@@ -44,7 +44,9 @@
     const app = U.$('.app'); if (!app) return;
     app.classList.toggle('rail-collapsed', collapsed);
     const t = U.$('#rail .toggle');
-    if (t) { U.replace(t, U.icon(collapsed ? 'panelOpen' : 'panelClose'), h('span.lbl', 'Collapse sidebar'), h('span.tip', 'Expand sidebar')); t.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar'; }
+    // exactly one label is ever visible: the inline text while expanded, the hover tooltip while collapsed
+    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    if (t) { U.replace(t, U.icon(collapsed ? 'panelOpen' : 'panelClose'), h('span.lbl', label), h('span.tip', label)); t.title = label; t.setAttribute('aria-label', label); }
   }
   function renderRail() {
     const rail = U.$('#rail');
@@ -68,6 +70,7 @@
     U.$$('#rail a.nav').forEach((a) => a.classList.toggle('active', a.dataset.name === route.name));
     MD.setTopbar(h('span.title', TITLES[route.name] || 'MeridianData'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
+    const main = U.$('#main'); if (main) main.classList.toggle('home', route.name === 'home');
     if (route.name === 'account' && route.params.address) { U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub }); const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref(); }
     document.title = (TITLES[route.name] ? TITLES[route.name] + ' · ' : '') + 'MeridianData';
   }
