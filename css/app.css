@@ -24,7 +24,8 @@
   --amber-dim: rgba(245, 182, 74, 0.14);
   --font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --rail: 60px;
+  --rail: 224px;
+  --rail-min: 60px;
   --top: 56px;
   --radius: 10px;
   color-scheme: dark;
@@ -53,31 +54,52 @@ input, select { font: inherit; color: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: #2e2e30; }
 
 /* ---------- Layout ---------- */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; height: 100vh; }
+.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; height: 100vh; transition: grid-template-columns .18s ease; }
+.app.rail-collapsed { --rail: var(--rail-min); }
 .rail {
   background: var(--bg-1);
   border-right: 1px solid var(--border-2);
-  display: flex; flex-direction: column; align-items: center;
-  padding: 12px 0; gap: 4px;
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 12px 10px; gap: 2px; overflow: hidden; min-width: 0;
 }
-.rail .logo { width: 34px; height: 34px; margin-bottom: 14px; display: grid; place-items: center; }
-.rail .logo img { width: 26px; height: auto; display: block; }
+.rail .logo { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px; margin-bottom: 10px; color: var(--text-1); }
+.rail .logo:hover { text-decoration: none; }
+.rail .logo img { width: 26px; height: auto; display: block; flex: none; }
+.rail .logo .word { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; white-space: nowrap; }
+.rail .logo .word span { color: var(--accent); }
+.rail .sec { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 12px 4px; white-space: nowrap; }
 .rail a.nav {
-  width: 40px; height: 40px; border-radius: 10px;
-  display: grid; place-items: center; color: var(--text-3);
-  transition: background .15s, color .15s; position: relative;
+  height: 40px; border-radius: 10px; padding: 0 10px;
+  display: flex; align-items: center; gap: 11px; color: var(--text-2);
+  transition: background .15s, color .15s; position: relative; white-space: nowrap;
 }
 .rail a.nav:hover { background: var(--bg-4); color: var(--text-1); text-decoration: none; }
 .rail a.nav.active { background: var(--accent-dim); color: var(--accent); }
-.rail a.nav svg { width: 20px; height: 20px; }
+.rail a.nav svg { width: 20px; height: 20px; flex: none; }
+.rail a.nav .lbl { font-size: 13.5px; }
+.rail a.nav .ext-ico { margin-left: auto; opacity: .45; }
+.rail a.nav .ext-ico svg { width: 13px; height: 13px; }
 .rail .spacer { flex: 1; }
 .rail a.nav .tip {
-  position: absolute; left: 50px; top: 50%; transform: translateY(-50%);
+  display: none; position: absolute; left: 50px; top: 50%; transform: translateY(-50%);
   background: var(--bg-5); border: 1px solid var(--border-3); color: var(--text-1);
   padding: 4px 8px; border-radius: 6px; font-size: 12px; white-space: nowrap;
-  opacity: 0; pointer-events: none; transition: opacity .12s; z-index: 50;
+  pointer-events: none; z-index: 50;
 }
-.rail a.nav:hover .tip { opacity: 1; }
+.rail .toggle {
+  margin-top: 6px; height: 36px; border-radius: 10px; border: 1px solid var(--border-2); background: transparent;
+  display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-3); cursor: pointer; white-space: nowrap; font-size: 12.5px;
+}
+.rail .toggle:hover { background: var(--bg-4); color: var(--text-1); }
+.rail .toggle svg { width: 16px; height: 16px; flex: none; }
+/* collapsed: icons only, tooltips on hover */
+.app.rail-collapsed .rail { padding: 12px 0; align-items: center; }
+.app.rail-collapsed .rail .logo { width: 40px; padding: 0; justify-content: center; }
+.app.rail-collapsed .rail .logo .word, .app.rail-collapsed .rail .sec, .app.rail-collapsed .rail a.nav .lbl, .app.rail-collapsed .rail a.nav .ext-ico, .app.rail-collapsed .rail .toggle .lbl { display: none; }
+.app.rail-collapsed .rail a.nav { width: 40px; padding: 0; justify-content: center; }
+.app.rail-collapsed .rail a.nav:hover .tip { display: block; }
+.app.rail-collapsed .rail .toggle { width: 40px; padding: 0; justify-content: center; border-color: transparent; }
+.app:not(.rail-collapsed) .topbar .brand { display: none; }
 
 .frame { display: grid; grid-template-rows: var(--top) 1fr; height: 100vh; min-width: 0; }
 .topbar {
@@ -272,6 +294,7 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .hero .quick .chipbtn:hover { color: var(--text-1); border-color: var(--accent); text-decoration: none; }
 .hero .quick .chipbtn { display: inline-flex; align-items: center; gap: 6px; }
 .hero .quick .chipbtn svg, .hero .strip .item svg, .btn svg, .chip svg, .topbar svg { width: 14px; height: 14px; flex: none; }
+.hero .strip-title { position: absolute; left: 0; right: 0; bottom: 138px; text-align: center; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
 .hero .strip { position: absolute; left: 0; right: 0; bottom: 84px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
 .hero .strip .track { display: flex; gap: 10px; width: max-content; animation: marquee 60s linear infinite; }
 .hero .strip:hover .track { animation-play-state: paused; }
@@ -364,6 +387,26 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .toast.show { opacity: 1; }
 
 .tooltip-note { font-size: 11.5px; color: var(--text-3); }
+
+/* Copy-trading page */
+.ct-hero { position: relative; overflow: hidden; background: radial-gradient(700px 300px at 85% 0%, rgba(35,212,188,.18), transparent 60%), var(--bg-2); }
+.ct-hero h1 { font-size: 24px; margin-bottom: 6px; }
+.ct-hero p { color: var(--text-2); max-width: 760px; margin: 0 0 6px; }
+.roadmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.roadmap .it { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.roadmap .it .t { font-weight: 600; font-size: 13px; }
+.roadmap .it .d { font-size: 12px; color: var(--text-3); }
+.kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border-3); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text-2); background: var(--bg-3); }
+
+/* Desktop polish */
+@media (min-width: 1400px) {
+  body { font-size: 14.5px; }
+  .main { padding: 24px 28px; }
+  .main > .page { max-width: 1560px; }
+  .overview { grid-template-columns: 320px minmax(0, 1fr); }
+  .chart-box { height: 360px; }
+  .hero h1 { font-size: 40px; }
+}
 .footer-note { color: var(--text-3); font-size: 11.5px; text-align: center; padding: 18px 0 4px; }
 
 /* ---------- Responsive ---------- */
@@ -380,9 +423,11 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 }
 @media (max-width: 720px) {
   :root { --rail: 0px; }
-  .app { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-  .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; flex-direction: row; justify-content: space-around; padding: 6px 8px; border-right: 0; border-top: 1px solid var(--border-2); z-index: 40; }
-  .rail .logo, .rail .spacer, .rail .ext, .rail .tip { display: none; }
+  .app, .app.rail-collapsed { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; flex-direction: row; justify-content: space-around; align-items: center; padding: 6px 8px; border-right: 0; border-top: 1px solid var(--border-2); z-index: 40; }
+  .rail .logo, .rail .spacer, .rail .ext, .rail .tip, .rail .sec, .rail .toggle, .rail a.nav .lbl, .rail a.nav .ext-ico { display: none !important; }
+  .rail a.nav { width: 40px; padding: 0; justify-content: center; }
+  .app:not(.rail-collapsed) .topbar .brand { display: inline; }
   .frame { height: 100vh; }
   .main { padding: 12px 12px 76px; }
   .topbar { padding: 0 12px; }

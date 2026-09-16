@@ -65,6 +65,12 @@ visitor's browser.
 * **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest,
   volume, sparkline and mPerp closure windows; live trade tape (taker/maker links to the
   accounts); liquidation feed; funding table.
+* **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
+  all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
+  positions is not implemented yet; nothing on the page places orders.
+
+The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
+(remembered per browser). Press `/` anywhere to jump to the search box.
 
 ## Metric definitions
 

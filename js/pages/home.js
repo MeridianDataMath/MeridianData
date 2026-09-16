@@ -15,7 +15,8 @@
         h('div.quick',
           h('a.chipbtn', { href: '#/leaderboard' }, U.icon('trophy'), ' Leaderboard'),
           h('a.chipbtn', { href: '#/dashboard' }, U.icon('grid'), ' Markets dashboard'),
-          h('a.chipbtn', { href: '#/favorites' }, U.icon('star'), ' Favorites')),
+          h('a.chipbtn', { href: '#/favorites' }, U.icon('star'), ' Favorites'),
+          h('a.chipbtn', { href: '#/copytrade' }, U.icon('users'), ' Copy trading', h('span.chip.accent', { style: { marginLeft: '6px' } }, 'soon'))),
         strip, foot);
       root.appendChild(h('div.page', hero));
       setTimeout(() => input.focus(), 50);
@@ -26,15 +27,22 @@
       if (ctx.signal.aborted) return;
       const lb = LB && LB.cache();
       if (lb && lb.rows && lb.rows.length) {
-        const rows = lb.rows.filter((r) => !r.inactive);
-        const pick = (iv) => U.sortBy(rows, (r) => (r.stats && r.stats[iv] ? r.stats[iv].pnl : -Infinity), true).slice(0, 12).map((r) => ({ r, iv }));
-        const items = pick('30d').concat(pick('7d')).filter((x) => x.r.stats && x.r.stats[x.iv] && x.r.stats[x.iv].pnl !== 0);
+        // ranked by all-time PnL (realised + unrealised since the exchange launched) → copy-trading candidates
+        const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all);
+        const ranked = U.sortBy(rows, (r) => r.stats.all.pnl, true);
+        const winners = ranked.filter((r) => r.stats.all.pnl > 0).slice(0, 24);
+        const items = winners.length >= 4 ? winners : ranked.slice(0, 12);
         if (items.length) {
           const track = h('div.track');
-          const mk = (x) => h('a.item', { href: U.accountUrl(x.r.account, x.r.sid) }, h('span.addr', U.shortAddr(x.r.account)), U.pnlEl(x.r.stats[x.iv].pnl), h('span.tag', x.iv));
-          items.forEach((x) => track.appendChild(mk(x)));
-          items.forEach((x) => track.appendChild(mk(x)));
+          const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: 'Open account' },
+            h('span.rank', { class: i < 3 ? 'top' : '', style: { width: 'auto' } }, '#' + (i + 1)),
+            h('span.addr', U.shortAddr(r.account)), U.pnlEl(r.stats.all.pnl),
+            r.stats.all.roi != null ? h('span.tag', U.fmtPct(r.stats.all.roi, { sign: true, dp: 0 }) + ' ROI') : null,
+            h('span.tag', r.style !== '—' ? r.style : 'all-time'));
+          items.forEach((r, i) => track.appendChild(mk(r, i)));
+          items.forEach((r, i) => track.appendChild(mk(r, i)));
           strip.appendChild(track);
+          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copy-trading candidates')), strip);
         }
       } else {
         strip.appendChild(h('div', { style: { textAlign: 'center', fontSize: '12.5px' } }, h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here')));
