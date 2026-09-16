@@ -1,6 +1,7 @@
 # Builds the shared leaderboard snapshot and publishes the site to GitHub Pages.
 # Runs on every push to main, every 15 minutes, and on demand (Actions tab → Run workflow).
-# One-time setup: repo Settings → Pages → "Build and deployment" → Source: GitHub Actions.
+# One-time setup (the default token cannot do this itself): repo Settings → Pages →
+# "Build and deployment" → Source: GitHub Actions. Until then the configure-pages step fails.
 name: Snapshot & deploy
 
 on:
@@ -33,9 +34,7 @@ jobs:
       - name: Build leaderboard snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs
         continue-on-error: true   # a Meridian API hiccup must not take the site down; visitors fall back to a browser build
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
+      - uses: actions/configure-pages@v5   # requires Settings → Pages → Source: GitHub Actions
       - uses: actions/upload-pages-artifact@v3
         with:
           path: '.'

@@ -30,8 +30,9 @@ browser uses) so visitors get the leaderboard instantly instead of building it t
 
 1. Create a **public** GitHub repository (public = unlimited free Actions minutes) and push this folder
    to its `main` branch.
-2. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions** (the workflow also tries
-   to enable this itself).
+2. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**. This is a one-time
+   manual step; the workflow's token is not allowed to enable Pages on its own, so until it is done
+   the "configure-pages" step fails (the snapshot step before it still runs).
 3. Wait for the "Snapshot & deploy" workflow to finish; the site is at
    `https://<user>.github.io/<repo>/`.
 4. Optional custom domain: add a `CNAME` DNS record pointing at `<user>.github.io`, enter the domain
