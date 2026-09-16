@@ -8,20 +8,22 @@
   let building = null;
 
   const P = (MD.router.pages.leaderboard = {
-    _remote: undefined,
+    _remote: undefined, _remoteAt: 0,
     /** newest of: local build (localStorage / memory) and the published snapshot (data/leaderboard.json) */
     cache() {
       const all = [U.storage.get(KEY, null), P._mem, P._remote].filter((c) => c && Array.isArray(c.rows));
       return all.sort((a, b) => b.builtAt - a.builtAt)[0] || null;
     },
-    /** Fetch the snapshot published next to the site (built by GitHub Actions); resolves null if absent. */
-    async loadRemote() {
-      if (P._remote !== undefined) return P._remote;
+    /** Fetch the snapshot published next to the site (built by GitHub Actions); resolves null if absent. Re-checks at most once a minute unless forced. */
+    async loadRemote(force) {
+      if (!force && P._remote !== undefined && Date.now() - P._remoteAt < 60000) return P._remote;
       try {
         const r = await fetch('data/leaderboard.json', { cache: 'no-cache' });
         const j = r.ok ? await r.json() : null;
-        P._remote = j && Array.isArray(j.rows) ? Object.assign(j, { remote: true }) : null;
-      } catch (_) { P._remote = null; }
+        if (j && Array.isArray(j.rows)) P._remote = Object.assign(j, { remote: true });
+        else if (P._remote === undefined) P._remote = null;
+      } catch (_) { if (P._remote === undefined) P._remote = null; }
+      P._remoteAt = Date.now();
       return P._remote;
     },
     async mount(root, route, ctx) {
@@ -94,8 +96,22 @@
           onRow: (r) => { location.hash = U.accountUrl(r.account, r.sid).slice(1); },
         });
         U.replace(tableWrap, tbl, UI.pager({ page: state.page, pageSize: PAGE, total, onPage: (p) => { state.page = p; renderTable(); tableWrap.scrollIntoView({ block: 'start' }); } }));
+        shownBuiltAt = data.builtAt;
+        renderSummary(data);
+      }
+      function renderSummary(data) {
+        if (!data) return;
         U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), data.partial ? h('span.neg', ' · partial build') : null);
       }
+      // keep the page current: re-check the published snapshot every minute, tick the age label every 30 s
+      let shownBuiltAt = 0;
+      const tick = setInterval(async () => {
+        if (ctx.signal.aborted) return;
+        await P.loadRemote();
+        const c = P.cache();
+        if (c && c.builtAt !== shownBuiltAt && !building) renderTable(); else renderSummary(c);
+      }, 30000);
+      ctx.onCleanup(() => clearInterval(tick));
 
       async function build(force) {
         if (building) return;

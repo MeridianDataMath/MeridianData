@@ -110,20 +110,34 @@
     const rangeSeg = UI.seg(RANGES, range, (v) => { range = v; MD.router.setParams({ range: v }, { silent: true }); loadRange(); }, 'sm');
     const chartCard = h('div.card', h('div.row.wrap', { style: { marginBottom: '12px' } }, metricSeg, cumBox, h('span.grow'), rangeSeg), chartBox, h('div', { style: { marginTop: '14px' } }, tiles));
     const tablesCard = h('div.card.tight');
-    U.replace(el, h('div.stack', h('div.overview', stateCard, chartCard), tablesCard));
+    // auto-refresh of balances / positions / orders (like the reference site's "30s" control)
+    const REFRESH = [{ v: 0, label: 'Off' }, { v: 15, label: '15s' }, { v: 30, label: '30s' }, { v: 60, label: '60s' }];
+    let refreshSec = U.num(U.storage.get('md.refresh', 30)); let refreshT = null; let lastLoad = 0;
+    const updLbl = h('span.dim.small');
+    const refreshSeg = UI.seg(REFRESH, refreshSec, (v) => { refreshSec = v; U.storage.set('md.refresh', v); schedule(); }, 'sm');
+    const refreshRow = h('div.row', { style: { justifyContent: 'flex-end' } }, updLbl, h('span.dim.small', 'Auto-refresh'), refreshSeg);
+    U.replace(el, h('div.stack', refreshRow, h('div.overview', stateCard, chartCard), tablesCard));
+    function schedule() {
+      clearTimeout(refreshT);
+      if (!refreshSec) return;
+      refreshT = setTimeout(async () => { if (cx.signal.aborted) return; try { await loadBase(true); } catch (e) { if (isAbort(e)) return; } schedule(); }, refreshSec * 1000);
+    }
+    const updTick = setInterval(() => { if (lastLoad) updLbl.textContent = 'updated ' + U.fmtAgo(lastLoad); }, 5000);
+    cx.onCleanup(() => { clearTimeout(refreshT); clearInterval(updTick); });
 
     // ---- state + tables (base data) ----
     let base = null;
-    async function loadBase() {
+    async function loadBase(refresh) {
       const [balances, positions, orders, vol] = await Promise.all([
         A.balances(sid, cx), A.openPositions(sid, cx), A.openOrders(sid, cx).catch(() => []), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
       ]);
       const pids = Array.from(new Set(positions.map((p) => p.productId)));
-      const prices = pids.length ? await A.marketPrices(pids, cx) : {};
+      const prices = pids.length ? await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }) : {};
       const acct = AN.accountState({ balances, positions, ref, prices });
       base = { balances, positions, orders, acct, vol, prices };
+      lastLoad = Date.now(); updLbl.textContent = 'updated just now';
       renderState();
-      renderTables();
+      if (refresh) { if (tt === 'positions' || tt === 'orders') renderTT(); } else renderTables();
       drawChart();
     }
     function renderState() {
@@ -300,6 +314,7 @@
     }
 
     await Promise.all([loadBase(), loadRange()]);
+    schedule();
   }
 
   // =====================================================================

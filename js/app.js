@@ -43,7 +43,7 @@
       h('span.spacer'),
       h('a.nav.ext', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, U.svg(U.icons.meridian), h('span.tip', 'Meridian app')),
       h('a.nav.ext', { href: 'https://docs.meridian.xyz', target: '_blank', rel: 'noopener' }, U.icon('book'), h('span.tip', 'Docs')),
-      h('a.nav.ext', { href: 'https://x.com/meridian_xyz', target: '_blank', rel: 'noopener' }, U.icon('x'), h('span.tip', 'Meridian on X')));
+      h('a.nav.ext', { href: 'https://x.com/meridiandotxyz', target: '_blank', rel: 'noopener' }, U.icon('x'), h('span.tip', 'Meridian on X')));
   }
 
   function onRoute(route) {
