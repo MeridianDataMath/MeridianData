@@ -8,7 +8,7 @@
   A.TV = 'https://tradingview.meridian.xyz';
   A.WS_URL = 'wss://ws.meridian.xyz/v1/stream';
   A.MAX_LIMIT = 200;
-  A.APP_URL = 'https://app.meridian.xyz';
+  A.APP_URL = 'https://app.meridian.xyz/?ref=BJ9Y51H9XB1L'; // every link to the Meridian app carries the site owner's referral code
 
   // ---------- fetch with cache / in-flight dedupe ----------
   const cache = new Map();
