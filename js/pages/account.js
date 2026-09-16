@@ -68,6 +68,7 @@
         h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)),
         UI.starBtn(fav, 'btn icon'),
         h('span.subsel', 'sub:', subSel),
+        h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
         h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt))));
 

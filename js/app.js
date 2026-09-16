@@ -8,9 +8,10 @@
     { name: 'favorites', path: '/favorites', icon: 'star', label: 'Favorites' },
     { name: 'leaderboard', path: '/leaderboard', icon: 'trophy', label: 'Leaderboard' },
     { name: 'dashboard', path: '/dashboard', icon: 'grid', label: 'Dashboard' },
+    { name: 'tax', path: '/tax', icon: 'receipt', label: 'Tax center' },
     { name: 'copytrade', path: '/copytrade', icon: 'users', label: 'Copy trading', badge: 'soon' },
   ];
-  const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', copytrade: 'Copy trading' };
+  const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', tax: 'Tax center', copytrade: 'Copy trading' };
   const X_URL = 'https://x.com/meridiandotxyz';
 
   MD.setTopbar = (node) => { const t = U.$('#topbar-title'); if (t) U.replace(t, node); };
@@ -50,7 +51,7 @@
   }
   function renderRail() {
     const rail = U.$('#rail');
-    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : '#' + n.path, dataset: { name: n.name } },
+    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, dataset: { name: n.name } },
       U.icon(n.icon), h('span.lbl', n.label, n.badge ? h('span.chip.accent', { style: { marginLeft: '8px' } }, n.badge) : null), h('span.tip', n.label));
     const ext = (href, icon, label) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener' }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
     U.replace(rail,
@@ -71,7 +72,11 @@
     MD.setTopbar(h('span.title', TITLES[route.name] || 'MeridianData'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
     const main = U.$('#main'); if (main) main.classList.toggle('home', route.name === 'home');
-    if (route.name === 'account' && route.params.address) { U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub }); const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref(); }
+    if (route.name === 'account' && route.params.address) {
+      U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub });
+      const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
+      const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');
+    }
     document.title = (TITLES[route.name] ? TITLES[route.name] + ' · ' : '') + 'MeridianData';
   }
 

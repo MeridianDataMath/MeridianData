@@ -168,7 +168,9 @@
     const seen = new Set();
     while (s < end) {
       const e = Math.min(end, s + chunk);
-      const part = await A.page(A.ARCHIVE, '/v1/subaccount/' + kind, { subaccountId: sid, startTime: s, endTime: e, resolution, order: 'asc' }, { maxPages: 40, ttl: ttl || 0, signal });
+      // the archive rejects an endTime later than its own clock; when the chunk ends "now", let the server default it
+      const endParam = e >= Date.now() - 2 * 60000 ? null : e;
+      const part = await A.page(A.ARCHIVE, '/v1/subaccount/' + kind, { subaccountId: sid, startTime: s, endTime: endParam, resolution, order: 'asc' }, { maxPages: 40, ttl: ttl || 0, signal });
       // chunks (and the server's clamping to bucket boundaries) can repeat the boundary bucket → dedupe
       for (const r of part) { const k = r.time + '|' + (r.tokenId || ''); if (seen.has(k)) continue; seen.add(k); rows.push(r); }
       s = e;

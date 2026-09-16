@@ -65,6 +65,10 @@ visitor's browser.
 * **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest,
   volume, sparkline and mPerp closure windows; live trade tape (taker/maker links to the
   accounts); liquidation feed; funding table.
+* **Tax center** – per subaccount and tax year (or custom UTC range): net result, realised PnL,
+  fees, funding, deposits, withdrawals, monthly breakdown, closed-positions ledger, and CSV
+  exports (summary, daily ledger, closed positions, fills, transfers, Koinly universal template)
+  plus a print-friendly view. Records only, not tax advice.
 * **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
   all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
   positions is not implemented yet; nothing on the page places orders.
