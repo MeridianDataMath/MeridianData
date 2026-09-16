@@ -54,7 +54,7 @@ input, select { font: inherit; color: inherit; }
 ::-webkit-scrollbar-thumb:hover { background: #2e2e30; }
 
 /* ---------- Layout ---------- */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; height: 100vh; transition: grid-template-columns .18s ease; }
+.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; height: 100vh; }
 .app.rail-collapsed { --rail: var(--rail-min); }
 .rail {
   background: var(--bg-1);
