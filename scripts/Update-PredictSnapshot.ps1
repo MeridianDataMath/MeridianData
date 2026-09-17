@@ -64,17 +64,24 @@ try {
         if (-not $j.agg) { throw "snapshot has no data: $($j.error)" }
         Log ('built: {0} predictions, {1} bettors, {2} makers, {3} KB, {4:N0}s' -f $j.predictions, $j.agg.bettors.Count, $j.agg.makers.Count, [math]::Round((Get-Item $file).Length / 1024), $sw.Elapsed.TotalSeconds)
         Copy-Item $file (Join-Path $dataDir 'predict.json') -Force   # local copy for development
+        $bettorsSrc = Join-Path $tmp 'bettors'
+        if (Test-Path $bettorsSrc) { $bettorsDst = Join-Path $dataDir 'bettors'; if (Test-Path $bettorsDst) { [IO.Directory]::Delete($bettorsDst, $true) }; Copy-Item $bettorsSrc $bettorsDst -Recurse }
     }
+    $srcDir = if ($PublishOnly) { $dataDir } else { $tmp }
 
     if ($DryRun) { Log 'dry run: not publishing'; exit 0 }
 
-    # publish as a fresh single-commit branch (plumbing: no worktree, no history growth)
-    $blob = (git hash-object -w $file).Trim()
-    if (-not $blob) { throw 'git hash-object failed' }
-    $specFile = Join-Path $env:TEMP 'md-tree-spec.txt'
-    [IO.File]::WriteAllText($specFile, "100644 blob $blob`tpredict.json`n", (New-Object System.Text.UTF8Encoding($false)))
-    $tree = (& cmd /c "git mktree < `"$specFile`"").Trim()
-    [IO.File]::Delete($specFile)
+    # publish the whole snapshot directory (predict.json + bettors/*.json) as a fresh single-commit branch:
+    # a temporary index turns the directory into a tree without touching the working copy; no history growth.
+    $idx = Join-Path $env:TEMP ('md-index-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $env:GIT_INDEX_FILE = $idx
+    $gitDir = Join-Path $Repo '.git'
+    & cmd /c "git --git-dir=`"$gitDir`" --work-tree=`"$srcDir`" add -A -- predict.json bettors 2>&1" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'git add (temp index) failed' }
+    $tree = (& cmd /c "git --git-dir=`"$gitDir`" write-tree").Trim()
+    Remove-Item Env:GIT_INDEX_FILE
+    [IO.File]::Delete($idx)
+    if (-not $tree) { throw 'git write-tree failed' }
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm') + ' UTC'
     $msg = ('Predict snapshot {0} ({1} predictions)' -f $stamp, $j.predictions)
     $commit = (git -c user.name=MeridianDataMath -c user.email=MeridianDataMath@users.noreply.github.com commit-tree $tree -m $msg).Trim()

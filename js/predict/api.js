@@ -64,6 +64,24 @@
     stats: 'timestamp realizedPnl cumulativePnl volume predictionsTotal predictionsWon predictionsLost predictionsPending predictionsNonDecisive deployedCollateral claimableCollateral',
   };
 
+  // ---------- live-access probe ----------
+  // The API only answers browsers from an allowlist of origins (localhost, app.meridian.xyz, app.sapience.xyz).
+  // Elsewhere the site works from the published snapshot; live queries switch on automatically once the domain is allowed.
+  P._live = null;
+  P.live = async function () {
+    if (P._live !== null) return P._live;
+    if (typeof window === 'undefined' || typeof location === 'undefined') { P._live = true; return true; }
+    try { await P.gql('query { predictions(first: 0) { totalCount } }', null, { ttl: 60000 }); P._live = true; }
+    catch (e) { P._live = !(e && (e.code === 'NETWORK' || e.code === 403 || e.code === 405)); }
+    return P._live;
+  };
+  /** Fetch a snapshot file by relative path: the newest of the Pages copy and the "snapshots" branch. */
+  P.SNAPSHOT_BASES = ['data/', 'https://raw.githubusercontent.com/MeridianDataMath/MeridianData/snapshots/'];
+  P.snapshotFile = async function (rel, { signal } = {}) {
+    const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => { try { const r = await fetch(b + rel, { cache: 'no-cache', signal }); if (!r.ok) return null; return await r.json(); } catch (e) { if (e && e.name === 'AbortError') throw e; return null; } }));
+    return got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;
+  };
+
   // ---------- predictions ----------
   P.predictionsPage = async function ({ filter, after, first, dir, signal, ttl }) {
     const d = await P.gql(`query Preds($first: Int!, $after: String, $filter: PredictionFilter, $dir: OrderDirection!) { predictions(first: $first, after: $after, filter: $filter, orderBy: { field: CREATED_AT, direction: $dir }) { totalCount pageInfo { hasNextPage endCursor } nodes { ${P.F.prediction} } } }`,

@@ -42,6 +42,7 @@
     return P._building;
   };
   const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · last ${s.windowDays} days only`);
+  const offlineNote = 'live queries are not available from this domain (the Predict API only allows Meridian\'s own origins), so this shows the published snapshot';
   const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
   async function withSnapshot(body, ctx, render) {
     const prog = h('span', 'Loading Predict data…');
@@ -50,7 +51,7 @@
     try { snap = await P.loadSnapshot({ signal: ctx.signal, onProgress: (n) => { prog.textContent = `Collecting recent predictions… ${n}`; } }); }
     catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
     if (ctx.signal.aborted) return;
-    render(snap);
+    try { await render(snap); } catch (e) { if (!isAbort(e)) { console.error(e); U.replace(body, UI.error(e, () => MD.router.dispatch())); } }
   }
 
   // ---------- section header (sub-nav across the Predict pages) ----------
@@ -73,7 +74,7 @@
   // =====================================================================
   async function mountOverview(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Overview'));
-    await withSnapshot(body, ctx, (snap) => {
+    await withSnapshot(body, ctx, async (snap) => {
       const a = snap.agg; const T = a.totals;
       const tiles = h('div.stats',
         UI.stat('Predictions', U.fmtNum(T.n, 0), `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
@@ -123,21 +124,33 @@
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
       C.timeSeries(cCount, { points: a.daily.map((d) => ({ x: d.t, y: d.n })), type: 'bar', color: col.blue, label: 'Predictions', yFmt: (v) => U.fmtNum(v, 0), tipFmt: (v) => U.fmtNum(v, 0) });
 
-      // live tape
+      // live tape (falls back to re-reading the snapshot when the API refuses this origin)
+      const live = await P.live();
       let tapeRows = a.tape.slice(0, 25);
+      const tapeHead = tapeCard.querySelector('.card-head .dim.small');
+      if (!live && tapeHead) tapeHead.textContent = 'as of the snapshot · ' + offlineNote;
       const tapeRow = (n, flash) => h('div.it', { class: flash ? 'flash' : '' },
         h('span.t', U.fmtTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
         h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ' + U.shortAddr(n.counterparty, 3)), resultChip(n));
       const renderTape = (fresh) => U.replace(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
-      const pollTape = async () => { try { const raw = await P.tape(25, { signal: ctx.signal }); const norms = raw.map(P.norm).map(P.compact); const known = new Set(tapeRows.map((r) => r.id)); const fresh = new Set(norms.filter((n) => !known.has(n.id)).map((n) => n.id)); tapeRows = norms; renderTape(fresh); } catch (e) { if (!isAbort(e)) console.warn('tape', e); } };
-      pollTape(); const tT = setInterval(pollTape, 20000); ctx.onCleanup(() => clearInterval(tT));
+      const pollTape = async () => {
+        try {
+          let norms;
+          if (live) norms = (await P.tape(25, { signal: ctx.signal })).map(P.norm).map(P.compact);
+          else { const s = await P.loadSnapshot({ signal: ctx.signal, force: true }); norms = (s.agg.tape || []).slice(0, 25); }
+          const known = new Set(tapeRows.map((r) => r.id)); const fresh = new Set(norms.filter((n) => !known.has(n.id)).map((n) => n.id)); tapeRows = norms; renderTape(fresh);
+        } catch (e) { if (!isAbort(e)) console.warn('tape', e); }
+      };
+      if (live) pollTape();
+      const tT = setInterval(pollTape, live ? 20000 : 60000); ctx.onCleanup(() => clearInterval(tT));
 
       // secondary market
       (async () => {
         try {
-          const t = await P.trades({ first: 10, signal: ctx.signal, ttl: 60000 });
-          const rows = t.nodes.map((x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: x.seller, buyer: x.buyer, tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash }; });
+          let rows, total;
+          if (live) { const t = await P.trades({ first: 10, signal: ctx.signal, ttl: 60000 }); rows = t.nodes.map(P.compactTrade); total = t.totalCount; }
+          else { rows = (snap.trades || []).slice(0, 10); total = snap.tradesTotal || rows.length; }
           U.replace(secBody, UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.t)) },
             { key: 's', label: 'Seller', render: (r) => bettorLink(r.seller) },
@@ -146,7 +159,7 @@
             { key: 'p', label: 'Paid', num: true, render: (r) => usd(r.paid) },
             { key: 'px', label: 'Price / token', num: true, title: 'Implied probability the buyer assigned', render: (r) => pct(r.px, 1) },
             { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener' }, U.icon('external')) : '') },
-          ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(t.totalCount, 0)} trades in total`));
+          ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(total, 0)} trades in total`));
         } catch (e) { if (!isAbort(e)) U.replace(secBody, UI.error(e)); }
       })();
     });
@@ -206,6 +219,7 @@
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
     const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
+    if (!(await P.live())) return mountQuestionsOffline(body, route, ctx, st);
     let cats = []; let counts = null;
     try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
     const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
@@ -247,6 +261,42 @@
     }
     function load() { cursors = [null]; MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
+  }
+
+  /** Question explorer over the snapshot's set (questions with Meridian open interest + those of open predictions). */
+  async function mountQuestionsOffline(body, route, ctx, st) {
+    await withSnapshot(body, ctx, (snap) => {
+      const all = snap.questionsWithOi || [];
+      const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
+      let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
+      const search = h('input.input', { placeholder: 'Search questions with Meridian activity', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
+      const controls = h('div.card', h('div.row.wrap', search,
+        h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
+        h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], st.sort === 'CREATED_AT' ? 'OPEN_INTEREST' : st.sort, (v) => { st.sort = v; page = 1; render(); }, 'sm'),
+        h('span.grow'), summary));
+      function render() {
+        let rows = all;
+        if (st.search) rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(st.search));
+        if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
+        rows = st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity) : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true) : U.sortBy(rows, (q) => q.oi, true);
+        const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
+        const slice = rows.slice((page - 1) * PAGE, page * PAGE);
+        U.replace(wrap, UI.table({ cols: [
+          { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+          { key: 'c', label: 'Category', render: (c) => c.cat || '—' },
+          { key: 'p', label: 'Probability', num: true, render: (c) => probBar(c.ep) },
+          { key: 'oi', label: 'Meridian OI', num: true, render: (c) => (c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '—')) },
+          { key: 'v24', label: 'Source vol 24h', num: true, render: (c) => (c.v24 ? usd(c.v24, { compact: true }) : h('span.dim', '—')) },
+          { key: 'v7', label: 'Source vol 7d', num: true, render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
+          { key: 'e', label: 'Ends', render: (c) => h('span.dim', c.end ? (c.end > Date.now() ? 'in ' + U.fmtCountdown(c.end - Date.now()) : U.fmtDate(c.end)) : '—') },
+          { key: 's', label: 'Status', render: (c) => (c.settled ? (c.nd ? UI.chip('void', 'amber') : c.yes ? UI.chip('YES', 'green') : UI.chip('NO', 'red')) : UI.chip('open', 'accent')) },
+          { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
+        ], rows: slice, empty: 'No questions match' }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
+        U.replace(summary, `${U.fmtNum(total, 0)} questions with Meridian activity`);
+      }
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', (snap.questions ? `${U.fmtNum(snap.questions.all, 0)} questions exist on Meridian Predict (${U.fmtNum(snap.questions.open, 0)} open). ` : '') + 'Shown: every open question with Meridian open interest plus those behind open predictions, as of the snapshot ' + U.fmtAgo(snap.builtAt) + '. Full-text search over all questions needs live API access, which ' + offlineNote.replace('live queries are', 'is') + '.'));
+      render();
+    });
   }
 
   // =====================================================================
@@ -312,38 +362,54 @@
     if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.error', 'Invalid address'))); return; }
     await P.renderBettor(body, addr, ctx);
   }
-  P.renderBettor = async function (el, addr, ctx) {
-    U.replace(el, loadingCard('Loading bettor history…'));
-    let acct, raw, openPos;
-    try {
-      [acct, raw, openPos] = await Promise.all([
+  /** Bettor model from live queries, or from the per-wallet snapshot file when the API refuses this origin. */
+  async function loadBettor(addr, ctx) {
+    const live = await P.live();
+    if (live) {
+      const [acct, raw, openPos] = await Promise.all([
         P.account(addr, { interval: 'DAY', fromSec: P.LAUNCH_SEC, signal: ctx.signal, ttl: 60000 }),
         P.predictionsOf(addr, { maxPages: 12, signal: ctx.signal }),
         P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
       ]);
-    } catch (e) { if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
+      const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
+      const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
+      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: openPos.totalCount || 0, builtAt: Date.now() };
+    }
+    const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
+    if (!f) return null;
+    const norms = f.predictions.map(P.unslim);
+    const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
+    const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
+    const open = mine.filter((n) => !n.settled);
+    const posRows = open.map((n) => ({ side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
+    return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt };
+  }
+  P.loadBettor = loadBettor;
+  P.renderBettor = async function (el, addr, ctx) {
+    U.replace(el, loadingCard('Loading bettor history…'));
+    let m;
+    try { m = await loadBettor(addr, ctx); } catch (e) { if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
     if (ctx.signal.aborted) return;
-    const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
+    if (!m) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address (as of the last snapshot).'))); return; }
+    const { norms, hist, posRows } = m;
     const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
     const isMaker = asMaker.length > asBettor.length;
     const mine = isMaker ? asMaker : asBettor;
-    if (!mine.length && !acct.history.some((x) => x.total)) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
+    if (!mine.length && !hist.some((x) => x.total)) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
     const s = P.bettorSummary(mine).stats || {};
-    const hist = acct.history;
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
     const tiles = h('div.stats',
-      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl, { sign: true }), 'realised · exchange stats', U.pnlClass(totals.pnl)),
-      UI.stat('Volume', usd(acct.totalVolume, { compact: true }), 'all time'),
+      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl, { sign: true }), m.live ? 'realised · exchange stats' : 'realised · from predictions', U.pnlClass(totals.pnl)),
+      UI.stat('Volume', usd(m.totalVolume, { compact: true }), 'all time'),
       UI.stat('Record', `${totals.won}W / ${totals.lost}L`, (totals.pending ? totals.pending + ' pending' : '') + (totals.nd ? ' · ' + totals.nd + ' void' : '')),
       UI.stat('Win rate', totals.won + totals.lost ? U.fmtPct((totals.won / (totals.won + totals.lost)) * 100, { dp: 0 }) : '—'),
       UI.stat('ROI', s.roi == null ? '—' : U.fmtPct(s.roi, { sign: true, dp: 0 }), 'on settled stakes (last ' + mine.length + ')', U.pnlClass(s.roi)),
       UI.stat('Avg odds', pct(s.avgOdds, 0), s.avgLegs ? 'avg ' + U.fmtNum(s.avgLegs, 1) + ' legs' : null),
-      UI.stat('Collateral', usd(acct.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
-      UI.stat('Open', String(openPos.totalCount || 0), 'positions'));
+      m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
+      UI.stat('Open', String(m.openCount), 'positions'));
     const cPnl = h('canvas'), cVol = h('canvas');
-    const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
     const openTbl = UI.table({ cols: [
       { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q))) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip('maker', 'blue') : UI.chip('bettor', '')) },
@@ -370,10 +436,10 @@
     const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
     const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
     U.replace(el, h('div.stack',
-      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', `${mine.length}${raw.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', m.live ? `${mine.length}${m.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history` : `${mine.length}${m.truncated ? '+' : ''} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', cPnl)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily volume'), h('div.chart-box.sm', cVol))),
-      UI.card('Open positions', openTbl, h('span.dim.small', String(openPos.totalCount || 0))),
+      UI.card('Open positions', openTbl, h('span.dim.small', String(m.openCount))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
     const col = C.colors();

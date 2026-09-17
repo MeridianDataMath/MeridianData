@@ -50,9 +50,42 @@ async function buildPredict() {
   const agg = P.aggregate(norms, { tapeSize: 100 });
   let counts = null;
   try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  // questions with Meridian open interest (the explorer's offline set) + the latest secondary-market trades
+  const questions = []; let after = null; let pages = 0;
+  try {
+    do {
+      const pg = await P.conditions({ settled: false, orderBy: 'OPEN_INTEREST', dir: 'DESC', first: 25, after });
+      const rows = pg.nodes.map(P.compactQuestion); questions.push(...rows); pages++;
+      after = pg.pageInfo.hasNextPage && rows[rows.length - 1].oi > 0 ? pg.pageInfo.endCursor : null;
+    } while (after && pages < 60);
+  } catch (e) { console.warn('predict: questions failed', e.message); }
+  const withOi = questions.filter((q) => q.oi > 0);
+  // plus the questions of open predictions, so every open position can be shown
+  const seenQ = new Set(withOi.map((q) => q.id));
+  for (const n of norms) {
+    if (n.settled) continue;
+    for (const k of n.picks) {
+      if (seenQ.has(k.id)) continue;
+      seenQ.add(k.id);
+      withOi.push({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, src: null });
+    }
+  }
+  let trades = [];
+  try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
-  console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
+  const byWallet = {};
+  for (const n of norms) { (byWallet[n.predictor] || (byWallet[n.predictor] = [])).push(n); (byWallet[n.counterparty] || (byWallet[n.counterparty] = [])).push(n); }
+  const dir = path.join(outDir, 'bettors'); fs.mkdirSync(dir, { recursive: true });
+  let files = 0;
+  for (const [addr, list] of Object.entries(byWallet)) {
+    list.sort((a, b) => b.t - a.t);
+    const truncated = list.length > 600;
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: (truncated ? list.slice(0, 600) : list).map(P.slim) }));
+    files++;
+  }
+  console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (doPredict) {
   try { await buildPredict(); }

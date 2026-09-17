@@ -97,4 +97,32 @@
 
   /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */
   P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0 }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
+
+  /** Slim record for the per-wallet snapshot files (≈400 bytes); P.unslim restores everything P.norm produces. */
+  P.slim = (n) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, r: n.result, tx: n.tx, cat: n.cat, k: n.picks.map((k) => [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat]) });
+  P.unslim = function (s) {
+    if (s.picks) return s;                               // already a full record
+    const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
+    const picks = (s.k || []).map(([q, yes, ep, endTime, cat]) => ({ id: null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), settled: false, resolvedToYes: null, nonDecisive: false, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
+    let fair = null; if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
+    const odds = pool > 0 ? stake / pool : null; const settled = !!s.st; const won = settled && s.r === 'PREDICTOR_WINS';
+    return { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, vig: odds != null && fair != null ? odds - fair : null, vigPct: odds != null && fair ? (odds - fair) / fair : null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, result: s.r || null, won, lost: settled && !won, pnl: settled ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null };
+  };
+
+  /** Daily account history reconstructed from a wallet's own predictions (used when the API is not reachable). */
+  P.historyFromPredictions = function (norms, address, asMaker) {
+    const days = {};
+    const at = (t) => { const k = dayKey(t); return days[k] || (days[k] = { t: k, pnl: 0, volume: 0, total: 0, won: 0, lost: 0, pending: 0, nonDecisive: 0, deployed: 0, claimable: 0 }); };
+    for (const n of norms) {
+      const d = at(n.t); d.total++; d.volume += asMaker ? n.cp : n.stake;
+      if (n.settled && n.settledAt) { const s = at(n.settledAt); const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if ((asMaker ? n.lost : n.won)) s.won++; else if (n.result === 'NON_DECISIVE') s.nonDecisive++; else s.lost++; }
+      else if (!n.settled) d.pending++;
+    }
+    const rows = Object.values(days).sort((a, b) => a.t - b.t);
+    let cum = 0; for (const r of rows) { cum += r.pnl; r.cumPnl = cum; }
+    return rows;
+  };
+  /** Compact question row for the snapshot's question explorer. */
+  P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
+  P.compactTrade = (x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: x.seller, buyer: x.buyer, tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash }; };
 })();

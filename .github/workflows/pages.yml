@@ -34,11 +34,11 @@ jobs:
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
         continue-on-error: true   # a Meridian API hiccup must not take the site down; visitors fall back to a browser build
-      - name: Copy the Predict snapshot published from a PC (branch "snapshots" → data/predict.json)
+      - name: Copy the Predict snapshot published from a PC (branch "snapshots" → data/)
         run: |
           mkdir -p data
           if git fetch --depth 1 origin snapshots 2>/dev/null; then
-            git show FETCH_HEAD:predict.json > data/predict.json && echo "predict.json copied ($(wc -c < data/predict.json) bytes)"
+            git archive FETCH_HEAD | tar -x -C data && echo "snapshot copied: $(ls data | wc -l) entries, $(ls data/bettors 2>/dev/null | wc -l) wallet files"
           else
             echo "no snapshots branch yet"
           fi
