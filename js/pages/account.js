@@ -2,7 +2,7 @@
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
 
-  const TABS = [['overview', 'Overview'], ['live', 'Live'], ['performance', 'Performance'], ['rewards', 'Rewards']];
+  const TABS = [['overview', 'Overview'], ['live', 'Live'], ['performance', 'Performance'], ['rewards', 'Rewards'], ['predict', 'Predict']];
   const RANGES = [{ v: '24h', label: '24h' }, { v: '7d', label: '7d' }, { v: '30d', label: '30d' }, { v: 'all', label: 'All time' }];
   const METRICS = [{ v: 'pnl', label: 'PnL' }, { v: 'volume', label: 'Volume' }, { v: 'balance', label: 'Balance' }, { v: 'equity', label: 'Equity' }, { v: 'funding', label: 'Funding' }, { v: 'fees', label: 'Fees' }];
 
@@ -117,7 +117,7 @@
         if (tabCtx) tabCtx.abort();
         tabCtx = child(ctx);
         U.clear(tabBody);
-        const fn = { overview: mountOverview, live: mountLive, performance: mountPerformance, rewards: mountRewards }[v];
+        const fn = { overview: mountOverview, live: mountLive, performance: mountPerformance, rewards: mountRewards, predict: mountPredict }[v];
         fn(tabBody, state, tabCtx).catch((e) => { if (!isAbort(e)) { console.error(e); U.replace(tabBody, UI.error(e, () => show(v))); } });
       }
       show(tab);
@@ -513,6 +513,15 @@
     C.timeSeries(c1, { points: cum, color: acc >= 0 ? col.green : col.red, label: 'PnL', xMax: Date.now() });
     C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, label: 'PnL', xMax: Date.now() });
     C.bars(c3, ps.byMarket.map((r) => r.ticker), ps.byMarket.map((r) => r.pnl), { horizontal: true });
+  }
+
+  // =====================================================================
+  // Predict (same view as #/predict/bettor, inline)
+  // =====================================================================
+  async function mountPredict(el, st, cx) {
+    const wrap = h('div');
+    U.replace(el, h('div.stack', h('div.row', h('span.dim.small', 'Meridian Predict activity of this wallet'), h('span.grow'), h('a.btn.sm.ghost', { href: '#/predict/bettor?address=' + encodeURIComponent(st.addr) }, U.icon('external'), 'Open in Predict section')), wrap));
+    await MD.predict.renderBettor(wrap, st.addr, cx);
   }
 
   // =====================================================================

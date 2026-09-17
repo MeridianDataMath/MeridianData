@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Build leaderboard snapshot (data/leaderboard.json)
+      - name: Build snapshots (data/leaderboard.json, data/predict.json)
         run: node scripts/build-snapshot.mjs
         continue-on-error: true   # a Meridian API hiccup must not take the site down; visitors fall back to a browser build
       - uses: actions/configure-pages@v5   # requires Settings → Pages → Source: GitHub Actions

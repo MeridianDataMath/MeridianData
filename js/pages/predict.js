@@ -1,0 +1,384 @@
+/* MeridianData — Predict section: overview, bettors, questions, market makers, vig & edge, bettor page */
+(function () {
+  const MD = window.MD; const U = MD.util; const UI = MD.ui; const C = MD.charts; const h = U.h; const P = MD.predict;
+  const isAbort = (e) => e && e.name === 'AbortError';
+  const DAY = U.DAY;
+  const PAGE = 25;
+
+  // ---------- formatting ----------
+  const pct = (x, dp = 1) => (x == null || !Number.isFinite(x) ? '—' : U.fmtPct(x * 100, { dp }));
+  const pp = (x, dp = 1) => (x == null || !Number.isFinite(x) ? '—' : (x > 0 ? '+' : '') + (x * 100).toFixed(dp) + ' pp');
+  const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m >= 100 ? 0 : 2) + '×');
+  const usd = (x, o) => U.fmtUsd(x, o);
+  const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
+  const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a }, U.shortAddr(a, n || 4));
+  const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
+  const resultChip = (n) => (!n.settled ? UI.chip('open', 'accent') : n.won ? UI.chip('won', 'green') : n.result === 'NON_DECISIVE' ? UI.chip('void', 'amber') : UI.chip('lost', 'red'));
+  const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
+  const vigCell = (v) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v)));
+  const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
+  const sourceLink = (c) => { const m = c.similarMarket && c.similarMarket.markets && c.similarMarket.markets[0]; return m ? h('a.btn.sm.ghost', { href: m, target: '_blank', rel: 'noopener', title: m }, U.icon('external'), /polymarket/i.test(m) ? 'Polymarket' : 'Source') : null; };
+
+  // ---------- snapshot: published data/predict.json, else a recent-window build in the browser ----------
+  P._snap = undefined; P._snapAt = 0; P._building = null;
+  P.loadSnapshot = async function ({ signal, onProgress, force } = {}) {
+    if (!force && P._snap && Date.now() - P._snapAt < 60000) return P._snap;
+    try {
+      const r = await fetch('data/predict.json', { cache: 'no-cache', signal });
+      if (r.ok) { const j = await r.json(); if (j && j.agg) { P._snap = Object.assign(j, { remote: true }); P._snapAt = Date.now(); return P._snap; } }
+    } catch (e) { if (isAbort(e)) throw e; }
+    if (P._snap && P._snap.builtAt > Date.now() - 15 * 60000) return P._snap;
+    if (!P._building) {
+      P._building = (async () => {
+        const days = 14; const to = Math.floor(Date.now() / 1000); const from = to - days * 86400;
+        const raw = await P.predictionsWindowed({ fromSec: from, toSec: to, windows: 7, concurrency: 7, signal, onProgress });
+        const norms = raw.map(P.norm);
+        const snap = { builtAt: Date.now(), source: 'browser', windowDays: days, fromSec: from, agg: P.aggregate(norms), remote: false };
+        P._snap = snap; P._snapAt = Date.now();
+        return snap;
+      })().finally(() => { P._building = null; });
+    }
+    return P._building;
+  };
+  const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · last ${s.windowDays} days only`);
+  const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
+  async function withSnapshot(body, ctx, render) {
+    const prog = h('span', 'Loading Predict data…');
+    U.replace(body, loadingCard(prog));
+    let snap;
+    try { snap = await P.loadSnapshot({ signal: ctx.signal, onProgress: (n) => { prog.textContent = `Collecting recent predictions… ${n}`; } }); }
+    catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
+    if (ctx.signal.aborted) return;
+    render(snap);
+  }
+
+  // ---------- section header (sub-nav across the Predict pages) ----------
+  const SUB = [['/predict', 'Overview'], ['/predict/bettors', 'Bettors'], ['/predict/questions', 'Questions'], ['/predict/makers', 'Market makers'], ['/predict/vig', 'Vig & edge']];
+  const subnav = (path) => h('div.tabs', SUB.map(([p, l]) => h('button', { class: p === path || (p === '/predict/bettors' && path === '/predict/bettor') ? 'on' : '', onclick: () => { location.hash = p; } }, l)));
+
+  MD.router.pages.predict = {
+    async mount(root, route, ctx) {
+      const path = route.path;
+      const body = h('div.stack');
+      U.replace(root, h('div.page', h('div.stack', subnav(path), body)));
+      const fn = { '/predict': mountOverview, '/predict/bettors': mountBettors, '/predict/questions': mountQuestions, '/predict/makers': mountMakers, '/predict/vig': mountVig, '/predict/bettor': mountBettorPage }[path];
+      if (!fn) { U.replace(body, h('div.card', h('div.empty', 'Unknown Predict page. ', h('a', { href: '#/predict' }, 'Overview')))); return; }
+      await fn(body, route, ctx);
+    },
+  };
+
+  // =====================================================================
+  // Overview
+  // =====================================================================
+  async function mountOverview(body, route, ctx) {
+    MD.setTopbar(h('span.title', 'Predict · Overview'));
+    await withSnapshot(body, ctx, (snap) => {
+      const a = snap.agg; const T = a.totals;
+      const tiles = h('div.stats',
+        UI.stat('Predictions', U.fmtNum(T.n, 0), `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
+        UI.stat('Wagered', usd(T.wagered, { compact: true }), 'bettor stakes'),
+        UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
+        UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${T.makers} market makers`),
+        UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of settled predictions'),
+        UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'settled · mirror = maker profit', U.pnlClass(T.bettorPnl)),
+        UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
+        UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs source market'));
+      const cWager = h('canvas'), cCount = h('canvas');
+      const tapeBody = h('div.feed');
+      const tapeCard = h('div.card.tight', h('div.card-head', h('h2', 'Live predictions'), h('span.dim.small', 'newest first · refreshes every 20 s'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), tapeBody);
+      const catTbl = UI.table({ cols: [
+        { key: 'c', label: 'Category', render: (r) => r.cat },
+        { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) },
+        { key: 'wr', label: 'Bettor win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
+        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+        { key: 'v', label: 'Avg vig', num: true, render: (r) => vigCell(r.avgVig) },
+      ], rows: a.categories });
+      const comboTbl = UI.table({ cols: [
+        { key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg combo') },
+        { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) },
+        { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds) },
+        { key: 'm', label: 'Median payout', num: true, render: (r) => mult(r.medianMultiple) },
+        { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
+        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+      ], rows: a.combos });
+      const makersTbl = UI.table({ cols: [
+        { key: 'a', label: 'Market maker', render: (r) => bettorLink(r.address, 6) },
+        { key: 'n', label: 'Taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 's', label: 'Share', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 0 }) },
+        { key: 'p', label: 'Maker PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+      ], rows: a.makers.slice(0, 5), onRow: () => { location.hash = '#/predict/makers'; } });
+      const secBody = h('div', UI.loading('Loading secondary market…'));
+      U.replace(body,
+        h('div.row.wrap', h('span.dim.small', snapNote(snap)), h('span.grow'), h('span.dim.small', 'Meridian Predict runs on Sapience; questions mirror Polymarket markets, USDe collateral, RFQ auctions against market makers.')),
+        tiles,
+        h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Wagered per day'), h('div.chart-box.sm', cWager)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Predictions per day'), h('div.chart-box.sm', cCount))),
+        tapeCard,
+        h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
+        h('div.grid.cols-2', UI.card('Market makers', makersTbl, h('a.small', { href: '#/predict/makers' }, 'all makers')), h('div.card.tight', h('div.card-head', h('h2', 'Secondary market'), h('span.dim.small', 'positions sold before resolution')), secBody)),
+        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL is realised on settled predictions only.'));
+      const col = C.colors();
+      C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
+      C.timeSeries(cCount, { points: a.daily.map((d) => ({ x: d.t, y: d.n })), type: 'bar', color: col.blue, label: 'Predictions', yFmt: (v) => U.fmtNum(v, 0), tipFmt: (v) => U.fmtNum(v, 0) });
+
+      // live tape
+      let tapeRows = a.tape.slice(0, 25);
+      const tapeRow = (n, flash) => h('div.it', { class: flash ? 'flash' : '' },
+        h('span.t', U.fmtTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
+        h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ' + U.shortAddr(n.counterparty, 3)), resultChip(n));
+      const renderTape = (fresh) => U.replace(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
+      renderTape();
+      const pollTape = async () => { try { const raw = await P.tape(25, { signal: ctx.signal }); const norms = raw.map(P.norm).map(P.compact); const known = new Set(tapeRows.map((r) => r.id)); const fresh = new Set(norms.filter((n) => !known.has(n.id)).map((n) => n.id)); tapeRows = norms; renderTape(fresh); } catch (e) { if (!isAbort(e)) console.warn('tape', e); } };
+      pollTape(); const tT = setInterval(pollTape, 20000); ctx.onCleanup(() => clearInterval(tT));
+
+      // secondary market
+      (async () => {
+        try {
+          const t = await P.trades({ first: 10, signal: ctx.signal, ttl: 60000 });
+          const rows = t.nodes.map((x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: x.seller, buyer: x.buyer, tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash }; });
+          U.replace(secBody, UI.table({ cols: [
+            { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.t)) },
+            { key: 's', label: 'Seller', render: (r) => bettorLink(r.seller) },
+            { key: 'b', label: 'Buyer', render: (r) => bettorLink(r.buyer) },
+            { key: 'tk', label: 'Face value', num: true, title: 'Position tokens pay 1 USDe each if the prediction wins', render: (r) => usd(r.tokens) },
+            { key: 'p', label: 'Paid', num: true, render: (r) => usd(r.paid) },
+            { key: 'px', label: 'Price / token', num: true, title: 'Implied probability the buyer assigned', render: (r) => pct(r.px, 1) },
+            { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener' }, U.icon('external')) : '') },
+          ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(t.totalCount, 0)} trades in total`));
+        } catch (e) { if (!isAbort(e)) U.replace(secBody, UI.error(e)); }
+      })();
+    });
+  }
+
+  // =====================================================================
+  // Bettors leaderboard
+  // =====================================================================
+  async function mountBettors(body, route, ctx) {
+    MD.setTopbar(h('span.title', 'Predict · Bettors'));
+    await withSnapshot(body, ctx, (snap) => {
+      const all = snap.agg.bettors;
+      const st = { q: '', minN: 3, sort: { key: 'pnl', desc: true }, page: 1, cat: '' };
+      const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
+      const wrap = h('div');
+      const summary = h('span.dim.small');
+      const controls = h('div.card', h('div.row.wrap',
+        h('input.input', { placeholder: 'Search address', style: { maxWidth: '260px' }, oninput: (e) => { st.q = e.target.value.trim().toLowerCase(); st.page = 1; render(); } }),
+        h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
+        h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c }, c))),
+        h('span.grow'), summary));
+      const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: b.winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin })[k];
+      function render() {
+        let rows = all.filter((b) => b.n >= st.minN);
+        if (st.q) rows = rows.filter((b) => b.address.includes(st.q));
+        if (st.cat) rows = rows.filter((b) => b.topCat === st.cat);
+        rows = U.sortBy(rows, (b) => val(b, st.sort.key), st.sort.desc);
+        const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (st.page > pages) st.page = pages;
+        const slice = rows.slice((st.page - 1) * PAGE, st.page * PAGE);
+        const onSort = (k) => { if (st.sort.key === k) st.sort.desc = !st.sort.desc; else st.sort = { key: k, desc: k !== 'address' }; st.page = 1; render(); };
+        U.replace(wrap, UI.table({ sort: st.sort, onSort, cols: [
+          { key: 'rank', label: '#', render: (r) => { const i = rows.indexOf(r) + 1; return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
+          { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
+          { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => h('span', U.fmtNum(r.n, 0), r.open ? h('span.dim.xs', ' (' + r.open + ' open)') : null) },
+          { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
+          { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => U.pnlEl(r.pnl) },
+          { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ settled stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
+          { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 0 })) },
+          { key: 'avgOdds', label: 'Avg odds', num: true, sortVal: 1, render: (r) => pct(r.avgOdds, 0) },
+          { key: 'combos', label: 'Combos', num: true, sortVal: 1, render: (r) => U.fmtPct((r.combos / r.n) * 100, { dp: 0 }) },
+          { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, render: (r) => vigCell(r.avgVig) },
+          { key: 'biggestWin', label: 'Best win', num: true, sortVal: 1, render: (r) => usd(r.biggestWin) },
+          { key: 'cat', label: 'Top category', render: (r) => r.topCat || '—' },
+          { key: 'last', label: 'Last active', sortVal: 1, render: (r) => h('span.dim', U.fmtAgo(r.last)) },
+        ], rows: slice, empty: 'No bettors match', onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } }),
+          UI.pager({ page: st.page, pageSize: PAGE, total, onPage: (p) => { st.page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
+        U.replace(summary, `${total} bettors · ${snapNote(snap)}`);
+      }
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts settled predictions only: a win pays the maker\'s collateral, a loss costs the stake. Open stakes are excluded.'));
+      render();
+    });
+  }
+
+  // =====================================================================
+  // Questions explorer (server-side paged)
+  // =====================================================================
+  async function mountQuestions(body, route, ctx) {
+    MD.setTopbar(h('span.title', 'Predict · Questions'));
+    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
+    let cats = []; let counts = null;
+    try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
+    const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
+    const wrap = h('div');
+    const summary = h('span.dim.small');
+    const search = h('input.input', { placeholder: 'Search questions (e.g. Bitcoin, Berlin, Lakers)', value: st.search, style: { maxWidth: '360px' } });
+    const debounced = U.debounce(() => { st.search = search.value.trim(); load(); }, 400);
+    search.addEventListener('input', debounced);
+    const catSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; load(); } }, h('option', { value: '' }, 'All categories'), cats.map((c) => h('option', { value: c.slug, selected: c.slug === st.cat }, c.name + (c.slug.startsWith('prices-') ? ' (prices)' : ''))));
+    const controls = h('div.card', h('div.row.wrap', search, catSel,
+      UI.seg([{ v: 'open', label: 'Open' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }], st.status, (v) => { st.status = v; load(); }, 'sm'),
+      h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'CREATED_AT', label: 'Newest' }], st.sort, (v) => { st.sort = v; load(); }, 'sm'),
+      h('span.grow'), summary));
+    U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is collateral escrowed on Meridian; source volume is the mirrored market's.` : ''));
+    let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
+    function renderRows() {
+      U.replace(wrap, UI.table({ cols: [
+        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.question), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+        { key: 'c', label: 'Category', render: (c) => (c.category ? c.category.name : '—') },
+        { key: 'p', label: 'Probability', num: true, title: 'Implied probability from the source market', render: (c) => probBar(c.estimatedPrice) },
+        { key: 'oi', label: 'Meridian OI', num: true, render: (c) => { const v = P.usd(c.openInterest); return v ? usd(v, { compact: true }) : h('span.dim', '—'); } },
+        { key: 'v24', label: 'Source vol 24h', num: true, render: (c) => (Number(c.similarMarketVolume24h) ? usd(Number(c.similarMarketVolume24h), { compact: true }) : h('span.dim', '—')) },
+        { key: 'v7', label: 'Source vol 7d', num: true, render: (c) => (Number(c.similarMarketVolume7d) ? usd(Number(c.similarMarketVolume7d), { compact: true }) : h('span.dim', '—')) },
+        { key: 'e', label: 'Ends', render: (c) => h('span.dim', c.endTime ? (c.endTime * 1000 > Date.now() ? 'in ' + U.fmtCountdown(c.endTime * 1000 - Date.now()) : U.fmtDate(c.endTime * 1000)) : '—') },
+        { key: 's', label: 'Status', render: (c) => (c.settled ? (c.nonDecisive ? UI.chip('void', 'amber') : c.resolvedToYes ? UI.chip('YES', 'green') : UI.chip('NO', 'red')) : UI.chip('open', 'accent')) },
+        { key: 'l', label: '', render: (c) => h('div.row', { style: { gap: '4px' } }, sourceLink(c)) },
+      ], rows, empty: loading ? 'Loading…' : 'No questions match' }),
+        UI.cursorPager({ page, hasNext, count: rows.length, loading, onPrev: () => go(page - 1), onNext: () => go(page + 1) }));
+    }
+    async function go(p) {
+      if (p < 1) return; loading = true; renderRows(); const my = ++reqId;
+      try {
+        const res = await P.conditions({ search: st.search || undefined, categorySlug: st.cat || undefined, settled: st.status === 'all' ? null : st.status === 'settled', orderBy: st.sort, dir: st.sort === 'END_TIME' ? 'ASC' : 'DESC', first: PAGE, after: cursors[p - 1], signal: ctx.signal, ttl: 30000 });
+        if (my !== reqId) return;
+        rows = res.nodes; hasNext = res.pageInfo.hasNextPage; page = p; if (hasNext && cursors.length === p) cursors.push(res.pageInfo.endCursor);
+        U.replace(summary, `${U.fmtNum(res.totalCount, 0)} questions`);
+      } catch (e) { if (isAbort(e)) return; if (my !== reqId) return; rows = []; U.replace(wrap, UI.error(e, () => go(p))); loading = false; return; }
+      loading = false; renderRows();
+    }
+    function load() { cursors = [null]; MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
+    load();
+  }
+
+  // =====================================================================
+  // Market makers
+  // =====================================================================
+  async function mountMakers(body, route, ctx) {
+    MD.setTopbar(h('span.title', 'Predict · Market makers'));
+    await withSnapshot(body, ctx, (snap) => {
+      const a = snap.agg; const T = a.totals; const cv = h('canvas');
+      const tbl = UI.table({ cols: [
+        { key: 'a', label: 'Market maker', render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 6), U.copyBtn(r.address)) },
+        { key: 'n', label: 'Predictions taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 's', label: 'Share of flow', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 1 }) },
+        { key: 'c', label: 'Collateral committed', num: true, title: 'Sum of collateral put up against bettors', render: (r) => usd(r.wagered, { compact: true }) },
+        { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
+        { key: 'p', label: 'Maker PnL', num: true, title: 'Settled: + bettor stake on wins, − own collateral on losses', render: (r) => U.pnlEl(r.pnl) },
+        { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
+        { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
+        { key: 'ao', label: 'Avg bettor odds', num: true, render: (r) => pct(r.avgOdds, 0) },
+        { key: 'cat', label: 'Top category', render: (r) => r.topCat || '—' },
+        { key: 'f', label: 'Active', render: (r) => h('span.dim', U.fmtDate(r.first) + ' → ' + U.fmtAgo(r.last)) },
+      ], rows: a.makers, onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
+      U.replace(body,
+        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds. The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(-T.bettorPnl, { sign: true }), 'settled predictions', U.pnlClass(-T.bettorPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
+        h('div.card.tight', tbl),
+        h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Maker PnL'), h('div.chart-box.sm', cv)));
+      C.bars(cv, a.makers.map((m) => U.shortAddr(m.address)), a.makers.map((m) => m.pnl), { horizontal: true });
+    });
+  }
+
+  // =====================================================================
+  // Vig & edge
+  // =====================================================================
+  async function mountVig(body, route, ctx) {
+    MD.setTopbar(h('span.title', 'Predict · Vig & edge'));
+    await withSnapshot(body, ctx, (snap) => {
+      const v = snap.agg.vig; const cv = h('canvas');
+      const sumTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
+        { key: 'k', label: labelKey, render: labelFn },
+        { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 'avg', label: 'Avg vig', num: true, render: (r) => vigCell(r.avg) },
+        { key: 'med', label: 'Median vig', num: true, render: (r) => vigCell(r.median) },
+        { key: 'sh', label: 'Above fair', num: true, title: 'Share of predictions where the bettor paid more than the source probability', render: (r) => (r.share == null ? '—' : U.fmtPct(r.share * 100, { dp: 0 })) },
+      ], rows });
+      U.replace(body,
+        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Every prediction locks odds = stake ÷ (stake + maker collateral). Each question also carries the probability of the source market it mirrors (mostly Polymarket). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = bettor paid above fair, which is the market maker\'s margin.'), h('p.muted.small', { style: { margin: 0 } }, 'Measured against the source\'s current or last price, not the price at the moment of the bet, so individual values are noisy; averages over many predictions are the meaningful part. For combos the fair price is the product of the legs.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'all predictions with a source price'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions')),
+        h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Average vig per week'), h('div.chart-box.sm', cv)),
+        h('div.grid.cols-2', UI.card('By category', sumTbl(v.byCat, 'Category', (r) => r.cat)), UI.card('By odds', sumTbl(v.byOddsBucket.filter((b) => b.n), 'Bettor odds', (r) => pct(r.from, 0) + ' – ' + pct(r.to, 0)))),
+        h('div.footer-note', 'A negative vig means the bettor got a better price than the source market showed; that happens when the source moved after the bet, or when makers compete hard on popular questions.'));
+      const col = C.colors();
+      C.timeSeries(cv, { points: v.weekly.map((w) => ({ x: w.t, y: (w.avg || 0) * 100 })), color: col.amber, label: 'Avg vig', yFmt: (x) => x.toFixed(1) + ' pp', tipFmt: (x) => x.toFixed(2) + ' pp', zero: true });
+    });
+  }
+
+  // =====================================================================
+  // Bettor page (also used as the Predict tab on the perps account page)
+  // =====================================================================
+  async function mountBettorPage(body, route, ctx) {
+    const addr = String(route.params.address || '').toLowerCase();
+    MD.setTopbar(h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer')));
+    if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.error', 'Invalid address'))); return; }
+    await P.renderBettor(body, addr, ctx);
+  }
+  P.renderBettor = async function (el, addr, ctx) {
+    U.replace(el, loadingCard('Loading bettor history…'));
+    let acct, raw, openPos;
+    try {
+      [acct, raw, openPos] = await Promise.all([
+        P.account(addr, { interval: 'DAY', fromSec: P.LAUNCH_SEC, signal: ctx.signal, ttl: 60000 }),
+        P.predictionsOf(addr, { maxPages: 12, signal: ctx.signal }),
+        P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
+      ]);
+    } catch (e) { if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
+    if (ctx.signal.aborted) return;
+    const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
+    const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
+    const isMaker = asMaker.length > asBettor.length;
+    const mine = isMaker ? asMaker : asBettor;
+    if (!mine.length && !acct.history.some((x) => x.total)) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
+    const s = P.bettorSummary(mine).stats || {};
+    const hist = acct.history;
+    const last = hist.length ? hist[hist.length - 1] : null;
+    const claimable = last ? last.claimable : 0;
+    const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
+    const tiles = h('div.stats',
+      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl, { sign: true }), 'realised · exchange stats', U.pnlClass(totals.pnl)),
+      UI.stat('Volume', usd(acct.totalVolume, { compact: true }), 'all time'),
+      UI.stat('Record', `${totals.won}W / ${totals.lost}L`, (totals.pending ? totals.pending + ' pending' : '') + (totals.nd ? ' · ' + totals.nd + ' void' : '')),
+      UI.stat('Win rate', totals.won + totals.lost ? U.fmtPct((totals.won / (totals.won + totals.lost)) * 100, { dp: 0 }) : '—'),
+      UI.stat('ROI', s.roi == null ? '—' : U.fmtPct(s.roi, { sign: true, dp: 0 }), 'on settled stakes (last ' + mine.length + ')', U.pnlClass(s.roi)),
+      UI.stat('Avg odds', pct(s.avgOdds, 0), s.avgLegs ? 'avg ' + U.fmtNum(s.avgLegs, 1) + ' legs' : null),
+      UI.stat('Collateral', usd(acct.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
+      UI.stat('Open', String(openPos.totalCount || 0), 'positions'));
+    const cPnl = h('canvas'), cVol = h('canvas');
+    const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
+    const openTbl = UI.table({ cols: [
+      { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q))) },
+      { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip('maker', 'blue') : UI.chip('bettor', '')) },
+      { key: 's', label: 'Stake', num: true, render: (r) => usd(r.stake) },
+      { key: 'o', label: 'Locked odds', num: true, render: (r) => pct(r.odds, 1) },
+      { key: 'f', label: 'Source now', num: true, title: 'Current probability on the source market', render: (r) => pct(r.fair, 1) },
+      { key: 'p', label: 'Pays', num: true, render: (r) => h('span', usd(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
+      { key: 'e', label: 'Resolves', render: (r) => h('span.dim', r.ends ? (r.ends > Date.now() ? 'in ' + U.fmtCountdown(r.ends - Date.now()) : 'pending') : '—') },
+    ], rows: posRows, empty: 'No open positions' });
+    let hpage = 1; const histWrap = h('div');
+    const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ cols: [
+      { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
+      { key: 'q', label: 'Prediction', render: (n) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, n.picks.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', k.q)), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + ' more legs') : null) },
+      { key: 'c', label: 'Category', render: (n) => n.cat },
+      { key: 's', label: isMaker ? 'Bettor stake' : 'Stake', num: true, render: (n) => usd(n.stake) },
+      { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
+      { key: 'v', label: 'Vig', num: true, render: (n) => vigCell(n.vig) },
+      { key: 'cp', label: isMaker ? 'Bettor' : 'Maker', render: (n) => bettorLink(isMaker ? n.predictor : n.counterparty) },
+      { key: 'r', label: 'Result', render: (n) => resultChip(n) },
+      { key: 'p', label: 'PnL', num: true, render: (n) => U.pnlEl(isMaker ? -n.pnl : n.pnl) },
+    ], rows: slice, empty: 'No predictions' }), mine.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: mine.length, onPage: (p) => { hpage = p; renderHist(); } }) : null); };
+    renderHist();
+    const sum = P.bettorSummary(mine);
+    const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
+    const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
+    U.replace(el, h('div.stack',
+      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', `${mine.length}${raw.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      tiles,
+      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', cPnl)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily volume'), h('div.chart-box.sm', cVol))),
+      UI.card('Open positions', openTbl, h('span.dim.small', String(openPos.totalCount || 0))),
+      UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
+      h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
+    const col = C.colors();
+    const firstAct = hist.findIndex((x) => x.total || x.volume);
+    const h2 = firstAct >= 0 ? hist.slice(Math.max(0, firstAct - 1)) : hist;
+    C.timeSeries(cPnl, { points: h2.map((x) => ({ x: x.t, y: x.cumPnl })), color: (last && last.cumPnl >= 0) ? col.green : col.red, label: 'PnL' });
+    C.timeSeries(cVol, { points: h2.map((x) => ({ x: x.t, y: x.volume })), type: 'bar', color: col.accent, label: 'Volume' });
+  };
+})();

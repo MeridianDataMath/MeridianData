@@ -12,6 +12,7 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 | `https://archive.meridian.xyz` | per-subaccount balance / unrealized-PnL / volume history (the charts and interval stats) |
 | `wss://ws.meridian.xyz/v1/stream` | live tickers, order book, trade tape, per-account position/order/fill events |
 | `https://tradingview.meridian.xyz` | 7-day oracle price sparklines on the dashboard |
+| `https://api.predict.meridian.xyz/graphql` | Meridian Predict (Sapience): questions, predictions, positions, account stats, secondary-market trades |
 
 ## Run it
 
@@ -71,6 +72,25 @@ visitor's browser.
   fees, funding, deposits, withdrawals, monthly breakdown, closed-positions ledger, and CSV
   exports (summary, daily ledger, closed positions, fills, transfers, Koinly universal template)
   plus a print-friendly view. Records only, not tax advice.
+* **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
+  * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
+    category and single-vs-combo breakdowns, market makers, secondary-market trades.
+  * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
+    average vig paid, best win and last activity; click through to a bettor page.
+  * *Questions* – explorer over all 77k questions: search, category, open/settled, sorted by
+    Meridian open interest, end time or newest; implied probability, Meridian OI, source volume,
+    link to the mirrored source market.
+  * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
+    committed, open exposure, PnL, win rate, vig captured.
+  * *Vig & edge* – the bettor's locked odds versus the source market's probability, overall,
+    per category, per odds bucket, singles vs combos, and per week.
+  * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
+    full prediction history, category and combo breakdown (also the **Predict** tab on every
+    perps account page). The Tax center gains a Predict block with realised PnL, monthly table
+    and two CSV exports.
+  The aggregates come from `data/predict.json`, built by the same GitHub Action every 15 min
+  (all predictions since launch, pulled 25 rows per page across parallel time windows). Without
+  it the browser builds the last 14 days itself.
 * **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
   all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
   positions is not implemented yet; nothing on the page places orders.

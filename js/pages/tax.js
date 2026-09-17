@@ -18,6 +18,48 @@
     setTimeout(() => URL.revokeObjectURL(url), 3000);
     U.toast('Downloaded ' + name);
   };
+  const busyFn = (btn, fn) => async () => { btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = ''; U.append(btn, [h('span.spinner'), ' Preparing…']); try { await fn(); } catch (e) { if (!isAbort(e)) U.toast('Export failed: ' + e.message); } btn.disabled = false; btn.innerHTML = old; };
+
+  /** Meridian Predict (prediction markets) section of the tax page: realised PnL from the exchange's own daily account stats. */
+  async function renderPredict(card, addr, start, end, fname, busy, download, toCsv, n6, isoDate, isoTime) {
+    const P = MD.predict;
+    const acct = await P.account(addr, { interval: 'DAY', fromSec: Math.floor(start / 1000) - 86400, toSec: Math.floor(end / 1000), ttl: 60000 });
+    const rows = acct.history.filter((x) => x.t >= start && x.t < end);
+    const T = rows.reduce((a, x) => { a.pnl += x.pnl; a.volume += x.volume; a.won += x.won; a.lost += x.lost; a.nd += x.nonDecisive; a.total += x.total; return a; }, { pnl: 0, volume: 0, won: 0, lost: 0, nd: 0, total: 0 });
+    const lastAll = acct.history.length ? acct.history[acct.history.length - 1] : null;
+    if (!T.total && !T.volume && !T.pnl && !(lastAll && (lastAll.claimable || lastAll.deployed))) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', 'No Meridian Predict activity for this wallet in the period.')); return; }
+    const months = {};
+    for (const x of rows) { const d = new Date(x.t); const k = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0'); const m = months[k] || (months[k] = { key: k, label: MON[d.getUTCMonth()] + ' ' + d.getUTCFullYear(), pnl: 0, volume: 0, won: 0, lost: 0, total: 0 }); m.pnl += x.pnl; m.volume += x.volume; m.won += x.won; m.lost += x.lost; m.total += x.total; }
+    const monthly = Object.values(months).sort((a, b) => (a.key < b.key ? -1 : 1));
+    card.dataset.pnl = n6(T.pnl);
+    const tiles = h('div.stats',
+      UI.stat('Realised PnL', U.fmtUsd(T.pnl, { sign: true }), 'settled predictions in period', U.pnlClass(T.pnl)),
+      UI.stat('Wagered', U.fmtUsd(T.volume), 'stakes placed in period'),
+      UI.stat('Predictions', String(T.total), `${T.won} won · ${T.lost} lost` + (T.nd ? ` · ${T.nd} void` : '')),
+      UI.stat('Claimable now', U.fmtUsd(lastAll ? lastAll.claimable : 0), 'won, not yet redeemed'),
+      UI.stat('In open positions', U.fmtUsd(lastAll ? lastAll.deployed : 0), 'collateral deployed now'));
+    const tbl = UI.table({ cols: [
+      { key: 'm', label: 'Month', render: (m) => m.label },
+      { key: 'p', label: 'Realised PnL', num: true, render: (m) => U.pnlEl(m.pnl) },
+      { key: 'v', label: 'Wagered', num: true, render: (m) => U.fmtUsd(m.volume) },
+      { key: 'n', label: 'Predictions', num: true, render: (m) => String(m.total) },
+      { key: 'w', label: 'Won / lost', num: true, render: (m) => `${m.won} / ${m.lost}` },
+    ], rows: monthly, empty: 'No activity in this period' });
+    const exportDaily = () => download(fname('predict-daily-ledger'), toCsv([['Date (UTC)', (x) => isoDate(x.t)], ['Realised PnL', (x) => n6(x.pnl)], ['Cumulative PnL', (x) => n6(x.cumPnl)], ['Wagered', (x) => n6(x.volume)], ['Predictions', (x) => x.total], ['Won', (x) => x.won], ['Lost', (x) => x.lost], ['Void', (x) => x.nonDecisive], ['Deployed collateral', (x) => n6(x.deployed)], ['Claimable', (x) => n6(x.claimable)]], rows));
+    const exportBets = async () => {
+      const raw = await P.predictionsOf(addr, { maxPages: 24, filter: { settled: true } });
+      const norms = raw.map(P.norm).filter((n) => n.predictor === addr && n.settledAt && n.settledAt >= start && n.settledAt < end).sort((a, b) => b.settledAt - a.settledAt);
+      if (raw.truncated) U.toast('More than 600 settled predictions; export truncated');
+      download(fname('predict-settled-bets'), toCsv([['Settled (UTC)', (n) => isoTime(n.settledAt)], ['Placed (UTC)', (n) => isoTime(n.t)], ['Picks', (n) => n.picks.map((k) => (k.yes ? 'YES: ' : 'NO: ') + k.q).join(' | ')], ['Legs', (n) => n.legs], ['Category', (n) => n.cat], ['Stake', (n) => n6(n.stake)], ['Maker collateral', (n) => n6(n.cp)], ['Locked odds', (n) => (n.odds == null ? '' : n6(n.odds))], ['Result', (n) => n.result], ['Realised PnL', (n) => n6(n.pnl)], ['Market maker', (n) => n.counterparty], ['Prediction ID', (n) => n.id], ['Tx', (n) => n.tx || '']], norms));
+    };
+    const exBtn = (label, sub, fn, async) => { const b = h('button.btn', {}, U.icon('download'), label); b.addEventListener('click', async ? busy(b, fn) : fn); return h('div.metric', h('div', b), h('div.s', { style: { marginTop: '6px' } }, sub)); };
+    U.replace(card,
+      h('div.row', { style: { marginBottom: '10px' } }, h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), h('span.dim.small', 'from the exchange\'s daily account stats · USDe')),
+      tiles,
+      h('div', { style: { margin: '14px 0' } }, h('div.card.tight', tbl)),
+      h('div.metric-list', exBtn('Predict daily ledger', 'One row per day: realised PnL, wagered, predictions won and lost, deployed and claimable collateral.', exportDaily), exBtn('Predict settled bets', 'Every prediction settled in the period with picks, stake, odds, result and PnL.', exportBets, true)),
+      h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Predict PnL is realised when a question resolves: a win pays the maker\'s collateral, a loss forfeits the stake. Winnings sit as claimable collateral until redeemed; redeeming does not change the PnL.'));
+  }
 
   MD.router.pages.tax = {
     async mount(root, route, ctx) {
@@ -50,14 +92,14 @@
       let subs, sa, ref;
       try { [subs, ref] = await Promise.all([A.subaccountsOf(addr, ctx), A.ref(ctx)]); }
       catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
-      if (!subs.length) { U.replace(body, h('div.card', h('div.empty', 'No Meridian subaccounts are registered for this address.'))); return; }
-      sa = subs.find((s) => s.id === subParam) || subs[0];
+      const perpsOnly = subs.length > 0;
+      sa = perpsOnly ? (subs.find((s) => s.id === subParam) || subs[0]) : null;
       if (subs.length > 1) { subSel.style.display = ''; U.replace(subSel, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name)))); }
-      const sid = sa.id;
+      const sid = sa ? sa.id : null;
 
       // ---- period ----
       const nowY = new Date().getUTCFullYear();
-      const firstY = new Date(U.num(sa.createdAt) || Date.now()).getUTCFullYear();
+      const firstY = new Date(sa ? (U.num(sa.createdAt) || Date.now()) : Date.UTC(2026, 5, 1)).getUTCFullYear();
       const years = []; for (let y = nowY; y >= Math.min(firstY, nowY); y--) years.push(y);
       let start, end, label, mode;
       if (route.params.from && route.params.to) { mode = 'custom'; start = Date.parse(route.params.from + 'T00:00:00Z'); end = Date.parse(route.params.to + 'T00:00:00Z') + U.DAY; label = route.params.from + ' → ' + route.params.to; }
@@ -69,9 +111,16 @@
       const controls = h('div.card', h('div.row.wrap',
         h('span.dim.small', 'Period'), yearSeg, h('span.dim.small', 'or custom (UTC)'), fromIn, h('span.dim', '→'), toIn,
         h('button.btn.sm', { onclick: () => { if (fromIn.value && toIn.value && fromIn.value <= toIn.value) MD.router.setParams({ from: fromIn.value, to: toIn.value, year: null }); } }, 'Apply'),
-        h('span.grow'), h('span.dim.small', U.shortAddr(addr, 6) + ' · ' + U.decodeBytes32(sa.name) + ' · since ' + U.fmtDate(sa.createdAt))));
+        h('span.grow'), h('span.dim.small', U.shortAddr(addr, 6) + (sa ? ' · ' + U.decodeBytes32(sa.name) + ' · since ' + U.fmtDate(sa.createdAt) : ' · no perps subaccount'))));
       const status = h('div.card', UI.loading('Collecting daily ledgers and position history…'));
       U.replace(body, controls, status);
+      if (!sa) {
+        // Predict-only wallet: no perps ledgers, but the prediction-market section still applies
+        const predictOnly = h('div.card', h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', h('span.loading', h('span.spinner'), 'Loading Predict history…')));
+        U.replace(body, controls, h('div.card', h('div.empty', 'This wallet has no Meridian perps subaccount, so there are no perps ledgers to report. Prediction-market activity is below.')), predictOnly);
+        renderPredict(predictOnly, addr, start, end, (kind) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}-${isoDate(start)}_${isoDate(end - 1)}.csv`, busyFn, download, toCsv, n6, isoDate, isoTime).catch((e) => { if (!isAbort(e)) U.replace(predictOnly, h('div.row', h('h2', 'Meridian Predict')), UI.error(e)); });
+        return;
+      }
 
       // ---- data ----
       let series, positions;
@@ -152,9 +201,9 @@
 
       // ---- exports ----
       const fname = (kind) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}-${isoDate(start)}_${isoDate(end - 1)}.csv`;
-      const busy = (btn, fn) => async () => { btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = ''; U.append(btn, [h('span.spinner'), ' Preparing…']); try { await fn(); } catch (e) { if (!isAbort(e)) U.toast('Export failed: ' + e.message); } btn.disabled = false; btn.innerHTML = old; };
+      const busy = busyFn;
       const exportSummary = () => download(fname('summary'), toCsv([['Metric', (r) => r[0]], ['USD', (r) => r[1]]],
-        [['Period start (UTC)', isoDate(start)], ['Period end (UTC)', isoDate(end - 1)], ['Wallet', addr], ['Subaccount', sid], ['Net result', n6(T.net)], ['Realised PnL', n6(T.realized)], ['Trading fees', n6(T.fees)], ['Funding (net)', n6(T.funding)], ['Deposits', n6(T.deposits)], ['Withdrawals', n6(T.withdrawals)], ['Volume', n6(T.volume)], ['Closed positions', closed.length], ['Liquidations', liqCount]])
+        [['Period start (UTC)', isoDate(start)], ['Period end (UTC)', isoDate(end - 1)], ['Wallet', addr], ['Subaccount', sid], ['Perps net result', n6(T.net)], ['Perps realised PnL', n6(T.realized)], ['Perps trading fees', n6(T.fees)], ['Perps funding (net)', n6(T.funding)], ['Perps deposits', n6(T.deposits)], ['Perps withdrawals', n6(T.withdrawals)], ['Perps volume', n6(T.volume)], ['Closed positions', closed.length], ['Liquidations', liqCount], ['Predict realised PnL', predictCard.dataset.pnl != null ? predictCard.dataset.pnl : 'see Predict ledger export']])
         + '\r\n\r\n' + toCsv([['Month', (m) => m.label], ['Realised PnL', (m) => n6(m.realized)], ['Fees', (m) => n6(m.fees)], ['Funding', (m) => n6(m.funding)], ['Net', (m) => n6(m.net)], ['Deposits', (m) => n6(m.deposits)], ['Withdrawals', (m) => n6(m.withdrawals)], ['Volume', (m) => n6(m.volume)]], monthly));
       const exportDaily = () => download(fname('daily-ledger'), toCsv([['Date (UTC)', (b) => isoDate(b.t)], ['Realised PnL', (b) => n6(b.realizedPnl)], ['Trading fees', (b) => n6(b.fee)], ['Funding', (b) => n6(b.funding)], ['Net', (b) => n6(b.realizedPnl - b.fee + b.funding)], ['Deposits', (b) => n6(b.deposit)], ['Withdrawals', (b) => n6(b.withdrawal)], ['Volume', (b) => n6(b.volume)], ['Balance end of day', (b) => n6(b.balance)]], days));
       const exportPositions = () => download(fname('closed-positions'), toCsv([['Closed (UTC)', (c) => isoTime(c.p.updatedAt)], ['Opened (UTC)', (c) => isoTime(c.p.createdAt)], ['Market', (c) => c.ticker], ['Side', (c) => (c.long ? 'LONG' : 'SHORT')], ['Size', (c) => n6(c.size)], ['Avg entry', (c) => n6(c.entry)], ['Avg exit', (c) => n6(c.exit)], ['Cost USD', (c) => n6(c.cost)], ['Proceeds USD', (c) => n6(c.proceeds)], ['Realised PnL', (c) => n6(c.gross)], ['Trading fees', (c) => n6(c.fees)], ['Position fees', (c) => n6(c.pfees)], ['Funding', (c) => n6(c.funding)], ['Net', (c) => n6(c.net)], ['Held hours', (c) => (c.hold / U.HOUR).toFixed(2)], ['Liquidated', (c) => (c.liq ? 'yes' : 'no')], ['Deleveraged', (c) => (c.adl ? 'yes' : 'no')], ['Position ID', (c) => c.p.id]], closed));
@@ -199,8 +248,9 @@
           h('div.it', h('div.t', 'Currency'), h('div.d', 'Everything settles in USDe. Amounts are shown at 1 USDe = 1 USD; if your jurisdiction requires it, apply the USDe/fiat rate of each day.'))),
         h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'MeridianData is not a tax adviser. Rules for perpetual futures differ by country; use these records with a professional or a tax tool.'));
 
+      const predictCard = h('div.card', h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', h('span.loading', h('span.spinner'), 'Loading Predict history…')));
       U.replace(body, controls,
-        h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', label), h('span.grow'), h('span.dim.small', `${days.length} days · ${positions.length}${positions.truncated ? '+' : ''} positions on record · ${openAtEnd} open now`)), tiles),
+        h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', label), UI.chip('perps', ''), h('span.grow'), h('span.dim.small', `${days.length} days · ${positions.length}${positions.truncated ? '+' : ''} positions on record · ${openAtEnd} open now`)), tiles),
         h('div.grid.cols-2', UI.card('Monthly breakdown', monthlyTbl), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Net result by month'), h('div.chart-box.sm', mCanvas))),
         UI.card('Closed positions', h('div',
           Math.abs(unlisted) >= 0.01 ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } },
@@ -208,8 +258,9 @@
             h('b', U.fmtUsd(T.realized, { sign: true })), ' realised PnL comes from them; the remaining ', h('b', U.fmtUsd(unlisted, { sign: true })),
             ' was booked on partial closes of positions that are still open.') : null,
           ledgerWrap), h('span.dim.small', `${closed.length} in period`)),
-        exportsCard, info);
+        exportsCard, predictCard, info);
       C.bars(mCanvas, monthly.map((m) => m.label), monthly.map((m) => m.net));
+      renderPredict(predictCard, addr, start, end, fname, busy, download, toCsv, n6, isoDate, isoTime).catch((e) => { if (!isAbort(e)) U.replace(predictCard, h('div.row', h('h2', 'Meridian Predict')), UI.error(e)); });
     },
   };
 })();

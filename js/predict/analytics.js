@@ -1,0 +1,100 @@
+/* MeridianData — Predict analytics: normalise predictions and aggregate bettors, makers, vig, categories, combos, series.
+   Shared by the browser and scripts/build-snapshot.mjs (Node). */
+(function () {
+  const MD = window.MD; const U = MD.util;
+  const P = (MD.predict = MD.predict || {});
+  const DAY = 86400000;
+
+  /** Normalise one raw prediction into plain numbers. */
+  P.norm = function (p) {
+    const stake = P.usd(p.predictorCollateral), cp = P.usd(p.counterpartyCollateral), pool = stake + cp;
+    const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => {
+      const c = k.condition || {};
+      const ep = c.estimatedPrice == null ? null : Number(c.estimatedPrice);
+      const yes = String(k.predictedOutcome).toUpperCase() === 'YES';
+      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, cat: (c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
+    });
+    let fair = null;
+    if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
+    const odds = pool > 0 ? stake / pool : null;
+    const cats = Array.from(new Set(picks.map((k) => k.cat)));
+    const settled = !!p.settled;
+    const won = settled && p.result === 'PREDICTOR_WINS';
+    return {
+      id: p.predictionId, t: P.ms(p.createdAt), settledAt: p.settledAt ? P.ms(p.settledAt) : null,
+      predictor: String(p.predictor || '').toLowerCase(), counterparty: String(p.counterparty || '').toLowerCase(),
+      stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null,
+      legs: picks.length, combo: picks.length > 1, picks, fair,
+      vig: odds != null && fair != null ? odds - fair : null,           // > 0: bettor paid above the source's fair price
+      vigPct: odds != null && fair ? (odds - fair) / fair : null,
+      cat: cats.length === 1 ? cats[0] : cats.length > 1 ? 'Mixed' : 'Other', cats,
+      settled, result: p.result || null, won, lost: settled && !won,
+      pnl: settled ? (won ? cp : -stake) : 0,                             // bettor's realised result
+      endsAt: p.pickConfig && p.pickConfig.endsAt ? P.ms(p.pickConfig.endsAt) : null,
+      tx: p.createTxHash || null,
+    };
+  };
+
+  /** Compact row for the tape / snapshot. */
+  P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, won: n.won, pnl: r4(n.pnl) });
+  const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
+  const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+  const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const dayKey = (ms) => Math.floor(ms / DAY) * DAY;
+  const weekKey = (ms) => Math.floor((ms - 4 * DAY) / (7 * DAY)) * 7 * DAY + 4 * DAY;   // Monday 00:00 UTC
+
+  /** Aggregate normalised predictions. Returns plain JSON. */
+  P.aggregate = function (norms, { tapeSize = 100 } = {}) {
+    const bettors = {}, makers = {}, cats = {}, combos = {}, daily = {}, weeks = {};
+    const acc = (m, k, init) => m[k] || (m[k] = init());
+    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, settled: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {} });
+    const bump = (s, n, asMaker) => {
+      s.n++; s.wagered += asMaker ? n.cp : n.stake; s.legs += n.legs; if (n.combo) s.combos++;
+      if (n.odds != null) { s.oddsSum += n.odds; s.oddsN++; }
+      if (n.vig != null) { s.vigSum += n.vig; s.vigN++; }
+      if (n.settled) { s.settled++; const w = asMaker ? n.lost : n.won; if (w) s.won++; else s.lost++; const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if (pnl > s.biggestWin) s.biggestWin = pnl; }
+      else { s.open++; s.openWagered += asMaker ? n.cp : n.stake; }
+      const st = asMaker ? n.cp : n.stake; if (st > s.biggestStake) s.biggestStake = st;
+      if (s.first == null || n.t < s.first) s.first = n.t; if (s.last == null || n.t > s.last) s.last = n.t;
+      s.cats[n.cat] = (s.cats[n.cat] || 0) + 1;
+    };
+    const finish = (s) => { s.winRate = s.settled ? (s.won / s.settled) * 100 : null; s.roi = s.settled ? (s.pnl / Math.max(1e-9, s.wagered - s.openWagered)) * 100 : null; s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = Object.keys(s.cats).sort((a, b) => s.cats[b] - s.cats[a])[0] || null; delete s.oddsSum; delete s.oddsN; delete s.vigSum; delete s.vigN; delete s.legs; return s; };
+    const vigAll = [], vigByCat = {};
+    let totals = { n: 0, wagered: 0, cpCommitted: 0, settled: 0, won: 0, lost: 0, bettorPnl: 0, open: 0, openWagered: 0, combos: 0 };
+    for (const n of norms) {
+      totals.n++; totals.wagered += n.stake; totals.cpCommitted += n.cp; if (n.combo) totals.combos++;
+      if (n.settled) { totals.settled++; if (n.won) totals.won++; else totals.lost++; totals.bettorPnl += n.pnl; } else { totals.open++; totals.openWagered += n.stake; }
+      const b = acc(bettors, n.predictor, side); bump(b, n, false);
+      const m = acc(makers, n.counterparty, side); bump(m, n, true);
+      const c = acc(cats, n.cat, () => ({ cat: n.cat, n: 0, wagered: 0, settled: 0, won: 0, pnl: 0, vig: [] })); c.n++; c.wagered += n.stake; if (n.settled) { c.settled++; if (n.won) c.won++; c.pnl += n.pnl; } if (n.vig != null) c.vig.push(n.vig);
+      const k = acc(combos, n.legs, () => ({ legs: n.legs, n: 0, settled: 0, won: 0, wagered: 0, pnl: 0, odds: [], multiples: [] })); k.n++; k.wagered += n.stake; if (n.settled) { k.settled++; if (n.won) k.won++; k.pnl += n.pnl; } if (n.odds != null) k.odds.push(n.odds); if (n.multiple != null) k.multiples.push(n.multiple);
+      const d = acc(daily, dayKey(n.t), () => ({ t: dayKey(n.t), n: 0, wagered: 0, bettors: new Set(), settledPnl: 0, settledN: 0 })); d.n++; d.wagered += n.stake; d.bettors.add(n.predictor);
+      if (n.settledAt) { const ds = acc(daily, dayKey(n.settledAt), () => ({ t: dayKey(n.settledAt), n: 0, wagered: 0, bettors: new Set(), settledPnl: 0, settledN: 0 })); ds.settledPnl += n.pnl; ds.settledN++; }
+      if (n.vig != null) { vigAll.push(n); const wk = acc(weeks, weekKey(n.t), () => ({ t: weekKey(n.t), vig: [], n: 0, wagered: 0 })); wk.vig.push(n.vig); wk.n++; wk.wagered += n.stake; (vigByCat[n.cat] || (vigByCat[n.cat] = [])).push(n.vig); }
+    }
+    const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a])));
+    const vigSummary = (list) => ({ n: list.length, avg: avg(list), median: median(list), share: list.length ? list.filter((v) => v > 0).length / list.length : null });
+    const vig = {
+      overall: vigSummary(vigAll.map((n) => n.vig)),
+      weighted: vigAll.length ? vigAll.reduce((a, n) => a + n.vig * n.stake, 0) / Math.max(1e-9, vigAll.reduce((a, n) => a + n.stake, 0)) : null,
+      byCat: Object.keys(vigByCat).map((c) => Object.assign({ cat: c }, vigSummary(vigByCat[c]))).sort((a, b) => b.n - a.n),
+      singles: vigSummary(vigAll.filter((n) => !n.combo).map((n) => n.vig)),
+      combosOnly: vigSummary(vigAll.filter((n) => n.combo).map((n) => n.vig)),
+      byOddsBucket: [[0, 0.1], [0.1, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 0.9], [0.9, 1.01]].map(([a, b]) => Object.assign({ from: a, to: Math.min(1, b) }, vigSummary(vigAll.filter((n) => n.odds >= a && n.odds < b).map((n) => n.vig)))),
+      weekly: Object.values(weeks).sort((a, b) => a.t - b.t).map((w) => ({ t: w.t, n: w.n, wagered: w.wagered, avg: avg(w.vig), median: median(w.vig) })),
+    };
+    return {
+      totals: Object.assign(totals, { bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.settled ? (totals.won / totals.settled) * 100 : null }),
+      bettors: rowsOf(bettors, 'address').sort((a, b) => b.pnl - a.pnl),
+      makers: rowsOf(makers, 'address').sort((a, b) => b.n - a.n),
+      categories: Object.values(cats).map((c) => ({ cat: c.cat, n: c.n, wagered: c.wagered, settled: c.settled, won: c.won, winRate: c.settled ? (c.won / c.settled) * 100 : null, pnl: c.pnl, avgVig: avg(c.vig) })).sort((a, b) => b.wagered - a.wagered),
+      combos: Object.values(combos).map((k) => ({ legs: k.legs, n: k.n, settled: k.settled, won: k.won, winRate: k.settled ? (k.won / k.settled) * 100 : null, wagered: k.wagered, pnl: k.pnl, avgOdds: avg(k.odds), avgMultiple: avg(k.multiples), medianMultiple: median(k.multiples) })).sort((a, b) => a.legs - b.legs),
+      daily: Object.values(daily).sort((a, b) => a.t - b.t).map((d) => ({ t: d.t, n: d.n, wagered: d.wagered, bettors: d.bettors.size, settledPnl: d.settledPnl, settledN: d.settledN })),
+      vig,
+      tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map(P.compact),
+    };
+  };
+
+  /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */
+  P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0 }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
+})();

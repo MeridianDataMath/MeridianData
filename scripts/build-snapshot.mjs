@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
- * Builds data/leaderboard.json — the shared leaderboard snapshot the site serves to every visitor.
- * Reuses the site's own browser modules (util / api / analytics) so the numbers match a local build.
+ * Builds the shared snapshots the site serves to every visitor:
+ *   data/leaderboard.json — perps leaderboard (every subaccount, all intervals)
+ *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape)
+ * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
  *   node scripts/build-snapshot.mjs
@@ -16,12 +18,33 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // minimal browser shims for the classic-script modules
 globalThis.window = globalThis;
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
-for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js']) {
+for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/predict/api.js', 'js/predict/analytics.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f });
 }
 const { MD } = globalThis;
-const A = MD.api, AN = MD.analytics, U = MD.util;
+const A = MD.api, AN = MD.analytics, U = MD.util, P = MD.predict;
+fs.mkdirSync(path.join(root, 'data'), { recursive: true });
 
+// ---------------------------------------------------------------- Predict
+async function buildPredict() {
+  const t0 = Date.now();
+  const toSec = Math.floor(Date.now() / 1000);
+  let lastLog = 0;
+  const raw = await P.predictionsWindowed({
+    fromSec: P.LAUNCH_SEC, toSec, windows: 32, concurrency: 8, maxPagesPerWindow: 600,
+    onProgress: (n) => { if (Date.now() - lastLog > 5000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far`); } },
+  });
+  const norms = raw.map(P.norm);
+  const agg = P.aggregate(norms, { tapeSize: 100 });
+  let counts = null;
+  try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
+  const out = { builtAt: Date.now(), source: 'github-actions', fromSec: P.LAUNCH_SEC, predictions: norms.length, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0 };
+  fs.writeFileSync(path.join(root, 'data', 'predict.json'), JSON.stringify(out));
+  console.log(`wrote data/predict.json: ${norms.length} predictions, ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+}
+try { await buildPredict(); } catch (e) { console.warn('predict snapshot failed (site falls back to a browser build):', e && e.message); }
+
+// ------------------------------------------------------------------- Perps
 const started = Date.now();
 const ctx = { signal: new AbortController().signal };
 const ref = await A.ref(ctx);
@@ -38,7 +61,6 @@ const rows = []; let failed = 0;
 results.forEach((r, i) => { if (r.ok) rows.push(r.value); else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
 
 const out = { builtAt: Date.now(), rows, partial: failed > 0, source: 'github-actions', accounts: subs.length, failed, durationMs: Date.now() - started };
-fs.mkdirSync(path.join(root, 'data'), { recursive: true });
 fs.writeFileSync(path.join(root, 'data', 'leaderboard.json'), JSON.stringify(out));
 console.log(`wrote data/leaderboard.json: ${rows.length} rows, ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
 if (!rows.length) process.exit(1);
