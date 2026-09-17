@@ -132,6 +132,10 @@
   A.positionsPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/position', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
   A.positionFills = (positionId, o) => A.page(A.BASE, '/v1/position/fill', { positionId }, { maxPages: 5, ttl: 60000, signal: o && o.signal });
   A.openOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isWorking: true }, { maxPages: 5, signal: o && o.signal });
+  /** Untriggered stop orders (take profit / stop loss) — a separate filter from working orders. */
+  A.pendingOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isPending: true }, { maxPages: 5, signal: o && o.signal });
+  /** Working + pending orders in one list. */
+  A.activeOrders = async (sid, o) => { const [w, p] = await Promise.all([A.openOrders(sid, o).catch(() => []), A.pendingOrders(sid, o).catch(() => [])]); const seen = new Set(); return w.concat(p).filter((x) => (seen.has(x.id) ? false : seen.add(x.id))); };
   A.fillsPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/order/fill', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
   A.fills = (sid, o) => A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: o && o.after }, { maxPages: (o && o.maxPages) || 10, signal: o && o.signal });
   A.transfersPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/token/transfer', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });

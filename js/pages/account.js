@@ -38,7 +38,39 @@
     return h('span', U.fmtPrice(r.liqPrice, r.prod.tickSize), h('span.xs', { class: cls, style: r.distPct >= 5 && r.distPct < 15 ? { color: 'var(--amber)' } : null }, ' ' + (r.distPct > 500 ? '>500%' : U.fmtPct(r.distPct, { dp: 1 }))));
   };
   const ratioTxt = (x) => (x == null ? null : x > 999 ? '>999×' : U.fmtNum(x, 1) + '×');
-  const flags = (o) => { const f = []; if (o.reduceOnly) f.push('RO'); if (o.postOnly) f.push('PO'); if (o.close) f.push('CLOSE'); if (U.num(o.stopPrice) > 0) f.push((String(o.stopType) === '0' ? 'TP' : 'SL') + ' @' + U.fmtPrice(o.stopPrice)); if (o.timeInForce && o.timeInForce !== 'GTD') f.push(o.timeInForce); return f.join(' · '); };
+  const flags = (o) => {
+    const f = []; const m = AN.orderMeta(o);
+    if (m.stop) f.push(m.kind + ' @' + U.fmtPrice(o.stopPrice) + (m.trigger === 'last' ? ' (last)' : ''));
+    if (o.reduceOnly) f.push('RO'); if (o.postOnly) f.push('PO'); if (o.close) f.push('CLOSE');
+    if (m.oco) f.push('OCO'); else if (m.oto) f.push('OTO');
+    if (o.timeInForce && o.timeInForce !== 'GTD') f.push(o.timeInForce);
+    return f.join(' · ');
+  };
+  /** TP / SL cell for a position row: nearest level, distance from mark, PnL if it fires, and how it was placed */
+  const exitCell = (r, list) => {
+    if (!list || !list.length) return h('span.dim', '—');
+    const e = list[0];
+    const tags = [];
+    if (e.kind === 'limit') tags.push('limit');
+    if (e.oco) tags.push('OCO');
+    if (e.kind === 'stop' && e.trigger === 'last') tags.push('last px');
+    if (e.qty != null) tags.push(U.fmtQty(e.qty));
+    return h('div', { style: { lineHeight: '1.25' }, title: (e.kind === 'stop' ? 'Stop order on the exchange' : 'Reduce-only limit order') + ' · PnL at this level before fees' },
+      h('div', U.fmtPrice(e.price, r.prod.tickSize), tags.length ? h('span.xs.dim', ' ' + tags.join(' · ')) : null),
+      h('div.xs', e.distPct == null ? null : h('span.dim', U.fmtPct(e.distPct, { sign: true, dp: 1 }) + ' · '), h('span', { class: U.pnlClass(e.pnl) }, U.fmtUsd(e.pnl, { sign: true })), list.length > 1 ? h('span.dim', ' · +' + (list.length - 1) + ' more') : null));
+  };
+  const orderCols = (ref) => [
+    { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
+    { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
+    { key: 'type', label: 'Type', render: (r) => { const m = AN.orderMeta(r); return m.stop ? h('span', m.kind, h('span.dim.xs', ' ' + r.type.toLowerCase())) : r.type; } },
+    { key: 'price', label: 'Price', num: true, render: (r) => { const m = AN.orderMeta(r); if (m.stop) return h('span', U.fmtPrice(r.stopPrice, tickOf(ref, r.productId)), h('span.dim.xs', ' trigger')); return U.num(r.price) ? U.fmtPrice(r.price, tickOf(ref, r.productId)) : 'MKT'; } },
+    { key: 'qty', label: 'Quantity', num: true, render: (r) => (AN.orderMeta(r).whole ? h('span.dim', 'all') : U.fmtQty(r.quantity)) },
+    { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled) },
+    { key: 'value', label: 'Value', num: true, render: (r) => { const v = U.num(r.price) * U.num(r.availableQuantity); return v > 0 ? U.fmtUsd(v) : h('span.dim', '—'); } },
+    { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'NEW' ? 'accent' : r.status === 'PENDING' ? 'amber' : r.status === 'FILLED_PARTIAL' ? 'blue' : '') },
+    { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', flags(r)) },
+    { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
+  ];
 
   MD.router.pages.account = {
     async mount(root, route, ctx) {
@@ -129,13 +161,15 @@
     // ---- state + tables (base data) ----
     let base = null;
     async function loadBase(refresh) {
-      const [balances, positions, orders, vol] = await Promise.all([
-        A.balances(sid, cx), A.openPositions(sid, cx), A.openOrders(sid, cx).catch(() => []), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
+      const [balances, positions, working, pending, vol] = await Promise.all([
+        A.balances(sid, cx), A.openPositions(sid, cx), A.openOrders(sid, cx).catch(() => []), A.pendingOrders(sid, cx).catch(() => []), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
       ]);
+      const orders = working.concat(pending);
       const pids = Array.from(new Set(positions.map((p) => p.productId)));
       const prices = pids.length ? await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }) : {};
       const acct = AN.accountState({ balances, positions, ref, prices });
-      base = { balances, positions, orders, acct, vol, prices };
+      AN.attachStops(acct.positions, orders);
+      base = { balances, positions, orders, working, pending, acct, vol, prices };
       lastLoad = Date.now(); updLbl.textContent = 'updated just now';
       renderState();
       if (refresh) { if (tt === 'positions' || tt === 'orders') renderTT(); } else renderTables();
@@ -159,7 +193,8 @@
           ...kv('Notional', U.fmtUsd(a.notional)),
           ...kv('Leverage', a.leverage != null ? U.fmtNum(a.leverage, 2) + '×' : '—'),
           ...kv('Open positions', String(a.positions.length)),
-          ...kv('Open orders', String(base.orders.length)),
+          ...kv('Open orders', String(base.working.length)),
+          ...kv('Stop orders (TP/SL)', String(base.pending.length)),
           h('span.sep'),
           ...kv('Volume (all time)', base.vol == null ? '—' : U.fmtUsd(base.vol)),
           ...kv('Subaccount', st.subName)),
@@ -187,6 +222,8 @@
             { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
             { key: 'cost', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
             { key: 'upnl', label: 'Unrealized PnL', num: true, render: (r) => h('span', U.pnlEl(r.net), r.roe != null ? h('span.dim.xs', ' (' + U.fmtPct(r.roe, { sign: true, dp: 1 }) + ')') : null) },
+            { key: 'tp', label: 'Take profit', num: true, title: 'Nearest take-profit level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.tp) },
+            { key: 'sl', label: 'Stop loss', num: true, title: 'Nearest stop-loss level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.sl) },
             { key: 'rpnl', label: 'Realized PnL', num: true, render: (r) => U.pnlEl(r.realized) },
             { key: 'fund', label: 'Funding', num: true, title: 'Unsettled funding (negative = paid)', render: (r) => U.pnlEl(-r.funding) },
             { key: 'liq', label: 'Liq. price', num: true, title: 'Estimated liquidation price (pool maintenance margin)', render: (r) => liqCell(r) },
@@ -194,20 +231,7 @@
           ], rows: a.positions, empty: 'No open positions',
         }));
       } else if (tt === 'orders') {
-        U.replace(ttBody, UI.table({
-          cols: [
-            { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
-            { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
-            { key: 'type', label: 'Type', render: (r) => r.type },
-            { key: 'price', label: 'Price', num: true, render: (r) => (U.num(r.price) ? U.fmtPrice(r.price, tickOf(ref, r.productId)) : 'MKT') },
-            { key: 'qty', label: 'Quantity', num: true, render: (r) => U.fmtQty(r.quantity) },
-            { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled) },
-            { key: 'value', label: 'Value', num: true, render: (r) => U.fmtUsd(U.num(r.price) * U.num(r.availableQuantity)) },
-            { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'NEW' ? 'accent' : r.status === 'FILLED_PARTIAL' ? 'blue' : '') },
-            { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', flags(r)) },
-            { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
-          ], rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders',
-        }));
+        U.replace(ttBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders' }));
       } else if (tt === 'fills') {
         U.replace(ttBody, cursorTable({
           fetchPage: (cursor, n) => A.fillsPage(sid, cursor, n, cx), empty: 'No fills yet',
@@ -341,6 +365,7 @@
       const px = {};
       for (const p of positions) { const prod = ref.byId[p.productId]; const m = prod && marks[prod.ticker]; px[p.productId] = m ? { oraclePrice: m.mark } : prices[p.productId]; }
       const acct = AN.accountState({ balances: [], positions, ref, prices: px });
+      AN.attachStops(acct.positions, orders);
       U.replace(posBody, UI.table({
         cols: [
           { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker) },
@@ -350,31 +375,21 @@
           { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
           { key: 'notional', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
           { key: 'upnl', label: 'Unrealized PnL', num: true, render: (r) => U.pnlEl(r.net) },
+          { key: 'tp', label: 'Take profit', num: true, render: (r) => exitCell(r, r.tp) },
+          { key: 'sl', label: 'Stop loss', num: true, render: (r) => exitCell(r, r.sl) },
           { key: 'rpnl', label: 'Realized', num: true, render: (r) => U.pnlEl(r.realized) },
           { key: 'fund', label: 'Funding', num: true, render: (r) => U.pnlEl(-r.funding) },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
         ], rows: acct.positions, empty: 'No open positions',
       }));
     };
-    const renderOrd = () => U.replace(ordBody, UI.table({
-      cols: [
-        { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
-        { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
-        { key: 'type', label: 'Type', render: (r) => r.type },
-        { key: 'price', label: 'Price', num: true, render: (r) => (U.num(r.price) ? U.fmtPrice(r.price, tickOf(ref, r.productId)) : 'MKT') },
-        { key: 'qty', label: 'Quantity', num: true, render: (r) => U.fmtQty(r.quantity) },
-        { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled) },
-        { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'NEW' ? 'accent' : '') },
-        { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', flags(r)) },
-        { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
-      ], rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders',
-    }));
+    const renderOrd = () => U.replace(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders' }));
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replace(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
 
     async function reload() {
       try {
-        const [p, o] = await Promise.all([A.openPositions(sid, cx), A.openOrders(sid, cx).catch(() => [])]);
+        const [p, o] = await Promise.all([A.openPositions(sid, cx), A.activeOrders(sid, cx)]);
         positions = p; orders = o;
         const pids = Array.from(new Set(positions.map((x) => x.productId)));
         if (pids.length) Object.assign(prices, await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }));

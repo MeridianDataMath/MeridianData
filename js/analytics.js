@@ -226,6 +226,52 @@
     return row;
   };
 
+  /** Describe an order's stop / grouping semantics. */
+  AN.orderMeta = function (o) {
+    const stop = U.num(o.stopPrice) > 0;
+    return {
+      stop,
+      kind: stop ? (String(o.stopType) === '0' ? 'TP' : 'SL') : null,
+      trigger: String(o.stopPriceType) === '0' ? 'last' : 'mark',
+      oco: !!o.groupId && String(o.groupContingencyType) === '1',
+      oto: !!o.groupId && String(o.groupContingencyType) === '0',
+      whole: !!o.close || U.num(o.quantity) === 0,
+      pending: o.status === 'PENDING' || o.triggered === 'NOT_TRIGGERED',
+    };
+  };
+
+  /**
+   * Attach exit levels to accountState position rows from the account's active orders (working + pending).
+   * Sets r.tp and r.sl: arrays of {price, qty (null = whole position), kind:'stop'|'limit', trigger, oco, distPct, pnl, order},
+   * nearest to the mark first. Stops use the exchange's TP/SL type; a reduce-only limit order on the closing side
+   * counts as a limit exit and is a take profit when it sits beyond the entry price.
+   */
+  AN.attachStops = function (rows, orders) {
+    for (const r of rows) {
+      const closingSide = r.long ? '1' : '0';
+      const tp = [], sl = [];
+      for (const o of orders || []) {
+        if (o.productId !== r.p.productId || String(o.side) !== closingSide) continue;
+        if (!/^(NEW|PENDING|FILLED_PARTIAL)$/.test(o.status)) continue;
+        const m = AN.orderMeta(o);
+        let price, kind;
+        if (m.stop) { price = U.num(o.stopPrice); kind = 'stop'; }
+        else { if (!(o.reduceOnly || o.close)) continue; price = U.num(o.price); if (!(price > 0)) continue; kind = 'limit'; }
+        const remaining = U.num(o.availableQuantity) || U.num(o.quantity);
+        const qty = m.whole || !(remaining > 0) ? null : Math.min(remaining, r.abs);
+        const ref = r.mark || r.entry;
+        const distPct = ref > 0 ? ((price - ref) / ref) * 100 : null;
+        const pnl = (r.long ? 1 : -1) * (qty == null ? r.abs : qty) * (price - r.entry);
+        const e = { price, qty, kind, trigger: m.trigger, oco: m.oco, distPct, pnl, order: o };
+        const isTp = m.stop ? m.kind === 'TP' : (r.long ? price >= r.entry : price <= r.entry);
+        (isTp ? tp : sl).push(e);
+      }
+      const near = (a, b) => Math.abs(a.distPct == null ? 0 : a.distPct) - Math.abs(b.distPct == null ? 0 : b.distPct);
+      r.tp = tp.sort(near); r.sl = sl.sort(near);
+    }
+    return rows;
+  };
+
   /** Interval start timestamp for an interval key. */
   AN.startFor = (interval, accountCreatedAt) => {
     const len = AN.INTERVALS[interval];
