@@ -374,6 +374,30 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 
 /* Dashboard */
 .mkt-row .tick { font-weight: 600; }
+/* Stop map */
+.smap-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.smap-wrap > div:first-child { border-right: 1px solid var(--border-2); min-width: 0; }
+.smap-sel { padding: 10px 12px; border-bottom: 1px solid var(--border-2); }
+.smap-sel:empty { display: none; }
+.smap { font-family: var(--mono); font-size: 12px; max-height: 520px; overflow: auto; }
+.smap .hdr, .smap .lvl { display: grid; grid-template-columns: 1.3fr 0.9fr 0.8fr 1fr 0.9fr; gap: 8px; padding: 5px 12px; align-items: center; min-width: 480px; }
+.smap .mid, .smap-detail { min-width: 480px; }
+.smap .hdr { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-family: var(--font); border-bottom: 1px solid var(--border-2); }
+.smap .hdr > span, .smap .lvl > span { text-align: right; white-space: nowrap; }
+.smap .hdr > span:first-child, .smap .lvl > span:first-child { text-align: left; }
+.smap .lvl { position: relative; cursor: pointer; }
+.smap .lvl:hover { background: var(--bg-3); }
+.smap .lvl > span { position: relative; z-index: 1; }
+.smap .lvl i { position: absolute; top: 2px; bottom: 2px; left: 0; opacity: .14; border-radius: 0 3px 3px 0; }
+.smap .lvl.tp i { background: var(--green); }
+.smap .lvl.sl i { background: var(--red); }
+.smap .lvl.en i { background: var(--accent-2); }
+.smap .lvl .chip { font-size: 10px; padding: 1px 5px; }
+.smap .mid { text-align: center; padding: 6px; border-top: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2); font-size: 13px; background: var(--bg-3); }
+.smap-detail { padding: 4px 12px 8px 24px; background: var(--bg-3); border-bottom: 1px solid var(--border-2); font-family: var(--font); display: flex; flex-direction: column; gap: 3px; }
+.smap .empty { font-family: var(--font); }
+table.tbl tbody tr.sel { background: var(--accent-dim); }
+@media (max-width: 1100px) { .smap-wrap { grid-template-columns: minmax(0, 1fr); } .smap-wrap > div:first-child { border-right: 0; border-bottom: 1px solid var(--border-2); } }
 .mkt-row .sub { color: var(--text-3); font-size: 11px; }
 .closure { font-size: 11.5px; color: var(--amber); }
 

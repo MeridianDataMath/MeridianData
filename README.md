@@ -63,7 +63,9 @@ visitor's browser.
   The snapshot is built in your browser (a few API calls per account), cached in
   `localStorage` and rebuilt when older than 30 minutes or when you press **Update**.
 * **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest,
-  volume, sparkline and mPerp closure windows; live trade tape (taker/maker links to the
+  volume, sparkline and mPerp closure windows; a **stop map** (every account's take-profit,
+  stop-loss and entry-stop levels per market as a ladder around the mark price, sized by
+  notional, with the accounts behind each level); live trade tape (taker/maker links to the
   accounts); liquidation feed; funding table.
 * **Tax center** – per subaccount and tax year (or custom UTC range): net result, realised PnL,
   fees, funding, deposits, withdrawals, monthly breakdown, closed-positions ledger, and CSV

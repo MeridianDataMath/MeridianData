@@ -1,6 +1,7 @@
-/* MeridianData — Exchange dashboard: markets, live trades, liquidations, closures */
+/* MeridianData — Exchange dashboard: markets, stop map, live trades, liquidations, closures */
 (function () {
-  const MD = window.MD; const U = MD.util; const A = MD.api; const UI = MD.ui; const C = MD.charts; const h = U.h;
+  const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
+  const isAbort = (e) => e && e.name === 'AbortError';
 
   MD.router.pages.dashboard = {
     async mount(root, route, ctx) {
@@ -12,8 +13,18 @@
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
+      // stop map elements
+      const smSummary = h('span.dim.small', h('span.loading', h('span.spinner'), 'Scanning accounts…'));
+      const smSel = h('div.smap-sel');
+      const smLadder = h('div.smap', UI.loading('Collecting stop orders…'));
+      const smTable = h('div');
+      const smRescan = h('button.btn.sm', { onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');
+      const stopCard = h('div.card.tight',
+        h('div.card-head', h('h2', 'Stop map'), smSummary, h('span.grow'), h('span.dim.small', 'take-profit, stop-loss and entry stops of every account, by price level · click a level for the accounts'), smRescan),
+        h('div.smap-wrap', h('div', smSel, smLadder), smTable));
       U.replace(root, h('div.page', h('div.stack', tiles,
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price')), mktBody),
+        stopCard,
         h('div.grid.cols-2',
           h('div.card.tight', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a side to open the account')), tradesBody),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
@@ -85,6 +96,108 @@
       function drawSparks() { for (const t of Object.keys(sparkData)) { const cv = sparks[t]; if (cv && cv.isConnected && !cv.__chart) C.sparkline(cv, sparkData[t]); } }
       const renderMarketsThrottled = U.throttle(() => { renderMarkets(); renderTiles(); }, 1500);
       renderTiles(); renderMarkets(); loadSparks();
+
+      // ---- stop map: TP / SL / entry stop levels of every account, per market ----
+      let sm = null, smMarket = null, smScanning = false;
+      async function scanStops() {
+        if (smScanning) return; smScanning = true; smRescan.disabled = true;
+        U.replace(smSummary, h('span.loading', h('span.spinner'), 'Scanning accounts…'));
+        try {
+          const LB = MD.router.pages.leaderboard; if (LB) await LB.loadRemote();
+          const snap = LB && LB.cache(); const known = {}; if (snap && snap.rows) for (const r of snap.rows) known[r.sid] = r;
+          const accounts = subs || (await A.allSubaccounts(ctx));
+          const levels = []; let scanned = 0;
+          const tasks = accounts.map((sa) => async () => {
+            const k = known[sa.id];
+            if (k && k.inactive) return;                       // never funded / traded → nothing to find
+            const o = { signal: ctx.signal };
+            const pending = await A.pendingOrders(sa.id, o).catch(() => []);
+            let positions = [], working = [];
+            if (!k || k.openCount > 0 || pending.length) [positions, working] = await Promise.all([A.openPositions(sa.id, o).catch(() => []), A.openOrders(sa.id, o).catch(() => [])]);
+            scanned++;
+            if (!pending.length && !positions.length) return;
+            const px = {}; for (const p of positions) { const prod = ref.byId[p.productId]; px[p.productId] = { oraclePrice: prod ? mark(prod) : 0 }; }
+            const st = AN.accountState({ balances: [], positions, ref, prices: px });
+            AN.attachStops(st.positions, working.concat(pending));
+            const used = new Set();
+            for (const r of st.positions) for (const [kind, list] of [['TP', r.tp], ['SL', r.sl]]) for (const e of list) {
+              used.add(e.order.id); const qty = e.qty == null ? r.abs : e.qty;
+              levels.push({ productId: r.p.productId, price: e.price, kind, posSide: r.long ? 'long' : 'short', qty, usd: qty * e.price, mech: e.kind, trigger: e.trigger, oco: e.oco, account: sa.account, sid: sa.id });
+            }
+            for (const od of pending) {                          // stops that open or add to a position
+              if (used.has(od.id) || od.reduceOnly || od.close) continue;
+              const qty = U.num(od.quantity), price = U.num(od.stopPrice); if (!(qty > 0 && price > 0)) continue;
+              levels.push({ productId: od.productId, price, kind: 'ENTRY', posSide: String(od.side) === '0' ? 'long' : 'short', qty, usd: qty * price, mech: 'stop', trigger: AN.orderMeta(od).trigger, oco: false, account: sa.account, sid: sa.id });
+            }
+          });
+          await U.pLimit(tasks, 4);
+          if (ctx.signal.aborted) return;
+          sm = { at: Date.now(), scanned, total: accounts.length, levels };
+          if (!smMarket || !levels.some((l) => l.productId === smMarket)) { const by = {}; for (const l of levels) by[l.productId] = (by[l.productId] || 0) + l.usd; smMarket = Object.keys(by).sort((a, b) => by[b] - by[a])[0] || null; }
+          renderStopMap();
+        } catch (e) { if (!isAbort(e)) U.replace(smSummary, h('span.neg', 'scan failed: ' + e.message)); }
+        finally { smScanning = false; smRescan.disabled = false; }
+      }
+      function renderStopMap() {
+        if (!sm) return;
+        const L = sm.levels;
+        const byMarket = U.groupBy(L, (l) => l.productId);
+        const markets = Object.keys(byMarket).filter((pid) => ref.byId[pid]).map((pid) => {
+          const ls = byMarket[pid]; const p = ref.byId[pid]; const m = mark(p);
+          const agg = { pid, p, mark: m, n: ls.length, tp: ls.filter((l) => l.kind === 'TP'), sl: ls.filter((l) => l.kind === 'SL'), en: ls.filter((l) => l.kind === 'ENTRY'), usd: U.sum(ls, (l) => l.usd), accounts: new Set(ls.map((l) => l.sid)).size };
+          const near = (list) => (list.length ? list.reduce((a, l) => (Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a)) : null);
+          agg.nearSl = near(agg.sl); agg.nearTp = near(agg.tp); return agg;
+        }).sort((a, b) => b.usd - a.usd);
+        U.replace(smSummary, `${L.length} levels · ${U.fmtUsd(U.sum(L, (l) => l.usd), { compact: true })} · ${new Set(L.map((l) => l.sid)).size} accounts · scanned ${sm.scanned}/${sm.total} · ${U.fmtAgo(sm.at)}`);
+        if (!markets.length) { U.replace(smSel); U.replace(smLadder, UI.empty('No stop orders on the exchange right now.')); U.replace(smTable); return; }
+        const cur = markets.find((x) => x.pid === smMarket) || markets[0]; smMarket = cur.pid;
+        U.replace(smSel, UI.seg(markets.map((x) => ({ v: x.pid, label: x.p.displayTicker })), smMarket, (v) => { smMarket = v; renderStopMap(); }, 'sm'));
+        const ls = byMarket[cur.pid]; const m = cur.mark; const tick = cur.p.tickSize;
+        const dense = new Set(ls.map((l) => l.price)).size > 40;
+        const bin = dense && m > 0 ? m * 0.0025 : 0;
+        const level = (pr) => (bin ? Math.round(pr / bin) * bin : pr);
+        const rows = {};
+        for (const l of ls) { const k = level(l.price) + '|' + l.kind; const r = rows[k] || (rows[k] = { price: level(l.price), kind: l.kind, usd: 0, qty: 0, items: [] }); r.usd += l.usd; r.qty += l.qty; r.items.push(l); }
+        const list = Object.values(rows).sort((a, b) => b.price - a.price);
+        const maxUsd = Math.max(1, ...list.map((r) => r.usd));
+        const rowEl = (r) => {
+          const cls = r.kind === 'TP' ? 'tp' : r.kind === 'SL' ? 'sl' : 'en';
+          const dist = m > 0 ? ((r.price - m) / m) * 100 : null;
+          const accts = new Set(r.items.map((i) => i.sid)).size;
+          const detail = h('div.smap-detail', { style: { display: 'none' } }, r.items.map((i) => h('div.row.small',
+            h('a.addr', { href: U.accountUrl(i.account, i.sid) }, U.shortAddr(i.account)),
+            h('span.dim', (i.kind === 'ENTRY' ? 'opens ' + i.posSide : 'closes ' + i.posSide) + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '')),
+            h('span.grow'), h('span.num', U.fmtQty(i.qty) + ' · ' + U.fmtUsd(i.usd, { compact: true })))));
+          const el = h('div.lvl', { class: cls, onclick: () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; } },
+            h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
+            h('span', (bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
+            h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),
+            h('span', UI.chip(r.kind === 'ENTRY' ? 'entry' : r.kind, r.kind === 'TP' ? 'green' : r.kind === 'SL' ? 'red' : 'blue')),
+            h('span.num', U.fmtUsd(r.usd, { compact: true })),
+            h('span.dim', accts + (accts === 1 ? ' acct' : ' accts')));
+          return [el, detail];
+        };
+        U.replace(smLadder,
+          h('div.hdr', h('span', 'Price'), h('span', 'vs mark'), h('span', 'Type'), h('span', 'Notional'), h('span', 'Accounts')),
+          list.filter((r) => r.price > m).map(rowEl),
+          h('div.mid', h('span.bold', 'mark ' + U.fmtPrice(m, tick)), h('span.dim.xs', '  ' + cur.p.displayTicker)),
+          list.filter((r) => r.price <= m).map(rowEl),
+          dense ? h('div.xs.dim.center', { style: { padding: '6px' } }, 'levels binned to 0.25% of mark') : null);
+        const nearCell = (l, r) => (l ? h('span', U.fmtPrice(l.price, r.p.tickSize), h('span.xs.dim', ' ' + U.fmtPct(((l.price - r.mark) / r.mark) * 100, { sign: true, dp: 1 }))) : h('span.dim', '—'));
+        U.replace(smTable, UI.table({
+          cols: [
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker) },
+            { key: 'n', label: 'TP / SL / entry', num: true, render: (r) => h('span', h('span.pos', String(r.tp.length)), h('span.dim', ' / '), h('span.neg', String(r.sl.length)), h('span.dim', ' / '), String(r.en.length)) },
+            { key: 'tpu', label: 'TP notional', num: true, render: (r) => U.fmtUsd(U.sum(r.tp, (l) => l.usd), { compact: true }) },
+            { key: 'slu', label: 'SL notional', num: true, render: (r) => U.fmtUsd(U.sum(r.sl, (l) => l.usd), { compact: true }) },
+            { key: 'nsl', label: 'Nearest SL', num: true, title: 'Stop-loss closest to the mark price', render: (r) => nearCell(r.nearSl, r) },
+            { key: 'ntp', label: 'Nearest TP', num: true, title: 'Take-profit closest to the mark price', render: (r) => nearCell(r.nearTp, r) },
+            { key: 'a', label: 'Accounts', num: true, render: (r) => String(r.accounts) },
+          ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''),
+        }));
+      }
+      scanStops();
+      const smT = setInterval(scanStops, 120000); ctx.onCleanup(() => clearInterval(smT));
 
       // ---- live trades ----
       let trades = [];
