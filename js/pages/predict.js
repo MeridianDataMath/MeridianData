@@ -21,7 +21,7 @@
 
   // ---------- snapshot: the newest of data/predict.json (Pages) and the "snapshots" branch (pushed from a PC),
   //            else a recent-window build in the browser ----------
-  P.SNAPSHOT_URLS = ['data/predict.json', 'https://raw.githubusercontent.com/MeridianDataMath/MeridianData/snapshots/predict.json'];
+  P.SNAPSHOT_URLS = ['data/predict.json'];
   P._snap = undefined; P._snapAt = 0; P._building = null;
   P.loadSnapshot = async function ({ signal, onProgress, force } = {}) {
     if (!force && P._snap && Date.now() - P._snapAt < 60000) return P._snap;

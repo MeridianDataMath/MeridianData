@@ -84,6 +84,9 @@ try {
     if (-not $tree) { throw 'git write-tree failed' }
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm') + ' UTC'
     $msg = ('Predict snapshot {0} ({1} predictions)' -f $stamp, $j.predictions)
+    # commit dates in UTC so the branch carries no local-timezone hint
+    $utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') + '+0000'
+    $env:GIT_AUTHOR_DATE = $utc; $env:GIT_COMMITTER_DATE = $utc
     $commit = (git -c user.name=MeridianDataMath -c user.email=MeridianDataMath@users.noreply.github.com commit-tree $tree -m $msg).Trim()
     if (-not $commit) { throw 'git commit-tree failed' }
     $env:GIT_TERMINAL_PROMPT = '0'

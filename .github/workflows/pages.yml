@@ -1,14 +1,14 @@
-# Builds the shared leaderboard snapshot and publishes the site to GitHub Pages.
-# Runs on every push to main, every 15 minutes, and on demand (Actions tab → Run workflow).
-# One-time setup (the default token cannot do this itself): repo Settings → Pages →
-# "Build and deployment" → Source: GitHub Actions. Until then the configure-pages step fails.
+# Builds the perps snapshot, adds the Predict snapshot pushed from a PC, and deploys the site.
+#   • With the CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID secrets set → Cloudflare Pages (works from a private repo).
+#   • Without them → GitHub Pages (public repos only; Settings → Pages → Source: GitHub Actions).
+# Runs on every push to main, every 30 minutes, and on demand.
 name: Snapshot & deploy
 
 on:
   push:
     branches: [main]
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -17,24 +17,33 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: deploy
   cancel-in-progress: true
+
+env:
+  CF_PROJECT: meridiandata          # Cloudflare Pages project name
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
-        continue-on-error: true   # a Meridian API hiccup must not take the site down; visitors fall back to a browser build
-      - name: Copy the Predict snapshot published from a PC (branch "snapshots" → data/)
+        continue-on-error: true   # an API hiccup must not take the site down; visitors fall back to a browser build
+
+      - name: Add the Predict snapshot published from a PC (branch "snapshots" → data/)
         run: |
           mkdir -p data
           if git fetch --depth 1 origin snapshots 2>/dev/null; then
@@ -43,9 +52,34 @@ jobs:
             echo "no snapshots branch yet"
           fi
         continue-on-error: true
-      - uses: actions/configure-pages@v5   # requires Settings → Pages → Source: GitHub Actions
-      - uses: actions/upload-pages-artifact@v3
+
+      - name: Assemble the site (dist/)
+        run: |
+          mkdir -p dist
+          cp -r index.html css js vendor assets _headers .nojekyll dist/
+          [ -d data ] && cp -r data dist/ || true
+          echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"
+
+      - name: Choose target
+        id: mode
+        run: echo "cf=$([ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # ---- Cloudflare Pages (private repo friendly) ----
+      - name: Deploy to Cloudflare Pages
+        if: steps.mode.outputs.cf == 'true'
+        uses: cloudflare/wrangler-action@v3
         with:
-          path: '.'
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ env.CF_PROJECT }} --branch=main --commit-dirty=true
+
+      # ---- GitHub Pages (public repo) ----
+      - uses: actions/configure-pages@v5
+        if: steps.mode.outputs.cf != 'true'
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.mode.outputs.cf != 'true'
+        with:
+          path: dist
       - id: deployment
+        if: steps.mode.outputs.cf != 'true'
         uses: actions/deploy-pages@v4

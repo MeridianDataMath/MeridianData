@@ -23,26 +23,32 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 * Or copy the folder to any static host (GitHub Pages, Cloudflare Pages, S3, nginx…).
   There is nothing to configure; routing is hash-based (`#/leaderboard`).
 
-## Publish it (GitHub Pages)
+## Publish it
 
-The repo ships with `.github/workflows/pages.yml`, which deploys the site to GitHub Pages and, every
-15 minutes, rebuilds `data/leaderboard.json` with `scripts/build-snapshot.mjs` (the same code the
-browser uses) so visitors get the leaderboard instantly instead of building it themselves.
+`.github/workflows/pages.yml` runs on every push, every 30 minutes and on demand. It builds the
+perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the `snapshots` branch,
+assembles `dist/` and deploys it:
 
-1. Create a **public** GitHub repository (public = unlimited free Actions minutes) and push this folder
-   to its `main` branch.
-2. Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**. This is a one-time
-   manual step; the workflow's token is not allowed to enable Pages on its own, so until it is done
-   the "configure-pages" step fails (the snapshot step before it still runs).
-3. Wait for the "Snapshot & deploy" workflow to finish; the site is at
-   `https://<user>.github.io/<repo>/`.
-4. Optional custom domain: add a `CNAME` DNS record pointing at `<user>.github.io`, enter the domain
-   under Settings → Pages, and put the domain in a `CNAME` file in the repo root.
+* **Cloudflare Pages** (recommended; works from a **private** repo, free): create a Pages project
+  named `meridiandata` (Workers & Pages → Create → Pages → *Upload assets*, upload this folder
+  once), create an API token with the *Cloudflare Pages: Edit* permission, and add two repository
+  secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow
+  deploys to `https://meridiandata.pages.dev`; attach a custom domain in the Pages project.
+  Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
+* **GitHub Pages** (public repos only): without those secrets the same workflow deploys to
+  `https://<user>.github.io/<repo>/` (Settings → Pages → Source: GitHub Actions, once).
 
-GitHub pauses scheduled workflows in repositories with no commits for 60 days; pushing anything (or
-pressing "Run workflow") re-enables it. Any other static host (Cloudflare Pages, Netlify, Vercel, S3)
-works too — upload the folder as-is; without the Action the leaderboard is simply built in each
-visitor's browser.
+The Predict snapshot is produced on a PC (see the Predict section below) whichever host is used.
+`_headers` sets cache and security headers on Cloudflare Pages and is ignored elsewhere.
+
+### Privacy notes
+
+* Fonts are self-hosted (`css/fonts.css`, `assets/fonts/`); no request goes to Google.
+* The site sets no cookies and runs no analytics; favorites and preferences live in `localStorage`.
+* Visitors' browsers call Meridian's public APIs directly, so Meridian sees their IP addresses.
+* Snapshot commits are dated in UTC; the snapshot builder sends no identifying User-Agent.
+* `js/api.js` contains the operator's Meridian referral code; remove it if the site should not be
+  linkable to a Meridian account.
 
 ## Pages
 

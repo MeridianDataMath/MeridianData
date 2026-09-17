@@ -32,7 +32,7 @@
     for (let attempt = 0; ; attempt++) {
       await pace();
       let res;
-      try { P.stats.requests++; res = await fetch(P.URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', 'user-agent': 'MeridianData/1.0 (+https://meridiandatamath.github.io/MeridianData/)' }, body, signal: opts.signal }); }
+      try { P.stats.requests++; res = await fetch(P.URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body, signal: opts.signal }); }
       catch (e) {
         if (e && e.name === 'AbortError') throw e;
         if (attempt < 3) { P.stats.retries++; await U.sleep(1000 * (attempt + 1)); continue; }
@@ -75,8 +75,8 @@
     catch (e) { P._live = !(e && (e.code === 'NETWORK' || e.code === 403 || e.code === 405)); }
     return P._live;
   };
-  /** Fetch a snapshot file by relative path: the newest of the Pages copy and the "snapshots" branch. */
-  P.SNAPSHOT_BASES = ['data/', 'https://raw.githubusercontent.com/MeridianDataMath/MeridianData/snapshots/'];
+  /** Fetch a snapshot file by relative path (served next to the site; the deploy copies the "snapshots" branch into data/). */
+  P.SNAPSHOT_BASES = ['data/'];
   P.snapshotFile = async function (rel, { signal } = {}) {
     const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => { try { const r = await fetch(b + rel, { cache: 'no-cache', signal }); if (!r.ok) return null; return await r.json(); } catch (e) { if (e && e.name === 'AbortError') throw e; return null; } }));
     return got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;

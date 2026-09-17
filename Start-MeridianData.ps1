@@ -25,6 +25,7 @@ $mime = @{
     '.html' = 'text/html; charset=utf-8'; '.js' = 'application/javascript; charset=utf-8'; '.css' = 'text/css; charset=utf-8'
     '.svg' = 'image/svg+xml'; '.json' = 'application/json; charset=utf-8'; '.png' = 'image/png'; '.jpg' = 'image/jpeg'
     '.ico' = 'image/x-icon'; '.woff2' = 'font/woff2'; '.woff' = 'font/woff'; '.txt' = 'text/plain; charset=utf-8'; '.md' = 'text/plain; charset=utf-8'
+    '' = 'text/plain; charset=utf-8'
 }
 $listener = New-Object System.Net.HttpListener
 $prefix = "http://localhost:$Port/"
