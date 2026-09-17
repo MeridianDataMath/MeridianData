@@ -19,18 +19,38 @@
   const cache = new Map();
   class GqlError extends Error { constructor(m, code) { super(m); this.code = code; } }
   P.GqlError = GqlError;
+  // The API allows 200 requests per minute per IP (RateLimit-Limit header). Bulk jobs set minIntervalMs to pace
+  // themselves; every caller gets a retry with backoff on 429 / transient network errors.
+  P.minIntervalMs = 0; P.stats = { requests: 0, retries: 0 };
+  let gate = Promise.resolve(), lastStart = 0;
+  const pace = () => { if (!P.minIntervalMs) return Promise.resolve(); gate = gate.then(async () => { const wait = lastStart + P.minIntervalMs - Date.now(); if (wait > 0) await U.sleep(wait); lastStart = Date.now(); }); return gate; };
   /** POST a query. opts: {variables, ttl (ms cache), signal} */
   P.gql = async function (query, variables, opts = {}) {
     const key = query + '|' + JSON.stringify(variables || {});
     if (opts.ttl) { const c = cache.get(key); if (c && c.exp > Date.now()) return c.value; }
-    let res;
-    try { res = await fetch(P.URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ query, variables: variables || {} }), signal: opts.signal }); }
-    catch (e) { if (e && e.name === 'AbortError') throw e; throw new GqlError('Network error: ' + (e && e.message), 'NETWORK'); }
-    let j = null; try { j = await res.json(); } catch (_) {}
-    if (!res.ok && !(j && j.data)) throw new GqlError((j && j.errors && j.errors[0] && j.errors[0].message) || ('HTTP ' + res.status), res.status);
-    if (j && j.errors && j.errors.length && !j.data) throw new GqlError(j.errors[0].message, (j.errors[0].extensions || {}).code);
-    if (opts.ttl) cache.set(key, { exp: Date.now() + opts.ttl, value: j.data });
-    return j.data;
+    const body = JSON.stringify({ query, variables: variables || {} });
+    for (let attempt = 0; ; attempt++) {
+      await pace();
+      let res;
+      try { P.stats.requests++; res = await fetch(P.URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', 'user-agent': 'MeridianData/1.0 (+https://meridiandatamath.github.io/MeridianData/)' }, body, signal: opts.signal }); }
+      catch (e) {
+        if (e && e.name === 'AbortError') throw e;
+        if (attempt < 3) { P.stats.retries++; await U.sleep(1000 * (attempt + 1)); continue; }
+        throw new GqlError('Network error: ' + (e && (e.cause && e.cause.message ? e.cause.message : e.message)), 'NETWORK');
+      }
+      if (res.status === 429 && attempt < 5) {
+        const reset = parseInt(res.headers.get('ratelimit-reset') || res.headers.get('retry-after') || '10', 10);
+        P.stats.retries++; await U.sleep(Math.min(65, Math.max(2, reset + 1)) * 1000); continue;
+      }
+      let j = null; try { j = await res.json(); } catch (_) {}
+      if (!res.ok && !(j && j.data)) {
+        if (res.status >= 500 && attempt < 3) { P.stats.retries++; await U.sleep(2000 * (attempt + 1)); continue; }
+        throw new GqlError((j && j.errors && j.errors[0] && j.errors[0].message) || ('HTTP ' + res.status), res.status);
+      }
+      if (j && j.errors && j.errors.length && !j.data) throw new GqlError(j.errors[0].message, (j.errors[0].extensions || {}).code);
+      if (opts.ttl) cache.set(key, { exp: Date.now() + opts.ttl, value: j.data });
+      return j.data;
+    }
   };
   P.clearCache = () => cache.clear();
 
@@ -71,15 +91,17 @@
     toSec = toSec || Math.floor(Date.now() / 1000);
     const span = Math.max(1, toSec - fromSec); const w = Math.ceil(span / windows);
     const ranges = []; for (let s = fromSec; s <= toSec; s += w) ranges.push([s, Math.min(toSec, s + w - 1)]);
-    const seen = new Map(); let done = 0;
+    const seen = new Map(); let done = 0; let fetched = 0;
     const tasks = ranges.map(([a, b]) => async () => {
-      const rows = await P.predictionsAll({ filter: Object.assign({}, baseFilter || {}, { createdAt: { gte: a, lte: b } }), maxPages: maxPagesPerWindow, signal, onPage: () => { if (onProgress) onProgress(seen.size + done, null); } });
+      const rows = await P.predictionsAll({ filter: Object.assign({}, baseFilter || {}, { createdAt: { gte: a, lte: b } }), maxPages: maxPagesPerWindow, signal, onPage: (n, total) => { if (onProgress) onProgress(fetched + n, null); } });
       for (const r of rows) seen.set(r.predictionId, r);
-      done++;
+      fetched += rows.length; done++;
       if (onProgress) onProgress(seen.size, ranges.length - done);
     });
-    await U.pLimit(tasks, concurrency);
-    if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    const results = await U.pLimit(tasks, concurrency);
+    if (signal && signal.aborted) throw new (typeof DOMException !== 'undefined' ? DOMException : Error)('Aborted', 'AbortError');
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) { const e = failed[0].error; throw new GqlError(`${failed.length}/${ranges.length} windows failed: ${e && e.message}`, e && e.code); }
     return Array.from(seen.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
   };
   P.predictionsCount = async (filter, o) => (await P.gql('query C($filter: PredictionFilter) { predictions(first: 0, filter: $filter) { totalCount } }', { filter: filter || null }, { ttl: 30000, signal: o && o.signal })).predictions.totalCount;

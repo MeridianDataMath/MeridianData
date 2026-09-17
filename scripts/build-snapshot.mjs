@@ -29,20 +29,29 @@ fs.mkdirSync(path.join(root, 'data'), { recursive: true });
 async function buildPredict() {
   const t0 = Date.now();
   const toSec = Math.floor(Date.now() / 1000);
+  P.minIntervalMs = 330;                       // ≈180 requests/min, under the API's 200/min per IP
+  // sanity probe first so a blocked runner fails loudly with the real reason
+  const probe = await P.predictionsCount();
+  console.log(`  predict: API reachable, ${probe} predictions in total`);
   let lastLog = 0;
   const raw = await P.predictionsWindowed({
-    fromSec: P.LAUNCH_SEC, toSec, windows: 32, concurrency: 8, maxPagesPerWindow: 600,
-    onProgress: (n) => { if (Date.now() - lastLog > 5000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far`); } },
+    fromSec: P.LAUNCH_SEC, toSec, windows: 24, concurrency: 4, maxPagesPerWindow: 600,
+    onProgress: (n) => { if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far (${P.stats.requests} requests, ${P.stats.retries} retries)`); } },
   });
   const norms = raw.map(P.norm);
   const agg = P.aggregate(norms, { tapeSize: 100 });
   let counts = null;
   try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
-  const out = { builtAt: Date.now(), source: 'github-actions', fromSec: P.LAUNCH_SEC, predictions: norms.length, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0 };
+  const out = { builtAt: Date.now(), source: 'github-actions', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(root, 'data', 'predict.json'), JSON.stringify(out));
-  console.log(`wrote data/predict.json: ${norms.length} predictions, ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`wrote data/predict.json: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
-try { await buildPredict(); } catch (e) { console.warn('predict snapshot failed (site falls back to a browser build):', e && e.message); }
+try { await buildPredict(); }
+catch (e) {
+  // No agg → the site falls back to a browser build; the error is published so it can be read without Action logs.
+  console.warn('predict snapshot failed (site falls back to a browser build):', e && e.stack);
+  fs.writeFileSync(path.join(root, 'data', 'predict.json'), JSON.stringify({ builtAt: Date.now(), source: 'github-actions', error: String(e && (e.stack || e.message || e)), requests: P.stats.requests, retries: P.stats.retries }));
+}
 
 // ------------------------------------------------------------------- Perps
 const started = Date.now();
