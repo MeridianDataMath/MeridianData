@@ -1,4 +1,4 @@
-/* MeridianData — reusable UI widgets */
+/* MeridianDataHub — reusable UI widgets */
 (function () {
   const MD = window.MD; const U = MD.util; const h = U.h;
   const UI = (MD.ui = {});

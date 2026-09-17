@@ -1,4 +1,4 @@
-/* MeridianData — Tax center: period summaries, monthly breakdown, ledgers and CSV exports for one subaccount */
+/* MeridianDataHub — Tax center: period summaries, monthly breakdown, ledgers and CSV exports for one subaccount */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';
@@ -255,7 +255,7 @@
           h('div.it', h('div.t', 'Deposits & withdrawals'), h('div.d', 'Movements of USDe in and out of the exchange. Usually not taxable events themselves, but they reconcile your balance.')),
           h('div.it', h('div.t', 'Margin conversions'), h('div.d', 'Moving margin between the USD pool and an mPerp pool (USD ⇄ XAUUSD etc.) converts 1:1 between USD-equivalent tokens; they are internal and net to zero across the account.')),
           h('div.it', h('div.t', 'Currency'), h('div.d', 'Everything settles in USDe. Amounts are shown at 1 USDe = 1 USD; if your jurisdiction requires it, apply the USDe/fiat rate of each day.'))),
-        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'MeridianData is not a tax adviser. Rules for perpetual futures differ by country; use these records with a professional or a tax tool.'));
+        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'MeridianDataHub is not a tax adviser. Rules for perpetual futures differ by country; use these records with a professional or a tax tool.'));
 
       const predictCard = h('div.card', h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', h('span.loading', h('span.spinner'), 'Loading Predict history…')));
       U.replace(body, controls,

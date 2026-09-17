@@ -1,4 +1,4 @@
-/* MeridianData — Copy trading (in development): leader scouting from the leaderboard snapshot + roadmap */
+/* MeridianDataHub — Copy trading (in development): leader scouting from the leaderboard snapshot + roadmap */
 (function () {
   const MD = window.MD; const U = MD.util; const UI = MD.ui; const h = U.h;
 
@@ -22,7 +22,7 @@
       const hero = h('div.card.ct-hero',
         h('div.row', { style: { marginBottom: '8px' } }, UI.chip('In development', 'accent'), h('span.dim.small', 'still being vibecoded')),
         h('h1', 'Copy trading on Meridian'),
-        h('p', 'The idea: pick a leader wallet, choose a size ratio and risk limits, and MeridianData mirrors the leader\'s Meridian positions into your own subaccount. The plan is to sign with a Meridian linked signer in your own browser, so no exchange keys are handed to anyone.'),
+        h('p', 'The idea: pick a leader wallet, choose a size ratio and risk limits, and MeridianDataHub mirrors the leader\'s Meridian positions into your own subaccount. The plan is to sign with a Meridian linked signer in your own browser, so no exchange keys are handed to anyone.'),
         h('p', 'Nothing on this page places orders yet. What already works is the scouting below: every wallet on the exchange, ranked by profit since launch, straight from the public API. Star the ones you like to watch them on Favorites.'));
       const roadmap = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Roadmap'),
         h('div.roadmap', ROADMAP.map((r) => h('div.it', h('div.row', h('span.t', r.t), h('span.grow'), UI.chip(STATUS[r.s][0], STATUS[r.s][1])), h('div.d', r.d)))));

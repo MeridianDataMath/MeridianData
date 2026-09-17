@@ -1,4 +1,4 @@
-/* MeridianData — account analytics: series building, interval stats, position stats, margin state */
+/* MeridianDataHub — account analytics: series building, interval stats, position stats, margin state */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api;
   const AN = (MD.analytics = {});

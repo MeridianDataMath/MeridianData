@@ -1,4 +1,4 @@
-/* MeridianData — Predict section: overview, bettors, questions, market makers, vig & edge, bettor page */
+/* MeridianDataHub — Predict section: overview, bettors, questions, market makers, vig & edge, bettor page */
 (function () {
   const MD = window.MD; const U = MD.util; const UI = MD.ui; const C = MD.charts; const h = U.h; const P = MD.predict;
   const isAbort = (e) => e && e.name === 'AbortError';

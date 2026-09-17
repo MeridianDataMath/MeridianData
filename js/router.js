@@ -1,4 +1,4 @@
-/* MeridianData — hash router: #/path?query */
+/* MeridianDataHub — hash router: #/path?query */
 (function () {
   const MD = window.MD; const U = MD.util;
   const R = (MD.router = { current: null, pages: {}, ctx: null });

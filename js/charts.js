@@ -1,4 +1,4 @@
-/* MeridianData — Chart.js wrappers with the site theme */
+/* MeridianDataHub — Chart.js wrappers with the site theme */
 (function () {
   const MD = window.MD; const U = MD.util;
   const C = (MD.charts = {});

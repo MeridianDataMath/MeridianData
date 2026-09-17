@@ -1,4 +1,4 @@
-/* MeridianData — Leaderboard: every subaccount, ranked, with a client-side build engine + cache */
+/* MeridianDataHub — Leaderboard: every subaccount, ranked, with a client-side build engine + cache */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const h = U.h;
   const KEY = 'md.lb.v3';

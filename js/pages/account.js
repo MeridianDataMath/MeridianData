@@ -1,4 +1,4 @@
-/* MeridianData — Account page: Overview / Live / Performance / Rewards */
+/* MeridianDataHub — Account page: Overview / Live / Performance / Rewards */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
 
@@ -136,7 +136,7 @@
 
     const stateCard = h('div.card.state-card', UI.loading('Loading account state…'));
     const chartCanvas = h('canvas');
-    const chartBox = h('div.chart-box', h('div.watermark', 'MeridianData'), chartCanvas);
+    const chartBox = h('div.chart-box', h('div.watermark', 'MeridianDataHub'), chartCanvas);
     const tiles = h('div.stats');
     const metricSeg = UI.seg(METRICS, metric, (v) => { metric = v; MD.router.setParams({ metric: v }, { silent: true }); drawChart(); }, 'sm');
     const cumBox = UI.checkbox('Cumulative', cumulative, (v) => { cumulative = v; U.storage.set('md.chart.cum', v); drawChart(); });

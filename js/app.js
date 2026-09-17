@@ -1,4 +1,4 @@
-/* MeridianData — bootstrap: sidebar, topbar, global search, router */
+/* MeridianDataHub — bootstrap: sidebar, topbar, global search, router */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const h = U.h;
 
@@ -66,7 +66,7 @@
       U.icon(n.icon), h('span.lbl', n.label, n.badge ? h('span.chip.accent', { style: { marginLeft: '8px' } }, n.badge) : null), h('span.tip', n.label));
     const ext = (href, icon, label) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener' }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
     U.replace(rail,
-      h('a.logo', { href: '#/', title: 'MeridianData' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'Data'))),
+      h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
       SECTIONS.map((s) => [h('div.sec', s.title), s.items.map(navLink)]),
       h('span.spacer'),
       h('div.sec', 'Meridian'),
@@ -83,7 +83,7 @@
       const on = p === route.path || (a.dataset.prefix && route.path.startsWith(a.dataset.prefix)) || (route.name !== 'predict' && p !== undefined && a.dataset.name === route.name);
       a.classList.toggle('active', !!on);
     });
-    MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianData'));
+    MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
     const main = U.$('#main'); if (main) main.classList.toggle('home', route.name === 'home');
     if (route.name === 'account' && route.params.address) {
@@ -91,7 +91,7 @@
       const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
       const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');
     }
-    document.title = ((PATH_TITLES[route.path] || TITLES[route.name]) ? (PATH_TITLES[route.path] || TITLES[route.name]) + ' · ' : '') + 'MeridianData';
+    document.title = ((PATH_TITLES[route.path] || TITLES[route.name]) ? (PATH_TITLES[route.path] || TITLES[route.name]) + ' · ' : '') + 'MeridianDataHub';
   }
 
   function boot() {

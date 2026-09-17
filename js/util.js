@@ -1,4 +1,4 @@
-/* MeridianData — shared helpers (classic script, attaches to window.MD) */
+/* MeridianDataHub — shared helpers (classic script, attaches to window.MD) */
 (function () {
   const MD = (window.MD = window.MD || {});
   const U = (MD.util = {});

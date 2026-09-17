@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CF_PROJECT: meridiandata          # Cloudflare Pages project name
+  CF_PROJECT: meridiandatahub        # Cloudflare Pages project name
 
 jobs:
   deploy:

@@ -1,4 +1,4 @@
-/* MeridianData — Meridian API client (REST, Archive, TradingView candles, WebSocket) */
+/* MeridianDataHub — Meridian API client (REST, Archive, TradingView candles, WebSocket) */
 (function () {
   const MD = window.MD; const U = MD.util;
   const A = (MD.api = {});

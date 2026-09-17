@@ -1,4 +1,4 @@
-# MeridianData
+# MeridianDataHub
 
 Account analytics, leaderboard and market dashboard for the **Meridian** perpetuals exchange
 (Robinhood Chain), in the spirit of [ethereal.thehedgie.com](https://ethereal.thehedgie.com/).
@@ -30,10 +30,10 @@ perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the `sn
 assembles `dist/` and deploys it:
 
 * **Cloudflare Pages** (recommended; works from a **private** repo, free): create a Pages project
-  named `meridiandata` (Workers & Pages → Create → Pages → *Upload assets*, upload this folder
+  named `meridiandatahub` (Workers & Pages → Create → Pages → *Upload assets*, upload this folder
   once), create an API token with the *Cloudflare Pages: Edit* permission, and add two repository
   secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow
-  deploys to `https://meridiandata.pages.dev`; attach a custom domain in the Pages project.
+  deploys to `https://meridiandatahub.pages.dev`; attach a custom domain in the Pages project.
   Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
 * **GitHub Pages** (public repos only): without those secrets the same workflow deploys to
   `https://<user>.github.io/<repo>/` (Settings → Pages → Source: GitHub Actions, once).

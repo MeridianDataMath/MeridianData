@@ -1,4 +1,4 @@
-/* MeridianData — Exchange dashboard: markets, stop map, live trades, liquidations, closures */
+/* MeridianDataHub — Exchange dashboard: markets, stop map, live trades, liquidations, closures */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';

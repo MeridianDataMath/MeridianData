@@ -32,7 +32,7 @@ $prefix = "http://localhost:$Port/"
 $listener.Prefixes.Add($prefix)
 try { $listener.Start() } catch { throw "Could not listen on $prefix - is the port in use? ($($_.Exception.Message))" }
 Write-Host ""
-Write-Host "  MeridianData  ->  $prefix" -ForegroundColor Cyan
+Write-Host "  MeridianDataHub  ->  $prefix" -ForegroundColor Cyan
 Write-Host "  Serving $rootFull" -ForegroundColor DarkGray
 Write-Host "  Press Ctrl+C to stop." -ForegroundColor DarkGray
 Write-Host ""

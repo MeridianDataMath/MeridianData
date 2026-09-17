@@ -1,4 +1,4 @@
-/* MeridianData — Favorites page */
+/* MeridianDataHub — Favorites page */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const h = U.h;
   MD.router.pages.favorites = {

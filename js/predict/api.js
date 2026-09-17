@@ -1,4 +1,4 @@
-/* MeridianData — Meridian Predict (Sapience) GraphQL client. Read-only, public, no auth. */
+/* MeridianDataHub — Meridian Predict (Sapience) GraphQL client. Read-only, public, no auth. */
 (function () {
   const MD = window.MD; const U = MD.util;
   const P = (MD.predict = MD.predict || {});

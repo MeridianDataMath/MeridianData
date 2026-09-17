@@ -1,4 +1,4 @@
-/* MeridianData — Home page */
+/* MeridianDataHub — Home page */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const h = U.h;
   MD.router.pages.home = {

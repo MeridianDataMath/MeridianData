@@ -1,4 +1,4 @@
-/* MeridianData — Predict analytics: normalise predictions and aggregate bettors, makers, vig, categories, combos, series.
+/* MeridianDataHub — Predict analytics: normalise predictions and aggregate bettors, makers, vig, categories, combos, series.
    Shared by the browser and scripts/build-snapshot.mjs (Node). */
 (function () {
   const MD = window.MD; const U = MD.util;
