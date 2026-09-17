@@ -29,12 +29,15 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the `snapshots` branch,
 assembles `dist/` and deploys it:
 
-* **Cloudflare Pages** (recommended; works from a **private** repo, free): create a Pages project
-  named `meridiandatahub` (Workers & Pages → Create → Pages → *Upload assets*, upload this folder
-  once), create an API token with the *Cloudflare Pages: Edit* permission, and add two repository
-  secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow
-  deploys to `https://meridiandatahub.pages.dev`; attach a custom domain in the Pages project.
-  Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
+* **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
+  named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
+  Create → *Upload assets*, upload the site folder without `.git` and `data/bettors`), create an
+  API token from the *Edit Cloudflare Workers* template, and add two repository secrets:
+  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow runs
+  `wrangler deploy` with `dist/`. The default URL is `https://meridiandatahub.<your-subdomain>.workers.dev`;
+  the subdomain can be changed under Workers & Pages → Overview, and a custom domain can be attached
+  in the Worker's settings. Private repos get 2,000 free Actions minutes a month; the 30-minute
+  schedule uses about 1,500.
 * **GitHub Pages** (public repos only): without those secrets the same workflow deploys to
   `https://<user>.github.io/<repo>/` (Settings → Pages → Source: GitHub Actions, once).
 

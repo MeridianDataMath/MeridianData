@@ -1,0 +1,11 @@
+// Cloudflare Worker with static assets — deployed by the GitHub Action (`wrangler deploy`).
+// No Worker code: everything in dist/ is served as-is, _headers applies, unknown paths fall back to index.html.
+{
+  "name": "meridiandatahub",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "single-page-application"
+  }
+}
