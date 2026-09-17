@@ -6,7 +6,10 @@
  * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
- *   node scripts/build-snapshot.mjs
+ *   node scripts/build-snapshot.mjs                 # both
+ *   node scripts/build-snapshot.mjs --perps         # leaderboard only (what GitHub Actions runs: the Predict API
+ *                                                   #   returns 403 to datacenter IPs, so that snapshot is built on a PC)
+ *   node scripts/build-snapshot.mjs --predict --out <dir>
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,6 +17,11 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const args = process.argv.slice(2);
+const flag = (n) => args.includes('--' + n);
+const outDir = args.includes('--out') ? path.resolve(args[args.indexOf('--out') + 1]) : path.join(root, 'data');
+const doPredict = flag('predict') || !flag('perps');
+const doPerps = flag('perps') || !flag('predict');
 
 // minimal browser shims for the classic-script modules
 globalThis.window = globalThis;
@@ -23,7 +31,7 @@ for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/predict/api.j
 }
 const { MD } = globalThis;
 const A = MD.api, AN = MD.analytics, U = MD.util, P = MD.predict;
-fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+fs.mkdirSync(outDir, { recursive: true });
 
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
@@ -42,16 +50,20 @@ async function buildPredict() {
   const agg = P.aggregate(norms, { tapeSize: 100 });
   let counts = null;
   try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
-  const out = { builtAt: Date.now(), source: 'github-actions', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
-  fs.writeFileSync(path.join(root, 'data', 'predict.json'), JSON.stringify(out));
-  console.log(`wrote data/predict.json: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
+  console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
-try { await buildPredict(); }
-catch (e) {
-  // No agg → the site falls back to a browser build; the error is published so it can be read without Action logs.
-  console.warn('predict snapshot failed (site falls back to a browser build):', e && e.stack);
-  fs.writeFileSync(path.join(root, 'data', 'predict.json'), JSON.stringify({ builtAt: Date.now(), source: 'github-actions', error: String(e && (e.stack || e.message || e)), requests: P.stats.requests, retries: P.stats.retries }));
+if (doPredict) {
+  try { await buildPredict(); }
+  catch (e) {
+    // No agg → the site falls back; the error is published so it can be read without Action logs.
+    console.warn('predict snapshot failed:', e && e.stack);
+    fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify({ builtAt: Date.now(), error: String(e && (e.stack || e.message || e)), requests: P.stats.requests, retries: P.stats.retries }));
+    if (!doPerps) process.exit(1);
+  }
 }
+if (!doPerps) process.exit(0);
 
 // ------------------------------------------------------------------- Perps
 const started = Date.now();
@@ -70,6 +82,6 @@ const rows = []; let failed = 0;
 results.forEach((r, i) => { if (r.ok) rows.push(r.value); else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
 
 const out = { builtAt: Date.now(), rows, partial: failed > 0, source: 'github-actions', accounts: subs.length, failed, durationMs: Date.now() - started };
-fs.writeFileSync(path.join(root, 'data', 'leaderboard.json'), JSON.stringify(out));
-console.log(`wrote data/leaderboard.json: ${rows.length} rows, ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
+console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows, ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
 if (!rows.length) process.exit(1);

@@ -19,14 +19,15 @@
   const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
   const sourceLink = (c) => { const m = c.similarMarket && c.similarMarket.markets && c.similarMarket.markets[0]; return m ? h('a.btn.sm.ghost', { href: m, target: '_blank', rel: 'noopener', title: m }, U.icon('external'), /polymarket/i.test(m) ? 'Polymarket' : 'Source') : null; };
 
-  // ---------- snapshot: published data/predict.json, else a recent-window build in the browser ----------
+  // ---------- snapshot: the newest of data/predict.json (Pages) and the "snapshots" branch (pushed from a PC),
+  //            else a recent-window build in the browser ----------
+  P.SNAPSHOT_URLS = ['data/predict.json', 'https://raw.githubusercontent.com/MeridianDataMath/MeridianData/snapshots/predict.json'];
   P._snap = undefined; P._snapAt = 0; P._building = null;
   P.loadSnapshot = async function ({ signal, onProgress, force } = {}) {
     if (!force && P._snap && Date.now() - P._snapAt < 60000) return P._snap;
-    try {
-      const r = await fetch('data/predict.json', { cache: 'no-cache', signal });
-      if (r.ok) { const j = await r.json(); if (j && j.agg) { P._snap = Object.assign(j, { remote: true }); P._snapAt = Date.now(); return P._snap; } }
-    } catch (e) { if (isAbort(e)) throw e; }
+    const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache', signal }); if (!r.ok) return null; const j = await r.json(); return j && j.agg ? j : null; } catch (e) { if (isAbort(e)) throw e; return null; } }));
+    const best = found.filter(Boolean).sort((a, b) => b.builtAt - a.builtAt)[0];
+    if (best && (!P._snap || best.builtAt >= P._snap.builtAt)) { P._snap = Object.assign(best, { remote: true }); P._snapAt = Date.now(); return P._snap; }
     if (P._snap && P._snap.builtAt > Date.now() - 15 * 60000) return P._snap;
     if (!P._building) {
       P._building = (async () => {
