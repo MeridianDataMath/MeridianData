@@ -88,9 +88,18 @@ visitor's browser.
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center gains a Predict block with realised PnL, monthly table
     and two CSV exports.
-  The aggregates come from `data/predict.json`, built by the same GitHub Action every 15 min
-  (all predictions since launch, pulled 25 rows per page across parallel time windows). Without
-  it the browser builds the last 14 days itself.
+  **How the Predict data gets there.** The Predict API refuses datacenter IPs (GitHub's
+  runners get 403) and only allows browsers from Meridian's own origins (CORS allowlist), so:
+  `scripts/Update-PredictSnapshot.ps1` runs on a normal PC (portable Node in `../tools/node`
+  or any `node` on PATH), pulls every prediction since launch paced under the API's 200
+  requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
+  (`predict.json` + one slim file per wallet in `bettors/`). `scripts/Install-SnapshotTask.ps1`
+  schedules that every 30 minutes. The Pages workflow copies the branch into `data/` on each
+  run and the site also reads it straight from `raw.githubusercontent.com`, taking whichever is
+  newer. On the public domain every Predict page therefore renders from the snapshot; live
+  queries (full-text question search, exchange-side account stats, 20-second tape) switch on
+  automatically on an allowed origin such as localhost. Without any snapshot the browser
+  builds the last 14 days itself.
 * **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
   all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
   positions is not implemented yet; nothing on the page places orders.
