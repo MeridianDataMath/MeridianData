@@ -1,5 +1,7 @@
 # MeridianDataHub
 
+**Live at <https://meridian.thedatahub.xyz/>.**
+
 Account analytics, leaderboard and market dashboard for the **Meridian** perpetuals exchange
 (Robinhood Chain), in the spirit of [ethereal.thehedgie.com](https://ethereal.thehedgie.com/).
 
@@ -35,9 +37,11 @@ assembles `dist/` and deploys it:
   API token from the *Edit Cloudflare Workers* template, and add two repository secrets:
   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow runs
   `wrangler deploy` with `dist/`. The default URL is `https://meridiandatahub.<your-subdomain>.workers.dev`;
-  the subdomain can be changed under Workers & Pages → Overview, and a custom domain can be attached
-  in the Worker's settings. Private repos get 2,000 free Actions minutes a month; the 30-minute
-  schedule uses about 1,500.
+  the subdomain can be changed under Workers & Pages → Overview. The public address
+  `meridian.thedatahub.xyz` is a custom domain on the Worker (Settings → Domains & Routes) on the
+  zone `thedatahub.xyz`, registered through Cloudflare Registrar; Cloudflare issues and renews the
+  certificate itself. Turn on *Always Use HTTPS* under the zone's SSL/TLS → Edge Certificates.
+  Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
 * **GitHub Pages** (public repos only): without those secrets the same workflow deploys to
   `https://<user>.github.io/<repo>/` (Settings → Pages → Source: GitHub Actions, once).
 
@@ -103,9 +107,9 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   or any `node` on PATH), pulls every prediction since launch paced under the API's 200
   requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
   (`predict.json` + one slim file per wallet in `bettors/`). `scripts/Install-SnapshotTask.ps1`
-  schedules that every 30 minutes. The Pages workflow copies the branch into `data/` on each
-  run and the site also reads it straight from `raw.githubusercontent.com`, taking whichever is
-  newer. On the public domain every Predict page therefore renders from the snapshot; live
+  schedules that every 30 minutes. The deploy workflow copies the branch into `data/` on each
+  run, which is where the site reads it from. On the public domain every Predict page
+  therefore renders from the snapshot; live
   queries (full-text question search, exchange-side account stats, 20-second tape) switch on
   automatically on an allowed origin such as localhost. Without any snapshot the browser
   builds the last 14 days itself.
