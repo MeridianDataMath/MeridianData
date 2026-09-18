@@ -448,10 +448,28 @@
         { key: 'gap', label: 'Implied − realized', num: true, title: 'Positive = bettors won less often than they paid for', render: gapCell },
         { key: 'roi', label: 'Bettor ROI', num: true, title: 'Net result ÷ stake on these bets; the mirror image is the maker\'s realised take', render: roiCell },
       ], rows });
+      const bucketLabel = (b) => pct(b.from, 0) + '–' + pct(b.to, 0);
+      // plain-language card for bettors, written from the numbers so it stays true as the snapshot changes
+      const bettorNote = (r) => {
+        if (!r || !r.overall.n) return null;
+        const o = r.overall; const roiTxt = (x) => U.fmtPct(x * 100, { sign: true, dp: 0 });
+        // contiguous odds buckets with enough bets and a clearly negative / positive money result
+        const runs = (pred) => { const out = []; for (const b of r.byOddsBucket) { if (b.n >= 100 && pred(b)) { const last = out[out.length - 1]; if (last && last.to === b.from) { last.to = b.to; last.stake += b.stake; last.pnl += b.pnl; } else out.push({ from: b.from, to: b.to, stake: b.stake, pnl: b.pnl }); } } return out.map((x) => Object.assign(x, { roi: x.pnl / x.stake })); };
+        const bad = runs((b) => b.roi < -0.1), good = runs((b) => b.roi > 0.05);
+        const types = [['singles', r.singles], ['combos across different events', r.combosOnly], ['combos on one event', r.combosSameEvent]].filter(([, x]) => x.n >= 100);
+        const pos = types.filter(([, x]) => x.roi > 0), neg = types.filter(([, x]) => x.roi < 0);
+        const list = (arr, f) => arr.map(f).join(arr.length > 2 ? ', ' : ' and ');
+        const li = (t, ...c) => h('li', { style: { margin: '0 0 6px' } }, h('b', { style: { color: 'var(--text-1)' } }, t + ' '), ...c);
+        return h('div.card', { style: { borderColor: 'var(--accent)' } }, h('h3', { style: { marginBottom: '8px' } }, 'How to read this if you bet'),
+          h('ul.muted', { style: { margin: 0, paddingLeft: '18px', maxWidth: '900px' } },
+            li('Two prices.', `The quoted cost (top of the page) is how far your odds sit from Polymarket's price at that moment, about ${pp(v.overall.avg)} on a typical bet. The realised cost (bottom) is what settled bets have actually returned: ${roiTxt(o.roi)} of stakes across every bettor so far. The second one is what a balance feels.`),
+            bad.length || good.length ? li('Where the money goes.', bad.length ? `Bets at ${list(bad, bucketLabel)} odds have returned ${list(bad, (x) => roiTxt(x.roi))} of stakes: long shots pay out far less often than their odds say. ` : '', good.length ? `Bets at ${list(good, bucketLabel)} odds have returned ${list(good, (x) => roiTxt(x.roi))}.` : '') : null,
+            types.length ? li('Bet type.', pos.length ? `${U.capitalize(list(pos, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} ${pos.length > 1 ? 'have' : 'has'} been net positive for bettors so far` : '', pos.length && neg.length ? '; ' : '', neg.length ? `${pos.length ? '' : ''}${pos.length ? list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')') : U.capitalize(list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} ${pos.length ? 'net negative' : (neg.length > 1 ? 'have' : 'has') + ' been net negative for bettors so far'}` : '', '. Adding a leg from another event is where the maker\'s margin compounds; legs on the same event are priced with their correlation.') : null,
+            li('Read it right.', 'Look at Bettor ROI, not the hit-rate gap: a one-point shortfall at 3% odds is a third of the stake, at 60% it is nothing. A gap inside the ± could be luck. These are past results across all bettors, not a forecast and not advice; small buckets swing.')));
+      };
       const realizedSection = (r) => {
         if (!r || !r.overall.n) return null;
         const o = r.overall; const cr = h('canvas');
-        const bucketLabel = (b) => pct(b.from, 0) + '–' + pct(b.to, 0);
         const buckets = r.byOddsBucket.filter((b) => b.n >= 30);
         const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different events', ...r.combosOnly }, { k: 'Combos · same event', ...r.combosSameEvent }, r.combosUnknown.n ? { k: 'Combos · event unknown', ...r.combosUnknown } : null].filter(Boolean);
         const node = h('div.stack', { style: { marginTop: '8px' } },
@@ -464,6 +482,7 @@
       };
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Every prediction locks odds = stake ÷ (stake + maker collateral). The fair price is what the mirrored Polymarket market showed at the moment the bet was placed, taken from Polymarket\'s own price history (1- to 15-minute samples, the last one at or before the bet). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = bettor paid above fair, which is the market maker\'s margin.'), h('p.muted.small', { style: { margin: 0 } }, 'For combos the fair price is the product of the legs\' prices at bet time, which assumes the legs are independent. Legs on the same Polymarket event (one match, one asset at several strikes) are correlated, so for those the product understates fair and the gap includes what the maker charges for correlation, not only margin. They are shown separately and kept out of the headline figures' + (cov ? `. Included: ${U.fmtNum(cov.clean != null ? cov.clean : cov.withAtBet, 0)} of ${U.fmtNum(cov.total, 0)} predictions (${U.fmtNum(cov.total - cov.withAtBet, 0)} without Polymarket history${cov.sameEvent ? `, ${U.fmtNum(cov.sameEvent, 0)} same-event combos` : ''})` : '') + '.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        bettorNote(v.realized),
         h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'odds vs source price at bet time'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos · different events', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions'), v.combosSameEvent && v.combosSameEvent.n ? UI.stat('Combos · same event', pp(v.combosSameEvent.avg), U.fmtNum(v.combosSameEvent.n, 0) + ' predictions · includes correlation pricing, not in the headline') : null),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Average vig per week'), h('div.chart-box.sm', cv)),
         h('div.grid.cols-2', UI.card('By category', sumTbl(v.byCat, 'Category', (r) => r.cat)), UI.card('By odds', sumTbl(v.byOddsBucket.filter((b) => b.n), 'Bettor odds', (r) => pct(r.from, 0) + ' – ' + pct(r.to, 0)))),

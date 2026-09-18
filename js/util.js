@@ -151,6 +151,7 @@
   U.fmtDate = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
   U.fmtDateShort = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}`; };
   U.fmtTime = (ms) => { const d = new Date(U.num(ms)); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+  U.capitalize = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   U.fmtHM = (ms) => { const d = new Date(U.num(ms)); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   /** Feed timestamps: clock time today, "Sep 17 21:06" for anything older, so a tape that spans days stays readable. */
   U.fmtFeedTime = (ms) => { const d = new Date(U.num(ms)); const now = new Date(); return d.toDateString() === now.toDateString() ? U.fmtTime(ms) : `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
