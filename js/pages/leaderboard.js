@@ -35,7 +35,16 @@
       const filters = h('div');
       const summary = h('span.dim.small');
       const updateBtn = h('button.btn.sm', { onclick: () => build(true) }, U.icon('refresh'), 'Update');
-      U.replace(root, h('div.page', h('div.lb', h('div.stack', h('div.row', summary, h('span.grow'), h('span.dim.small', 'PnL, ROI, Sharpe and drawdown follow the selected interval'), updateBtn), progress, h('div.card.tight', tableWrap)), h('div.card.filters', filters))));
+      // narrow screens stack the filters under the table, so a toolbar above it carries the interval and a Filters toggle
+      const lbEl = h('div.lb');
+      const toolbar = h('div.row.lb-toolbar');
+      const renderToolbar = () => U.replace(toolbar, UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'), h('span.grow'), h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters'));
+      const filtersCard = h('div.card.filters', filters);
+      U.replace(root, h('div.page', U.append(lbEl, [h('div.stack', h('div.row', summary, h('span.grow'), h('span.dim.small', 'PnL, ROI, Sharpe and drawdown follow the selected interval'), updateBtn), toolbar, progress, h('div.card.tight', tableWrap)), filtersCard])));
+      // narrow screens: the filters sit right under the toolbar that toggles them; wide screens: the side column
+      const narrow = window.matchMedia('(max-width: 1100px)');
+      const placeFilters = () => { if (narrow.matches) toolbar.after(filtersCard); else lbEl.appendChild(filtersCard); };
+      placeFilters(); narrow.addEventListener('change', placeFilters); window.addEventListener('resize', placeFilters); ctx.onCleanup(() => { narrow.removeEventListener('change', placeFilters); window.removeEventListener('resize', placeFilters); });
       ctx.onCleanup(U.on('favorites', () => renderTable()));
 
       const numInput = (k, which, ph) => h('input.input.sm', { type: 'number', placeholder: ph || which, value: state[which][k] ?? '', oninput: (e) => { const v = e.target.value; if (v === '') delete state[which][k]; else state[which][k] = U.num(v); state.page = 1; renderTable(); } });
@@ -53,7 +62,7 @@
           h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; Update rebuilds one in your browser right now.'),
           h('div.sec', MD.defsLink()));
       }
-      renderFilters();
+      renderFilters(); renderToolbar();
 
       function rowsFiltered(data) {
         const iv = state.interval;

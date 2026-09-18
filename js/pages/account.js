@@ -116,20 +116,25 @@
 
       // ---- topbar header ----
       const subSel = h('select', { onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name))));
-      MD.setTopbar(h('div.acct-head',
+      const head = h('div.acct-head',
         h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)),
         UI.starBtn(fav, 'btn icon'),
         h('span.subsel', 'sub:', subSel),
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
         h('button.btn.sm.ghost.explorer', { title: 'Copy a link to this page', onclick: () => { U.copyText(location.href); U.toast('Link copied'); } }, U.icon('copy'), 'Share'),
-        h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt))));
+        h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt)));
+      // phones: the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
+      const headSlot = h('div.acct-head-slot');
+      const narrow = window.matchMedia('(max-width: 720px)');
+      const placeHead = () => { if (narrow.matches) { headSlot.appendChild(head); MD.setTopbar(h('span.title', 'Account')); } else { MD.setTopbar(head); } };
+      placeHead(); narrow.addEventListener('change', placeHead); window.addEventListener('resize', placeHead); ctx.onCleanup(() => { narrow.removeEventListener('change', placeHead); window.removeEventListener('resize', placeHead); });
 
       // ---- tabs ----
       let tab = TABS.some((t) => t[0] === route.params.tab) ? route.params.tab : 'overview';
       const tabsEl = h('div.tabs', TABS.map(([v, label]) => h('button', { class: v === tab ? 'on' : '', dataset: { v }, onclick: () => show(v) }, label)));
       const tabBody = h('div', { style: { marginTop: '16px' } });
-      U.replace(page, h('div.stack', tabsEl, tabBody));
+      U.replace(page, h('div.stack', headSlot, tabsEl, tabBody));
       let tabCtx = null;
       const state = { addr, sa, subs, ref, fav, subName };
       function show(v) {

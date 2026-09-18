@@ -505,7 +505,12 @@
   // =====================================================================
   async function mountBettorPage(body, route, ctx) {
     const addr = String(route.params.address || '').toLowerCase();
-    MD.setTopbar(h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer')));
+    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
+    // phones: the header goes into the page (the topbar cannot fit it); same arrangement as the perps account page
+    const headSlot = h('div.acct-head-slot'); if (body.parentElement) body.parentElement.prepend(headSlot); else body.prepend(headSlot);
+    const narrow = window.matchMedia('(max-width: 720px)');
+    const placeHead = () => { if (narrow.matches) { headSlot.appendChild(head); MD.setTopbar(h('span.title', 'Predict · Bettor')); } else { MD.setTopbar(head); } };
+    placeHead(); narrow.addEventListener('change', placeHead); window.addEventListener('resize', placeHead); ctx.onCleanup(() => { narrow.removeEventListener('change', placeHead); window.removeEventListener('resize', placeHead); });
     if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.error', 'Invalid address'))); return; }
     await P.renderBettor(body, addr, ctx);
   }

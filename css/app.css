@@ -407,6 +407,7 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .lb .filters { position: sticky; top: 0; }
 .lb .filters .sec { border-top: 1px solid var(--border-2); padding-top: 12px; margin-top: 12px; }
 .lb .filters h3 { margin-bottom: 8px; }
+.lb-toolbar { display: none; }   /* narrow screens only (see the responsive block) */
 .minmax { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .progress { height: 4px; background: var(--bg-5); border-radius: 3px; overflow: hidden; }
 .progress > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
@@ -518,7 +519,9 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 }
 @media (max-width: 1100px) {
   .lb { grid-template-columns: minmax(0, 1fr); }
-  .lb .filters { position: static; }
+  .lb .filters { position: static; display: none; }   /* collapsed under the toolbar's Filters button */
+  .lb.open .filters { display: block; }
+  .lb-toolbar { display: flex; }
   .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -563,6 +566,13 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .feed .it:has(.grow.ellipsis) { flex-wrap: wrap; row-gap: 2px; }
   .feed .it .grow.ellipsis { flex: 1 1 200px; order: 10; min-width: 0 !important; color: var(--text-2); }
   .feed .it:has(.grow.ellipsis) > .chip:last-child { order: 11; margin-left: auto; }   /* result chip sits at the end of the question line */
+  /* the account header lives in the page here (see account.js); it may wrap, and shows everything the topbar hid */
+  .acct-head-slot:empty { display: none; }
+  .acct-head-slot .acct-head { flex-wrap: wrap; overflow: visible; gap: 8px; margin-bottom: -4px; }
+  .acct-head-slot .acct-head .explorer, .acct-head-slot .acct-head .since { display: inline-flex; }
+  .acct-head-slot .acct-head .since { flex-basis: 100%; }
+  /* toasts clear the bottom navigation bar */
+  .toast { bottom: 72px; }
   /* stat tiles: two per row, an odd last one spans the row */
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats > :last-child:nth-child(odd) { grid-column: 1 / -1; }
