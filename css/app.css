@@ -222,6 +222,21 @@ label.lbl { display: block; font-size: 11.5px; color: var(--text-3); margin-bott
 .chip.amber { background: var(--amber-dim); color: var(--amber); border-color: transparent; }
 .chip.blue { background: rgba(104,149,255,.14); color: var(--accent-2); border-color: transparent; }
 
+/* modal (resolution details etc.) */
+.modal-bg { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.62); display: grid; place-items: center; padding: 16px; }
+.modal { background: var(--bg-2); border: 1px solid var(--border-3); border-radius: 12px; width: min(720px, 100%); max-height: min(86vh, 900px); display: flex; flex-direction: column; box-shadow: 0 24px 70px rgba(0,0,0,.55); }
+.modal-head { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border-2); }
+.modal-head h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; line-height: 1.35; }
+.modal-body { padding: 14px 16px; overflow: auto; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 16px; font-size: 13px; align-items: start; }
+.kv .k { color: var(--text-3); white-space: nowrap; }
+.rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
+.res-cell { line-height: 1.25; white-space: normal; min-width: 210px; max-width: 340px; }
+.res-cell .res-info { padding: 2px; margin-top: -2px; color: var(--text-3); }
+.res-cell .res-info:hover { color: var(--text-1); }
+.res-line { display: flex; align-items: center; gap: 6px; white-space: normal; line-height: 1.25; }
+.legs > div + div { margin-top: 4px; }
+
 .addr { font-family: var(--mono); font-size: 13px; }
 a.addr:hover { text-decoration: underline; }
 .copy { cursor: pointer; color: var(--text-3); display: inline-grid; place-items: center; }
@@ -440,7 +455,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   :root { --bg-0: #fff; --bg-1: #fff; --bg-2: #fff; --bg-3: #f4f4f5; --bg-4: #f4f4f5; --bg-5: #ececee; --bg-6: #e4e4e7; --border-1: #ddd; --border-2: #ddd; --border-3: #ccc; --text-1: #111; --text-2: #333; --text-3: #666; --green: #0f8a52; --red: #c22a2f; --accent: #0b8f7e; }
   body { overflow: visible; }
   .app { display: block; height: auto; }
-  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip { display: none !important; }
+  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg { display: none !important; }
   .frame { display: block; height: auto; }
   .main { overflow: visible; padding: 0; height: auto; }
   .main > .page { max-width: none; }
@@ -488,6 +503,10 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .topbar { padding: 0 12px; }
   .topbar .search-mini input { width: 160px; }
   .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: 1fr; }
+  .modal-bg { padding: 8px; align-items: end; }
+  .modal { max-height: 92vh; }
+  .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .kv .k { white-space: normal; margin-top: 6px; }
   /* phone: stack the hero content instead of pinning the ticker/footer to the bottom */
   .main.home { padding: 0 0 56px; }
   .main.home .hero { min-height: calc(100vh - var(--top) - 56px); justify-content: flex-start; padding: 48px 16px 24px; }

@@ -90,9 +90,15 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last activity; click through to a bettor page.
-  * *Questions* – explorer over all 77k questions: search, category, open/settled, sorted by
-    Meridian open interest, end time or newest; implied probability, Meridian OI, source volume,
-    link to the mirrored source market.
+  * *Questions* – explorer over all 85k questions: search, category, open / ended-unsettled /
+    settled, sorted by Meridian open interest, end time or newest; implied probability, Meridian
+    OI, source volume, link to the mirrored source market. A **Resolution** column says when and
+    how each question resolves: the Polymarket market's end (and the fixture time for sports,
+    which moves when a game is postponed), Meridian's own betting cutoff when it is earlier, and
+    the live position in Polymarket's UMA pipeline — *awaiting proposal*, *proposed X, challenge
+    window ends 15:42*, *disputed*, *UMA vote*, *resolved on Polymarket, not settled on Meridian
+    yet*. The ⓘ button opens the proposal / dispute details and the market's resolution rules.
+    The same per-leg status sits on the open positions of every bettor page.
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
     committed, open exposure, PnL, win rate, vig captured.
   * *Vig & edge* – the bettor's locked odds versus the source market's probability, overall,
@@ -113,6 +119,14 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   queries (full-text question search, exchange-side account stats, 20-second tape) switch on
   automatically on an allowed origin such as localhost. Without any snapshot the browser
   builds the last 14 days itself.
+  **Resolution data** does not depend on the Predict API at all: a Meridian question's
+  `conditionId` is the Polymarket condition id, so the browser asks Polymarket's public Gamma
+  API (`gamma-api.polymarket.com`, CORS-open) for the market and, for anything past its end or
+  in resolution, reads the UMA CTF adapter (`getQuestion`) and the optimistic oracle
+  (`getRequest`) on Polygon through a public RPC (`polygon-bor-rpc.publicnode.com`, fallback
+  `1rpc.io`). That gives the proposer, the proposed outcome, the exact end of the challenge
+  window and any disputer. Neg-risk (multi-outcome) markets use a different adapter that keys
+  questions differently, so for those only Polymarket's coarse status is shown.
 * **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
   all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
   positions is not implemented yet; nothing on the page places orders.
@@ -160,7 +174,10 @@ js/analytics.js         series building, interval stats, position stats, margin 
 js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
-js/pages/*.js           home, account, favorites, leaderboard, dashboard
+js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, predict
+js/predict/api.js       Predict (Sapience) GraphQL client
+js/predict/analytics.js Predict normalisation, aggregation, per-wallet slim records
+js/predict/resolution.js Polymarket Gamma + UMA oracle resolution tracker
 js/app.js               bootstrap, sidebar, global search
 vendor/chart.umd.js     Chart.js 4 (MIT)
 assets/                 Meridian logo (media kit) + favicon

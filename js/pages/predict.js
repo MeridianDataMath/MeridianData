@@ -216,6 +216,32 @@
   // =====================================================================
   // Questions explorer (server-side paged)
   // =====================================================================
+  const R = P.res;
+  const STATUS_OPTS = [{ v: 'open', label: 'Open' }, { v: 'ended', label: 'Ended · unsettled', title: 'Past their end time on Meridian but not settled yet — where is each one in the resolution pipeline?' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }];
+  /** Meridian's view of a question as the resolution tracker wants it (live API row or snapshot row). */
+  const qView = (c) => (c.conditionId
+    ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, question: c.question }
+    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, question: c.q });
+  const qId = (c) => c.conditionId || c.id;
+  const resCols = (rows) => [
+    { key: 'r', label: 'Resolution', title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: P.APP_URL }) },
+    { key: 's', label: 'Status', render: (c) => R.chip(qView(c), qId(c)) },
+  ];
+  /** Pull Polymarket + oracle data for the rows on screen, re-rendering as each layer arrives; keeps countdowns fresh. */
+  function trackResolution(rows, ctx, rerender, isCurrent) {
+    const ids = rows.map(qId).filter(Boolean);
+    if (!ids.length) return;
+    (async () => {
+      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); if (isCurrent()) rerender(); }
+      catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); }
+    })();
+  }
+  const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
+  /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
+  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, resolved: 5, paused: 6, unknown: 7, trading: 8, settled: 9 };
+  const byStage = (rows) => U.sortBy(rows, (c) => (STAGE_RANK[R.state(qView(c), qId(c)).code] || 0) * 1e13 + (qView(c).end || 0));
+  const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
+
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
     const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
@@ -230,35 +256,41 @@
     search.addEventListener('input', debounced);
     const catSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; load(); } }, h('option', { value: '' }, 'All categories'), cats.map((c) => h('option', { value: c.slug, selected: c.slug === st.cat }, c.name + (c.slug.startsWith('prices-') ? ' (prices)' : ''))));
     const controls = h('div.card', h('div.row.wrap', search, catSel,
-      UI.seg([{ v: 'open', label: 'Open' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }], st.status, (v) => { st.status = v; load(); }, 'sm'),
+      UI.seg(STATUS_OPTS, st.status, (v) => { st.status = v; load(); }, 'sm'),
       h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'CREATED_AT', label: 'Newest' }], st.sort, (v) => { st.sort = v; load(); }, 'sm'),
       h('span.grow'), summary));
-    U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is collateral escrowed on Meridian; source volume is the mirrored market's.` : ''));
+    U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is collateral escrowed on Meridian; source volume is the mirrored market's.` : ''), resFootnote());
     let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
     function renderRows() {
+      if (st.status === 'ended') rows = byStage(rows);
       U.replace(wrap, UI.table({ cols: [
-        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.question), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.question), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
         { key: 'c', label: 'Category', render: (c) => (c.category ? c.category.name : '—') },
         { key: 'p', label: 'Probability', num: true, title: 'Implied probability from the source market', render: (c) => probBar(c.estimatedPrice) },
         { key: 'oi', label: 'Meridian OI', num: true, render: (c) => { const v = P.usd(c.openInterest); return v ? usd(v, { compact: true }) : h('span.dim', '—'); } },
         { key: 'v24', label: 'Source vol 24h', num: true, render: (c) => (Number(c.similarMarketVolume24h) ? usd(Number(c.similarMarketVolume24h), { compact: true }) : h('span.dim', '—')) },
         { key: 'v7', label: 'Source vol 7d', num: true, render: (c) => (Number(c.similarMarketVolume7d) ? usd(Number(c.similarMarketVolume7d), { compact: true }) : h('span.dim', '—')) },
-        { key: 'e', label: 'Ends', render: (c) => h('span.dim', c.endTime ? (c.endTime * 1000 > Date.now() ? 'in ' + U.fmtCountdown(c.endTime * 1000 - Date.now()) : U.fmtDate(c.endTime * 1000)) : '—') },
-        { key: 's', label: 'Status', render: (c) => (c.settled ? (c.nonDecisive ? UI.chip('void', 'amber') : c.resolvedToYes ? UI.chip('YES', 'green') : UI.chip('NO', 'red')) : UI.chip('open', 'accent')) },
+        ...resCols(rows),
         { key: 'l', label: '', render: (c) => h('div.row', { style: { gap: '4px' } }, sourceLink(c)) },
-      ], rows, empty: loading ? 'Loading…' : 'No questions match' }),
+      ], rows, empty: loading ? 'Loading…' : st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match' }),
         UI.cursorPager({ page, hasNext, count: rows.length, loading, onPrev: () => go(page - 1), onNext: () => go(page + 1) }));
     }
     async function go(p) {
       if (p < 1) return; loading = true; renderRows(); const my = ++reqId;
       try {
-        const res = await P.conditions({ search: st.search || undefined, categorySlug: st.cat || undefined, settled: st.status === 'all' ? null : st.status === 'settled', orderBy: st.sort, dir: st.sort === 'END_TIME' ? 'ASC' : 'DESC', first: PAGE, after: cursors[p - 1], signal: ctx.signal, ttl: 30000 });
+        // "Ended · unsettled": unsettled questions in end-time order start with the ended ones, so a page is cut off at the first still-running question
+        const ended = st.status === 'ended';
+        const res = await P.conditions({ search: st.search || undefined, categorySlug: st.cat || undefined, settled: st.status === 'all' ? null : st.status === 'settled', orderBy: ended ? 'END_TIME' : st.sort, dir: ended || st.sort === 'END_TIME' ? 'ASC' : 'DESC', first: PAGE, after: cursors[p - 1], signal: ctx.signal, ttl: 30000 });
         if (my !== reqId) return;
-        rows = res.nodes; hasNext = res.pageInfo.hasNextPage; page = p; if (hasNext && cursors.length === p) cursors.push(res.pageInfo.endCursor);
-        U.replace(summary, `${U.fmtNum(res.totalCount, 0)} questions`);
+        const now = Date.now() / 1000;
+        rows = ended ? res.nodes.filter((c) => c.endTime && c.endTime < now) : res.nodes;
+        hasNext = res.pageInfo.hasNextPage && rows.length === res.nodes.length; page = p; if (hasNext && cursors.length === p) cursors.push(res.pageInfo.endCursor);
+        U.replace(summary, ended ? `${rows.length} ended, unsettled on this page` : `${U.fmtNum(res.totalCount, 0)} questions`);
       } catch (e) { if (isAbort(e)) return; if (my !== reqId) return; rows = []; U.replace(wrap, UI.error(e, () => go(p))); loading = false; return; }
       loading = false; renderRows();
+      trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
+    resTicker(ctx, () => { if (!loading) renderRows(); });
     function load() { cursors = [null]; MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
@@ -270,32 +302,42 @@
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
       let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian activity', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
+      const now = Date.now();
+      const endedCount = all.filter((q) => q.end && q.end < now && !q.settled).length;
+      if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
+        UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); }, 'sm'),
         h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], st.sort === 'CREATED_AT' ? 'OPEN_INTEREST' : st.sort, (v) => { st.sort = v; page = 1; render(); }, 'sm'),
         h('span.grow'), summary));
-      function render() {
-        let rows = all;
+      let renderSeq = 0, endedPreloaded = false;
+      function render(keepTracking) {
+        let rows = all; const t = Date.now();
         if (st.search) rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(st.search));
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
-        rows = st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity) : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true) : U.sortBy(rows, (q) => q.oi, true);
+        if (st.status === 'open') rows = rows.filter((q) => !q.settled);
+        else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
+        else if (st.status === 'ended') rows = rows.filter((q) => q.end && q.end < t && !q.settled);
+        if (st.status === 'ended' && !endedPreloaded) { endedPreloaded = true; R.load(rows.map(qId), { signal: ctx.signal, deep: false }).then(() => { if (st.status === 'ended') render(true); }).catch(() => {}); }
+        rows = st.status === 'ended' ? byStage(rows) : st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity) : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true) : U.sortBy(rows, (q) => q.oi, true);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE);
         U.replace(wrap, UI.table({ cols: [
-          { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+          { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
           { key: 'c', label: 'Category', render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, render: (c) => probBar(c.ep) },
           { key: 'oi', label: 'Meridian OI', num: true, render: (c) => (c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '—')) },
           { key: 'v24', label: 'Source vol 24h', num: true, render: (c) => (c.v24 ? usd(c.v24, { compact: true }) : h('span.dim', '—')) },
           { key: 'v7', label: 'Source vol 7d', num: true, render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
-          { key: 'e', label: 'Ends', render: (c) => h('span.dim', c.end ? (c.end > Date.now() ? 'in ' + U.fmtCountdown(c.end - Date.now()) : U.fmtDate(c.end)) : '—') },
-          { key: 's', label: 'Status', render: (c) => (c.settled ? (c.nd ? UI.chip('void', 'amber') : c.yes ? UI.chip('YES', 'green') : UI.chip('NO', 'red')) : UI.chip('open', 'accent')) },
+          ...resCols(slice),
           { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
-        ], rows: slice, empty: 'No questions match' }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
-        U.replace(summary, `${U.fmtNum(total, 0)} questions with Meridian activity`);
+        ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match' }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
+        U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian activity`);
+        if (!keepTracking) { const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
-      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', (snap.questions ? `${U.fmtNum(snap.questions.all, 0)} questions exist on Meridian Predict (${U.fmtNum(snap.questions.open, 0)} open). ` : '') + 'Shown: every open question with Meridian open interest plus those behind open predictions, as of the snapshot ' + U.fmtAgo(snap.builtAt) + '. Full-text search over all questions needs live API access, which ' + offlineNote.replace('live queries are', 'is') + '.'));
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', (snap.questions ? `${U.fmtNum(snap.questions.all, 0)} questions exist on Meridian Predict (${U.fmtNum(snap.questions.open, 0)} open). ` : '') + 'Shown: every open question with Meridian open interest plus those behind open predictions, as of the snapshot ' + U.fmtAgo(snap.builtAt) + '. Full-text search over all questions needs live API access, which ' + offlineNote.replace('live queries are', 'is') + '.'), resFootnote());
       render();
+      resTicker(ctx, () => render(true));
     });
   }
 
@@ -372,7 +414,7 @@
         P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
       ]);
       const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
-      const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
+      const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
       return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: openPos.totalCount || 0, builtAt: Date.now() };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
@@ -381,7 +423,7 @@
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
     const open = mine.filter((n) => !n.settled);
-    const posRows = open.map((n) => ({ side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
+    const posRows = open.map((n) => ({ side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: false, resolvedToYes: null })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
     return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt };
   }
   P.loadBettor = loadBettor;
@@ -410,15 +452,25 @@
       m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
       UI.stat('Open', String(m.openCount), 'positions'));
     const cPnl = h('canvas'), cVol = h('canvas');
-    const openTbl = UI.table({ cols: [
+    // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
+    const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: false, question: k.q });
+    const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id
+      ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: P.APP_URL }); } }, R.line(legView(k), k.id))
+      : h('div.res-line', h('span.dim.small', k.endTime ? (k.endTime > Date.now() ? 'in ' + U.fmtCountdown(k.endTime - Date.now()) : 'pending') : '—')))));
+    const openWrap = h('div');
+    const renderOpen = () => U.replace(openWrap, UI.table({ cols: [
       { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q))) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip('maker', 'blue') : UI.chip('bettor', '')) },
       { key: 's', label: 'Stake', num: true, render: (r) => usd(r.stake) },
       { key: 'o', label: 'Locked odds', num: true, render: (r) => pct(r.odds, 1) },
       { key: 'f', label: 'Source now', num: true, title: 'Current probability on the source market', render: (r) => pct(r.fair, 1) },
       { key: 'p', label: 'Pays', num: true, render: (r) => h('span', usd(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
-      { key: 'e', label: 'Resolves', render: (r) => h('span.dim', r.ends ? (r.ends > Date.now() ? 'in ' + U.fmtCountdown(r.ends - Date.now()) : 'pending') : '—') },
-    ], rows: posRows, empty: 'No open positions' });
+      { key: 'e', label: 'Resolution', title: 'Where each leg is in the Polymarket / UMA resolution pipeline', render: legCell },
+    ], rows: posRows, empty: 'No open positions' }));
+    renderOpen();
+    const legIds = posRows.flatMap((r) => r.picks.map((k) => k.id)).filter(Boolean);
+    if (legIds.length) (async () => { try { await R.load(legIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
+    resTicker(ctx, renderOpen);
     let hpage = 1; const histWrap = h('div');
     const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ cols: [
       { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
@@ -439,7 +491,7 @@
       h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', m.live ? `${mine.length}${m.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history` : `${mine.length}${m.truncated ? '+' : ''} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', cPnl)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily volume'), h('div.chart-box.sm', cVol))),
-      UI.card('Open positions', openTbl, h('span.dim.small', String(m.openCount))),
+      UI.card('Open positions', openWrap, h('span.dim.small', String(m.openCount))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
     const col = C.colors();

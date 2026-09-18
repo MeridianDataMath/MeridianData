@@ -57,6 +57,15 @@
     set(value); el.set = set; el.get = () => value;
     return el;
   };
+  /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
+  UI.modal = function ({ title, body }) {
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
+    const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } },
+      h('div.modal', { role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', title), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', body)));
+    document.body.appendChild(bg); document.addEventListener('keydown', onKey);
+    return { close, el: bg };
+  };
   UI.checkbox = (label, checked, onChange) => { const inp = h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked) }); return h('label.checkbox', inp, label); };
 
   UI.starBtn = function (fav, cls) {
