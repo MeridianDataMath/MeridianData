@@ -57,6 +57,19 @@
     set(value); el.set = set; el.get = () => value;
     return el;
   };
+  /** Thin progress bar along the bottom edge of the topbar. start() creeps towards 90 % on its own, set(0..1) pins a
+   *  real value (bytes received etc.), done() completes and fades. Several loaders can overlap; the last done() hides it. */
+  UI.progress = (() => {
+    let bar, fill, timer, v = 0, active = 0, hideT;
+    const el = () => { if (!bar) { fill = h('i'); bar = h('div.progress', fill); (U.$('.topbar') || document.body).appendChild(bar); } return bar; };
+    const paint = () => { fill.style.width = (v * 100).toFixed(1) + '%'; };
+    const creep = () => { if (v < 0.9) { v += (0.9 - v) * 0.08; paint(); } };
+    return {
+      start() { el(); clearTimeout(hideT); active++; bar.classList.add('on'); if (v === 0 || v >= 1) v = 0.06; paint(); if (!timer) timer = setInterval(creep, 250); },
+      set(x) { if (!bar) return; v = Math.max(v, Math.min(0.95, x)); paint(); },
+      done() { if (!bar) return; active = Math.max(0, active - 1); if (active) return; clearInterval(timer); timer = null; v = 1; paint(); hideT = setTimeout(() => { bar.classList.remove('on'); v = 0; paint(); }, 350); },
+    };
+  })();
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
   UI.modal = function ({ title, body }) {
     const onKey = (e) => { if (e.key === 'Escape') close(); };

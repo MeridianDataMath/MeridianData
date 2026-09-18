@@ -108,6 +108,11 @@ input, select { font: inherit; color: inherit; }
   min-width: 0;
 }
 .topbar .title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* page-load progress: a 2px line along the bottom of the topbar */
+.topbar { position: relative; }
+.topbar .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; opacity: 0; transition: opacity .3s; }
+.topbar .progress.on { opacity: 1; }
+.topbar .progress i { display: block; height: 100%; width: 0; background: var(--accent); box-shadow: 0 0 8px var(--accent); transition: width .25s ease-out; }
 .topbar .grow { flex: 1; min-width: 0; }
 .topbar .brand { font-weight: 700; letter-spacing: -0.01em; }
 .topbar .brand span { color: var(--accent); }
@@ -422,6 +427,9 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .empty { color: var(--text-3); text-align: center; padding: 30px 16px; font-size: 13px; }
 .loading { color: var(--text-3); display: inline-flex; align-items: center; gap: 8px; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--border-3); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
+.spinner.sm { width: 10px; height: 10px; border-width: 1.5px; margin-left: 6px; vertical-align: middle; }
+.meter { width: 260px; max-width: 80vw; height: 4px; background: var(--bg-5); border-radius: 2px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 2px; transition: width .2s ease-out; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .error { background: var(--red-dim); border: 1px solid rgba(239,69,74,.35); color: #ffb3b5; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 .notice { background: var(--accent-dim); border: 1px solid rgba(35,212,188,.3); color: var(--text-1); border-radius: 8px; padding: 10px 12px; font-size: 13px; }

@@ -35,7 +35,7 @@
       try { P.stats.requests++; res = await fetch(P.URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body, signal: opts.signal }); }
       catch (e) {
         if (e && e.name === 'AbortError') throw e;
-        if (attempt < 3) { P.stats.retries++; await U.sleep(1000 * (attempt + 1)); continue; }
+        if (attempt < 3 && opts.retry !== false) { P.stats.retries++; await U.sleep(1000 * (attempt + 1)); continue; }
         throw new GqlError('Network error: ' + (e && (e.cause && e.cause.message ? e.cause.message : e.message)), 'NETWORK');
       }
       if (res.status === 429 && attempt < 5) {
@@ -68,11 +68,17 @@
   // The API only answers browsers from an allowlist of origins (localhost, app.meridian.xyz, app.sapience.xyz).
   // Elsewhere the site works from the published snapshot; live queries switch on automatically once the domain is allowed.
   P._live = null;
+  // One probe per page load, no retries (a CORS refusal is final), and the verdict is remembered for an hour so the
+  // next visit skips even that. Without this the refused probe's backoff held every Predict page for ~9 s.
+  P.LIVE_MEMO_MS = 3600000;
   P.live = async function () {
     if (P._live !== null) return P._live;
     if (typeof window === 'undefined' || typeof location === 'undefined') { P._live = true; return true; }
-    try { await P.gql('query { predictions(first: 0) { totalCount } }', null, { ttl: 60000 }); P._live = true; }
+    const memo = U.storage.get('md.predict.live', null);
+    if (memo && memo.origin === location.origin && memo.exp > Date.now()) { P._live = !!memo.v; return P._live; }
+    try { await P.gql('query { predictions(first: 0) { totalCount } }', null, { ttl: 60000, retry: false }); P._live = true; }
     catch (e) { P._live = !(e && (e.code === 'NETWORK' || e.code === 403 || e.code === 405)); }
+    U.storage.set('md.predict.live', { v: P._live, origin: location.origin, exp: Date.now() + P.LIVE_MEMO_MS });
     return P._live;
   };
   /** Fetch a snapshot file by relative path (served next to the site; the deploy copies the "snapshots" branch into data/). */

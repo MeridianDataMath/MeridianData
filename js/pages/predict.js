@@ -23,9 +23,26 @@
   //            else a recent-window build in the browser ----------
   P.SNAPSHOT_URLS = ['data/predict.json'];
   P._snap = undefined; P._snapAt = 0; P._building = null;
-  P.loadSnapshot = async function ({ signal, onProgress, force } = {}) {
+  /** Read a JSON response chunk by chunk so the caller can show download progress. The server sends the snapshot
+   *  compressed and chunked (no Content-Length), so the total is the size seen on the previous visit. */
+  async function readJson(r, onBytes) {
+    if (!r.body || !onBytes) return r.json();
+    const reader = r.body.getReader(); const chunks = []; let got = 0;
+    const total = Number(r.headers.get('content-length')) || U.storage.get('md.predict.snapBytes', 0) || 0;
+    for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; onBytes(got, total); }
+    const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
+    U.storage.set('md.predict.snapBytes', got);
+    return JSON.parse(new TextDecoder().decode(buf));
+  }
+  let bytesListeners = [];
+  P.loadSnapshot = async function ({ signal, onProgress, onBytes, force } = {}) {
     if (!force && P._snap && Date.now() - P._snapAt < 60000) return P._snap;
-    const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache', signal }); if (!r.ok) return null; const j = await r.json(); return j && j.agg ? j : null; } catch (e) { if (isAbort(e)) throw e; return null; } }));
+    if (onBytes) bytesListeners.push(onBytes);
+    if (P._loading) return P._loading;   // a page that starts the download while another is in flight shares it
+    P._loading = (async () => {
+    // no abort signal on the shared download: a page change must not kill the fetch the next page is waiting for
+    const tell = (got, total) => bytesListeners.forEach((f) => f(got, total));
+    const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) return null; const j = await readJson(r, tell); return j && j.agg ? j : null; } catch (e) { return null; } }));
     const best = found.filter(Boolean).sort((a, b) => b.builtAt - a.builtAt)[0];
     if (best && (!P._snap || best.builtAt >= P._snap.builtAt)) { P._snap = Object.assign(best, { remote: true }); P._snapAt = Date.now(); return P._snap; }
     if (P._snap && P._snap.builtAt > Date.now() - 15 * 60000) return P._snap;
@@ -40,18 +57,27 @@
       })().finally(() => { P._building = null; });
     }
     return P._building;
+    })().finally(() => { P._loading = null; bytesListeners = []; });
+    return P._loading;
   };
   const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · last ${s.windowDays} days only`);
   const offlineNote = 'live queries are not available from this domain (the Predict API only allows Meridian\'s own origins), so this shows the published snapshot';
   const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
   async function withSnapshot(body, ctx, render) {
     const prog = h('span', 'Loading Predict data…');
-    U.replace(body, loadingCard(prog));
+    const meter = h('div.meter', h('i'));
+    U.replace(body, h('div.card', h('div.empty', h('div.stack', { style: { alignItems: 'center', gap: '10px' } }, h('span.loading', h('span.spinner'), prog), meter))));
+    UI.progress.start();
     let snap;
-    try { snap = await P.loadSnapshot({ signal: ctx.signal, onProgress: (n) => { prog.textContent = `Collecting recent predictions… ${n}`; } }); }
-    catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
-    if (ctx.signal.aborted) return;
+    try {
+      snap = await P.loadSnapshot({ signal: ctx.signal,
+        onBytes: (got, total) => { const f = total ? Math.min(1, got / total) : 0; if (total) { UI.progress.set(0.1 + 0.75 * f); meter.firstChild.style.width = (f * 100).toFixed(0) + '%'; } prog.textContent = 'Downloading snapshot… ' + (total ? Math.round(f * 100) + '%' : U.fmtCompact(got / 1024, 0) + ' KB'); },
+        onProgress: (n) => { prog.textContent = `Collecting recent predictions… ${n}`; } });
+    } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
+    if (ctx.signal.aborted) { UI.progress.done(); return; }
+    prog.textContent = 'Rendering…'; UI.progress.set(0.9);
     try { await render(snap); } catch (e) { if (!isAbort(e)) { console.error(e); U.replace(body, UI.error(e, () => MD.router.dispatch())); } }
+    UI.progress.done();
   }
 
   // ---------- section header (sub-nav across the Predict pages) ----------
@@ -223,8 +249,9 @@
     ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, question: c.question }
     : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, question: c.q });
   const qId = (c) => c.conditionId || c.id;
+  let resLoading = 0;   // > 0 while Polymarket / oracle data for the visible rows is on its way (header shows a spinner)
   const resCols = (rows) => [
-    { key: 'r', label: 'Resolution', title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: P.APP_URL }) },
+    { key: 'r', label: h('span', 'Resolution', resLoading ? h('span.spinner.sm', { title: 'loading Polymarket and oracle data' }) : null), title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: P.APP_URL }) },
     { key: 's', label: 'Status', render: (c) => R.chip(qView(c), qId(c)) },
   ];
   /** Pull Polymarket + oracle data for the rows on screen, re-rendering as each layer arrives; keeps countdowns fresh. */
@@ -232,8 +259,11 @@
     const ids = rows.map(qId).filter(Boolean);
     if (!ids.length) return;
     (async () => {
-      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); if (isCurrent()) rerender(); }
+      resLoading++;
+      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); }
       catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); }
+      finally { resLoading--; }
+      if (isCurrent()) rerender();
     })();
   }
   const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
@@ -247,8 +277,10 @@
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
     const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
+    const warm = P.loadSnapshot({ signal: ctx.signal }).catch(() => null);   // start the download while the API probe runs
     const live = await P.live();
     if (!live || route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, live);
+    void warm;
     let cats = []; let counts = null;
     try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
     const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
@@ -442,8 +474,10 @@
   P.loadBettor = loadBettor;
   P.renderBettor = async function (el, addr, ctx) {
     U.replace(el, loadingCard('Loading bettor history…'));
+    UI.progress.start();
     let m;
-    try { m = await loadBettor(addr, ctx); } catch (e) { if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
+    try { m = await loadBettor(addr, ctx); } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
+    UI.progress.done();
     if (ctx.signal.aborted) return;
     if (!m) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address (as of the last snapshot).'))); return; }
     const { norms, hist, posRows } = m;
