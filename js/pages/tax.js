@@ -89,7 +89,7 @@
         pickErr.textContent = 'Enter a 0x wallet address or a subaccount ID';
       } }, h('div.grow', input), subSel, h('button.btn.primary', { type: 'submit' }, 'Load'));
       const head = h('div.card',
-        h('div.row.wrap', { style: { marginBottom: '6px' } }, h('h2', 'Tax center'), UI.chip('records · not advice', ''), h('span.grow'), h('button.btn.sm.ghost', { onclick: () => window.print() }, U.icon('printer'), 'Print / PDF')),
+        h('div.row.wrap', { style: { marginBottom: '6px' } }, h('h2', 'Tax center'), UI.chip('records · not advice', ''), h('span.grow'), MD.defsLink(), h('button.btn.sm.ghost', { onclick: () => window.print() }, U.icon('printer'), 'Print / PDF')),
         h('p.muted', { style: { margin: '0 0 12px', maxWidth: '860px' } }, 'Yearly and monthly totals of realised PnL, fees, funding, deposits and withdrawals for a Meridian subaccount, with ledgers you can hand to an accountant or import into a tax tool. All timestamps are UTC and all amounts are USD-equivalent (USDe-settled).'),
         picker, pickErr);
       const body = h('div.stack');
@@ -149,7 +149,9 @@
       // monthly
       const months = {};
       for (const b of days) { const d = new Date(b.t); const k = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0'); const m = months[k] || (months[k] = { key: k, label: MON[d.getUTCMonth()] + ' ' + d.getUTCFullYear(), realized: 0, fees: 0, funding: 0, deposits: 0, withdrawals: 0, volume: 0, days: 0 }); m.realized += b.realizedPnl; m.fees += b.fee; m.funding += b.funding; m.deposits += b.deposit; m.withdrawals += b.withdrawal; m.volume += b.volume; m.days++; }
-      const monthly = Object.values(months).sort((a, b) => (a.key < b.key ? -1 : 1)).map((m) => Object.assign(m, { net: m.realized - m.fees + m.funding }));
+      let monthly = Object.values(months).sort((a, b) => (a.key < b.key ? -1 : 1)).map((m) => Object.assign(m, { net: m.realized - m.fees + m.funding }));
+      // the series starts one bucket before the account existed; drop leading months with no activity at all
+      while (monthly.length > 1 && !monthly[0].realized && !monthly[0].fees && !monthly[0].funding && !monthly[0].deposits && !monthly[0].withdrawals && !monthly[0].volume) monthly = monthly.slice(1);
       // closed positions in period (attributed to the close date)
       const closed = positions.filter((p) => U.num(p.size) === 0 && U.num(p.totalDecreaseQuantity) > 0 && U.num(p.updatedAt) >= start && U.num(p.updatedAt) < end)
         .map((p) => { const prod = ref.byId[p.productId]; const incQ = U.num(p.totalIncreaseQuantity), decQ = U.num(p.totalDecreaseQuantity); const fees = U.num(p.feesAccruedUsd), pfees = U.num(p.positionFeeAccruedUsd), fund = -U.num(p.fundingAccruedUsd), gross = U.num(p.realizedPnl); return { p, ticker: prod ? prod.displayTicker : p.productId, tick: prod && prod.tickSize, long: String(p.side) === '0', size: incQ, entry: incQ ? U.num(p.totalIncreaseNotional) / incQ : 0, exit: decQ ? U.num(p.totalDecreaseNotional) / decQ : 0, cost: U.num(p.totalIncreaseNotional), proceeds: U.num(p.totalDecreaseNotional), gross, fees, pfees, funding: fund, net: gross - fees - pfees + fund, hold: U.num(p.updatedAt) - U.num(p.createdAt), liq: !!p.isLiquidated, adl: !!p.wasDeleveraged }; })

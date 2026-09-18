@@ -45,6 +45,26 @@
     return { error: 'Enter a 0x wallet address (40 hex chars) or a subaccount UUID' };
   };
 
+  /** "How is this number calculated?" — one modal, linked from the leaderboard, the performance tab and the tax center. */
+  MD.DEFINITIONS = [
+    ['PnL (interval)', 'Realised PnL + trading fees + realised funding over the interval, plus the change in unrealised PnL between the start of the interval and now. All-time starts at the subaccount\'s creation.'],
+    ['Equity', 'Sum of margin balances across pools (all pools are USD-equivalent tokens) + net unrealised PnL (unrealised − unsettled funding − unsettled position fees).'],
+    ['ROI', 'PnL ÷ (equity at the start of the interval + deposits during it). "—" when there was nothing at risk.'],
+    ['Max drawdown', 'Largest peak-to-trough decline of the equity curve inside the interval, with deposits and withdrawals removed so a withdrawal does not count as a loss.'],
+    ['Sharpe', 'Mean ÷ standard deviation of per-bucket returns (PnL over the previous bucket\'s equity), annualised. Daily buckets for 7d / 30d / all-time, hourly for 24h. Needs a few buckets to mean anything.'],
+    ['Win rate', 'Closed positions with a positive net result (realised − fees − funding) ÷ closed positions.'],
+    ['Profit factor', 'Gross profit of winning closed positions ÷ gross loss of losing ones. Above 1 means the wins outweigh the losses.'],
+    ['Expectancy', 'Average net result per closed position.'],
+    ['Trading style', 'Average holding time of closed positions: Scalper < 1 h, Intraday < 1 day, Swing < 7 days, otherwise Long-term.'],
+    ['Funding', 'Shown with the trader\'s sign: positive = received, negative = paid (the exchange API reports the opposite).'],
+    ['Fees', 'Trading fees paid. Negative fees mean fees received — the exchange\'s fee-collector subaccount looks like that and is tagged "no trades".'],
+    ['Liquidation price', 'Uses the app\'s pool maths: maintenance margin = notional × (1 / (2 × max leverage) + taker fee), solved per position with the equity left after the other positions\' maintenance margin. "none" when pool equity is far above it.'],
+    ['Meridian OI (Predict)', 'Collateral escrowed on Meridian for a question right now: bettor stakes plus the market makers\' matching collateral of open predictions.'],
+    ['Vig (Predict)', 'Locked odds (stake ÷ pool) minus the source market\'s probability. Positive = the bettor paid above the fair price; that margin is the market maker\'s edge.'],
+  ];
+  MD.openDefinitions = () => MD.ui.modal({ title: 'How the numbers are calculated', body: h('div', h('div.kv', MD.DEFINITIONS.flatMap(([k, v]) => [h('div.k', k), h('div', { style: { color: 'var(--text-2)' } }, v)])), h('p.muted.small', { style: { margin: '14px 0 0' } }, 'All figures come from Meridian\'s public API and archive; nothing is estimated. Amounts are USD-equivalent (USDe-settled). Times are shown in your local time zone, except the Tax center, which uses UTC.')) });
+  MD.defsLink = () => h('a.defs.small', { href: '#', onclick: (e) => { e.preventDefault(); MD.openDefinitions(); } }, U.icon('help'), 'How are these calculated?');
+
   MD.router.pages.notfound = { async mount(root) { U.replace(root, h('div.page', h('div.card', h('div.empty', 'Page not found. ', h('a', { href: '#/' }, 'Go home'))))); } };
 
   // Account / Tax center reopen the last viewed account; before any has been viewed in this browser they open the

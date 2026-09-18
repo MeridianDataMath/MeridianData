@@ -50,7 +50,8 @@
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
             fld('Trading style', h('select.input.sm', { onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
           h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
-          h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; Update rebuilds one in your browser right now.'));
+          h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; Update rebuilds one in your browser right now.'),
+          h('div.sec', MD.defsLink()));
       }
       renderFilters();
 
@@ -101,7 +102,7 @@
       }
       function renderSummary(data) {
         if (!data) return;
-        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), data.partial ? h('span.neg', ' · partial build') : null);
+        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), data.partial ? h('span.neg', ' · partial build') : null, UI.staleNote(data.builtAt, 'the publishing job may be down; press Update to rebuild in your browser'));
       }
       // keep the page current: re-check the published snapshot every minute, tick the age label every 30 s
       let shownBuiltAt = 0;

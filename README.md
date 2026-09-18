@@ -135,7 +135,12 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   positions is not implemented yet; nothing on the page places orders.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
-(remembered per browser). Press `/` anywhere to jump to the search box.
+(remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
+under the top bar shows every page load; "How are these calculated?" (leaderboard, performance
+tab, tax center) opens the metric definitions below in a panel. Published snapshots that are more
+than two hours old are flagged as stale wherever they are shown. Subaccounts that never traded
+(the exchange's fee-collector account "earns" PnL from fees received) are tagged *no trades* on the
+leaderboard and left out of the home ticker and the copy-trading leaders.
 
 ## Metric definitions
 

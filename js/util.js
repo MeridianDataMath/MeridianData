@@ -106,8 +106,9 @@
       if (a >= 1e4) return s + '$' + fmtN(a / 1e3, 1) + 'K';
       return s + '$' + fmtN(a, opts.dp ?? 2);
     }
-    const dp = opts.dp ?? (Math.abs(n) >= 1 || n === 0 ? 2 : Math.abs(n) >= 0.01 ? 4 : 6);
     const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
+    if (n !== 0 && Math.abs(n) < 0.01 && opts.dp == null) return s + '<$0.01';   // dust: "+$0.000716" helps nobody
+    const dp = opts.dp ?? (Math.abs(n) >= 1 || n === 0 ? 2 : 4);
     return s + '$' + fmtN(Math.abs(n), dp);
   };
   /** Price formatting with sensible decimals for the magnitude (or tickSize decimals if given) */
@@ -151,6 +152,8 @@
   U.fmtDateShort = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}`; };
   U.fmtTime = (ms) => { const d = new Date(U.num(ms)); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   U.fmtHM = (ms) => { const d = new Date(U.num(ms)); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  /** Feed timestamps: clock time today, "Sep 17 21:06" for anything older, so a tape that spans days stays readable. */
+  U.fmtFeedTime = (ms) => { const d = new Date(U.num(ms)); const now = new Date(); return d.toDateString() === now.toDateString() ? U.fmtTime(ms) : `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   U.fmtDateTime = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   U.fmtAgo = (ms) => {

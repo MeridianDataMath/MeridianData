@@ -78,6 +78,10 @@
     prog.textContent = 'Rendering…'; UI.progress.set(0.9);
     try { await render(snap); } catch (e) { if (!isAbort(e)) { console.error(e); U.replace(body, UI.error(e, () => MD.router.dispatch())); } }
     UI.progress.done();
+    if (snap && snap.remote && Date.now() - snap.builtAt > UI.STALE_MS) {
+      body.prepend(h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row', { style: { gap: '8px', alignItems: 'baseline' } },
+        UI.chip('stale snapshot', 'amber'), h('span.small', `This Predict snapshot was built ${U.fmtAgo(snap.builtAt)}. It is normally refreshed every 30 minutes, so the publishing job is probably down; figures below are as of ${U.fmtDateTime(snap.builtAt)}.`))));
+    }
   }
 
   // ---------- section header (sub-nav across the Predict pages) ----------
@@ -156,7 +160,7 @@
       const tapeHead = tapeCard.querySelector('.card-head .dim.small');
       if (!live && tapeHead) tapeHead.textContent = 'as of the snapshot · ' + offlineNote;
       const tapeRow = (n, flash) => h('div.it', { class: flash ? 'flash' : '' },
-        h('span.t', U.fmtTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
+        h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
         h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ' + U.shortAddr(n.counterparty, 3)), resultChip(n));
       const renderTape = (fresh) => U.replace(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();

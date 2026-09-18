@@ -41,7 +41,10 @@
     R.root.scrollTop = 0;
     U.clear(R.root);
     if (R.onRoute) R.onRoute(route);
+    const progress = window.MD.ui && window.MD.ui.progress;   // the thin line under the topbar, for every page change
+    if (progress) progress.restart();
     try { await page.mount(R.root, route, ctx); }
     catch (e) { if (!(e && e.name === 'AbortError')) { console.error(e); U.replace(R.root, U.h('div.page', U.h('div.error', 'Failed to render page: ' + (e.message || e)))); } }
+    finally { if (progress && R.ctx === ctx) progress.done(); }
   };
 })();

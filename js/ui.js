@@ -66,10 +66,17 @@
     const creep = () => { if (v < 0.9) { v += (0.9 - v) * 0.08; paint(); } };
     return {
       start() { el(); clearTimeout(hideT); active++; bar.classList.add('on'); if (v === 0 || v >= 1) v = 0.06; paint(); if (!timer) timer = setInterval(creep, 250); },
+      /** a page change: forget loaders of the page being left (their done() may never come) and start fresh */
+      restart() { active = 0; v = 0; this.start(); },
       set(x) { if (!bar) return; v = Math.max(v, Math.min(0.95, x)); paint(); },
       done() { if (!bar) return; active = Math.max(0, active - 1); if (active) return; clearInterval(timer); timer = null; v = 1; paint(); hideT = setTimeout(() => { bar.classList.remove('on'); v = 0; paint(); }, 350); },
     };
   })();
+  /** Inline warning when a published snapshot is older than it should be (the publishers run every 30 minutes). */
+  UI.STALE_MS = 2 * 3600000;
+  UI.staleNote = (builtAt, hint) => (builtAt && Date.now() - builtAt > UI.STALE_MS
+    ? h('span', { style: { color: 'var(--amber)' }, title: hint || '' }, ' · stale: ' + U.fmtDuration(Date.now() - builtAt) + ' old')
+    : null);
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
   UI.modal = function ({ title, body }) {
     const onKey = (e) => { if (e.key === 'Escape') close(); };

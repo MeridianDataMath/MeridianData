@@ -12,7 +12,9 @@
       async function render(force) {
         const favs = U.favorites.list();
         if (!favs.length) {
-          U.replace(body, h('div.card', h('div.empty', 'No favorites yet. Open an account and press the star to keep it here.')));
+          U.replace(body, h('div.card', h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No favorites yet. Open an account and press the star to keep it here.'),
+            h('div.row.wrap', { style: { justifyContent: 'center', gap: '6px' } }, h('a.btn.sm', { href: '#/leaderboard' }, U.icon('trophy'), 'Browse the leaderboard'), h('a.btn.sm', { href: '#/copytrade' }, U.icon('users'), 'Top PnL wallets'), h('a.btn.sm', { href: '#/account' }, U.icon('search'), 'Open an account')),
+            h('div.xs.dim', { style: { marginTop: '12px' } }, 'Favorites are stored in this browser only.'))));
           return;
         }
         U.replace(body, h('div.card.tight', UI.loading('Loading favorite accounts…')));

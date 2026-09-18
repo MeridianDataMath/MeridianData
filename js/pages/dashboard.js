@@ -203,7 +203,7 @@
       let trades = [];
       const tradeRow = (t, flash) => {
         const link = (sid, label) => (sid ? h('a', { href: U.accountUrl('', sid), title: sid, onclick: (e) => { e.stopPropagation(); } }, label) : h('span.dim', label));
-        return h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.taker || t.maker ? h('span.xs', link(t.taker, 'taker'), h('span.dim', ' · '), link(t.maker, 'maker')) : h('span.xs.dim', 'history'));
+        return h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.taker || t.maker ? h('span.xs', link(t.taker, 'taker'), h('span.dim', ' · '), link(t.maker, 'maker')) : h('span.xs.dim', 'history'));
       };
       const renderTrades = () => U.replace(tradesBody, trades.length ? trades.slice(0, 40).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
       (async () => {

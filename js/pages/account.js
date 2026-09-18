@@ -122,6 +122,7 @@
         h('span.subsel', 'sub:', subSel),
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
+        h('button.btn.sm.ghost.explorer', { title: 'Copy a link to this page', onclick: () => { U.copyText(location.href); U.toast('Link copied'); } }, U.icon('copy'), 'Share'),
         h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt))));
 
       // ---- tabs ----
@@ -404,7 +405,7 @@
       }));
     };
     const renderOrd = () => U.replace(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders' }));
-    const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
+    const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replace(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
 
     async function reload() {
@@ -521,7 +522,7 @@
         { key: 'ls', label: 'Long %', num: true, render: (r) => U.fmtPct((r.longs / r.count) * 100, { dp: 0 }) },
       ], rows: ps.byMarket, empty: 'No positions yet',
     });
-    U.replace(el, h('div.stack', grid,
+    U.replace(el, h('div.stack', grid, h('div.row', { style: { marginTop: '-8px' } }, h('span.grow'), MD.defsLink()),
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2))),
       h('div.grid.cols-2', UI.card('By market', perMarket), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
       positions.truncated ? h('div.notice', 'Only the most recent 2,000 positions were analysed.') : null));

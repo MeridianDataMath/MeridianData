@@ -107,7 +107,7 @@ input, select { font: inherit; color: inherit; }
   border-bottom: 1px solid var(--border-2); background: var(--bg-1);
   min-width: 0;
 }
-.topbar .title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar .title { display: block; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* page-load progress: a 2px line along the bottom of the topbar */
 .topbar { position: relative; }
 .topbar .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; opacity: 0; transition: opacity .3s; }
@@ -233,6 +233,9 @@ label.lbl { display: block; font-size: 11.5px; color: var(--text-3); margin-bott
 .modal-head { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border-2); }
 .modal-head h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; line-height: 1.35; }
 .modal-body { padding: 14px 16px; overflow: auto; }
+a.defs { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); }
+a.defs:hover { color: var(--accent); text-decoration: none; }
+a.defs svg { width: 13px; height: 13px; }
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 16px; font-size: 13px; align-items: start; }
 .kv .k { color: var(--text-3); white-space: nowrap; }
 .rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
@@ -509,7 +512,9 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .frame { height: 100vh; }
   .main { padding: 12px 12px 76px; }
   .topbar { padding: 0 12px; }
-  .topbar .search-mini input { width: 160px; }
+  .topbar { gap: 8px; }
+  .topbar .search-mini input { width: 120px; padding: 7px 10px; }
+  .topbar .search-mini input:focus { width: 200px; }
   .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: minmax(0, 1fr); }
   .modal-bg { padding: 8px; align-items: end; }
   .modal { max-height: 92vh; }
