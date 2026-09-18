@@ -8,6 +8,19 @@
 
   const child = (ctx) => { const ac = new AbortController(); const c = { signal: ac.signal, cleanup: [], onCleanup(f) { this.cleanup.push(f); }, abort() { ac.abort(); this.cleanup.forEach((f) => { try { f(); } catch (_) {} }); this.cleanup = []; } }; ctx.onCleanup(() => c.abort()); ctx.signal.addEventListener('abort', () => ac.abort()); return c; };
   const isAbort = (e) => e && e.name === 'AbortError';
+  /** "#/account" with nothing selected yet: search box, favorites, and pointers to the places that list accounts. */
+  function pickAccountCard() {
+    const input = h('input.input', { placeholder: 'Wallet address (0x…) or subaccount ID', autocomplete: 'off', spellcheck: 'false', style: { flex: '1', minWidth: '240px' } });
+    const err = h('div.small.neg', { style: { minHeight: '18px', marginTop: '6px' } });
+    const btn = h('button.btn', { type: 'submit' }, U.icon('search'), 'Open');
+    const form = h('form', { onsubmit: async (e) => { e.preventDefault(); err.textContent = ''; btn.disabled = true; const r = await MD.search(input.value); btn.disabled = false; if (r.error) err.textContent = r.error; } }, h('div.row.wrap', { style: { gap: '8px' } }, input, btn));
+    const favs = U.favorites.list();
+    return h('div.stack',
+      h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Open an account'), h('p.muted', { style: { margin: '0 0 12px', maxWidth: '640px' } }, 'Every Meridian account is public. Paste a wallet address or a subaccount ID to see its equity, positions, orders, fills, performance and rewards.'), form, err),
+      favs.length ? h('div.card.tight', h('div.card-head', h('h2', 'Favorites')), h('div', { style: { padding: '6px 8px' } }, favs.slice(0, 12).map((f) => h('a.btn.sm.ghost', { href: U.accountUrl(f.address, f.subaccountId), style: { margin: '2px' } }, U.icon('star'), f.name || U.shortAddr(f.address, 4))))) : null,
+      h('div.card', h('h3', { style: { marginBottom: '8px' } }, 'Find accounts'), h('div.row.wrap', { style: { gap: '6px' } },
+        h('a.btn.sm', { href: '#/leaderboard' }, U.icon('trophy'), 'Leaderboard'), h('a.btn.sm', { href: '#/copytrade' }, U.icon('users'), 'Top PnL wallets'), h('a.btn.sm', { href: '#/dashboard' }, U.icon('grid'), 'Dashboard trade tape'))));
+  }
   const tickerOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].displayTicker : U.shortAddr(pid, 4));
   const tickOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].tickSize : null);
 
@@ -79,6 +92,13 @@
       MD.setTopbar(h('span.title', 'Account'));
       let addr = (route.params.address || '').trim().toLowerCase();
       const subParam = route.params.sub;
+      if (!addr && !subParam) {
+        // nothing asked for: reopen the last account seen in this browser, else offer a way to pick one
+        const last = U.storage.get('md.lastAccount', null);
+        if (last && U.isAddress(last.address)) { location.replace(U.accountUrl(last.address, last.sub)); return; }
+        U.replace(page, pickAccountCard());
+        return;
+      }
       let subs = [];
       try {
         if (!addr && subParam && U.isUuid(subParam)) { const sa = await A.subaccount(subParam, ctx); addr = sa.account; }

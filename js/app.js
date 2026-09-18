@@ -47,7 +47,9 @@
 
   MD.router.pages.notfound = { async mount(root) { U.replace(root, h('div.page', h('div.card', h('div.empty', 'Page not found. ', h('a', { href: '#/' }, 'Go home'))))); } };
 
-  function lastAccountHref() { const last = U.storage.get('md.lastAccount', null); return last ? U.accountUrl(last.address, last.sub) : '#/'; }
+  // Account / Tax center reopen the last viewed account; before any has been viewed in this browser they open the
+  // pages' own "pick an account" screens (a bare "#/" made the buttons look dead on a fresh domain).
+  function lastAccountHref() { const last = U.storage.get('md.lastAccount', null); return last ? U.accountUrl(last.address, last.sub) : '#/account'; }
 
   // ---- sidebar (expanded with labels by default on desktop; collapsible to icons, remembered) ----
   const RAIL_KEY = 'md.rail.collapsed';
