@@ -93,9 +93,11 @@
       if (prevEq > 1) rets.push(gain / prevEq);
       prevEq = b.equity; prevUp = b.upnl;
     }
+    // Sharpe from a handful of buckets is noise (its standard error is ~1/√n), so it needs at least 10 buckets:
+    // the 7-day interval (7 daily buckets) therefore shows none; 24h uses hourly buckets, 30d / all use daily.
     let sharpe = null;
     const nz = rets.filter((r) => r !== 0);
-    if (rets.length >= 3 && nz.length >= 2) {
+    if (rets.length >= 10 && nz.length >= 3) {
       const mean = rets.reduce((a, x) => a + x, 0) / rets.length;
       const sd = Math.sqrt(rets.reduce((a, x) => a + (x - mean) * (x - mean), 0) / (rets.length - 1));
       const per = bucketMs || U.DAY;

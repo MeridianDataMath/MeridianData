@@ -155,7 +155,8 @@ leaderboard and left out of the home ticker and the copy-trading leaders.
   (unrealized − unsettled funding − unsettled position fees).
 * **ROI** = PnL ÷ (equity at the start of the interval + deposits during it).
 * **Max drawdown** = largest peak-to-trough decline of the equity curve in the interval.
-* **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized
+* **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized; shown only with
+  at least 10 buckets (so never for the 7-day interval)
   (daily buckets for 7d/30d/all, hourly for 24h).
 * **Win rate** = closed positions with positive net result (realized − fees − funding) ÷ closed
   positions. **Trading style** is the average holding time of closed positions:
