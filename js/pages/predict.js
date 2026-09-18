@@ -242,10 +242,13 @@
   const byStage = (rows) => U.sortBy(rows, (c) => (STAGE_RANK[R.state(qView(c), qId(c)).code] || 0) * 1e13 + (qView(c).end || 0));
   const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
 
+  /** Default view: only questions Meridian users have actually bet on (from the snapshot). With live API access,
+   *  `all=1` switches to the server-side explorer over every question on the exchange. */
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
     const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
-    if (!(await P.live())) return mountQuestionsOffline(body, route, ctx, st);
+    const live = await P.live();
+    if (!live || route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, live);
     let cats = []; let counts = null;
     try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
     const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
@@ -258,7 +261,8 @@
     const controls = h('div.card', h('div.row.wrap', search, catSel,
       UI.seg(STATUS_OPTS, st.status, (v) => { st.status = v; load(); }, 'sm'),
       h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'CREATED_AT', label: 'Newest' }], st.sort, (v) => { st.sort = v; load(); }, 'sm'),
-      h('span.grow'), summary));
+      h('span.grow'), summary),
+      h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Every question on the exchange, including the ones nobody has bet on.'), h('a.small', { href: '#/predict/questions', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: null, q: null, cat: null, status: null, sort: null }); } }, 'Back to questions with Meridian bets')));
     U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is collateral escrowed on Meridian; source volume is the mirrored market's.` : ''), resFootnote());
     let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
     function renderRows() {
@@ -291,51 +295,60 @@
       trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
     resTicker(ctx, () => { if (!loading) renderRows(); });
-    function load() { cursors = [null]; MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
+    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
 
-  /** Question explorer over the snapshot's set (questions with Meridian open interest + those of open predictions). */
-  async function mountQuestionsOffline(body, route, ctx, st) {
+  /** Questions people have actually bet on through Meridian (from the snapshot): open interest now, open predictions,
+   *  and questions settled in the last 30 days. Rows carry n = predictions ever, b = open predictions, s = open stake. */
+  const hasBets = (q) => q.oi > 0 || q.b > 0 || q.n > 0 || q.n == null;   // n == null: snapshot older than this field
+  const betsNote = (c) => (c.b ? `${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}` : c.n ? `${c.n} bet${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}` : null);
+  async function mountQuestionsWithBets(body, route, ctx, st, live) {
     await withSnapshot(body, ctx, (snap) => {
-      const all = snap.questionsWithOi || [];
+      const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
       let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
-      const search = h('input.input', { placeholder: 'Search questions with Meridian activity', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
+      const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const now = Date.now();
-      const endedCount = all.filter((q) => q.end && q.end < now && !q.settled).length;
+      const endedCount = all.filter((q) => q.end && q.end < now && !q.settled && (q.oi > 0 || q.b > 0 || q.b == null)).length;
       if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
         UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); }, 'sm'),
-        h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], st.sort === 'CREATED_AT' ? 'OPEN_INTEREST' : st.sort, (v) => { st.sort = v; page = 1; render(); }, 'sm'),
-        h('span.grow'), summary));
+        h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'BETS', label: 'Open bets' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], ['OPEN_INTEREST', 'BETS', 'END_TIME', 'PROB'].includes(st.sort) ? st.sort : 'OPEN_INTEREST', (v) => { st.sort = v; page = 1; render(); }, 'sm'),
+        h('span.grow'), summary),
+        live ? h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Only questions with Meridian bets are listed.'), h('a.small', { href: '#/predict/questions?all=1', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null }); } }, 'Search all ' + (snap.questions ? U.fmtCompact(snap.questions.all, 0) + ' ' : '') + 'questions on the exchange')) : null);
       let renderSeq = 0, endedPreloaded = false;
       function render(keepTracking) {
         let rows = all; const t = Date.now();
         if (st.search) rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(st.search));
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
-        if (st.status === 'open') rows = rows.filter((q) => !q.settled);
+        const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it
+        if (st.status === 'open') rows = rows.filter(exposure);
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
-        else if (st.status === 'ended') rows = rows.filter((q) => q.end && q.end < t && !q.settled);
+        else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
         if (st.status === 'ended' && !endedPreloaded) { endedPreloaded = true; R.load(rows.map(qId), { signal: ctx.signal, deep: false }).then(() => { if (st.status === 'ended') render(true); }).catch(() => {}); }
-        rows = st.status === 'ended' ? byStage(rows) : st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity) : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true) : U.sortBy(rows, (q) => q.oi, true);
+        rows = st.status === 'ended' ? byStage(rows)
+          : st.status === 'settled' ? U.sortBy(rows, (q) => q.l || q.end || 0, true)
+          : st.sort === 'BETS' ? U.sortBy(rows, (q) => (q.b || 0) * 1e9 + (q.s || 0), true)
+          : st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity)
+          : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true)
+          : U.sortBy(rows, (q) => (q.oi || 0) * 1e9 + (q.s || 0), true);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE);
         U.replace(wrap, UI.table({ cols: [
           { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
           { key: 'c', label: 'Category', render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, render: (c) => probBar(c.ep) },
-          { key: 'oi', label: 'Meridian OI', num: true, render: (c) => (c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '—')) },
-          { key: 'v24', label: 'Source vol 24h', num: true, render: (c) => (c.v24 ? usd(c.v24, { compact: true }) : h('span.dim', '—')) },
-          { key: 'v7', label: 'Source vol 7d', num: true, render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
+          { key: 'oi', label: 'Meridian OI', num: true, title: 'Collateral escrowed on Meridian right now · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, betsNote(c)) : null) },
+          { key: 'v7', label: 'Source vol 7d', num: true, title: 'Volume on the mirrored Polymarket market, last 7 days', render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
         ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match' }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
-        U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian activity`);
+        U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`);
         if (!keepTracking) { const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
-      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', (snap.questions ? `${U.fmtNum(snap.questions.all, 0)} questions exist on Meridian Predict (${U.fmtNum(snap.questions.open, 0)} open). ` : '') + 'Shown: every open question with Meridian open interest plus those behind open predictions, as of the snapshot ' + U.fmtAgo(snap.builtAt) + '. Full-text search over all questions needs live API access, which ' + offlineNote.replace('live queries are', 'is') + '.'), resFootnote());
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: open interest now, open predictions, and questions settled in the last 30 days, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '.' + (live ? '' : ' Searching every question on the exchange needs live API access, which ' + offlineNote.replace('live queries are', 'is') + '.')), resFootnote());
       render();
       resTicker(ctx, () => render(true));
     });

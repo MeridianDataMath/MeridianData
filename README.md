@@ -90,9 +90,12 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last activity; click through to a bettor page.
-  * *Questions* – explorer over all 85k questions: search, category, open / ended-unsettled /
-    settled, sorted by Meridian open interest, end time or newest; implied probability, Meridian
-    OI, source volume, link to the mirrored source market. A **Resolution** column says when and
+  * *Questions* – only the questions people have bet on through Meridian (open interest now, open
+    predictions, and questions settled in the last 30 days; the exchange itself lists 85k):
+    search, category, open / ended-unsettled / settled, sorted by Meridian OI, open bets, end
+    time or probability; implied probability, Meridian OI with the number of open bets and stake,
+    source volume, link to the mirrored source market. On an origin with live API access a link
+    switches to the full explorer over every question. A **Resolution** column says when and
     how each question resolves: the Polymarket market's end (and the fixture time for sports,
     which moves when a game is postponed), Meridian's own betting cutoff when it is earlier, and
     the live position in Polymarket's UMA pipeline — *awaiting proposal*, *proposed X, challenge

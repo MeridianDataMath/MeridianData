@@ -60,16 +60,30 @@ async function buildPredict() {
     } while (after && pages < 60);
   } catch (e) { console.warn('predict: questions failed', e.message); }
   const withOi = questions.filter((q) => q.oi > 0);
-  // plus the questions of open predictions, so every open position can be shown
+  // Meridian activity per question from the predictions themselves: n = predictions ever, b = open predictions,
+  // s = bettor stake in those open predictions, l = last prediction. The explorer shows only questions with bets.
+  const act = {};
+  for (const n of norms) {
+    for (const k of n.picks) {
+      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0 });
+      a.n++; if (!n.settled) { a.b++; a.s += n.stake; } if (n.t > a.l) a.l = n.t;
+    }
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const rowOf = (k) => ({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, src: null });
+  // plus the questions behind open predictions (a leg can be stuck in resolution) …
   const seenQ = new Set(withOi.map((q) => q.id));
   for (const n of norms) {
     if (n.settled) continue;
-    for (const k of n.picks) {
-      if (seenQ.has(k.id)) continue;
-      seenQ.add(k.id);
-      withOi.push({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, src: null });
-    }
+    for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
+  // … and the questions of predictions settled in the last 30 days (newest first, capped), so "Settled" shows what people bet on
+  const recent = norms.filter((n) => n.settled && n.settledAt && n.settledAt > Date.now() - 30 * 86400000).sort((a, b) => b.settledAt - a.settledAt);
+  for (const n of recent) {
+    if (withOi.length >= 1200) break;
+    for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
+  }
+  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; }
   let trades = [];
   try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
