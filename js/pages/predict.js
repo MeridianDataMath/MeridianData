@@ -169,7 +169,7 @@
       const tapeRow = (n, flash) => h('div.it.click', { class: flash ? 'flash' : '', title: 'Open this bettor', onclick: () => { location.hash = bettorUrl(n.predictor).slice(1); } },
         h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
         h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: 'Market maker ' + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n));
-      const renderTape = (fresh) => U.replace(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
+      const renderTape = (fresh) => U.replaceLive(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
       const pollTape = async () => {
         try {

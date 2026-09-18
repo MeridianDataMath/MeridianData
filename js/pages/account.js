@@ -395,7 +395,7 @@
       for (const p of positions) { const prod = ref.byId[p.productId]; const m = prod && marks[prod.ticker]; px[p.productId] = m ? { oraclePrice: m.mark } : prices[p.productId]; }
       const acct = AN.accountState({ balances: [], positions, ref, prices: px });
       AN.attachStops(acct.positions, orders);
-      U.replace(posBody, UI.table({
+      U.replaceLive(posBody, UI.table({
         cols: [
           { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker) },
           { key: 'side', label: 'Side', render: (r) => U.sideEl(r.long, true) },
@@ -412,9 +412,9 @@
         ], rows: acct.positions, empty: 'No open positions',
       }));
     };
-    const renderOrd = () => U.replace(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders' }));
+    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders' }));
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
-    const renderFills = () => U.replace(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
+    const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
 
     async function reload() {
       try {
@@ -459,14 +459,14 @@
       const m = marks[curMarket];
       const bestA = a.length ? a[0][0] : null, bestB = b.length ? b[0][0] : null;
       const spread = bestA && bestB ? ((bestA - bestB) / ((bestA + bestB) / 2)) * 100 : null;
-      U.replace(book, h('div.hdr', h('span', 'Price'), h('span', 'Size'), h('span', 'Total')), rowsA.slice().reverse().map((r) => lvl(r, 'ask')),
+      U.replaceLive(book, h('div.hdr', h('span', 'Price'), h('span', 'Size'), h('span', 'Total')), rowsA.slice().reverse().map((r) => lvl(r, 'ask')),
         h('div.mid', h('span.bold', m && m.mark ? U.fmtPrice(m.mark, tick) : '—'), h('span.dim.xs', spread != null ? '  spread ' + U.fmtPct(spread, { dp: 3 }) : '')),
         rowsB.map((r) => lvl(r, 'bid')));
       bookTitle.textContent = prod.displayTicker + ' · mark ' + (m && m.mark ? U.fmtPrice(m.mark, tick) : '—');
     }
     let unsubTrades = null, mktRows = [];
     const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
-    const renderMkt = () => U.replace(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+    const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
       if (unsubTrades) unsubTrades();

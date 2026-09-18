@@ -53,6 +53,18 @@
     if (inner.some((s) => s.l || s.t)) el.querySelectorAll(SCROLLERS).forEach((s, i) => { const p = inner[i]; if (p && (p.l || p.t)) { s.scrollLeft = p.l; s.scrollTop = p.t; } });
     return el;
   };
+  /** For containers that re-render on every tick: skip a render while the reader is selecting text inside it or
+   *  holding the mouse button over it, so copying a price or an address is possible; the next tick catches up. */
+  let pointerDown = false;
+  document.addEventListener('pointerdown', () => { pointerDown = true; }, true);
+  document.addEventListener('pointerup', () => { pointerDown = false; }, true);
+  document.addEventListener('pointercancel', () => { pointerDown = false; }, true);
+  U.replaceLive = (el, ...children) => {
+    const sel = document.getSelection ? document.getSelection() : null;
+    if (sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer)) return el;
+    if (pointerDown && el.matches(':hover')) return el;
+    return U.replace(el, ...children);
+  };
   U.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   U.svg = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 

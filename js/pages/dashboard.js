@@ -49,7 +49,7 @@
       function renderTiles() {
         let vol = 0, oi = 0;
         for (const p of ref.active) { const o = mark(p); vol += U.num(p.volume24h) * o; oi += U.num(p.openInterest) * o; }
-        U.replace(tiles, UI.stat('Active markets', String(ref.active.length), ref.products.length - ref.active.length ? (ref.products.length - ref.active.length) + ' pending/delisted' : null), UI.stat('24h volume', U.fmtUsd(vol, { compact: true })), UI.stat('Open interest', U.fmtUsd(oi, { compact: true })), UI.stat('Accounts', subs ? String(subs.length) : '—', subs && subs.length ? 'newest ' + U.fmtAgo(Math.max(...subs.map((s) => s.createdAt))) : null), UI.stat('Points distributed', points ? U.fmtCompact(points.totalPoints) : '—', points ? 'updated ' + U.fmtAgo(points.updatedAt) : null));
+        U.replaceLive(tiles, UI.stat('Active markets', String(ref.active.length), ref.products.length - ref.active.length ? (ref.products.length - ref.active.length) + ' pending/delisted' : null), UI.stat('24h volume', U.fmtUsd(vol, { compact: true })), UI.stat('Open interest', U.fmtUsd(oi, { compact: true })), UI.stat('Accounts', subs ? String(subs.length) : '—', subs && subs.length ? 'newest ' + U.fmtAgo(Math.max(...subs.map((s) => s.createdAt))) : null), UI.stat('Points distributed', points ? U.fmtCompact(points.totalPoints) : '—', points ? 'updated ' + U.fmtAgo(points.updatedAt) : null));
       }
       const mark = (p) => { const l = live[p.ticker]; if (l && U.num(l.markPx)) return U.num(l.markPx); const px = prices[p.id]; return px ? U.num(px.oraclePrice) : 0; };
       const sparks = {};
@@ -62,7 +62,7 @@
           const fr = U.num(l.fr1h || p.fundingRate1h); const proj = projected[p.id] ? U.num(projected[p.id].fundingRateProjected1h) : null;
           return { p, m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, fr, proj };
         });
-        U.replace(mktBody, UI.table({
+        U.replaceLive(mktBody, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · fee ' + U.fmtPct(U.num(r.p.takerFee) * 100, { dp: 2 })) },
             { key: 'px', label: 'Mark price', num: true, render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
@@ -75,7 +75,7 @@
             { key: 'note', label: 'Status', render: (r) => closureNote(r.p) || h('span.xs.dim', r.p.marginMode === 'CROSS' ? '24/7' : 'open') },
           ], rows,
         }));
-        U.replace(fundBody, UI.table({
+        U.replaceLive(fundBody, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
             { key: 'fr', label: 'Current 1h', num: true, render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
@@ -216,7 +216,7 @@
           h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))),
           h('span.xs', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));
       };
-      const renderTrades = () => U.replace(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+      const renderTrades = () => U.replaceLive(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
       let resolving = false;
       const resolveVisible = async () => {
         if (resolving) return; resolving = true;

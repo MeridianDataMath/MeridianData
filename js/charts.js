@@ -30,7 +30,6 @@
    */
   C.timeSeries = function (canvas, opts) {
     if (!window.Chart) return null;
-    C.destroy(canvas);
     const col = C.colors();
     const pts = opts.points || [];
     const color = opts.color || col.accent;
@@ -43,7 +42,7 @@
       borderWidth: type === 'bar' ? 0 : 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: color, pointHoverBorderColor: '#0e0e0f',
       fill: type === 'line' && opts.fill !== false ? 'origin' : false, tension: 0.25, borderRadius: 2, maxBarThickness: 18, stepped: opts.stepped || false,
     };
-    const chart = new Chart(canvas, {
+    const config = {
       type,
       data: { datasets: [ds] },
       options: {
@@ -63,7 +62,13 @@
           },
         },
       },
-    });
+    };
+    // a chart that already exists on this canvas is updated in place (auto-refresh every 30 s): no flicker, and a
+    // tooltip the reader is hovering survives the refresh
+    const existing = canvas.__chart;
+    if (existing && existing.config.type === type) { existing.data = config.data; existing.options = config.options; existing.update('none'); return existing; }
+    C.destroy(canvas);
+    const chart = new Chart(canvas, config);
     canvas.__chart = chart;
     return chart;
   };
