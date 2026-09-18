@@ -24,7 +24,11 @@
         U.append(td, [v == null ? '—' : v]);
         tr.appendChild(td);
       }
-      if (o.onRow) tr.addEventListener('click', (e) => { if (e.target.closest('a,button,.copy')) return; o.onRow(r); });
+      if (o.onRow) {
+        tr.addEventListener('click', (e) => { if (e.target.closest('a,button,.copy')) return; o.onRow(r); });
+        tr.tabIndex = 0;   // reachable with Tab, opened with Enter
+        tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === tr) { e.preventDefault(); o.onRow(r); } });
+      }
       tbody.appendChild(tr);
     }
     return h('div.tbl-wrap', h('table.tbl', thead, tbody));
