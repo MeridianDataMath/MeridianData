@@ -42,7 +42,17 @@
     return el;
   };
   U.clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); return el; };
-  U.replace = (el, ...children) => { U.clear(el); U.append(el, children); return el; };
+  /** Replace children, keeping the scroll position of the container and of any scrollers inside it (tables scrolled
+   *  sideways on a phone, feeds scrolled down): live pages re-render on every tick and must not snap back. */
+  const SCROLLERS = '.tbl-wrap, .feed, .scroll-y, .smap, .book';
+  U.replace = (el, ...children) => {
+    const own = { l: el.scrollLeft, t: el.scrollTop };
+    const inner = Array.from(el.querySelectorAll(SCROLLERS)).map((s) => ({ l: s.scrollLeft, t: s.scrollTop }));
+    U.clear(el); U.append(el, children);
+    if (own.l || own.t) { el.scrollLeft = own.l; el.scrollTop = own.t; }
+    if (inner.some((s) => s.l || s.t)) el.querySelectorAll(SCROLLERS).forEach((s, i) => { const p = inner[i]; if (p && (p.l || p.t)) { s.scrollLeft = p.l; s.scrollTop = p.t; } });
+    return el;
+  };
   U.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   U.svg = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 
