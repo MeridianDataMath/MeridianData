@@ -12,7 +12,7 @@
       const c = k.condition || {};
       const ep = c.estimatedPrice == null ? null : Number(c.estimatedPrice);
       const yes = String(k.predictedOutcome).toUpperCase() === 'YES';
-      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, cat: (c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
+      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, cat: (c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
     });
     let fair = null;
     if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
@@ -20,19 +20,33 @@
     const cats = Array.from(new Set(picks.map((k) => k.cat)));
     const settled = !!p.settled;
     const won = settled && p.result === 'PREDICTOR_WINS';
-    return {
+    const n = {
       id: p.predictionId, t: P.ms(p.createdAt), settledAt: p.settledAt ? P.ms(p.settledAt) : null,
       predictor: String(p.predictor || '').toLowerCase(), counterparty: String(p.counterparty || '').toLowerCase(),
       stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null,
       legs: picks.length, combo: picks.length > 1, picks, fair,
-      vig: odds != null && fair != null ? odds - fair : null,           // > 0: bettor paid above the source's fair price
-      vigPct: odds != null && fair ? (odds - fair) / fair : null,
+      // fairNow / vigNow: against the source market's price as the API reports it now (hindsight for settled bets).
+      // fair-at-bet / vig: against the source's price at the moment of the bet (Polymarket price history), set by P.applyAtBet.
+      fairNow: fair, vigNow: odds != null && fair != null ? odds - fair : null,
+      fairAtBet: null, vig: null, vigPct: null,
       cat: cats.length === 1 ? cats[0] : cats.length > 1 ? 'Mixed' : 'Other', cats,
       settled, result: p.result || null, won, lost: settled && !won,
       pnl: settled ? (won ? cp : -stake) : 0,                             // bettor's realised result
       endsAt: p.pickConfig && p.pickConfig.endsAt ? P.ms(p.pickConfig.endsAt) : null,
       tx: p.createTxHash || null,
     };
+    P.applyAtBet(n, picks.map((k) => k.priceAtBet));
+    return n;
+  };
+  /** Attach the source market's YES price at bet time for each leg (null = unknown) and derive fair-at-bet and the true vig:
+   *  locked odds − fair-at-bet, > 0 when the bettor paid above the price the source market showed at that moment. */
+  P.applyAtBet = function (n, prices) {
+    let fair = 1, ok = n.picks.length > 0;
+    n.picks.forEach((k, i) => { const p = prices && prices[i] != null && Number.isFinite(Number(prices[i])) ? Number(prices[i]) : null; k.priceAtBet = p; k.fairAtBet = p == null ? null : (k.yes ? p : 1 - p); if (p == null) ok = false; else fair *= k.fairAtBet; });
+    n.fairAtBet = ok ? fair : null;
+    n.vig = ok && n.odds != null ? n.odds - fair : null;
+    n.vigPct = ok && n.odds != null && fair ? (n.odds - fair) / fair : null;
+    return n;
   };
 
   /** Compact row for the tape / snapshot. */
@@ -82,6 +96,8 @@
       combosOnly: vigSummary(vigAll.filter((n) => n.combo).map((n) => n.vig)),
       byOddsBucket: [[0, 0.1], [0.1, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 0.9], [0.9, 1.01]].map(([a, b]) => Object.assign({ from: a, to: Math.min(1, b) }, vigSummary(vigAll.filter((n) => n.odds >= a && n.odds < b).map((n) => n.vig)))),
       weekly: Object.values(weeks).sort((a, b) => a.t - b.t).map((w) => ({ t: w.t, n: w.n, wagered: w.wagered, avg: avg(w.vig), median: median(w.vig) })),
+      // how many predictions have a source price at bet time (the rest have no Polymarket history yet or no source market)
+      coverage: { withAtBet: vigAll.length, total: norms.length, source: 'polymarket-history' },
     };
     return {
       totals: Object.assign(totals, { bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.settled ? (totals.won / totals.settled) * 100 : null }),
@@ -100,14 +116,16 @@
 
   /** Slim record for the per-wallet snapshot files (≈400 bytes); P.unslim restores everything P.norm produces. */
   // Open predictions keep the leg's conditionId (6th element) so the resolution tracker can look the market up; settled ones don't need it.
-  P.slim = (n) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, r: n.result, tx: n.tx, cat: n.cat, k: n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat]; if (!n.settled && k.id) a.push(k.id); return a; }) });
+  // leg = [question, yes, sourcePriceNow, endTime, category, conditionId (open predictions only), priceAtBet]
+  P.slim = (n) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, r: n.result, tx: n.tx, cat: n.cat, k: n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, !n.settled && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet)]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }) });
   P.unslim = function (s) {
     if (s.picks) return s;                               // already a full record
     const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
-    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), settled: false, resolvedToYes: null, nonDecisive: false, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
+    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id, pb]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: pb == null ? null : pb, settled: false, resolvedToYes: null, nonDecisive: false, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
     let fair = null; if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
     const odds = pool > 0 ? stake / pool : null; const settled = !!s.st; const won = settled && s.r === 'PREDICTOR_WINS';
-    return { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, vig: odds != null && fair != null ? odds - fair : null, vigPct: odds != null && fair ? (odds - fair) / fair : null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, result: s.r || null, won, lost: settled && !won, pnl: settled ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null };
+    const n = { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, fairNow: fair, vigNow: odds != null && fair != null ? odds - fair : null, fairAtBet: null, vig: null, vigPct: null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, result: s.r || null, won, lost: settled && !won, pnl: settled ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null };
+    return P.applyAtBet(n, picks.map((k) => k.priceAtBet));
   };
 
   /** Daily account history reconstructed from a wallet's own predictions (used when the API is not reachable). */

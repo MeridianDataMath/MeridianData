@@ -114,7 +114,7 @@
         UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of settled predictions'),
         UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'settled · mirror = maker profit', U.pnlClass(T.bettorPnl)),
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
-        UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs source market'));
+        UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
       const cWager = h('canvas'), cCount = h('canvas');
       const tapeBody = h('div.feed');
       const tapeCard = h('div.card.tight', h('div.card-head', h('h2', 'Live predictions'), h('span.dim.small', 'newest first · refreshes every 20 s'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), tapeBody);
@@ -230,7 +230,7 @@
           { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 0 })) },
           { key: 'avgOdds', label: 'Avg odds', num: true, sortVal: 1, render: (r) => pct(r.avgOdds, 0) },
           { key: 'combos', label: 'Combos', num: true, sortVal: 1, render: (r) => U.fmtPct((r.combos / r.n) * 100, { dp: 0 }) },
-          { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, render: (r) => vigCell(r.avgVig) },
+          { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (r) => vigCell(r.avgVig) },
           { key: 'biggestWin', label: 'Best win', num: true, sortVal: 1, render: (r) => usd(r.biggestWin) },
           { key: 'cat', label: 'Top category', render: (r) => r.topCat || '—' },
           { key: 'last', label: 'Last active', sortVal: 1, render: (r) => h('span.dim', U.fmtAgo(r.last)) },
@@ -407,7 +407,7 @@
         { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
         { key: 'p', label: 'Maker PnL', num: true, title: 'Settled: + bettor stake on wins, − own collateral on losses', render: (r) => U.pnlEl(r.pnl) },
         { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
-        { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
+        { key: 'v', label: 'Avg vig captured', num: true, title: 'Bettor odds minus the Polymarket price at the moment of the bet', render: (r) => vigCell(r.avgVig) },
         { key: 'ao', label: 'Avg bettor odds', num: true, render: (r) => pct(r.avgOdds, 0) },
         { key: 'cat', label: 'Top category', render: (r) => r.topCat || '—' },
         { key: 'f', label: 'Active', render: (r) => h('span.dim', U.fmtDate(r.first) + ' → ' + U.fmtAgo(r.last)) },
@@ -427,7 +427,8 @@
   async function mountVig(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Vig & edge'));
     await withSnapshot(body, ctx, (snap) => {
-      const v = snap.agg.vig; const cv = h('canvas');
+      const v = snap.agg.vig; const cv = h('canvas'); const cov = v.coverage || null;
+      if (!cov || !cov.withAtBet) { U.replace(body, h('div.card', h('div.empty', 'No source prices at bet time in this snapshot yet. The snapshot builder fetches them from Polymarket\'s price history; the next published snapshot will have them.'))); return; }
       const sumTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
         { key: 'k', label: labelKey, render: labelFn },
         { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
@@ -436,11 +437,11 @@
         { key: 'sh', label: 'Above fair', num: true, title: 'Share of predictions where the bettor paid more than the source probability', render: (r) => (r.share == null ? '—' : U.fmtPct(r.share * 100, { dp: 0 })) },
       ], rows });
       U.replace(body,
-        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Every prediction locks odds = stake ÷ (stake + maker collateral). Each question also carries the probability of the source market it mirrors (mostly Polymarket). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = bettor paid above fair, which is the market maker\'s margin.'), h('p.muted.small', { style: { margin: 0, color: 'var(--amber)' } }, 'Indicative only. The Predict API exposes each question\'s source probability as it is now, not as it was when the bet was placed, so "fair" is the current price for open questions and effectively the outcome (0 or 1) for settled ones. Averages therefore mix the auction\'s margin with price moves after the bet and with hindsight. A version that uses the source market\'s price at bet time is in the works. For combos the fair price is the product of the legs.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
-        h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'all predictions with a source price'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions')),
+        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Every prediction locks odds = stake ÷ (stake + maker collateral). The fair price is what the mirrored Polymarket market showed at the moment the bet was placed, taken from Polymarket\'s own price history (1- to 15-minute samples, the last one at or before the bet). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = bettor paid above fair, which is the market maker\'s margin.'), h('p.muted.small', { style: { margin: 0 } }, 'For combos the fair price is the product of the legs\' prices at bet time. Predictions whose legs have no Polymarket history (no mirrored market, or a market not yet looked up) are left out' + (cov ? `: ${U.fmtNum(cov.withAtBet, 0)} of ${U.fmtNum(cov.total, 0)} predictions are included` : '') + '.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'odds vs source price at bet time'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions')),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Average vig per week'), h('div.chart-box.sm', cv)),
         h('div.grid.cols-2', UI.card('By category', sumTbl(v.byCat, 'Category', (r) => r.cat)), UI.card('By odds', sumTbl(v.byOddsBucket.filter((b) => b.n), 'Bettor odds', (r) => pct(r.from, 0) + ' – ' + pct(r.to, 0)))),
-        h('div.footer-note', 'A negative vig means the bettor got a better price than the source market showed; that happens when the source moved after the bet, or when makers compete hard on popular questions.'));
+        h('div.footer-note', 'A negative vig means the bettor locked better odds than Polymarket showed at that moment, which happens when makers compete hard on a question or the source printed a stale price. Polymarket samples are the last trade or midpoint in the bucket, so single values carry a little noise; averages are the meaningful part.'));
       const col = C.colors();
       C.timeSeries(cv, { points: v.weekly.map((w) => ({ x: w.t, y: (w.avg || 0) * 100 })), color: col.amber, label: 'Avg vig', yFmt: (x) => x.toFixed(1) + ' pp', tipFmt: (x) => x.toFixed(2) + ' pp', zero: true });
     });
@@ -531,7 +532,7 @@
       { key: 'c', label: 'Category', render: (n) => n.cat },
       { key: 's', label: isMaker ? 'Bettor stake' : 'Stake', num: true, render: (n) => usd(n.stake) },
       { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
-      { key: 'v', label: 'Vig', num: true, render: (n) => vigCell(n.vig) },
+      { key: 'v', label: 'Vig', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (n) => vigCell(n.vig) },
       { key: 'cp', label: isMaker ? 'Bettor' : 'Maker', render: (n) => bettorLink(isMaker ? n.predictor : n.counterparty) },
       { key: 'r', label: 'Result', render: (n) => resultChip(n) },
       { key: 'p', label: 'PnL', num: true, render: (n) => U.pnlEl(isMaker ? -n.pnl : n.pnl) },

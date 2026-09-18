@@ -60,7 +60,7 @@
     ['Fees', 'Trading fees paid. Negative fees mean fees received — the exchange\'s fee-collector subaccount looks like that and is tagged "no trades".'],
     ['Liquidation price', 'Uses the app\'s pool maths: maintenance margin = notional × (1 / (2 × max leverage) + taker fee), solved per position with the equity left after the other positions\' maintenance margin. "none" when pool equity is far above it.'],
     ['Meridian OI (Predict)', 'Collateral escrowed on Meridian for a question right now: bettor stakes plus the market makers\' matching collateral of open predictions.'],
-    ['Vig (Predict)', 'Locked odds (stake ÷ pool) minus the source market\'s probability. Positive = the bettor paid above the fair price; that margin is the market maker\'s edge.'],
+    ['Vig (Predict)', 'Locked odds (stake ÷ pool) minus the mirrored Polymarket market\'s price at the moment the bet was placed, from Polymarket\'s price history (last sample at or before the bet; combos multiply the legs). Positive = the bettor paid above the fair price; that margin is the market maker\'s edge.'],
   ];
   MD.openDefinitions = () => MD.ui.modal({ title: 'How the numbers are calculated', body: h('div', h('div.kv', MD.DEFINITIONS.flatMap(([k, v]) => [h('div.k', k), h('div', { style: { color: 'var(--text-2)' } }, v)])), h('p.muted.small', { style: { margin: '14px 0 0' } }, 'All figures come from Meridian\'s public API and archive; nothing is estimated. Amounts are USD-equivalent (USDe-settled). Times are shown in your local time zone, except the Tax center, which uses UTC.')) });
   MD.defsLink = () => h('a.defs.small', { href: '#', onclick: (e) => { e.preventDefault(); MD.openDefinitions(); } }, U.icon('help'), 'How are these calculated?');

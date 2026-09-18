@@ -33,6 +33,81 @@ const { MD } = globalThis;
 const A = MD.api, AN = MD.analytics, U = MD.util, P = MD.predict;
 fs.mkdirSync(outDir, { recursive: true });
 
+// ---------------------------------------------------------------- Polymarket price at bet time
+// The Predict API only exposes a question's source probability as it is now, so a real vig needs the price the mirrored
+// Polymarket market showed when the bet was placed. Meridian's conditionId is Polymarket's, so: Gamma API → the YES
+// outcome's CLOB token → CLOB price history around each bet → the last price at or before the bet (5-minute buckets).
+// Results persist in a cache file (data/cache/polymarket-prices.json, gitignored) so a run only fetches new predictions.
+const GAMMA = 'https://gamma-api.polymarket.com/markets';
+const CLOB_HISTORY = 'https://clob.polymarket.com/prices-history';
+const cacheFile = args.includes('--cache') ? path.resolve(args[args.indexOf('--cache') + 1]) : path.join(root, 'data', 'cache', 'polymarket-prices.json');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function getJson(url, tries = 3) {
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetch(url, { headers: { accept: 'application/json' } });
+      if (r.status === 429 || r.status >= 500) throw new Error('HTTP ' + r.status);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) { if (i >= tries - 1) throw e; await sleep(1500 * (i + 1)); }
+  }
+}
+async function attachPricesAtBet(norms) {
+  let cache = { v: 1, tokens: {}, preds: {} };
+  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const now = Date.now();
+  // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried for 3 days)
+  const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || now - c.at < 3 * 86400000)); });
+  console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up`);
+  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); return; }
+  // 2. YES-token ids from Gamma for the conditions involved (closed markets need a second pass with closed=true)
+  const condIds = Array.from(new Set(todo.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
+  const needTok = condIds.filter((id) => { const t = cache.tokens[id]; return !t || (!t.yes && now - t.at > 7 * 86400000); });
+  for (let i = 0; i < needTok.length; i += 40) {
+    const chunk = needTok.slice(i, i + 40); const seen = new Set();
+    for (const closed of [false, true]) {
+      const rest = chunk.filter((id) => !seen.has(id)); if (!rest.length) break;
+      const arr = await getJson(GAMMA + '?limit=' + rest.length + (closed ? '&closed=true' : '') + '&' + rest.map((id) => 'condition_ids=' + id).join('&'));
+      for (const m of Array.isArray(arr) ? arr : []) {
+        let toks = []; try { toks = JSON.parse(m.clobTokenIds || '[]'); } catch (_) {}
+        const id = String(m.conditionId || '').toLowerCase(); seen.add(id);
+        cache.tokens[id] = { yes: toks[0] || null, outcomes: (() => { try { return JSON.parse(m.outcomes || '[]'); } catch (_) { return []; } })(), at: now };
+      }
+      await sleep(150);
+    }
+    for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = { yes: null, at: now };
+  }
+  // 3. one history request per condition covering every new bet on it, then the last price at or before each bet
+  const byCond = {};
+  for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
+  const conds = Object.keys(byCond); let done = 0, lastLog = Date.now(), next = 0;
+  const oneCondition = async (id) => {
+    const legs = byCond[id]; const times = legs.map((l) => l.n.t);
+    const from = Math.floor(Math.min(...times) / 1000) - 6 * 3600, to = Math.floor(Math.max(...times) / 1000) + 3600;
+    const spanDays = (to - from) / 86400; const fidelity = spanDays <= 3 ? 1 : spanDays <= 30 ? 5 : spanDays <= 120 ? 15 : 60;
+    let hist = [];
+    try { const j = await getJson(CLOB_HISTORY + '?market=' + cache.tokens[id].yes + '&startTs=' + from + '&endTs=' + to + '&fidelity=' + fidelity); hist = (j && j.history) || []; }
+    catch (e) { console.warn('  predict: history failed for', id.slice(0, 12), e.message); }
+    for (const { n, i } of legs) {
+      const t = n.t / 1000; let best = null;
+      for (const h of hist) { if (h.t <= t) best = h; else break; }                           // last sample at or before the bet
+      if (!best || t - best.t > 86400) { const after = hist.find((h) => h.t > t && h.t - t < 6 * 3600); if (!best && after) best = after; }
+      n.picks[i].priceAtBet = best ? Number(best.p) : null;
+    }
+    done++;
+    if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: price history ${done}/${conds.length} conditions`); }
+  };
+  // a few requests in flight, ~8/s overall; the CLOB answered 5/s sequential bursts without complaint
+  await Promise.all(Array.from({ length: 3 }, async () => { while (next < conds.length) { const id = conds[next++]; await oneCondition(id); await sleep(250); } }));
+  // 4. record, apply, save
+  for (const n of todo) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now };
+  for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p);
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+  fs.writeFileSync(cacheFile, JSON.stringify(cache));
+  const got = norms.filter((n) => n.vig != null).length;
+  console.log(`  predict: price-at-bet ready for ${got}/${norms.length} predictions (${conds.length} history requests)`);
+}
+
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
   const t0 = Date.now();
@@ -42,12 +117,15 @@ async function buildPredict() {
   const probe = await P.predictionsCount();
   console.log(`  predict: API reachable, ${probe} predictions in total`);
   let lastLog = 0;
+  const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : 0;   // testing: a page per window only
   const raw = await P.predictionsWindowed({
-    fromSec: P.LAUNCH_SEC, toSec, windows: 24, concurrency: 4, maxPagesPerWindow: 600,
+    fromSec: P.LAUNCH_SEC, toSec, windows: 24, concurrency: 4, maxPagesPerWindow: limit ? 1 : 600,
     onProgress: (n) => { if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far (${P.stats.requests} requests, ${P.stats.retries} retries)`); } },
   });
-  const norms = raw.map(P.norm);
+  const norms = (limit ? raw.slice(0, limit) : raw).map(P.norm);
+  try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
   const agg = P.aggregate(norms, { tapeSize: 100 });
+  console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
   try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
   // questions with Meridian open interest (the explorer's offline set) + the latest secondary-market trades

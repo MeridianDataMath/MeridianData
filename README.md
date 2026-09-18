@@ -104,8 +104,13 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     The same per-leg status sits on the open positions of every bettor page.
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
     committed, open exposure, PnL, win rate, vig captured.
-  * *Vig & edge* – the bettor's locked odds versus the source market's probability, overall,
-    per category, per odds bucket, singles vs combos, and per week.
+  * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at
+    the moment of the bet**, overall, per category, per odds bucket, singles vs combos, and per
+    week. The Predict API only exposes a question's source probability as it is now, so the
+    snapshot builder fetches the price at bet time from Polymarket's own CLOB price history
+    (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet; 1-minute
+    samples for short spans, up to 15-minute for long ones) and caches it per prediction in
+    `data/cache/polymarket-prices.json`, so a run only looks up new predictions.
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center gains a Predict block with realised PnL, monthly table
