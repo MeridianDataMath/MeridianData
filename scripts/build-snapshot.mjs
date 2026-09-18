@@ -59,10 +59,10 @@ async function attachPricesAtBet(norms) {
   // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried for 3 days)
   const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || now - c.at < 3 * 86400000)); });
   console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up`);
-  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); return; }
   // 2. YES-token ids from Gamma for the conditions involved (closed markets need a second pass with closed=true)
-  const condIds = Array.from(new Set(todo.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
-  const needTok = condIds.filter((id) => { const t = cache.tokens[id]; return !t || (!t.yes && now - t.at > 7 * 86400000); });
+  // (also the Polymarket event each market belongs to, so combos with legs on the same event can be told apart)
+  const condIds = Array.from(new Set(norms.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
+  const needTok = condIds.filter((id) => { const t = cache.tokens[id]; return !t || t.ev === undefined || (!t.yes && now - t.at > 7 * 86400000); });
   for (let i = 0; i < needTok.length; i += 40) {
     const chunk = needTok.slice(i, i + 40); const seen = new Set();
     for (const closed of [false, true]) {
@@ -71,12 +71,15 @@ async function attachPricesAtBet(norms) {
       for (const m of Array.isArray(arr) ? arr : []) {
         let toks = []; try { toks = JSON.parse(m.clobTokenIds || '[]'); } catch (_) {}
         const id = String(m.conditionId || '').toLowerCase(); seen.add(id);
-        cache.tokens[id] = { yes: toks[0] || null, outcomes: (() => { try { return JSON.parse(m.outcomes || '[]'); } catch (_) { return []; } })(), at: now };
+        const ev = (m.events && m.events[0] && (m.events[0].id || m.events[0].slug)) || null;
+        cache.tokens[id] = Object.assign({}, cache.tokens[id], { yes: toks[0] || null, outcomes: (() => { try { return JSON.parse(m.outcomes || '[]'); } catch (_) { return []; } })(), ev: ev == null ? null : String(ev), at: now });
       }
       await sleep(150);
     }
-    for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = { yes: null, at: now };
+    for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, at: now });
   }
+  for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
+  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); fs.writeFileSync(cacheFile, JSON.stringify(cache)); return; }
   // 3. one history request per condition covering every new bet on it, then the last price at or before each bet
   const byCond = {};
   for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
