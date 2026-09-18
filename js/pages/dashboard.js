@@ -26,7 +26,7 @@
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price')), mktBody),
         stopCard,
         h('div.grid.cols-2',
-          h('div.card.tight', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a side to open the account')), tradesBody),
+          h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
         h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'current 1h rate · projected · annualized')), fundBody))));
 
@@ -200,16 +200,46 @@
       const smT = setInterval(scanStops, 120000); ctx.onCleanup(() => clearInterval(smT));
 
       // ---- live trades ----
+      // WebSocket fills carry both subaccount ids; the REST history only carries order ids, so those rows are
+      // resolved to their taker / maker through the public order endpoint in the background (cached, a few at a time).
       let trades = [];
-      const tradeRow = (t, flash) => {
-        const link = (sid, label) => (sid ? h('a', { href: U.accountUrl('', sid), title: sid, onclick: (e) => { e.stopPropagation(); } }, label) : h('span.dim', label));
-        return h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.taker || t.maker ? h('span.xs', link(t.taker, 'taker'), h('span.dim', ' · '), link(t.maker, 'maker')) : h('span.xs.dim', 'history'));
+      const SHOW = 60;
+      const openAccount = async (t, which) => {
+        let sid = t[which];
+        if (!sid && t[which + 'Order']) { try { sid = (await A.order(t[which + 'Order'], ctx)).subaccountId; t[which] = sid; } catch (_) {} }
+        if (sid) MD.router.navigate('/account', { address: '', sub: sid }); else U.toast('Account not available for this trade');
       };
-      const renderTrades = () => U.replace(tradesBody, trades.length ? trades.slice(0, 40).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+      const tradeRow = (t, flash) => {
+        const link = (which, label) => { const sid = t[which]; return sid || t[which + 'Order'] ? h('a', { href: sid ? U.accountUrl('', sid) : '#', title: sid || 'resolving…', onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAccount(t, which); } }, label) : h('span.dim', label); };
+        const clickable = !!(t.taker || t.takerOrder);
+        return h('div.it', { class: (flash ? 'flash ' : '') + (clickable ? 'click' : ''), title: clickable ? 'Open the account that took this trade' : undefined, onclick: clickable ? () => openAccount(t, 'taker') : undefined },
+          h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))),
+          h('span.xs', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));
+      };
+      const renderTrades = () => U.replace(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+      let resolving = false;
+      const resolveVisible = async () => {
+        if (resolving) return; resolving = true;
+        try {
+          const todo = trades.slice(0, SHOW).filter((t) => (!t.taker && t.takerOrder) || (!t.maker && t.makerOrder));
+          let i = 0, changed = false;
+          await Promise.all(Array.from({ length: 3 }, async () => {
+            while (i < todo.length && !ctx.signal.aborted) {
+              const t = todo[i++];
+              for (const which of ['taker', 'maker']) {
+                if (t[which] || !t[which + 'Order']) continue;
+                try { t[which] = (await A.order(t[which + 'Order'], ctx)).subaccountId || null; changed = true; } catch (e) { if (e.name === 'AbortError') return; t[which + 'Order'] = null; }
+              }
+            }
+          }));
+          if (changed && !ctx.signal.aborted) renderTrades();
+        } finally { resolving = false; }
+      };
       (async () => {
-        const seed = await Promise.all(ref.active.map((p) => A.trades(p.id, 15, ctx).then((rows) => rows.map((r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, side: r.takerSide, size: r.filled, price: r.price }))).catch(() => [])));
+        const seed = await Promise.all(ref.active.map((p) => A.trades(p.id, 15, ctx).then((rows) => rows.map((r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null }))).catch(() => [])));
         trades = U.sortBy(seed.flat(), (t) => t.t, true);
         renderTrades();
+        resolveVisible();
       })();
       for (const p of ref.active) {
         ctx.onCleanup(A.ws.subscribe('TradeFill', p.ticker, (m) => {

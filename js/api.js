@@ -116,6 +116,8 @@
   };
   A.liquidity = (pid, o) => A.get(A.BASE + '/v1/product/market-liquidity' + qs({ productId: pid }), { signal: o && o.signal });
   A.trades = (pid, limit, o) => A.get(A.BASE + '/v1/order/trade' + qs({ productId: pid, limit: limit || 50 }), { ttl: (o && o.ttl) || 0, signal: o && o.signal }).then((r) => r.data || []);
+  /** One order by id (public): the way to learn which subaccount stood behind a trade from the REST history. Filled orders never change. */
+  A.order = (id, o) => A.get(A.BASE + '/v1/order/' + encodeURIComponent(id), { ttl: 6 * 3600000, signal: o && o.signal });
   A.liquidations = (limit, o) => A.get(A.BASE + '/v1/position/liquidation' + qs({ limit: limit || 50 }), { ttl: 15000, signal: o && o.signal }).then((r) => r.data || []);
   A.gaps = (ids, start, end, o) => A.page(A.BASE, '/v1/product/mark-price-gap', { productIds: ids, startTime: start, endTime: end }, { ttl: 60000, maxPages: 5, signal: o && o.signal });
   A.fundingHistory = (pid, start, end, o) => A.page(A.BASE, '/v1/funding', { productId: pid, startTime: start, endTime: end }, { ttl: 60000, maxPages: 10, signal: o && o.signal });
