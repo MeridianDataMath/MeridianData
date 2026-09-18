@@ -8,7 +8,7 @@
       MD.setTopbar(h('span.title', 'Dashboard'));
       const tiles = h('div.stats');
       const mktBody = h('div', UI.loading('Loading markets…'));
-      const tradesBody = h('div.feed', UI.loading('Loading trades…'));
+      const tradesBody = h('div.feed.pause-hover', UI.loading('Loading trades…'));
       const liqBody = h('div', UI.loading('Loading…'));
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');

@@ -375,8 +375,8 @@
     const { sa, ref } = st; const sid = sa.id;
     const status = h('span.status-dot');
     const statusTxt = h('span.dim.small', 'connecting');
-    const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed'), book = h('div.book'), bookTitle = h('span.dim.small');
-    const mktTrades = h('div.feed', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
+    const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
+    const mktTrades = h('div.feed.pause-hover', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
     const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
     const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
     U.replace(el, h('div.live',

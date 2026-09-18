@@ -210,7 +210,9 @@
         this.retry = 0; this.setStatus('open');
         for (const [, sub] of this.subs) this.send(sub.payload);
       };
-      sock.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (_) { return; } this.route(m); };
+      sock.onmessage = (ev) => { this.lastMsg = Date.now(); let m; try { m = JSON.parse(ev.data); } catch (_) { return; } this.route(m); };
+      this.lastMsg = Date.now();
+      this.watch();
       sock.onclose = () => {
         this.setStatus('closed');
         if (this.subs.size) { const d = Math.min(15000, 500 * Math.pow(2, this.retry++)); setTimeout(() => this.ensure(), d); }
@@ -218,6 +220,17 @@
       sock.onerror = () => {};
     },
     send(obj) { if (this.sock && this.sock.readyState === 1) this.sock.send(JSON.stringify(obj)); },
+    /** A socket can stay "open" after the laptop slept or the network blipped while nothing arrives any more (tickers
+     *  normally come every second). Silence for 45 s, coming back online, or the tab becoming visible again after a
+     *  quiet spell all force a reconnect, so the status dot and the data are honest. */
+    watch() {
+      if (this.watchT) return;
+      const stale = (ms) => this.sock && this.sock.readyState === 1 && this.subs.size && Date.now() - (this.lastMsg || 0) > ms;
+      const kick = () => { try { this.sock.close(); } catch (_) {} };
+      this.watchT = setInterval(() => { if (stale(45000)) kick(); }, 15000);
+      window.addEventListener('online', () => { if (stale(5000)) kick(); });
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && stale(10000)) kick(); });
+    },
     route(m) {
       if (!m || !m.e) return;
       const d = m.data || {};

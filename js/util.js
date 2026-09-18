@@ -61,8 +61,16 @@
   document.addEventListener('pointercancel', () => { pointerDown = false; }, true);
   U.replaceLive = (el, ...children) => {
     const sel = document.getSelection ? document.getSelection() : null;
-    if (sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer)) return el;
-    if (pointerDown && el.matches(':hover')) return el;
+    const selecting = sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);
+    // tapes (class pause-hover) hold still while the pointer is over them, so a row cannot slide away under a click;
+    // whatever arrived meanwhile is applied when the pointer leaves
+    const held = selecting || (pointerDown && el.matches(':hover')) || (el.classList.contains('pause-hover') && el.matches(':hover'));
+    if (held) {
+      el.__pending = children;
+      if (!el.__catchUp) { el.__catchUp = true; el.addEventListener('mouseleave', () => { const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); }); }
+      return el;
+    }
+    el.__pending = null;
     return U.replace(el, ...children);
   };
   U.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

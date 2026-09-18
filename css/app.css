@@ -390,6 +390,9 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .feed-card .card-head { flex: none; }
 .feed-card .feed-fill { flex: 1; min-height: 420px; position: relative; }
 .feed-card .feed-fill > * { position: absolute; inset: 0; max-height: none; overflow: auto; }
+/* a tape holds still under the pointer (see U.replaceLive); its card header says so */
+.card:has(.feed.pause-hover:hover) > .card-head::after { content: 'paused while hovering'; margin-left: auto; font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.card:has(.feed.pause-hover:hover) > .card-head > .grow { display: none; }
 .feed .it.click { cursor: pointer; }
 .feed .it.click:hover { background: var(--bg-4); }
 .feed .it.mine { background: var(--accent-dim); }

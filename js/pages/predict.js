@@ -116,7 +116,7 @@
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
       const cWager = h('canvas'), cCount = h('canvas');
-      const tapeBody = h('div.feed');
+      const tapeBody = h('div.feed.pause-hover');
       const tapeCard = h('div.card.tight', h('div.card-head', h('h2', 'Live predictions'), h('span.dim.small', 'newest first · refreshes every 20 s'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), tapeBody);
       const catTbl = UI.table({ cols: [
         { key: 'c', label: 'Category', render: (r) => r.cat },
