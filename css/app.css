@@ -297,6 +297,7 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .chart-box .watermark {
   position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
   font-size: 34px; font-weight: 800; color: rgba(255,255,255,.035); letter-spacing: .12em; text-transform: uppercase;
+  overflow: hidden; white-space: nowrap;   /* the word is wider than a phone's chart; never let it widen the page */
 }
 .chart-box .overlay { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .spark { width: 110px; height: 30px; display: block; }
@@ -533,8 +534,9 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: minmax(0, 1fr); }
   .modal-bg { padding: 8px; align-items: end; }
   .modal { max-height: 92vh; }
-  .kv { grid-template-columns: 1fr; gap: 2px 0; }
-  .kv .k { white-space: normal; margin-top: 6px; }
+  /* long definitions (modals) stack key over value; short figures (account state) stay on one line */
+  .modal .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .modal .kv .k { white-space: normal; margin-top: 6px; }
   /* phone: stack the hero content instead of pinning the ticker/footer to the bottom */
   .main.home { padding: 0 0 56px; }
   .main.home .hero { min-height: calc(100vh - var(--top) - 56px); justify-content: flex-start; padding: 48px 16px 24px; }
@@ -544,4 +546,22 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .hero .strip { position: static; width: calc(100% + 32px); margin: 10px -16px 0; }
   .hero .foot { position: static; display: flex; margin-top: 22px; gap: 12px 18px; }
   .chart-box { height: 240px; }
+  /* feeds (trade tapes, fills, prediction tape): tighter cells so a row fits a phone instead of scrolling sideways */
+  .feed .it { gap: 6px; padding: 7px 10px; }
+  .feed .it .t { width: auto; white-space: nowrap; font-size: 11px; }
+  .feed .it .m { width: auto; min-width: 0; }
+  .feed .it .num { white-space: nowrap; }
+  .feed .it .num.dim, .feed .it > .xs { display: none; }   /* notional and the taker · maker links: the row itself opens the account */
+  /* rows with a text column (the prediction tape's question) wrap it onto its own full-width line */
+  .feed .it:has(.grow.ellipsis) { flex-wrap: wrap; row-gap: 2px; }
+  .feed .it .grow.ellipsis { flex: 1 1 200px; order: 10; min-width: 0 !important; color: var(--text-2); }
+  .feed .it:has(.grow.ellipsis) > .chip:last-child { order: 11; margin-left: auto; }   /* result chip sits at the end of the question line */
+  /* stat tiles: two per row, an odd last one spans the row */
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stats > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  /* tab bars: tighter so the five account tabs fit a phone; a soft fade on the right when they still overflow */
+  .tabs { position: relative; }
+  .tabs button { padding: 10px 8px; font-size: 13px; }
+  .tabs { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+  .tabs.fits { -webkit-mask-image: none; mask-image: none; }
 }

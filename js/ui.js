@@ -72,6 +72,14 @@
       done() { if (!bar) return; active = Math.max(0, active - 1); if (active) return; clearInterval(timer); timer = null; v = 1; paint(); hideT = setTimeout(() => { bar.classList.remove('on'); v = 0; paint(); }, 350); },
     };
   })();
+  /** Tab bars that overflow (phones) get a fade on the right edge via CSS; `.fits` removes it when everything is visible
+   *  or the bar is scrolled to its end. Checked after renders, on resize and on scroll. */
+  const fitTabs = () => { for (const t of document.querySelectorAll('.tabs')) t.classList.toggle('fits', t.scrollWidth <= t.clientWidth + 1 || t.scrollLeft + t.clientWidth >= t.scrollWidth - 1); };
+  UI.fitTabs = fitTabs;
+  window.addEventListener('resize', fitTabs);
+  document.addEventListener('scroll', (e) => { if (e.target && e.target.classList && e.target.classList.contains('tabs')) fitTabs(); }, true);
+  new MutationObserver(() => { clearTimeout(fitTabs._t); fitTabs._t = setTimeout(fitTabs, 50); }).observe(document.documentElement, { childList: true, subtree: true });
+
   /** Inline warning when a published snapshot is older than it should be (the publishers run every 30 minutes). */
   UI.STALE_MS = 2 * 3600000;
   UI.staleNote = (builtAt, hint) => (builtAt && Date.now() - builtAt > UI.STALE_MS
