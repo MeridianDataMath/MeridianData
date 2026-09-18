@@ -181,7 +181,8 @@
     const game = m.gameAt && m.gameAt > (m.endAt || 0) ? m.gameAt : null; const end = game || m.endAt;
     if ((end && end < now) || !m.acceptingOrders) return { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: (game ? 'Game started ' : 'Market ended ') + (end ? cd(end) : ''), sub: 'nobody has proposed an outcome yet · $' + U.fmtNum(bond, 0) + ' bond, then a ' + live(liveness) + ' challenge window', at: end, m, o };
     if (game) return { code: 'trading', chip: ['open', 'accent'], main: 'Game starts ' + U.fmtDateTime(game) + ' (' + cd(game) + ')', sub: (m.endAt < now ? 'rescheduled · ' : '') + 'resolves after the final result' + (cutoff ? ' · ' + cutoff : ''), at: game, m, o };
-    return { code: 'trading', chip: ['open', 'accent'], main: 'Resolves after ' + U.fmtDateTime(m.endAt) + (m.endAt ? ' (' + cd(m.endAt) + ')' : ''), sub: cutoff || 'earlier if the outcome is known before then · see rules', at: m.endAt, m, o };
+    if (!m.endAt) return { code: 'trading', chip: ['open', 'accent'], main: 'No end date on Polymarket', sub: cutoff || 'resolves when the outcome is known · see rules', m, o };
+    return { code: 'trading', chip: ['open', 'accent'], main: 'Resolves after ' + U.fmtDateTime(m.endAt) + ' (' + cd(m.endAt) + ')', sub: cutoff || 'earlier if the outcome is known before then · see rules', at: m.endAt, m, o };
   };
 
   // ---------------------------------------------------------------- rendering

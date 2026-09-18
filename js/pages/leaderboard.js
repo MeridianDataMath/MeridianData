@@ -50,7 +50,7 @@
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
             fld('Trading style', h('select.input.sm', { onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
           h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
-          h('div.sec.small.dim', 'Built in your browser from the public Meridian API. Snapshots are cached locally; press Update to rebuild.'));
+          h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; Update rebuilds one in your browser right now.'));
       }
       renderFilters();
 
@@ -81,7 +81,7 @@
           sort: state.sort, onSort,
           cols: [
             { key: 'rank', label: '#', render: (r) => { const i = rows.indexOf(r) + 1; return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
-            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : null) },
+            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : !r.inactive && AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
             { key: 'pnl', label: 'PnL', num: true, sortVal: 1, render: (r) => (s(r) ? U.pnlEl(s(r).pnl) : '—') },
             { key: 'volume', label: 'Volume', num: true, sortVal: 1, render: (r) => (s(r) ? U.fmtUsd(s(r).volume) : '—') },

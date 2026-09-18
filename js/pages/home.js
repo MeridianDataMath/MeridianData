@@ -30,7 +30,8 @@
       const lb = LB && LB.cache();
       if (lb && lb.rows && lb.rows.length) {
         // ranked by all-time PnL (realised + unrealised since the exchange launched) → copy-trading candidates
-        const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all);
+        // copy-trade candidates must have traded: the exchange's fee-collector subaccount "earns" PnL with zero volume
+        const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r));
         const ranked = U.sortBy(rows, (r) => r.stats.all.pnl, true);
         const winners = ranked.filter((r) => r.stats.all.pnl > 0).slice(0, 24);
         const items = winners.length >= 4 ? winners : ranked.slice(0, 12);

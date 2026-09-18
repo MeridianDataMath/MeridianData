@@ -226,6 +226,10 @@
     return row;
   };
 
+  /** A leaderboard row that never traded: no volume and no positions. The exchange's fee-collector subaccount is one —
+   *  its "PnL" is fees received — so lists of traders leave these out and the leaderboard labels them. */
+  AN.noTrades = (r) => !(U.num(r.volumeAll) > 0) && !(r.positionsCount > 0) && !(r.openCount > 0);
+
   /** Describe an order's stop / grouping semantics. */
   AN.orderMeta = function (o) {
     const stop = U.num(o.stopPrice) > 0;

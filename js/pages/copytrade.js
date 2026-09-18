@@ -38,7 +38,7 @@
           U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No leaderboard snapshot yet.'), h('a.btn.primary', { href: '#/leaderboard' }, 'Build the leaderboard')));
           U.replace(summary, ''); return;
         }
-        let rows = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all);
+        let rows = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r));   // leaders must have traded
         rows = U.sortBy(rows, (r) => r.stats.all.pnl, true);
         if (onlyProfit) rows = rows.filter((r) => r.stats.all.pnl > 0);
         const s = (r, iv) => r.stats[iv] || {};
