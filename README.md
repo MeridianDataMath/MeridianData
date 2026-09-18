@@ -110,7 +110,12 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     snapshot builder fetches the price at bet time from Polymarket's own CLOB price history
     (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet; 1-minute
     samples for short spans, up to 15-minute for long ones) and caches it per prediction in
-    `data/cache/polymarket-prices.json`, so a run only looks up new predictions.
+    `data/cache/polymarket-prices.json`, so a run only looks up new predictions. Combos
+    multiply the legs, so combos whose legs sit on one Polymarket event (correlated) are shown
+    separately and kept out of the headline. The page's second half is the ex-post view,
+    *Quote-implied vs realized*: on settled bets, the locked odds against the realised hit rate
+    (with a 95% interval) and bettor ROI, overall, by bet type, by odds bucket and by category;
+    that needs no source price and already contains correlation and bettor skill.
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center gains a Predict block with realised PnL, monthly table

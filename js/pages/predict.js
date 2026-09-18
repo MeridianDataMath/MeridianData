@@ -436,12 +436,39 @@
         { key: 'med', label: 'Median vig', num: true, render: (r) => vigCell(r.median) },
         { key: 'sh', label: 'Above fair', num: true, title: 'Share of predictions where the bettor paid more than the source probability', render: (r) => (r.share == null ? '—' : U.fmtPct(r.share * 100, { dp: 0 })) },
       ], rows });
+      // ---- ex-post: locked odds vs what actually happened, on settled bets ----
+      const roiCell = (r) => (r.roi == null ? h('span.dim', '—') : h('span', { class: U.pnlClass(r.roi) }, U.fmtPct(r.roi * 100, { sign: true, dp: 1 })));
+      const hitCell = (r) => (r.hit == null ? h('span.dim', '—') : h('span', U.fmtPct(r.hit * 100, { dp: 1 }), h('span.dim.xs', ' ±' + U.fmtNum(r.ci * 100, 1))));
+      const gapCell = (r) => (r.gap == null ? h('span.dim', '—') : h('span', { class: Math.abs(r.gap) > (r.ci || 0) ? (r.gap > 0 ? 'neg' : 'pos') : 'dim', title: Math.abs(r.gap) > (r.ci || 0) ? 'Outside the 95% interval' : 'Within the 95% interval: could be luck' }, pp(r.gap)));
+      const realTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
+        { key: 'k', label: labelKey, render: labelFn },
+        { key: 'n', label: 'Settled', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 'imp', label: 'Implied', num: true, title: 'Average locked odds = the win probability the bettors paid for', render: (r) => (r.implied == null ? '—' : U.fmtPct(r.implied * 100, { dp: 1 })) },
+        { key: 'hit', label: 'Realized', num: true, title: 'Share actually won, with the 95% interval', render: hitCell },
+        { key: 'gap', label: 'Implied − realized', num: true, title: 'Positive = bettors won less often than they paid for', render: gapCell },
+        { key: 'roi', label: 'Bettor ROI', num: true, title: 'Net result ÷ stake on these bets; the mirror image is the maker\'s realised take', render: roiCell },
+      ], rows });
+      const realizedSection = (r) => {
+        if (!r || !r.overall.n) return null;
+        const o = r.overall; const cr = h('canvas');
+        const bucketLabel = (b) => pct(b.from, 0) + '–' + pct(b.to, 0);
+        const buckets = r.byOddsBucket.filter((b) => b.n >= 30);
+        const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different events', ...r.combosOnly }, { k: 'Combos · same event', ...r.combosSameEvent }, r.combosUnknown.n ? { k: 'Combos · event unknown', ...r.combosUnknown } : null].filter(Boolean);
+        const node = h('div.stack', { style: { marginTop: '8px' } },
+          h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Quote-implied vs realized'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'The other way to measure the edge, needing no source price at all: on settled bets, the odds the bettors locked are the win probability they paid for; compare that with how often they actually won. Outcomes carry the real correlation between legs and any skill the bettors have, so this is the maker\'s realised edge rather than a quoted one. It costs waiting for settlement and some luck: the ± is a 95% interval on the hit rate, and a gap inside it may be chance.'), h('p.muted.small', { style: { margin: 0 } }, 'Money matters more than counts here: a bet at 3% odds that hits 2% of the time loses a third of its stakes on average, while the same one-point gap at 60% odds is nothing. Bettor ROI is net result ÷ stake and is the number to read; the maker\'s take is its mirror image.')),
+          h('div.stats', UI.stat('Settled bets', U.fmtNum(o.n, 0), U.fmtUsd(o.stake, { compact: true }) + ' staked'), UI.stat('Implied win rate', U.fmtPct(o.implied * 100, { dp: 1 }), 'avg locked odds'), UI.stat('Realized win rate', U.fmtPct(o.hit * 100, { dp: 1 }), '± ' + U.fmtNum(o.ci * 100, 1) + ' pp (95%)'), UI.stat('Bettor ROI', U.fmtPct(o.roi * 100, { sign: true, dp: 1 }), 'net result ÷ stake', U.pnlClass(o.roi)), UI.stat('Maker take', U.fmtPct(-o.roi * 100, { sign: true, dp: 1 }), 'of stakes, realised', U.pnlClass(-o.roi))),
+          h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Implied vs realized by locked odds'), h('div.chart-box.sm', cr)), UI.card('By bet type', realTbl(splits, 'Type', (x) => x.k))),
+          h('div.grid.cols-2', UI.card('By locked odds', realTbl(r.byOddsBucket.filter((b) => b.n), 'Bettor odds', bucketLabel)), UI.card('By category', realTbl(r.byCat.filter((c) => c.n >= 20), 'Category', (x) => x.cat))));
+        requestAnimationFrame(() => C.pairedBars(cr, buckets.map(bucketLabel), buckets.map((b) => b.implied * 100), buckets.map((b) => b.hit * 100), { aLabel: 'Implied (locked odds)', bLabel: 'Realized (won)', max: 100 }));
+        return node;
+      };
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Every prediction locks odds = stake ÷ (stake + maker collateral). The fair price is what the mirrored Polymarket market showed at the moment the bet was placed, taken from Polymarket\'s own price history (1- to 15-minute samples, the last one at or before the bet). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = bettor paid above fair, which is the market maker\'s margin.'), h('p.muted.small', { style: { margin: 0 } }, 'For combos the fair price is the product of the legs\' prices at bet time, which assumes the legs are independent. Legs on the same Polymarket event (one match, one asset at several strikes) are correlated, so for those the product understates fair and the gap includes what the maker charges for correlation, not only margin. They are shown separately and kept out of the headline figures' + (cov ? `. Included: ${U.fmtNum(cov.clean != null ? cov.clean : cov.withAtBet, 0)} of ${U.fmtNum(cov.total, 0)} predictions (${U.fmtNum(cov.total - cov.withAtBet, 0)} without Polymarket history${cov.sameEvent ? `, ${U.fmtNum(cov.sameEvent, 0)} same-event combos` : ''})` : '') + '.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
         h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'odds vs source price at bet time'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos · different events', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions'), v.combosSameEvent && v.combosSameEvent.n ? UI.stat('Combos · same event', pp(v.combosSameEvent.avg), U.fmtNum(v.combosSameEvent.n, 0) + ' predictions · includes correlation pricing, not in the headline') : null),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Average vig per week'), h('div.chart-box.sm', cv)),
         h('div.grid.cols-2', UI.card('By category', sumTbl(v.byCat, 'Category', (r) => r.cat)), UI.card('By odds', sumTbl(v.byOddsBucket.filter((b) => b.n), 'Bettor odds', (r) => pct(r.from, 0) + ' – ' + pct(r.to, 0)))),
-        h('div.footer-note', 'A negative vig means the bettor locked better odds than Polymarket showed at that moment, which happens when makers compete hard on a question or the source printed a stale price. Polymarket samples are the last trade or midpoint in the bucket, so single values carry a little noise; averages are the meaningful part.'));
+        h('div.footer-note', 'A negative vig means the bettor locked better odds than Polymarket showed at that moment, which happens when makers compete hard on a question or the source printed a stale price. Polymarket samples are the last trade or midpoint in the bucket, so single values carry a little noise; averages are the meaningful part.'),
+        realizedSection(v.realized));
       const col = C.colors();
       C.timeSeries(cv, { points: v.weekly.map((w) => ({ x: w.t, y: (w.avg || 0) * 100 })), color: col.amber, label: 'Avg vig', yFmt: (x) => x.toFixed(1) + ' pp', tipFmt: (x) => x.toFixed(2) + ' pp', zero: true });
     });

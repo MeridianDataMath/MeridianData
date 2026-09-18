@@ -108,6 +108,26 @@
       // how many predictions have a source price at bet time (the rest have no Polymarket history yet or no source market)
       coverage: { withAtBet: norms.filter((n) => n.vig != null).length, clean: vigAll.length, sameEvent: norms.filter((n) => n.vig != null && n.sameEvent === true).length, total: norms.length, source: 'polymarket-history' },
     };
+    // Ex-post view, no source price needed: on settled bets, the odds the bettors locked (their implied win probability)
+    // against how often they actually won, and the money-weighted result. Correlation and bettor skill are in the outcomes,
+    // so this is the maker's realised edge; the price is luck (± = 95% interval on the hit rate) and needing settlement.
+    const settledBets = norms.filter((n) => n.settled && !n.nd && n.odds != null);
+    const realizedOf = (list) => {
+      const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null };
+      const implied = list.reduce((a, n) => a + n.odds, 0) / k, hit = list.filter((n) => n.won).length / k;
+      const stake = list.reduce((a, n) => a + n.stake, 0), pnl = list.reduce((a, n) => a + n.pnl, 0);
+      return { n: k, implied, hit, ci: 1.96 * Math.sqrt(hit * (1 - hit) / k), gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+    };
+    const realized = {
+      overall: realizedOf(settledBets),
+      singles: realizedOf(settledBets.filter((n) => !n.combo)),
+      combosOnly: realizedOf(settledBets.filter((n) => n.combo && n.sameEvent === false)),
+      combosSameEvent: realizedOf(settledBets.filter((n) => n.combo && n.sameEvent === true)),
+      combosUnknown: realizedOf(settledBets.filter((n) => n.combo && n.sameEvent == null)),
+      byOddsBucket: [[0, 0.05], [0.05, 0.1], [0.1, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 0.9], [0.9, 1.01]].map(([a, b]) => Object.assign({ from: a, to: Math.min(1, b) }, realizedOf(settledBets.filter((n) => n.odds >= a && n.odds < b)))),
+      byCat: Object.keys(cats).map((c) => Object.assign({ cat: c }, realizedOf(settledBets.filter((n) => n.cat === c)))).filter((r) => r.n).sort((a, b) => b.n - a.n),
+    };
+    vig.realized = realized;
     return {
       totals: Object.assign(totals, { bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null }),
       bettors: rowsOf(bettors, 'address').sort((a, b) => b.pnl - a.pnl),

@@ -100,4 +100,24 @@
     canvas.__chart = chart;
     return chart;
   };
+
+  /** Two series side by side per label (e.g. implied vs realized probability per odds bucket), in percent. */
+  C.pairedBars = function (canvas, labels, a, b, opts = {}) {
+    if (!window.Chart) return null;
+    C.destroy(canvas);
+    const col = C.colors();
+    const fmt = opts.fmt || ((v) => U.fmtPct(v, { dp: 1 }));
+    const ds = (label, data, color) => ({ label, data, backgroundColor: hexA(color, 0.55), borderColor: color, borderWidth: 1, borderRadius: 3, maxBarThickness: 22 });
+    const chart = new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets: [ds(opts.aLabel || 'A', a, opts.aColor || col.text), ds(opts.bLabel || 'B', b, opts.bColor || col.accent)] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { grid: { display: false }, border: { display: false } }, y: { min: 0, max: opts.max, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { callback: fmt } } },
+        plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: col.text, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } }, tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, callbacks: { label: (it) => it.dataset.label + ': ' + fmt(it.raw) } } },
+      },
+    });
+    canvas.__chart = chart;
+    return chart;
+  };
 })();
