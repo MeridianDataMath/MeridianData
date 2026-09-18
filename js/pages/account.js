@@ -162,7 +162,7 @@
     const metricSeg = UI.seg(METRICS, metric, (v) => { metric = v; MD.router.setParams({ metric: v }, { silent: true }); drawChart(); }, 'sm');
     const cumBox = UI.checkbox('Cumulative', cumulative, (v) => { cumulative = v; U.storage.set('md.chart.cum', v); drawChart(); });
     const rangeSeg = UI.seg(RANGES, range, (v) => { range = v; MD.router.setParams({ range: v }, { silent: true }); loadRange(); }, 'sm');
-    const chartCard = h('div.card', h('div.row.wrap', { style: { marginBottom: '12px' } }, metricSeg, cumBox, h('span.grow'), rangeSeg), chartBox, h('div', { style: { marginTop: '14px' } }, tiles));
+    const chartCard = h('div.card.chart-fill', h('div.row.wrap', { style: { marginBottom: '12px', flex: 'none' } }, metricSeg, cumBox, h('span.grow'), rangeSeg), chartBox, h('div', { style: { marginTop: '14px', flex: 'none' } }, tiles));
     const tablesCard = h('div.card.tight');
     // auto-refresh of balances / positions / orders (like the reference site's "30s" control)
     const REFRESH = [{ v: 0, label: 'Off' }, { v: 15, label: '15s' }, { v: 30, label: '30s' }, { v: 60, label: '60s' }];
@@ -371,13 +371,16 @@
     const status = h('span.status-dot');
     const statusTxt = h('span.dim.small', 'connecting');
     const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed'), book = h('div.book'), bookTitle = h('span.dim.small');
+    const mktTrades = h('div.feed', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
+    const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
     const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
     U.replace(el, h('div.live',
       h('div.stack',
         h('div.card.tight', h('div.card-head', h('h2', 'Open positions'), status, statusTxt), posBody),
         h('div.card.tight', h('div.card-head', h('h2', 'Open orders')), ordBody),
         h('div.card.tight', h('div.card-head', h('h2', 'Fills'), h('span.dim.small', 'live')), fillBody)),
-      h('div.card.tight', h('div.card-head', h('h2', 'Order book'), mkSel), h('div', { style: { padding: '4px 0 6px' } }, h('div.center', bookTitle)), book)));
+      h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Order book'), mkSel), h('div', { style: { padding: '4px 0 6px', flex: 'none' } }, h('div.center', bookTitle)), h('div', { style: { flex: 'none' } }, book),
+        h('div.card-head', { style: { borderTop: '1px solid var(--border-2)', flex: 'none' } }, h('h2', 'Market trades'), mktTitle), mktFill)));
 
     const marks = {}; // ticker -> {mark, bid, ask}
     let positions = [], orders = [], fills = [];
@@ -456,17 +459,31 @@
         rowsB.map((r) => lvl(r, 'bid')));
       bookTitle.textContent = prod.displayTicker + ' · mark ' + (m && m.mark ? U.fmtPrice(m.mark, tick) : '—');
     }
+    let unsubTrades = null, mktRows = [];
+    const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
+    const renderMkt = () => U.replace(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
+      if (unsubTrades) unsubTrades();
       curMarket = ticker; bids.clear(); asks.clear(); mkSel.value = ticker;
       U.replace(book, UI.loading('Loading order book…'));
+      const prod = ref.byTicker[ticker];
+      mktRows = []; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
+      if (prod) {
+        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); renderMkt(); }).catch(() => { if (curMarket === ticker) renderMkt(); });
+        unsubTrades = A.ws.subscribe('TradeFill', ticker, (m) => {
+          const d = m.data || {};
+          for (const it of d.d || []) { const sids = it.sids || []; const mine = sids[0] === sa.id ? 'you · taker' : sids[1] === sa.id ? 'you · maker' : null; mktRows.unshift({ id: it.id, t: d.t || m.t, tick: prod.tickSize, side: it.sd, size: it.sz, price: it.px, mine, _new: true }); }
+          mktRows = mktRows.slice(0, 200); renderMkt();
+        });
+      }
       unsubBook = A.ws.subscribe('L2Book', ticker, (m) => {
         const d = m.data || {};
         for (const [p, q] of d.a || []) { const qq = U.num(q); if (qq === 0) asks.delete(U.num(p)); else asks.set(U.num(p), qq); }
         for (const [p, q] of d.b || []) { const qq = U.num(q); if (qq === 0) bids.delete(U.num(p)); else bids.set(U.num(p), qq); }
         renderBook();
       });
-      cx.onCleanup(() => { if (unsubBook) unsubBook(); });
+      cx.onCleanup(() => { if (unsubBook) unsubBook(); if (unsubTrades) unsubTrades(); });
     }
     const biggest = positions.length ? U.sortBy(positions, (p) => Math.abs(U.num(p.cost)), true)[0] : null;
     selectMarket(biggest && ref.byId[biggest.productId] ? ref.byId[biggest.productId].ticker : (ref.active[0] && ref.active[0].ticker));
@@ -524,7 +541,7 @@
     });
     U.replace(el, h('div.stack', grid, h('div.row', { style: { marginTop: '-8px' } }, h('span.grow'), MD.defsLink()),
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2))),
-      h('div.grid.cols-2', UI.card('By market', perMarket), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
+      h('div.grid.cols-2', UI.card('By market', perMarket), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
       positions.truncated ? h('div.notice', 'Only the most recent 2,000 positions were analysed.') : null));
     const start = AN.startFor('all', sa.createdAt);
     const rows = series.filter((b) => b.t >= start);

@@ -262,7 +262,10 @@
       const predictCard = h('div.card', h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', h('span.loading', h('span.spinner'), 'Loading Predict history…')));
       U.replace(body, controls,
         h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', label), UI.chip('perps', ''), h('span.grow'), h('span.dim.small', `${days.length} days · ${positions.length}${positions.truncated ? '+' : ''} positions on record · ${openAtEnd} open now`)), tiles),
-        h('div.grid.cols-2', UI.card('Monthly breakdown', monthlyTbl), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Net result by month'), h('div.chart-box.sm', mCanvas))),
+        // a short monthly table beside a 200px chart leaves a blank strip; until there are enough months, stack them
+        monthly.length >= 6
+          ? h('div.grid.cols-2', UI.card('Monthly breakdown', monthlyTbl), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net result by month'), h('div.chart-box.sm', mCanvas)))
+          : h('div.stack', UI.card('Monthly breakdown', monthlyTbl), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Net result by month'), h('div.chart-box.sm', mCanvas))),
         UI.card('Closed positions', h('div',
           Math.abs(unlisted) >= 0.01 ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } },
             'These are positions fully closed in the period. ', h('b', U.fmtUsd(closedGross, { sign: true })), ' of the period\'s ',

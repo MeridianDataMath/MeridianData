@@ -11,7 +11,7 @@
   const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m >= 100 ? 0 : 2) + '×');
   const usd = (x, o) => U.fmtUsd(x, o);
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
-  const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a }, U.shortAddr(a, n || 4));
+  const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
   const resultChip = (n) => (!n.settled ? UI.chip('open', 'accent') : n.won ? UI.chip('won', 'green') : n.result === 'NON_DECISIVE' ? UI.chip('void', 'amber') : UI.chip('lost', 'red'));
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
@@ -138,9 +138,14 @@
       const makersTbl = UI.table({ cols: [
         { key: 'a', label: 'Market maker', render: (r) => bettorLink(r.address, 6) },
         { key: 'n', label: 'Taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
-        { key: 's', label: 'Share', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 0 }) },
+        { key: 's', label: 'Share of flow', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 0 }) },
+        { key: 'c', label: 'Collateral committed', num: true, render: (r) => usd(r.wagered, { compact: true }) },
+        { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
         { key: 'p', label: 'Maker PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
-      ], rows: a.makers.slice(0, 5), onRow: () => { location.hash = '#/predict/makers'; } });
+        { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
+        { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
+        { key: 'f', label: 'Last active', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
+      ], rows: a.makers.slice(0, 5), onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       const secBody = h('div', UI.loading('Loading secondary market…'));
       U.replace(body,
         h('div.row.wrap', h('span.dim.small', snapNote(snap)), h('span.grow'), h('span.dim.small', 'Meridian Predict runs on Sapience; questions mirror Polymarket markets, USDe collateral, RFQ auctions against market makers.')),
@@ -148,7 +153,8 @@
         h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Wagered per day'), h('div.chart-box.sm', cWager)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Predictions per day'), h('div.chart-box.sm', cCount))),
         tapeCard,
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
-        h('div.grid.cols-2', UI.card('Market makers', makersTbl, h('a.small', { href: '#/predict/makers' }, 'all makers')), h('div.card.tight', h('div.card-head', h('h2', 'Secondary market'), h('span.dim.small', 'positions sold before resolution')), secBody)),
+        h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
+        h('div.card.tight', h('div.card-head', h('h2', 'Secondary market'), h('span.dim.small', 'positions sold before resolution')), secBody),
         h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL is realised on settled predictions only.'));
       const col = C.colors();
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
@@ -159,9 +165,10 @@
       let tapeRows = a.tape.slice(0, 25);
       const tapeHead = tapeCard.querySelector('.card-head .dim.small');
       if (!live && tapeHead) tapeHead.textContent = 'as of the snapshot · ' + offlineNote;
-      const tapeRow = (n, flash) => h('div.it', { class: flash ? 'flash' : '' },
+      // the whole row opens the bettor; the maker keeps its own link on the right
+      const tapeRow = (n, flash) => h('div.it.click', { class: flash ? 'flash' : '', title: 'Open this bettor', onclick: () => { location.hash = bettorUrl(n.predictor).slice(1); } },
         h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
-        h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ' + U.shortAddr(n.counterparty, 3)), resultChip(n));
+        h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: 'Market maker ' + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n));
       const renderTape = (fresh) => U.replace(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
       const pollTape = async () => {

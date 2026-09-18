@@ -290,6 +290,10 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .chart-box { position: relative; height: 320px; width: 100%; }
 .chart-box canvas { position: absolute; inset: 0; }
 .chart-box.sm { height: 200px; }
+/* a chart card beside a taller neighbour: the chart grows to fill the card instead of leaving a blank strip */
+.card.chart-fill { display: flex; flex-direction: column; }
+.card.chart-fill .chart-box { flex: 1; height: auto; min-height: 320px; }
+.card.chart-fill .chart-box.sm { min-height: 200px; }
 .chart-box .watermark {
   position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
   font-size: 34px; font-weight: 800; color: rgba(255,255,255,.035); letter-spacing: .12em; text-transform: uppercase;
@@ -358,7 +362,9 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .metric .s { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 
 /* Live tab */
-.live { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; }
+.live { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; }
+.live .feed .it { gap: 8px; }
+.live .feed .it > * { white-space: nowrap; }
 .book { font-family: var(--mono); font-size: 12px; }
 .book .lvl { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 2px 10px; position: relative; }
 .book .lvl > span { position: relative; z-index: 1; text-align: right; }
@@ -378,9 +384,10 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .feed-card { display: flex; flex-direction: column; }
 .feed-card .card-head { flex: none; }
 .feed-card .feed-fill { flex: 1; min-height: 420px; position: relative; }
-.feed-card .feed-fill .feed { position: absolute; inset: 0; max-height: none; }
+.feed-card .feed-fill > * { position: absolute; inset: 0; max-height: none; overflow: auto; }
 .feed .it.click { cursor: pointer; }
 .feed .it.click:hover { background: var(--bg-4); }
+.feed .it.mine { background: var(--accent-dim); }
 .scroll-y { max-height: 420px; overflow: auto; }
 .scroll-y table.tbl th { top: 0; }
 .feed .it { display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-bottom: 1px solid var(--border-2); font-size: 12.5px; }
