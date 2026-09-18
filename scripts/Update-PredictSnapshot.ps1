@@ -94,6 +94,21 @@ try {
     $push = & cmd /c "git push --force --quiet origin ${commit}:refs/heads/snapshots 2>&1"
     if ($LASTEXITCODE -ne 0) { throw "git push failed: $push" }
     Log "published snapshots branch @ $($commit.Substring(0, 8))"
+    # The site only carries this snapshot once the deploy workflow has run. Its own schedule (every 30 minutes,
+    # and GitHub often runs cron late) would leave the snapshot 20-50 minutes old on the site, so trigger the
+    # workflow now with the same GitHub credential git just pushed with (Git Credential Manager).
+    try {
+        # (through a file and cmd: a PowerShell pipe into git leaves it "missing protocol field")
+        $credIn = Join-Path $env:TEMP ('md-gitcred-' + [guid]::NewGuid().ToString('N') + '.txt')
+        [IO.File]::WriteAllText($credIn, "protocol=https`nhost=github.com`n`n")
+        try { $cred = & cmd /c "git credential fill < `"$credIn`" 2>nul" } finally { Remove-Item $credIn -Force -ErrorAction SilentlyContinue }
+        $token = ($cred | Where-Object { $_ -like 'password=*' } | Select-Object -First 1) -replace '^password=', ''
+        if ($token) {
+            $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri 'https://api.github.com/repos/MeridianDataMath/MeridianData/actions/workflows/pages.yml/dispatches' `
+                -Headers @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json' } -ContentType 'application/json' -Body '{"ref":"main"}' -TimeoutSec 30
+            Log "deploy workflow triggered (HTTP $($r.StatusCode))"
+        } else { Log 'deploy not triggered: no GitHub credential from git credential fill; the 30-minute schedule will pick the snapshot up' }
+    } catch { Log "deploy not triggered ($($_.Exception.Message)); the 30-minute schedule will pick the snapshot up" }
     if ($tmp) { [IO.Directory]::Delete($tmp, $true) }
 } catch {
     Log "FAILED: $($_.Exception.Message)"

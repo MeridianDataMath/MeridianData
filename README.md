@@ -122,7 +122,10 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
   (`predict.json` + one slim file per wallet in `bettors/`). `scripts/Install-SnapshotTask.ps1`
   schedules that every 30 minutes. The deploy workflow copies the branch into `data/` on each
-  run, which is where the site reads it from. On the public domain every Predict page
+  run, which is where the site reads it from; after each push the PC script triggers that
+  workflow (`workflow_dispatch`, with the GitHub credential git pushed with), so the site
+  carries a new snapshot a few minutes after it is built instead of waiting for the workflow's
+  own 30-minute schedule, which GitHub often runs late. On the public domain every Predict page
   therefore renders from the snapshot; live
   queries (full-text question search, exchange-side account stats, 20-second tape) switch on
   automatically on an allowed origin such as localhost. Without any snapshot the browser
