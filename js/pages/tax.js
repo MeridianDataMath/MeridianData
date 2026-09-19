@@ -233,7 +233,7 @@
 
       // closed positions in period (attributed to the close date), with gains / losses, holding period and term
       const closed = positions.filter((p) => U.num(p.size) === 0 && U.num(p.totalDecreaseQuantity) > 0 && U.num(p.updatedAt) >= start && U.num(p.updatedAt) < end)
-        .map((p) => { const prod = ref.byId[p.productId]; const incQ = U.num(p.totalIncreaseQuantity), decQ = U.num(p.totalDecreaseQuantity); const fees = U.num(p.feesAccruedUsd), pfees = U.num(p.positionFeeAccruedUsd), fund = -U.num(p.fundingAccruedUsd), gross = U.num(p.realizedPnl); const net = gross - fees - pfees + fund; const hold = U.num(p.updatedAt) - U.num(p.createdAt); return { p, t: U.num(p.updatedAt), ticker: prod ? prod.displayTicker : p.productId, tick: prod && prod.tickSize, long: String(p.side) === '0', size: incQ, entry: incQ ? U.num(p.totalIncreaseNotional) / incQ : 0, exit: decQ ? U.num(p.totalDecreaseNotional) / decQ : 0, cost: U.num(p.totalIncreaseNotional), proceeds: U.num(p.totalDecreaseNotional), gross, fees, pfees, funding: fund, net, netC: money.fx(net, U.num(p.updatedAt)), grossC: money.fx(gross, U.num(p.updatedAt)), hold, longTerm: hold > YEAR_MS, liq: !!p.isLiquidated, adl: !!p.wasDeleveraged }; })
+        .map((p) => { const prod = ref.byId[p.productId]; const incQ = U.num(p.totalIncreaseQuantity), decQ = U.num(p.totalDecreaseQuantity); const fees = U.num(p.feesAccruedUsd), pfees = U.num(p.positionFeeAccruedUsd), fund = -U.num(p.fundingAccruedUsd), gross = U.num(p.realizedPnl); const net = gross - fees - pfees + fund; const hold = U.num(p.updatedAt) - U.num(p.createdAt); const rate = rates ? rates.at(U.num(p.updatedAt)) : 1; return { p, t: U.num(p.updatedAt), rate, ticker: prod ? prod.displayTicker : p.productId, tick: prod && prod.tickSize, long: String(p.side) === '0', size: incQ, entry: incQ ? U.num(p.totalIncreaseNotional) / incQ : 0, exit: decQ ? U.num(p.totalDecreaseNotional) / decQ : 0, cost: U.num(p.totalIncreaseNotional), proceeds: U.num(p.totalDecreaseNotional), gross, fees, pfees, funding: fund, net, netC: money.fx(net, U.num(p.updatedAt)), grossC: money.fx(gross, U.num(p.updatedAt)), hold, longTerm: hold > YEAR_MS, liq: !!p.isLiquidated, adl: !!p.wasDeleveraged }; })
         .sort((a, b) => b.t - a.t);
       const wins = closed.filter((c) => c.net > 0), losses = closed.filter((c) => c.net < 0);
       // gains / losses on the booked (gross) result, so gains + losses + partial closes = the ledger's realized PnL; fees and funding are their own lines
@@ -245,9 +245,20 @@
       const largestWin = wins.length ? wins.reduce((a, c) => (c.net > a.net ? c : a)) : null, largestLoss = losses.length ? losses.reduce((a, c) => (c.net < a.net ? c : a)) : null;
       const closedGross = U.sum(closed, (c) => c.gross); const unlisted = T.realized - closedGross;
       // per market (closed positions)
-      const byMarket = Object.values(closed.reduce((acc, c) => { const m = acc[c.ticker] || (acc[c.ticker] = { ticker: c.ticker, n: 0, wins: 0, gross: 0, fees: 0, funding: 0, net: 0, netC: 0, volume: 0 }); m.n++; if (c.net > 0) m.wins++; m.gross += c.gross; m.fees += c.fees + c.pfees; m.funding += c.funding; m.net += c.net; m.netC += c.netC; m.volume += c.cost + c.proceeds; return acc; }, {})).sort((a, b) => b.volume - a.volume);
+      const byMarket = Object.values(closed.reduce((acc, c) => { const m = acc[c.ticker] || (acc[c.ticker] = { ticker: c.ticker, n: 0, wins: 0, gross: 0, fees: 0, funding: 0, net: 0, volume: 0, C: { gross: 0, fees: 0, funding: 0, net: 0, volume: 0 } }); m.n++; if (c.net > 0) m.wins++; m.gross += c.gross; m.fees += c.fees + c.pfees; m.funding += c.funding; m.net += c.net; m.volume += c.cost + c.proceeds; m.C.gross += c.gross * c.rate; m.C.fees += (c.fees + c.pfees) * c.rate; m.C.funding += c.funding * c.rate; m.C.net += c.netC; m.C.volume += (c.cost + c.proceeds) * c.rate; return acc; }, {})).sort((a, b) => b.volume - a.volume);
       // open at period end (not taxable yet, but part of a complete picture)
       const openUpnl = U.sum(openNow, (p) => U.num(p.unrealizedPnl));
+
+      // ---- balance reconciliation (an accountant's first check): opening + deposits − withdrawals + result = closing ----
+      const beforeRows = series.filter((x) => x.t < start);
+      const opening = beforeRows.length ? beforeRows[beforeRows.length - 1].balance : 0;
+      const closing = days.length ? days[days.length - 1].balance : opening;
+      const expected = opening + T.deposits - T.withdrawals + T.net;
+      const reconDiff = closing - expected;
+      const reconRows = [['Opening balance', opening], ['+ Deposits', T.deposits], ['− Withdrawals (incl. fees)', -T.withdrawals], ['+ Realized PnL', T.realized], ['− Trading fees', -T.fees], ['+ Funding', T.funding], ['= Expected closing balance', expected], ['Closing balance (ledger)', closing], ['Difference', reconDiff]];
+      const reconCard = h('details.recon', { style: { marginTop: '12px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'Balance reconciliation · ', h('span', { class: Math.abs(reconDiff) < 0.05 ? 'pos' : 'neg' }, Math.abs(reconDiff) < 0.005 ? 'exact' : 'difference ' + money.usd(reconDiff, { sign: true, dp: 2 })), h('span.dim', ' · opening + deposits − withdrawals + result = closing')),
+        h('div.card.tight', { style: { marginTop: '8px', maxWidth: '520px' } }, UI.table({ cols: [{ key: 'k', label: 'Step', render: (r) => h('span', { class: /^=|Closing|Difference/.test(r[0]) ? 'bold' : '' }, r[0]) }, { key: 'v', label: 'USD', num: true, render: (r) => h('span', { class: r[0] === 'Difference' ? (Math.abs(r[1]) < 0.05 ? 'pos' : 'neg') : '' }, U.fmtUsd(r[1], { sign: r[0] === 'Difference' || /^[+−]/.test(r[0]), dp: 2 })) }], rows: reconRows })),
+        h('div.dim.small', { style: { marginTop: '6px' } }, 'Balances are summed across the account\'s margin pools; conversions between pools cancel out. A few cents of difference come from position fees and hourly funding rounding in the exchange\'s ledger.'));
 
       // ---- summary tiles ----
       const tiles = h('div.stats',
@@ -262,7 +273,9 @@
         UI.stat('Closed positions', String(closed.length), closed.length ? `win rate ${U.fmtPct((wins.length / closed.length) * 100, { dp: 0 })} · longest hold ${U.fmtDuration(longestHold)}` : null),
         UI.stat('Long-term', longTerm.length ? money.fmt(longTermNetC, { sign: true }) : '—', longTerm.length ? `${longTerm.length} position${longTerm.length > 1 ? 's' : ''} held over a year` : 'no position held over a year: everything is short-term'),
         UI.stat('Volume', money.fmt(TC.volume, { compact: true }), 'traded notional'),
-        UI.stat('Open at period end', openNow.length ? String(openNow.length) : '0', openNow.length ? `${money.usd(openUpnl, { sign: true })} unrealized · not taxable until closed` : 'no open positions'));
+        end >= now - U.DAY
+          ? UI.stat('Open at period end', openNow.length ? String(openNow.length) : '0', openNow.length ? `${money.usd(openUpnl, { sign: true })} unrealized · not taxable until closed` : 'no open positions')
+          : UI.stat('Open positions now', openNow.length ? String(openNow.length) : '0', 'after the period · what was open at its end is not recorded'));
 
       // ---- income vs expenses (classification hints only) ----
       const catRows = [
@@ -304,11 +317,11 @@
         { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
         { key: 'n', label: 'Closed', num: true, render: (r) => String(r.n) },
         { key: 'wr', label: 'Win rate', num: true, render: (r) => U.fmtPct((r.wins / r.n) * 100, { dp: 0 }) },
-        { key: 'g', label: 'Realized PnL', num: true, render: (r) => money.usd(r.gross, { sign: true }) },
-        { key: 'f', label: 'Fees', num: true, render: (r) => money.usd(r.fees) },
-        { key: 'fu', label: 'Funding', num: true, render: (r) => money.usd(r.funding, { sign: true }) },
-        { key: 'net', label: 'Net', num: true, render: (r) => pnlEl(r.netC, r.net) },
-        { key: 'v', label: 'Volume', num: true, render: (r) => money.usd(r.volume, { compact: true }) },
+        { key: 'g', label: 'Realized PnL', num: true, render: (r) => pnlEl(r.C.gross, r.gross) },
+        { key: 'f', label: 'Fees', num: true, render: (r) => money.fmt(r.C.fees) },
+        { key: 'fu', label: 'Funding', num: true, render: (r) => pnlEl(r.C.funding, r.funding) },
+        { key: 'net', label: 'Net', num: true, render: (r) => pnlEl(r.C.net, r.net) },
+        { key: 'v', label: 'Volume', num: true, render: (r) => money.fmt(r.C.volume, { compact: true }) },
       ], rows: byMarket, empty: 'No positions closed in this period' });
 
       // ---- closed positions ledger ----
@@ -322,10 +335,10 @@
           { key: 'size', label: 'Size', num: true, render: (c) => U.fmtQty(c.size) },
           { key: 'entry', label: 'Avg entry', num: true, render: (c) => U.fmtPrice(c.entry, c.tick) },
           { key: 'exit', label: 'Avg exit', num: true, render: (c) => U.fmtPrice(c.exit, c.tick) },
-          { key: 'cost', label: 'Cost', num: true, render: (c) => money.usd(c.cost) },
+          { key: 'cost', label: 'Cost', num: true, render: (c) => money.fmt(c.cost * c.rate) },
           { key: 'gross', label: 'Realized PnL', num: true, render: (c) => pnlEl(c.grossC, c.gross) },
-          { key: 'fees', label: 'Fees', num: true, render: (c) => money.usd(c.fees + c.pfees) },
-          { key: 'fund', label: 'Funding', num: true, render: (c) => money.usd(c.funding, { sign: true }) },
+          { key: 'fees', label: 'Fees', num: true, render: (c) => money.fmt((c.fees + c.pfees) * c.rate) },
+          { key: 'fund', label: 'Funding', num: true, render: (c) => money.fmt(c.funding * c.rate, { sign: true }) },
           { key: 'net', label: 'Net', num: true, render: (c) => pnlEl(c.netC, c.net) },
           { key: 'hold', label: 'Held', num: true, render: (c) => h('span', U.fmtDuration(c.hold), c.longTerm ? h('span.chip.blue', { style: { marginLeft: '6px' } }, 'long-term') : null) },
           { key: 'flag', label: '', render: (c) => (c.liq ? UI.chip('LIQ', 'red') : c.adl ? UI.chip('ADL', 'amber') : '') },
@@ -436,7 +449,7 @@
 
       const info = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'What counts on Meridian'),
         h('div.roadmap',
-          h('div.it', h('div.t', 'Realized PnL'), h('div.d', 'Booked whenever a position is reduced or closed, including liquidations and auto-deleveraging. The period totals use the exchange\'s settled daily figures, so they include partial closes of positions you still hold; the per-position tables list only positions fully closed in the period, and the difference is shown as its own line.')),
+          h('div.it', h('div.t', 'Realized PnL'), h('div.d', 'Booked whenever a position is reduced or closed, including liquidations and auto-deleveraging. The period totals use the exchange\'s settled daily figures, so they include partial closes of positions you still hold; the per-position tables list only positions fully closed in the period, each with its whole result (a position partly closed before the period shows here in full, and the difference line goes the other way), and the difference is shown as its own line.')),
           h('div.it', h('div.t', 'Gains, losses and holding periods'), h('div.d', 'Each perpetual position is its own lot: it is opened, possibly added to, and closed, with one net result. There is no cost-basis method to choose (FIFO, LIFO, average) because nothing is carried between positions. Holding period runs from the first fill to the last; a position held over a year is flagged long-term.')),
           h('div.it', h('div.t', 'Funding'), h('div.d', 'Paid or received every hour while a position is open. The daily ledger nets it per day; received and paid are split by the sign of each day\'s total.')),
           h('div.it', h('div.t', 'Fees'), h('div.d', 'Taker / maker trading fees, position fees on mPerp markets (XAU, XAG, SPY, QQQ) and withdrawal fees.')),
@@ -448,7 +461,7 @@
       const predictCard = h('div.card', h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', h('span.loading', h('span.spinner'), 'Loading Predict history…')));
       const fxLine = rates ? h('div.small.dim', { style: { marginTop: '6px' } }, `Reported in ${cur} at ECB daily reference rates · latest ${rates.last.r.toFixed(4)} ${cur}/USD (${isoDate(rates.last.t)}) · USD figures in every export`) : fxNote ? h('div.small.neg', { style: { marginTop: '6px' } }, fxNote) : null;
       U.replace(body, controls,
-        h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', label), UI.chip('perps', 'accent'), h('span.grow'), h('span.dim.small', `${isoDate(start)} → ${isoDate(end - 1)} · ${days.length} days · ${positions.length}${positions.truncated ? '+' : ''} positions on record`)), tiles, fxLine),
+        h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', label), UI.chip('perps', 'accent'), h('span.grow'), h('span.dim.small', `${isoDate(start)} → ${isoDate(end - 1)}` + (firstT > start ? ` · account since ${U.fmtDate(firstT)}` : '') + ` · ${days.length} ledger days · ${positions.length}${positions.truncated ? '+' : ''} positions on record`)), tiles, fxLine, reconCard),
         h('div.grid.cols-2', UI.card('Income and expenses', catTbl, h('span.dim.small', 'classification hints')), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net result by month'), h('div.chart-box.sm', mCanvas))),
         h('div.grid.cols-2', UI.card('Monthly breakdown', monthlyTbl), UI.card('Quarterly breakdown', quarterTbl, h('span.dim.small', mode === 'year' ? 'fiscal quarters' : 'calendar quarters'))),
         UI.card('By market', marketTbl, h('span.dim.small', 'positions closed in the period')),
