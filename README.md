@@ -105,9 +105,15 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     opens a panel with the actual predictions on it: bettor, stake, odds, payout, maker, and every
     leg of the combo with its own state, since a combo pays only if all legs resolve for the bettor.
     An ended question none of whose open predictions can still win (each has a leg resolved against
-    its bettor) is left out; predictions whose legs have all resolved for the bettor and are still
-    unpaid after a week are the *settlement backlog*, counted on the Overview and listed first on
-    the Ended tab. The snapshot carries `questions/<conditionId>.json` per question for this.
+    its bettor) is left out. The snapshot carries `questions/<conditionId>.json` per question for this.
+  * *Decided vs settled* – a prediction is **decided** when every leg has resolved on Meridian and
+    the verdict is recorded (`pickConfig.resolved` / `result`); it is **settled** only when the
+    winner claims, which most do late or never (roughly 1,000 of 1,300 "unsettled" predictions are
+    decided). Results, win rates, PnL and the ex-post vig therefore count from the verdict; the
+    Overview shows *Unclaimed winnings* (won, not claimed) and bettor pages an *Unclaimed winnings*
+    tile. *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
+    not resolved although Polymarket has; those are listed first on the Ended tab. The tax center
+    stays on a cash basis (claimed).
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
     committed, open exposure, PnL, win rate, vig captured.
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at

@@ -141,13 +141,13 @@ async function buildPredict() {
     } while (after && pages < 60);
   } catch (e) { console.warn('predict: questions failed', e.message); }
   const withOi = questions.filter((q) => q.oi > 0);
-  // Meridian activity per question from the predictions themselves: n = predictions ever, b = open predictions,
-  // s = bettor stake in those open predictions, l = last prediction. The explorer shows only questions with bets.
+  // Meridian activity per question from the predictions themselves: n = predictions ever, b = open predictions (not yet
+  // decided), s = bettor stake in those, u = decided but unclaimed, l = last prediction. The explorer shows only questions with bets.
   const act = {};
   for (const n of norms) {
     for (const k of n.picks) {
-      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0 });
-      a.n++; if (!n.settled) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
+      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0, u: 0 });
+      a.n++; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (!n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
     }
   }
   const r2 = (x) => Math.round(x * 100) / 100;
@@ -155,7 +155,7 @@ async function buildPredict() {
   // plus the questions behind open predictions (a leg can be stuck in resolution) …
   const seenQ = new Set(withOi.map((q) => q.id));
   for (const n of norms) {
-    if (n.settled) continue;
+    if (n.decided && n.settled) continue;   // open, or decided and not yet claimed: still someone's money
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
   // … and the questions of predictions settled in the last 30 days (newest first, capped), so "Settled" shows what people bet on
@@ -164,11 +164,11 @@ async function buildPredict() {
     if (withOi.length >= 1200) break;
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
-  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; }
+  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; q.u = a ? a.u : 0; }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   const openBy = {};
-  for (const n of norms) { if (n.settled) continue; for (const k of n.picks) { if (!k.id) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
+  for (const n of norms) { if (n.decided) continue; for (const k of n.picks) { if (!k.id) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
   for (const q of withOi) if (openBy[q.id]) q.op = openBy[q.id];
   // one file per question with all its predictions, legs keeping their ids (the bettor files drop ids of settled legs)
   const qdir = path.join(outDir, 'questions'); fs.mkdirSync(qdir, { recursive: true });

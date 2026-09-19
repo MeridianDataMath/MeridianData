@@ -13,7 +13,7 @@
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
-  const resultChip = (n) => (!n.settled ? UI.chip('open', 'accent') : n.won ? UI.chip('won', 'green') : n.result === 'NON_DECISIVE' ? UI.chip('void', 'amber') : UI.chip('lost', 'red'));
+  const resultChip = (n) => (!n.decided ? UI.chip('open', 'accent') : n.unclaimed ? (n.won ? UI.chip('won · unclaimed', 'green') : n.nd ? UI.chip('void · unclaimed', 'amber') : UI.chip('lost · unclaimed', 'red')) : n.won ? UI.chip('won', 'green') : n.result === 'NON_DECISIVE' ? UI.chip('void', 'amber') : UI.chip('lost', 'red'));
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same Polymarket event: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
   const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
@@ -107,12 +107,13 @@
     await withSnapshot(body, ctx, async (snap) => {
       const a = snap.agg; const T = a.totals;
       const tiles = h('div.stats',
-        UI.stat('Predictions', U.fmtNum(T.n, 0), `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
+        UI.stat('Predictions', U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided · ${U.fmtNum(T.settled, 0)} claimed` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
         UI.stat('Wagered', usd(T.wagered, { compact: true }), 'bettor stakes'),
         UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
         UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${T.makers} market makers`),
-        UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of settled predictions'),
-        UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'settled · mirror = maker profit', U.pnlClass(T.bettorPnl)),
+        UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of decided predictions'),
+        UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'decided, claimed or not · mirror = maker profit', U.pnlClass(T.bettorPnl)),
+        T.unclaimedWon ? h('a', { href: '#/predict/questions?status=settled', style: { display: 'contents' } }, UI.stat('Unclaimed winnings', U.fmtNum(T.unclaimedWon, 0), `won predictions not yet claimed · ${usd(T.unclaimedWonPayout, { compact: true })} of payouts · ${U.fmtNum(T.unclaimedLost, 0)} lost ones unclaimed by makers`, 'pos')) : null,
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
       // settlement backlog: ended questions resolved on the source market a week or more ago and still unsettled
@@ -127,7 +128,7 @@
           const preds = new Map(); let oldest = 0;
           for (const q of ended) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
           if (!preds.size) return;
-          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Settlement backlog', String(preds.size), `won prediction${preds.size > 1 ? 's' : ''} unpaid ${R.STUCK_DAYS}+ days · oldest ${oldest}d · ${usd(Array.from(preds.values()).reduce((a, x) => a + x, 0))} of stakes`, 'neg')));
+          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Unresolved on Meridian', String(preds.size), `won prediction${preds.size > 1 ? 's' : ''} whose legs Polymarket resolved ${R.STUCK_DAYS}+ days ago, still unresolved on Meridian · oldest ${oldest}d · ${usd(Array.from(preds.values()).reduce((a, x) => a + x, 0))} of stakes`, 'neg')));
         } catch (e) { if (!isAbort(e)) console.warn('backlog tile', e); }
       })();
       const cWager = h('canvas'), cCount = h('canvas');
@@ -287,14 +288,14 @@
     const preds = file.predictions.map(P.unslim);
     const legIds = Array.from(new Set(preds.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
     const legState = (k, n) => {
-      if (n.settled) return h('span.dim.xs', n.won ? 'won' : n.result === 'NON_DECISIVE' ? 'void' : 'lost');
+      if (n.decided) return h('span.dim.xs', n.won ? 'won' : n.nd ? 'void' : 'lost');
       if (!k.id) return h('span.dim.xs', '—');
       const st = R.state({ end: k.endTime, settled: false, question: k.q }, k.id);
       if (st.code === 'resolved') { const y = R.resolvedYes(st.m); const forBettor = y === true || y === false ? y === !!k.yes : null; return h('span.xs', { class: forBettor === true ? 'pos' : forBettor === false ? 'neg' : 'dim' }, forBettor === true ? 'resolved for' : forBettor === false ? 'resolved against' : 'resolved · ' + (st.outcome || 'unclear')); }
       return h('span.xs.dim', st.chip ? st.chip[0] : st.code);
     };
     const predState = (n) => {
-      if (n.settled) return resultChip(n);
+      if (n.decided) return resultChip(n);
       const ps = R.predictionState(n.picks.map((k) => [k.id, k.yes]));
       return ps.code === 'won' ? UI.chip('won · awaiting payout', 'green') : ps.code === 'lost' ? UI.chip('lost · awaiting settlement', 'red') : UI.chip('open', 'accent');
     };
@@ -400,7 +401,7 @@
   /** Questions people have actually bet on through Meridian (from the snapshot): open interest now, open predictions,
    *  and questions settled in the last 30 days. Rows carry n = predictions ever, b = open predictions, s = open stake. */
   const hasBets = (q) => q.oi > 0 || q.b > 0 || q.n > 0 || q.n == null;   // n == null: snapshot older than this field
-  const betsNote = (c) => (c.b ? `${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}` : c.n ? `${c.n} bet${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}` : null);
+  const betsNote = (c) => { const parts = []; if (c.b) parts.push(`${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}`); if (c.u) parts.push(`${c.u} decided, unclaimed`); if (!parts.length && c.n) parts.push(`${c.n} bet${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`); return parts.length ? parts.join(' · ') : null; };
   async function mountQuestionsWithBets(body, route, ctx, st, liveP) {
     await withSnapshot(body, ctx, (snap) => {
       let live = false;
@@ -409,7 +410,7 @@
       let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const now = Date.now();
-      const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it
+      const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (undecided)
       // ended but unsettled questions whose source market already resolved with nobody on the winning side are noise:
       // only the makers are waiting for the settlement. Their resolution state is loaded once so they can be dropped.
       const alive = (q) => !R.questionDead(q);
@@ -436,8 +437,8 @@
         const preds = new Map(); let oldest = 0;
         for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
         const waiting = Array.from(preds.values()).reduce((a, x) => a + x, 0);
-        U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('settlement backlog', 'amber'),
-          h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), still wait for their payout on Meridian: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}. Predictions with a leg still open, or a leg lost, are not counted. The questions are listed first; click one to see the predictions and their legs.`))));
+        U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('unresolved on Meridian', 'amber'),
+          h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian's own resolver has not resolved the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}. (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
       };
       let renderSeq = 0, endedPreloaded = false;
       if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});
@@ -496,7 +497,7 @@
       ], rows: a.makers, onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds. The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
-        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(-T.bettorPnl, { sign: true }), 'settled predictions', U.pnlClass(-T.bettorPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
+        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(-T.bettorPnl, { sign: true }), 'decided predictions, claimed or not', U.pnlClass(-T.bettorPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
         h('div.card.tight', tbl),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Maker PnL'), h('div.chart-box.sm', cv)));
       C.bars(cv, a.makers.map((m) => U.shortAddr(m.address)), a.makers.map((m) => m.pnl), { horizontal: true });
@@ -524,7 +525,7 @@
       const gapCell = (r) => (r.gap == null ? h('span.dim', '—') : h('span', { class: Math.abs(r.gap) > (r.ci || 0) ? (r.gap > 0 ? 'neg' : 'pos') : 'dim', title: Math.abs(r.gap) > (r.ci || 0) ? 'Outside the 95% interval' : 'Within the 95% interval: could be luck' }, pp(r.gap)));
       const realTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
         { key: 'k', label: labelKey, render: labelFn },
-        { key: 'n', label: 'Settled', num: true, render: (r) => U.fmtNum(r.n, 0) },
+        { key: 'n', label: 'Decided', num: true, render: (r) => U.fmtNum(r.n, 0) },
         { key: 'imp', label: 'Implied', num: true, title: 'Average locked odds = the win probability the bettors paid for', render: (r) => (r.implied == null ? '—' : U.fmtPct(r.implied * 100, { dp: 1 })) },
         { key: 'hit', label: 'Realized', num: true, title: 'Share actually won, with the 95% interval', render: hitCell },
         { key: 'gap', label: 'Implied − realized', num: true, title: 'Positive = bettors won less often than they paid for', render: gapCell },
@@ -555,8 +556,8 @@
         const buckets = r.byOddsBucket.filter((b) => b.n >= 30);
         const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different events', ...r.combosOnly }, { k: 'Combos · same event', ...r.combosSameEvent }, r.combosUnknown.n ? { k: 'Combos · event unknown', ...r.combosUnknown } : null].filter(Boolean);
         const node = h('div.stack', { style: { marginTop: '8px' } },
-          h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Quote-implied vs realized'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'The other way to measure the edge, needing no source price at all: on settled bets, the odds the bettors locked are the win probability they paid for; compare that with how often they actually won. Outcomes carry the real correlation between legs and any skill the bettors have, so this is the maker\'s realised edge rather than a quoted one. It costs waiting for settlement and some luck: the ± is a 95% interval on the hit rate, and a gap inside it may be chance.'), h('p.muted.small', { style: { margin: 0 } }, 'Money matters more than counts here: a bet at 3% odds that hits 2% of the time loses a third of its stakes on average, while the same one-point gap at 60% odds is nothing. Bettor ROI is net result ÷ stake and is the number to read; the maker\'s take is its mirror image.')),
-          h('div.stats', UI.stat('Settled bets', U.fmtNum(o.n, 0), U.fmtUsd(o.stake, { compact: true }) + ' staked'), UI.stat('Implied win rate', U.fmtPct(o.implied * 100, { dp: 1 }), 'avg locked odds'), UI.stat('Realized win rate', U.fmtPct(o.hit * 100, { dp: 1 }), '± ' + U.fmtNum(o.ci * 100, 1) + ' pp (95%)'), UI.stat('Bettor ROI', U.fmtPct(o.roi * 100, { sign: true, dp: 1 }), 'net result ÷ stake', U.pnlClass(o.roi)), UI.stat('Maker take', U.fmtPct(-o.roi * 100, { sign: true, dp: 1 }), 'of stakes, realised', U.pnlClass(-o.roi))),
+          h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Quote-implied vs realized'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'The other way to measure the edge, needing no source price at all: on decided bets (the exchange\x27s verdict is in, claimed or not), the odds the bettors locked are the win probability they paid for; compare that with how often they actually won. Outcomes carry the real correlation between legs and any skill the bettors have, so this is the maker\'s realised edge rather than a quoted one. It costs waiting for settlement and some luck: the ± is a 95% interval on the hit rate, and a gap inside it may be chance.'), h('p.muted.small', { style: { margin: 0 } }, 'Money matters more than counts here: a bet at 3% odds that hits 2% of the time loses a third of its stakes on average, while the same one-point gap at 60% odds is nothing. Bettor ROI is net result ÷ stake and is the number to read; the maker\'s take is its mirror image.')),
+          h('div.stats', UI.stat('Decided bets', U.fmtNum(o.n, 0), U.fmtUsd(o.stake, { compact: true }) + ' staked · claimed or not'), UI.stat('Implied win rate', U.fmtPct(o.implied * 100, { dp: 1 }), 'avg locked odds'), UI.stat('Realized win rate', U.fmtPct(o.hit * 100, { dp: 1 }), '± ' + U.fmtNum(o.ci * 100, 1) + ' pp (95%)'), UI.stat('Bettor ROI', U.fmtPct(o.roi * 100, { sign: true, dp: 1 }), 'net result ÷ stake', U.pnlClass(o.roi)), UI.stat('Maker take', U.fmtPct(-o.roi * 100, { sign: true, dp: 1 }), 'of stakes, realised', U.pnlClass(-o.roi))),
           h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Implied vs realized by locked odds'), h('div.chart-box.sm', cr)), UI.card('By bet type', realTbl(splits, 'Type', (x) => x.k))),
           h('div.grid.cols-2', UI.card('By locked odds', realTbl(r.byOddsBucket.filter((b) => b.n), 'Bettor odds', bucketLabel)), UI.card('By category', realTbl(r.byCat.filter((c) => c.n >= 20), 'Category', (x) => x.cat))));
         requestAnimationFrame(() => C.pairedBars(cr, buckets.map(bucketLabel), buckets.map((b) => b.implied * 100), buckets.map((b) => b.hit * 100), { aLabel: 'Implied (locked odds)', bLabel: 'Realized (won)', max: 100 }));
@@ -599,15 +600,16 @@
         P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
       ]);
       const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
-      const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
-      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: openPos.totalCount || (openPos.nodes || []).length, builtAt: Date.now() };
+      const undecided = (openPos.nodes || []).filter((p) => !(p.pickConfig && p.pickConfig.resolved));   // decided-but-unclaimed positions are not open
+      const posRows = undecided.map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
+      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: undecided.length, builtAt: Date.now() };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
     const norms = f.predictions.map(P.unslim);
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
-    const open = mine.filter((n) => !n.settled);
+    const open = mine.filter((n) => !n.decided);
     const posRows = open.map((n) => ({ side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: false, resolvedToYes: null })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
     return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt };
   }
@@ -629,15 +631,21 @@
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
+    // decided but unclaimed: the verdict is in, the money has not moved yet (this side's wins are collectable now)
+    const unclaimed = mine.filter((n) => n.unclaimed);
+    const unclaimedWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
+    const unclaimedPayout = U.sum(unclaimedWon, (n) => n.pool);
+    const unclaimedPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
     const tiles = h('div.stats',
-      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl, { sign: true }), m.live ? 'realised · exchange stats' : 'realised · from predictions', U.pnlClass(totals.pnl)),
+      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl + unclaimedPnl, { sign: true }), (m.live ? 'decided · exchange stats' : 'decided · from predictions') + (unclaimed.length ? ` · ${usd(totals.pnl, { sign: true })} claimed so far` : ''), U.pnlClass(totals.pnl + unclaimedPnl)),
       UI.stat('Volume', usd(m.totalVolume, { compact: true }), 'all time'),
-      UI.stat('Record', `${totals.won}W / ${totals.lost}L`, (totals.pending ? totals.pending + ' pending' : '') + (totals.nd ? ' · ' + totals.nd + ' void' : '')),
+      UI.stat('Record', `${totals.won}W / ${totals.lost}L`, [totals.pending - unclaimed.length > 0 ? (totals.pending - unclaimed.length) + ' open' : null, unclaimed.length ? unclaimed.length + ' decided, unclaimed (' + (isMaker ? unclaimedWon.length + ' won' : unclaimedWon.length + 'W / ' + (unclaimed.length - unclaimedWon.length) + 'L') + ')' : null, totals.nd ? totals.nd + ' void' : null].filter(Boolean).join(' · ') || null),
       UI.stat('Win rate', totals.won + totals.lost ? U.fmtPct((totals.won / (totals.won + totals.lost)) * 100, { dp: 0 }) : '—'),
-      UI.stat('ROI', s.roi == null ? '—' : U.fmtPct(s.roi, { sign: true, dp: 0 }), 'on settled stakes (last ' + mine.length + ')', U.pnlClass(s.roi)),
+      UI.stat('ROI', s.roi == null ? '—' : U.fmtPct(s.roi, { sign: true, dp: 0 }), 'on decided stakes (last ' + mine.length + ')', U.pnlClass(s.roi)),
       UI.stat('Avg odds', pct(s.avgOdds, 0), s.avgLegs ? 'avg ' + U.fmtNum(s.avgLegs, 1) + ' legs' : null),
       m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
-      UI.stat('Open', String(m.openCount), 'positions'));
+      UI.stat('Open', String(m.openCount), 'positions, not yet decided'),
+      unclaimedWon.length ? UI.stat('Unclaimed winnings', usd(unclaimedPayout), `${unclaimedWon.length} won prediction${unclaimedWon.length > 1 ? 's' : ''} to claim · ${usd(unclaimedPnl, { sign: true })} net once claimed`, 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: false, question: k.q });
