@@ -25,6 +25,7 @@
   function alertsCard(ctx) {
     const card = h('div.card');
     const render = () => {
+      const ae = document.activeElement; if (ae && card.contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName) && ae.type !== 'checkbox') return;   // an alert arriving must not clobber a field being typed in
       const s = AL.state(); const has = 'Notification' in window; const perm = has ? Notification.permission : 'unsupported';
       const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
       const ev = (k, label) => UI.checkbox(label, !!s.events[k], (v) => { s.events[k] = v; AL.save(); });
@@ -34,8 +35,9 @@
         perm === 'granted' ? h('span.chip.green', 'allowed') : perm === 'denied' ? h('span.chip.red', { title: 'Blocked for this site in the browser settings' }, 'blocked') : perm === 'unsupported' ? h('span.chip', 'not supported here') : h('button.btn.sm', { onclick: async () => { const r = await AL.askPermission(); U.toast(r === 'granted' ? 'Notifications allowed' : 'Notifications not allowed'); render(); } }, 'Allow notifications'));
       const topicIn = h('input.input.sm', { placeholder: 'ntfy topic (leave empty for none)', value: s.ntfy.topic || '', style: { width: '240px' }, spellcheck: false, onchange: (e) => { s.ntfy.topic = e.target.value.trim(); AL.save(); } });
       const serverIn = h('input.input.sm', { placeholder: 'https://ntfy.sh', value: s.ntfy.server || 'https://ntfy.sh', style: { width: '170px' }, spellcheck: false, onchange: (e) => { s.ntfy.server = e.target.value.trim() || 'https://ntfy.sh'; AL.save(); } });
+      const ntfyErr = s.ntfy.lastError ? h('span.small.neg', { title: U.fmtDateTime(s.ntfy.lastError.t) }, 'last push failed: ' + s.ntfy.lastError.msg) : null;
       const testBtn = h('button.btn.sm', { onclick: async () => { s.ntfy.topic = topicIn.value.trim(); s.ntfy.server = serverIn.value.trim() || 'https://ntfy.sh'; AL.save(); try { await AL.test(); U.toast('Test push sent'); } catch (e) { U.toast('Push failed: ' + e.message); } } }, 'Send a test');
-      const status = h('span.dim.small', s.leaders.length ? (AL.isOwner() ? 'this tab is listening' : 'another tab of this browser is listening') + ' · ' + s.leaders.length + ' followed' : 'not listening');
+      const status = h('span.dim.small', s.leaders.length ? (AL.isOwner() ? 'this tab is listening since ' + U.fmtTime(AL.since || Date.now()) : 'another tab of this browser is listening') + ' · ' + s.leaders.length + ' followed' : 'not listening');
       const hist = s.history.slice(0, 30);
       const feed = UI.table({ cols: [
         { key: 't', label: 'When', render: (a) => h('span.dim', U.fmtAgo(a.t)) },
@@ -56,8 +58,8 @@
             h('div.row.wrap', { style: { gap: '8px' } }, h('span.dim.small', 'Only orders of at least'), minIn, h('span.dim.small', 'USD notional (0 = everything; fills of one order are grouped)'))),
           h('div.stack', { style: { gap: '10px' } },
             h('div', h('div.lbl', 'Deliver as'), h('div.stack', { style: { gap: '6px' } }, h('div.dim.small', 'A toast on this site, always. And:'), browserRow,
-              h('div.row.wrap', { style: { gap: '8px' } }, h('span.dim.small', 'Phone push via ntfy'), topicIn, serverIn, testBtn),
-              h('div.dim.xs', 'Install the ntfy app, subscribe to a topic name nobody would guess, and put it here; the tab posts each alert to it (the topic is the only secret, so treat it like one). Alerts flow while a tab of this site is open in this browser; one tab listens, the others just show the log.'))))),
+              h('div.row.wrap', { style: { gap: '8px' } }, h('span.dim.small', 'Phone push via ntfy'), topicIn, serverIn, testBtn, ntfyErr),
+              h('div.dim.xs', 'Install the ntfy app, subscribe to a topic name nobody would guess, and put it here; the tab posts each alert to it (the topic is the only secret, so treat it like one). Alerts flow while a tab of this site is open in this browser; one tab listens, the others just show the log. A tab left in the background may deliver up to a minute late, as browsers slow its timers.'))))),
         h('div.card.tight', { style: { marginTop: '12px' } }, h('div.card-head', h('h3', 'Recent'), h('span.dim.small', 'newest first · kept in this browser')), feed));
     };
     render();

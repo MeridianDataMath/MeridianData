@@ -9,7 +9,7 @@
   const TAB = Math.random().toString(36).slice(2, 10);
   const DEF = () => ({ v: 1, leaders: [], events: { open: true, add: false, reduce: false, close: true, reverse: true, liq: true }, minNotional: 0, browser: true, ntfy: { server: 'https://ntfy.sh', topic: '' }, history: [] });
   AL.MAX_LEADERS = 15;   // each followed account takes two account streams of the socket's fifty
-  let st = null; const subs = new Map(); const pos = {}; const pending = new Map(); let owner = false; let ownerT = null; let started = false;
+  let st = null; const subs = new Map(); const pos = {}; const pending = new Map(); const seenFills = new Set(); let owner = false; let ownerT = null; let started = false;
 
   AL.state = () => (st || (st = Object.assign(DEF(), U.storage.get(KEY, null) || {})));
   AL.save = () => { U.storage.set(KEY, st); U.emit('alerts'); };
@@ -20,13 +20,19 @@
   AL.isOwner = () => owner;
 
   // ---- one tab does the listening: the owner claims a heartbeat in localStorage and the others follow its history
+  const STALE = 90000;   // a hidden tab's timers may run once a minute, so its heartbeat must count that long
   const claimOwner = () => {
     const o = U.storage.get(OWNER, null);
-    if (o && o.id !== TAB && Date.now() - o.t < 15000) { if (owner) { owner = false; AL.sync(); } return; }
+    if (o && o.id !== TAB && Date.now() - o.t < STALE) { if (owner) { owner = false; AL.sync(); U.emit('alerts'); } return; }
     U.storage.set(OWNER, { id: TAB, t: Date.now() });
-    if (!owner) { owner = true; AL.sync(); U.emit('alerts'); }
+    if (!owner) { owner = true; AL.since = Date.now(); AL.sync(); U.emit('alerts'); }
   };
-  const heartbeat = () => { if (owner) U.storage.set(OWNER, { id: TAB, t: Date.now() }); else claimOwner(); };
+  const heartbeat = () => {
+    if (!owner) return claimOwner();
+    const o = U.storage.get(OWNER, null);
+    if (o && o.id !== TAB && Date.now() - o.t < STALE) { owner = false; AL.sync(); U.emit('alerts'); return; }   // another tab took over (both claimed at once)
+    U.storage.set(OWNER, { id: TAB, t: Date.now() });
+  };
 
   /** Start following (called once from the app; safe to call again). */
   AL.start = () => {
@@ -34,9 +40,15 @@
     AL.state();
     claimOwner();
     ownerT = setInterval(heartbeat, 5000);
-    window.addEventListener('beforeunload', () => { if (owner) U.storage.del(OWNER); });
+    const release = () => { if (owner) U.storage.del(OWNER); };   // hand over at once when this tab goes away (pagehide fires where beforeunload does not)
+    window.addEventListener('beforeunload', release); window.addEventListener('pagehide', release);
     window.addEventListener('storage', (e) => {
-      if (e.key === KEY) { st = null; AL.state(); U.emit('alerts'); if (owner) AL.sync(); }   // another tab followed / unfollowed, or the owner wrote history
+      if (e.key === KEY) {   // another tab followed / unfollowed, or the owner wrote history
+        const before = st && st.history.length ? st.history[0].id : null;
+        st = null; const now = AL.state();
+        if (!owner && now.history.length && now.history[0].id !== before && Date.now() - now.history[0].t < 120000) U.toast(now.history[0].msg);
+        U.emit('alerts'); if (owner) AL.sync();
+      }
       if (e.key === OWNER && !e.newValue) claimOwner();                            // the owner tab closed
     });
     AL.sync();
@@ -60,7 +72,7 @@
     try { for (const p of await A.openPositions(sid)) pos[sid][p.productId] = U.num(p.size); } catch (_) {}
     const unFill = A.ws.subscribe('OrderFill', sid, (m) => {
       const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [];
-      for (const it of items) { const prod = ref.byTicker[it.s]; if (!prod) continue; onFill(sid, prod, { q: (U.sideName(it.sd) === 'BUY' ? 1 : -1) * U.num(it.sz), px: U.num(it.px), t: U.num(it.t || d.t) || Date.now(), oid: it.oid || it.id }); }
+      for (const it of items) { const prod = ref.byTicker[it.s]; if (!prod) continue; if (it.id) { if (seenFills.has(it.id)) continue; seenFills.add(it.id); if (seenFills.size > 2000) seenFills.delete(seenFills.values().next().value); } onFill(sid, prod, { q: (U.sideName(it.sd) === 'BUY' ? 1 : -1) * U.num(it.sz), px: U.num(it.px), t: U.num(it.t || d.t) || Date.now(), oid: it.oid || it.id }); }
     });
     const unLiq = A.ws.subscribe('SubaccountLiquidation', sid, (m) => {
       const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [d];
@@ -92,7 +104,7 @@
   AL.describe = (a) => {
     const who = a.name && a.name !== 'primary' ? a.name : U.shortAddr(a.address || '', 4);
     const size = a.notional ? U.fmtUsd(a.notional, { compact: true, dp: 0 }) : '';
-    if (a.kind === 'liq') return `${who} was liquidated on ${a.ticker}${size ? ' · ' + size : ''}`;
+    if (a.kind === 'liq') return `${who} was liquidated${a.ticker ? ' on ' + a.ticker : ''}${size ? ' · ' + size : ''}`;
     return `${who} ${VERB[a.kind]} a ${a.side} on ${a.ticker}${size ? ' · ' + size : ''}${a.px ? ' @ ' + U.fmtPrice(a.px, a.tick) : ''}`;
   };
 
@@ -107,9 +119,9 @@
     const url = location.origin + location.pathname + U.accountUrl(l.address, l.sid);
     U.toast(a.msg);
     if (s.browser && 'Notification' in window && Notification.permission === 'granted') {
-      try { const n = new Notification(a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], { body: a.msg, tag: a.id, icon: 'assets/favicon.png' }); n.onclick = () => { window.focus(); location.hash = U.accountUrl(l.address, l.sid).slice(1); n.close(); }; } catch (_) {}
+      try { const n = new Notification(a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], { body: a.msg, tag: a.id }); n.onclick = () => { window.focus(); location.hash = U.accountUrl(l.address, l.sid).slice(1); n.close(); }; } catch (_) {}
     }
-    if (s.ntfy && s.ntfy.topic) AL.push(a, url).catch(() => {});
+    if (s.ntfy && s.ntfy.topic) AL.push(a, url).then(() => { if (s.ntfy.lastError) { s.ntfy.lastError = null; AL.save(); } }).catch((e) => { s.ntfy.lastError = { t: Date.now(), msg: e.message }; AL.save(); });
   }
 
   /** Publish one alert to ntfy (CORS-enabled; the topic is the only secret). */
