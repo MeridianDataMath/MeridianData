@@ -106,7 +106,11 @@
         subs = await A.subaccountsOf(addr, ctx);
       } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.dispatch())); return; }
       if (!subs.length) {
-        U.replace(page, h('div.card', h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No Meridian subaccounts are registered for ', h('span.addr', addr), '.'), h('div.small', 'Accounts appear here once the wallet has deposited on ', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), '. ', h('a', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, 'View on explorer'))))); return;
+        const predictLine = h('div.small', { style: { marginTop: '8px' } });
+        U.replace(page, h('div.card', h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No Meridian perps subaccounts are registered for ', h('span.addr', addr), '.'), h('div.small', 'Perps accounts appear here once the wallet has deposited on ', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), '. ', h('a', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, 'View on explorer')), predictLine)));
+        // a wallet can be a Predict bettor without ever touching perps: point at its bettor page when the snapshot knows it
+        MD.predict.snapshotFile('bettors/' + addr.toLowerCase() + '.json', { signal: ctx.signal }).then((f) => { if (f && f.predictions && f.predictions.length) U.replace(predictLine, 'It does have Meridian Predict activity: ', h('a.btn.sm', { href: '#/predict/bettor?address=' + addr.toLowerCase(), style: { marginLeft: '4px' } }, U.icon('target'), `${f.total || f.predictions.length} prediction${(f.total || f.predictions.length) > 1 ? 's' : ''} · open the bettor page`)); }).catch(() => {});
+        return;
       }
       const sa = subs.find((s) => s.id === subParam) || subs[0];
       const subName = U.decodeBytes32(sa.name);
