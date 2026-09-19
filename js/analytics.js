@@ -14,7 +14,7 @@
    */
   AN.buildSeries = function ({ balance = [], upnl = [], volume = [] }) {
     const m = new Map();
-    const at = (t) => { let b = m.get(t); if (!b) { b = { t, balance: 0, upnl: 0, realizedPnl: 0, fee: 0, funding: 0, deposit: 0, withdrawal: 0, volume: 0, hasBalance: false }; m.set(t, b); } return b; };
+    const at = (t) => { let b = m.get(t); if (!b) { b = { t, balance: 0, upnl: 0, realizedPnl: 0, fee: 0, funding: 0, deposit: 0, withdrawal: 0, wfee: 0, volume: 0, hasBalance: false }; m.set(t, b); } return b; };
     // The archive reports flows (realizedPnl, tradingFee, realizedFunding, deposit, withdrawal, fees) as
     // running totals per token; `balance` is the end-of-bucket level. Diff consecutive buckets per token.
     const byToken = U.groupBy(balance, (r) => r.tokenId || r.tokenAddress || 'x');
@@ -30,6 +30,7 @@
         b.funding += d('realizedFunding');
         b.deposit += d('deposit');
         b.withdrawal += -d('withdrawal') - d('withdrawalFee') - d('depositFee');
+        b.wfee += -d('withdrawalFee') - d('depositFee');   // the fee part of the line above (an expense, unlike the transfer itself)
         prev = r;
       }
     }
