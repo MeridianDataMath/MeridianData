@@ -343,7 +343,7 @@
    *  `all=1` switches to the server-side explorer over every question on the exchange. */
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
-    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'all', sort: route.params.sort || 'OPEN_INTEREST', col: { key: route.params.col || 'sw', desc: route.params.dir !== 'asc' } };
+    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST', col: { key: route.params.col || 'sw', desc: route.params.dir !== 'asc' } };
     // The default view never waits for the API probe (a refused CORS preflight can take a second); only `all=1` needs it.
     const liveP = P.live();
     if (route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, liveP);
@@ -394,7 +394,7 @@
       trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
     resTicker(ctx, () => { if (!loading) renderRows(); });
-    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'all' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
+    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
 
@@ -419,7 +419,7 @@
       const endedIds = Array.from(new Set(endedQs.flatMap((q) => [qId(q)].concat(R.legIds(q)))));
       const endedCountOf = () => all.filter((q) => exposure(q) && q.end && q.end < now && alive(q)).length;
       const endedCount = endedCountOf();
-      if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'all';
+      if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
         h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; headerSorted = false; render(); renderBacklog(); }, 'sm')),
