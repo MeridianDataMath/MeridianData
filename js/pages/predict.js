@@ -9,7 +9,9 @@
   const pct = (x, dp = 1) => (x == null || !Number.isFinite(x) ? '—' : U.fmtPct(x * 100, { dp }));
   const pp = (x, dp = 1) => (x == null || !Number.isFinite(x) ? '—' : (x > 0 ? '+' : '') + (x * 100).toFixed(dp) + ' pp');
   const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m >= 100 ? 0 : 2) + '×');
-  const usd = (x, o) => U.fmtUsd(x, o);
+  // money on the Predict pages: whole dollars from $100 up (cents on a five-figure total are noise), cents only on small stakes
+  const usd = (x, o) => U.fmtUsd(x, Math.abs(U.num(x)) >= 100 && !(o && o.dp != null) ? Object.assign({ dp: 0 }, o) : o);
+  const pnlEl = (x) => h('span', { class: 'num ' + U.pnlClass(x) }, usd(x, { sign: true }));
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
@@ -139,7 +141,7 @@
         { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
         { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) },
         { key: 'wr', label: 'Bettor win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
-        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => pnlEl(r.pnl) },
         { key: 'v', label: 'Avg vig', num: true, render: (r) => vigCell(r.avgVig) },
       ], rows: a.categories });
       const comboTbl = UI.table({ cols: [
@@ -149,7 +151,7 @@
         { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds) },
         { key: 'm', label: 'Median payout', num: true, render: (r) => mult(r.medianMultiple) },
         { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
-        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+        { key: 'p', label: 'Bettor PnL', num: true, render: (r) => pnlEl(r.pnl) },
       ], rows: a.combos });
       const makersTbl = UI.table({ cols: [
         { key: 'a', label: 'Market maker', render: (r) => bettorLink(r.address, 6) },
@@ -157,7 +159,7 @@
         { key: 's', label: 'Share of flow', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 0 }) },
         { key: 'c', label: 'Collateral committed', num: true, render: (r) => usd(r.wagered, { compact: true }) },
         { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
-        { key: 'p', label: 'Maker PnL', num: true, render: (r) => U.pnlEl(r.pnl) },
+        { key: 'p', label: 'Maker PnL', num: true, render: (r) => pnlEl(r.pnl) },
         { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
         { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
         { key: 'f', label: 'Last active', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
@@ -248,7 +250,7 @@
           { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
           { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => h('span', U.fmtNum(r.n, 0), r.open ? h('span.dim.xs', ' (' + r.open + ' open)') : null) },
           { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
-          { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => U.pnlEl(r.pnl) },
+          { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => pnlEl(r.pnl) },
           { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ settled stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
           { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 0 })) },
           { key: 'avgOdds', label: 'Avg odds', num: true, sortVal: 1, render: (r) => pct(r.avgOdds, 0) },
@@ -487,7 +489,7 @@
         { key: 's', label: 'Share of flow', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 1 }) },
         { key: 'c', label: 'Collateral committed', num: true, title: 'Sum of collateral put up against bettors', render: (r) => usd(r.wagered, { compact: true }) },
         { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
-        { key: 'p', label: 'Maker PnL', num: true, title: 'Settled: + bettor stake on wins, − own collateral on losses', render: (r) => U.pnlEl(r.pnl) },
+        { key: 'p', label: 'Maker PnL', num: true, title: 'Settled: + bettor stake on wins, − own collateral on losses', render: (r) => pnlEl(r.pnl) },
         { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
         { key: 'v', label: 'Avg vig captured', num: true, title: 'Bettor odds minus the Polymarket price at the moment of the bet', render: (r) => vigCell(r.avgVig) },
         { key: 'ao', label: 'Avg bettor odds', num: true, render: (r) => pct(r.avgOdds, 0) },
@@ -678,12 +680,12 @@
       { key: 'v', label: 'Vig', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (n) => vigCell(n.vig, n) },
       { key: 'cp', label: isMaker ? 'Bettor' : 'Maker', render: (n) => bettorLink(isMaker ? n.predictor : n.counterparty) },
       { key: 'r', label: 'Result', render: (n) => resultChip(n) },
-      { key: 'p', label: 'PnL', num: true, render: (n) => U.pnlEl(isMaker ? -n.pnl : n.pnl) },
+      { key: 'p', label: 'PnL', num: true, render: (n) => pnlEl(isMaker ? -n.pnl : n.pnl) },
     ], rows: slice, empty: 'No predictions' }), mine.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: mine.length, onPage: (p) => { hpage = p; renderHist(); } }) : null); };
     renderHist();
     const sum = P.bettorSummary(mine);
-    const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
-    const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
+    const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
+    const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
     U.replace(el, h('div.stack',
       h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', m.live ? `${mine.length}${m.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history` : `${mine.length}${m.truncated ? '+' : ''} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
