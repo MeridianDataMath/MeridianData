@@ -10,7 +10,7 @@
     { t: 'Risk controls', d: 'Max leverage, max notional per market, pause on drawdown, exclude markets.', s: 'planned' },
     { t: 'Copy history', d: 'PnL attribution per leader and your slippage versus the leader\'s fills.', s: 'planned' },
   ];
-  const STATUS = { live: ['live', 'green'], building: ['being vibecoded', 'accent'], planned: ['planned', ''] };
+  const STATUS = { live: ['live', 'green'], building: ['in progress', 'accent'], planned: ['planned', ''] };
 
   MD.router.pages.copytrade = {
     async mount(root, route, ctx) {
@@ -20,14 +20,14 @@
       const summary = h('span.dim.small');
       let onlyProfit = true;
       const hero = h('div.card.ct-hero',
-        h('div.row', { style: { marginBottom: '8px' } }, UI.chip('In development', 'accent'), h('span.dim.small', 'still being vibecoded')),
+        h('div.row', { style: { marginBottom: '8px' } }, UI.chip('In development', 'accent'), h('span.dim.small', 'the next thing being built')),
         h('h1', 'Copy trading on Meridian'),
         h('p', 'The idea: pick a leader wallet, choose a size ratio and risk limits, and MeridianDataHub mirrors the leader\'s Meridian positions into your own subaccount. The plan is to sign with a Meridian linked signer in your own browser, so no exchange keys are handed to anyone.'),
         h('p', 'Nothing on this page places orders yet. What already works is the scouting below: every wallet on the exchange, ranked by profit since launch, straight from the public API. Star the ones you like to watch them on Favorites.'));
       const roadmap = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Roadmap'),
         h('div.roadmap', ROADMAP.map((r) => h('div.it', h('div.row', h('span.t', r.t), h('span.grow'), UI.chip(STATUS[r.s][0], STATUS[r.s][1])), h('div.d', r.d)))));
       const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by all-time PnL'), summary, h('span.grow'), UI.checkbox('Only profitable', onlyProfit, (v) => { onlyProfit = v; render(); })), tableWrap);
-      U.replace(root, h('div.page', h('div.stack', hero, roadmap, leaders, h('div.footer-note', 'Ranking uses the same snapshot as the Leaderboard (realised + unrealised PnL since the exchange launched, net of fees and funding). Past performance is not a promise of future returns.'))));
+      U.replace(root, h('div.page', h('div.stack', hero, roadmap, leaders, h('div.footer-note', 'Ranking uses the same snapshot as the Leaderboard (realized + unrealized PnL since the exchange launched, net of fees and funding). Past performance is not a promise of future returns.'))));
       ctx.onCleanup(U.on('favorites', () => render()));
 
       if (LB) await LB.loadRemote();

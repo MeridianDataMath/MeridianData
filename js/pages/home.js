@@ -29,7 +29,7 @@
       if (ctx.signal.aborted) return;
       const lb = LB && LB.cache();
       if (lb && lb.rows && lb.rows.length) {
-        // ranked by all-time PnL (realised + unrealised since the exchange launched) → copy-trading candidates
+        // ranked by all-time PnL (realized + unrealized since the exchange launched) → copy-trading candidates
         // copy-trade candidates must have traded: the exchange's fee-collector subaccount "earns" PnL with zero volume
         const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r));
         const ranked = U.sortBy(rows, (r) => r.stats.all.pnl, true);

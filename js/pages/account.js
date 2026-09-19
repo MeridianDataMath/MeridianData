@@ -167,7 +167,7 @@
     const stateCard = h('div.card.state-card', UI.loading('Loading account state…'));
     const chartCanvas = h('canvas');
     const chartBox = h('div.chart-box', h('div.watermark', 'MeridianDataHub'), chartCanvas);
-    const tiles = h('div.stats');
+    const tiles = h('div.stats.three');   // six interval stats: two rows of three, no orphans
     const metricSeg = UI.seg(METRICS, metric, (v) => { metric = v; MD.router.setParams({ metric: v }, { silent: true }); drawChart(); }, 'sm');
     const cumBox = UI.checkbox('Cumulative', cumulative, (v) => { cumulative = v; U.storage.set('md.chart.cum', v); drawChart(); });
     const rangeSeg = UI.seg(RANGES, range, (v) => { range = v; MD.router.setParams({ range: v }, { silent: true }); loadRange(); }, 'sm');

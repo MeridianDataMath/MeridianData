@@ -117,7 +117,7 @@
     };
     // Ex-post view, no source price needed: on settled bets, the odds the bettors locked (their implied win probability)
     // against how often they actually won, and the money-weighted result. Correlation and bettor skill are in the outcomes,
-    // so this is the maker's realised edge; the price is luck (± = 95% interval on the hit rate) and needing settlement.
+    // so this is the maker's realized edge; the price is luck (± = 95% interval on the hit rate) and needing settlement.
     const settledBets = norms.filter((n) => n.decided && !n.nd && n.odds != null);   // decided, claimed or not
     const realizedOf = (list) => {
       const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null };

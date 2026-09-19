@@ -209,7 +209,7 @@
     if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };
     if (o && !isZero(o.proposer)) {
       const out = priceName(o.proposedPrice, o, m); const at = o.expiration; const since = at ? at - liveness * 1000 : null;
-      if (at && at < now) return { code: 'settling', chip: ['proposed: ' + out, 'accent'], main: out + ' proposed · window closed ' + cd(at), sub: 'no dispute · Polymarket finalises next, then Meridian settles', at, outcome: out, m, o };
+      if (at && at < now) return { code: 'settling', chip: ['proposed: ' + out, 'accent'], main: out + ' proposed · window closed ' + cd(at), sub: 'no dispute · Polymarket finalizes next, then Meridian settles', at, outcome: out, m, o };
       return { code: 'proposed', chip: ['proposed: ' + out, 'accent'], main: out + ' proposed' + (since ? ' ' + cd(since) : ''), sub: 'challenge window ends ' + (at ? U.fmtHM(at) + ' (' + cd(at) + ')' : 'in ' + live(liveness)) + (o.reset ? ' · 2nd proposal' : ''), at, outcome: out, m, o };
     }
     if (o && o.reset) return { code: 'disputed', chip: ['disputed', 'red'], main: 'First proposal disputed', sub: 'waiting for a new proposal · then another ' + live(liveness) + ' challenge window', m, o };

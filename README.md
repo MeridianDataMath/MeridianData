@@ -72,16 +72,17 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   * *Rewards* – points per season (rank, tier, referral points, epoch history), exchange-wide
     points, linked API signers.
 * **Favorites** – starred accounts with live equity (stored in this browser only).
-* **Leaderboard** – every subaccount on the exchange, ranked; filters for interval
-  (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading style.
-  The snapshot is built in your browser (a few API calls per account), cached in
-  `localStorage` and rebuilt when older than 30 minutes or when you press **Update**.
+* **Leaderboard** – every subaccount on the exchange, ranked; sortable columns and filters for
+  interval (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
+  style. A snapshot is published every 30 minutes by the deploy workflow; **Update** rebuilds one
+  in your browser (a few API calls per account), cached in `localStorage`. Subaccounts that
+  never traded (the exchange's fee collector) are tagged *no trades*.
 * **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest,
   volume, sparkline and mPerp closure windows; a **stop map** (every account's take-profit,
   stop-loss and entry-stop levels per market as a ladder around the mark price, sized by
   notional, with the accounts behind each level); live trade tape (taker/maker links to the
   accounts); liquidation feed; funding table.
-* **Tax center** – per subaccount and tax year (or custom UTC range): net result, realised PnL,
+* **Tax center** – per subaccount and tax year (or custom UTC range): net result, realized PnL,
   fees, funding, deposits, withdrawals, monthly breakdown, closed-positions ledger, and CSV
   exports (summary, daily ledger, closed positions, fills, transfers, Koinly universal template)
   plus a print-friendly view. Records only, not tax advice.
@@ -92,9 +93,9 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     average vig paid, best win and last activity; click through to a bettor page.
   * *Questions* – only the questions people have bet on through Meridian (open interest now, open
     predictions, and questions settled in the last 30 days; the exchange itself lists 85k):
-    search, category, open / ended-unsettled / settled, sorted by Meridian OI, open bets, end
-    time or probability; implied probability, Meridian OI with the number of open bets and stake,
-    source volume, link to the mirrored source market. On an origin with live API access a link
+    search, category, open / ended-unsettled / settled / all (Open by default), sortable columns
+    (stake ever placed on Meridian first); implied probability, Meridian OI with the number of
+    open bets and stake, source volume, link to the mirrored source market. On an origin with live API access a link
     switches to the full explorer over every question. A **Resolution** column says when and
     how each question resolves: the Polymarket market's end (and the fixture time for sports,
     which moves when a game is postponed), Meridian's own betting cutoff when it is earlier, and
@@ -125,12 +126,12 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     `data/cache/polymarket-prices.json`, so a run only looks up new predictions. Combos
     multiply the legs, so combos whose legs sit on one Polymarket event (correlated) are shown
     separately and kept out of the headline. The page's second half is the ex-post view,
-    *Quote-implied vs realized*: on settled bets, the locked odds against the realised hit rate
+    *Quote-implied vs realized*: on settled bets, the locked odds against the realized hit rate
     (with a 95% interval) and bettor ROI, overall, by bet type, by odds bucket and by category;
     that needs no source price and already contains correlation and bettor skill.
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
-    perps account page). The Tax center gains a Predict block with realised PnL, monthly table
+    perps account page). The Tax center gains a Predict block with realized PnL, monthly table
     and two CSV exports.
   **How the Predict data gets there.** The Predict API refuses datacenter IPs (GitHub's
   runners get 403) and only allows browsers from Meridian's own origins (CORS allowlist), so:

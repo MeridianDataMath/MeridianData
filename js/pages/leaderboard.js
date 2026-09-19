@@ -42,7 +42,7 @@
       const filtersCard = h('div.card.filters', filters);
       U.replace(root, h('div.page', U.append(lbEl, [h('div.stack', h('div.row', summary, h('span.grow'), h('span.dim.small', 'PnL, ROI, Sharpe and drawdown follow the selected interval'), updateBtn), toolbar, progress, h('div.card.tight', tableWrap)), filtersCard])));
       // narrow screens: the filters sit right under the toolbar that toggles them; wide screens: the side column
-      const narrow = window.matchMedia('(max-width: 1100px)');
+      const narrow = window.matchMedia('(max-width: 1500px)');
       const placeFilters = () => { if (narrow.matches) toolbar.after(filtersCard); else lbEl.appendChild(filtersCard); };
       placeFilters(); narrow.addEventListener('change', placeFilters); window.addEventListener('resize', placeFilters); ctx.onCleanup(() => { narrow.removeEventListener('change', placeFilters); window.removeEventListener('resize', placeFilters); });
       ctx.onCleanup(U.on('favorites', () => renderTable()));
