@@ -497,7 +497,10 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   :root { --bg-0: #fff; --bg-1: #fff; --bg-2: #fff; --bg-3: #f4f4f5; --bg-4: #f4f4f5; --bg-5: #ececee; --bg-6: #e4e4e7; --border-1: #ddd; --border-2: #ddd; --border-3: #ccc; --text-1: #111; --text-2: #333; --text-3: #666; --green: #0f8a52; --red: #c22a2f; --accent: #0b8f7e; }
   body { overflow: visible; }
   .app { display: block; height: auto; }
-  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg { display: none !important; }
+  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg, .no-print { display: none !important; }
+  .card-head .dim, .stat .sub { color: #555; }
+  .tbl-wrap { overflow: visible; }
+  table.tbl { font-size: 11px; }
   .frame { display: block; height: auto; }
   .main { overflow: visible; padding: 0; height: auto; }
   .main > .page { max-width: none; }

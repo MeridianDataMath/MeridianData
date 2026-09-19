@@ -82,10 +82,18 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   stop-loss and entry-stop levels per market as a ladder around the mark price, sized by
   notional, with the accounts behind each level); live trade tape (taker/maker links to the
   accounts); liquidation feed; funding table.
-* **Tax center** – per subaccount and tax year (or custom UTC range): net result, realized PnL,
-  fees, funding, deposits, withdrawals, monthly breakdown, closed-positions ledger, and CSV
-  exports (summary, daily ledger, closed positions, fills, transfers, Koinly universal template)
-  plus a print-friendly view. Records only, not tax advice.
+* **Tax center** – a full tax report per subaccount: fiscal-year presets (calendar, UK, Australia,
+  New Zealand, India, South Africa, Egypt/Pakistan) or a custom UTC range; a reporting currency
+  (28 currencies at ECB daily reference rates via frankfurter.dev, USD kept in every export);
+  net result, realized PnL, gains and losses, fees, funding received / paid, deposits,
+  withdrawals, long-term positions (held over a year), open positions at period end; an income
+  vs expenses table with classification hints; monthly, fiscal-quarter and per-market
+  breakdowns; a closed-positions ledger with holding periods; a full transaction ledger (fills,
+  transfers, position closes, daily funding) with type filters; and nine CSV exports: summary
+  with monthly and quarterly tables, capital gains (Form 8949-style), closed positions, daily
+  ledger, all transactions, fills, transfers, Koinly universal, CoinTracking. The Predict
+  section reports on a cash (claimed) basis with the decided-but-unclaimed tail shown apart.
+  Print-friendly. Records only, not tax advice.
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
   * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
