@@ -12,8 +12,8 @@
     ] },
     // tools that span perps and Predict sit between the two, ruled off above and below
     { title: null, rule: true, items: [
+      { name: 'copytrade', path: '/copytrade', icon: 'users', label: 'Copy trading' },
       { name: 'tax', path: '/tax', icon: 'receipt', label: 'Tax center' },
-      { name: 'copytrade', path: '/copytrade', icon: 'users', label: 'Copy trading', badge: 'soon' },
     ] },
     { title: 'Predict', items: [
       { name: 'predict', path: '/predict', icon: 'target', label: 'Overview' },

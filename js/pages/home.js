@@ -18,7 +18,7 @@
           h('a.chipbtn', { href: '#/favorites' }, U.icon('star'), ' Favorites'),
           h('a.chipbtn', { href: '#/tax' }, U.icon('receipt'), ' Tax center'),
           h('a.chipbtn', { href: '#/predict' }, U.icon('target'), ' Predict'),
-          h('a.chipbtn', { href: '#/copytrade' }, U.icon('users'), ' Copy trading', h('span.chip.accent', { style: { marginLeft: '6px' } }, 'soon'))),
+          h('a.chipbtn', { href: '#/copytrade' }, U.icon('users'), ' Copy trading')),
         strip, foot);
       root.appendChild(h('div.page', hero));
       setTimeout(() => input.focus(), 50);
