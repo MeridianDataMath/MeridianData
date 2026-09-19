@@ -40,7 +40,7 @@
       const sc = lbRow ? AN.copyScore(lbRow) : null;
 
       const head = h('div.card', h('div.row.wrap', { style: { gap: '10px' } },
-        UI.starBtn({ address: sa.account, subaccountId: sid, name: U.decodeBytes32(sa.name) }), h('h2', U.shortAddr(sa.account, 6)), U.copyBtn(sa.account),
+        UI.starBtn({ address: sa.account, subaccountId: sid, name: U.decodeBytes32(sa.name) }), MD.bellBtn({ sid, address: sa.account, name: U.decodeBytes32(sa.name) }), h('h2', U.shortAddr(sa.account, 6)), U.copyBtn(sa.account),
         sc ? h('span.chip', { class: { 'Copyable': 'green', 'Copy with care': 'amber' }[sc.verdict] || 'red' }, `copyability ${sc.total} · ${sc.verdict}`) : null,
         h('span.grow'), h('a.btn.sm', { href: U.accountUrl(sa.account, sid) }, 'Account page')),
         h('p.muted', { style: { margin: '8px 0 0', maxWidth: '900px' } }, 'What a follower would have kept copying this account: every position it opened since the start date is replayed with your size, entered and exited a set number of seconds after each of its fills at the oracle price of that moment, at taker fees, with slippage for your size against today\'s order books. Funding and mPerp position fees follow the leader\'s, scaled to your size.'));

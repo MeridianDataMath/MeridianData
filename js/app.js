@@ -134,6 +134,8 @@
       if (target) { e.preventDefault(); target.focus(); target.select(); }
     });
     MD.router.start(U.$('#main'), onRoute);
+    // leader alerts follow their accounts on every page, from whichever tab of this browser owns the job
+    if (MD.alerts && MD.alerts.state().leaders.length) MD.alerts.start();
     A.maintenance().then((m) => { if (m && m.isEnabled) { const b = U.$('#banner'); if (b) { b.style.display = ''; U.replace(b, h('div.notice', 'Meridian is currently in maintenance mode; data may be stale.')); } } }).catch(() => {});
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

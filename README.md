@@ -51,7 +51,7 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
 ### Privacy notes
 
 * Fonts are self-hosted (`css/fonts.css`, `assets/fonts/`); no request goes to Google.
-* The site sets no cookies and runs no analytics; favorites and preferences live in `localStorage`.
+* The site sets no cookies and runs no analytics; favorites, paper accounts, alerts and preferences live in `localStorage`. Leader alerts post to an ntfy topic only if one is entered.
 * Visitors' browsers call Meridian's public APIs directly, so Meridian sees their IP addresses.
 * Snapshot commits are dated in UTC; the snapshot builder sends no identifying User-Agent.
 * `js/api.js` contains the operator's Meridian referral code; remove it if the site should not be
@@ -249,6 +249,17 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   liquidation, a deleveraging) is closed at the mark and marked "closed at mark". Realized, unrealized at
   the live mark, delay cost (measured / modelled), fees and slippage, funding, open virtual
   positions and the mirrored-fill log. Stop & discard removes the account.
+* **Leader alerts** (the bell on any leader row, breakdown or simulator; the card on the Copy
+  trading page) – follow up to 15 subaccounts and be told when one opens, adds to, reduces,
+  closes or reverses a position, or is liquidated. `js/copy/alerts.js` subscribes to each
+  followed account's `OrderFill` and `SubaccountLiquidation` streams (seeded from its open
+  positions, resynced every ten minutes), groups the fills of one order for 2.5 s and classifies
+  the order against the running position; events and a minimum notional are configurable.
+  Delivery: a toast on the site, a browser notification (permission asked on the page), and
+  optionally an ntfy push to a phone (topic and server on the page, "Send a test"; the tab
+  POSTs to the topic, which is the only secret). Alerts flow while a tab of the site is open in
+  that browser; one tab is elected listener through a localStorage heartbeat so several tabs
+  never double-send, the others mirror the log. History (last 200) is kept in localStorage.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
@@ -302,6 +313,7 @@ js/router.js            hash router
 js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, predict
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
+js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client

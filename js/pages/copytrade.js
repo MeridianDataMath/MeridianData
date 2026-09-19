@@ -1,14 +1,14 @@
 /* MeridianDataHub — Copy trading, phase 1: leaders ranked by copyability (what a follower would actually keep), with the
    full breakdown behind every score. Nothing here places orders; that is the copy agent of a later phase. */
 (function () {
-  const MD = window.MD; const U = MD.util; const AN = MD.analytics; const UI = MD.ui; const h = U.h;
+  const MD = window.MD; const U = MD.util; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const h = U.h;
 
   const ROADMAP = [
     { t: 'Leaders & copyability', d: 'Every wallet scored on track record, copy friction (fees, drift, slippage at its size) and activity, with the numbers behind each score.', s: 'live' },
     { t: 'Watchlist', d: 'Star a wallet to keep it on your Favorites page with live equity and open positions.', s: 'live' },
     { t: 'Copy simulator', d: 'Replay a leader\'s positions with your size, delay and slippage against its real fills and the minute-by-minute price, and see what you would have kept.', s: 'live' },
     { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape; kept in your browser and caught up from the exchange when you come back.', s: 'live' },
-    { t: 'Leader alerts', d: 'A push when a leader opens, closes or gets liquidated, straight from the exchange WebSocket.', s: 'planned' },
+    { t: 'Leader alerts', d: 'A toast, a browser notification or an ntfy push to your phone when a followed leader opens, adds, reduces, closes, reverses or gets liquidated, straight from the exchange WebSocket, while a tab of this site is open.', s: 'live' },
     { t: 'Copy agent', d: 'A local service with a Meridian linked signer (trade-only key, no withdrawals) mirroring leaders into your own subaccount with size and risk limits.', s: 'planned' },
     { t: 'Copy history', d: 'PnL attribution per leader and your realized slippage versus the leader\'s fills.', s: 'planned' },
   ];
@@ -17,6 +17,53 @@
   const PILLARS = [['track', 'Track record', 'is there an edge, and is it steady'], ['friction', 'Copy friction', 'how much of it survives being copied a minute later at this size'], ['activity', 'Activity', 'is the account still trading']];
   const usd0 = (v) => U.fmtUsd(v || 0, { compact: true, dp: 0 });
   const bps = (v, opts) => (v == null ? h('span.dim', '—') : h('span', { class: 'num ' + (opts && opts.cost ? (v > 0 ? 'neg' : '') : U.pnlClass(v)) }, (opts && opts.sign && v > 0 ? '+' : '') + U.fmtNum(v, 1) + ' bps'));
+
+  /** Follow / unfollow for alerts. */
+  MD.bellBtn = (l, cls) => { const on = AL.isFollowed(l.sid); const bb = h('button.star-btn.bell', { class: (on ? 'on ' : '') + (cls || ''), title: on ? 'Alerts on · click to stop following' : 'Alert me when this account trades', onclick: (e) => { e.preventDefault(); e.stopPropagation(); AL.toggle(l); } }, U.icon(on ? 'bellFill' : 'bell')); return bb; };
+
+  /** The alerts card: who is followed, what to be told about, how, and what happened. */
+  function alertsCard(ctx) {
+    const card = h('div.card');
+    const render = () => {
+      const s = AL.state(); const has = 'Notification' in window; const perm = has ? Notification.permission : 'unsupported';
+      const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
+      const ev = (k, label) => UI.checkbox(label, !!s.events[k], (v) => { s.events[k] = v; AL.save(); });
+      const events = h('div.row.wrap', { style: { gap: '4px 14px' } }, ev('open', 'opens'), ev('add', 'adds'), ev('reduce', 'reduces'), ev('close', 'closes'), ev('reverse', 'reverses'), ev('liq', 'is liquidated'));
+      const minIn = h('input.input.sm', { type: 'number', min: 0, step: 100, value: s.minNotional || '', placeholder: '0', style: { width: '100px' }, onchange: (e) => { s.minNotional = Math.max(0, U.num(e.target.value)); AL.save(); } });
+      const browserRow = h('div.row.wrap', { style: { gap: '8px' } }, UI.checkbox('Browser notification', !!s.browser, (v) => { s.browser = v; AL.save(); }),
+        perm === 'granted' ? h('span.chip.green', 'allowed') : perm === 'denied' ? h('span.chip.red', { title: 'Blocked for this site in the browser settings' }, 'blocked') : perm === 'unsupported' ? h('span.chip', 'not supported here') : h('button.btn.sm', { onclick: async () => { const r = await AL.askPermission(); U.toast(r === 'granted' ? 'Notifications allowed' : 'Notifications not allowed'); render(); } }, 'Allow notifications'));
+      const topicIn = h('input.input.sm', { placeholder: 'ntfy topic (leave empty for none)', value: s.ntfy.topic || '', style: { width: '240px' }, spellcheck: false, onchange: (e) => { s.ntfy.topic = e.target.value.trim(); AL.save(); } });
+      const serverIn = h('input.input.sm', { placeholder: 'https://ntfy.sh', value: s.ntfy.server || 'https://ntfy.sh', style: { width: '170px' }, spellcheck: false, onchange: (e) => { s.ntfy.server = e.target.value.trim() || 'https://ntfy.sh'; AL.save(); } });
+      const testBtn = h('button.btn.sm', { onclick: async () => { s.ntfy.topic = topicIn.value.trim(); s.ntfy.server = serverIn.value.trim() || 'https://ntfy.sh'; AL.save(); try { await AL.test(); U.toast('Test push sent'); } catch (e) { U.toast('Push failed: ' + e.message); } } }, 'Send a test');
+      const status = h('span.dim.small', s.leaders.length ? (AL.isOwner() ? 'this tab is listening' : 'another tab of this browser is listening') + ' · ' + s.leaders.length + ' followed' : 'not listening');
+      const hist = s.history.slice(0, 30);
+      const feed = UI.table({ cols: [
+        { key: 't', label: 'When', render: (a) => h('span.dim', U.fmtAgo(a.t)) },
+        { key: 'w', label: 'Leader', render: (a) => h('a.addr', { href: U.accountUrl(a.address, a.sid) }, a.name && a.name !== 'primary' ? a.name : U.shortAddr(a.address, 4)) },
+        { key: 'k', label: 'Event', render: (a) => UI.chip(a.kind === 'liq' ? 'liquidated' : a.kind, a.kind === 'liq' ? 'red' : a.kind === 'open' || a.kind === 'add' ? 'green' : a.kind === 'reverse' ? 'amber' : '') },
+        { key: 'm', label: 'Market', render: (a) => (a.ticker ? UI.marketCell(a.ticker) : h('span.dim', '—')) },
+        { key: 's', label: 'Side', render: (a) => (a.side ? U.sideEl(a.side === 'LONG', true) : h('span.dim', '—')) },
+        { key: 'n', label: 'Size', num: true, render: (a) => (a.notional ? U.fmtUsd(a.notional, { compact: true, dp: 0 }) : h('span.dim', '—')) },
+        { key: 'p', label: 'Price', num: true, render: (a) => (a.px ? U.fmtPrice(a.px, a.tick) : h('span.dim', '—')) },
+        { key: 'go', label: '', render: (a) => h('a.btn.sm.ghost', { href: '#/copytrade/sim?address=' + a.address + '&sub=' + a.sid }, 'Simulate') },
+      ], rows: hist, empty: s.leaders.length ? 'Nothing yet: the followed leaders have not traded since this tab started listening' : 'Follow a leader to start' });
+      U.replace(card,
+        h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Leader alerts'), UI.chip('live', 'blue'), status, h('span.grow'), hist.length ? h('button.btn.sm.ghost', { onclick: () => AL.clearHistory() }, 'Clear') : null),
+        h('div.grid.cols-2',
+          h('div.stack', { style: { gap: '10px' } },
+            h('div', h('div.lbl', 'Following'), leaders),
+            h('div', h('div.lbl', 'Tell me when a leader'), events),
+            h('div.row.wrap', { style: { gap: '8px' } }, h('span.dim.small', 'Only orders of at least'), minIn, h('span.dim.small', 'USD notional (0 = everything; fills of one order are grouped)'))),
+          h('div.stack', { style: { gap: '10px' } },
+            h('div', h('div.lbl', 'Deliver as'), h('div.stack', { style: { gap: '6px' } }, h('div.dim.small', 'A toast on this site, always. And:'), browserRow,
+              h('div.row.wrap', { style: { gap: '8px' } }, h('span.dim.small', 'Phone push via ntfy'), topicIn, serverIn, testBtn),
+              h('div.dim.xs', 'Install the ntfy app, subscribe to a topic name nobody would guess, and put it here; the tab posts each alert to it (the topic is the only secret, so treat it like one). Alerts flow while a tab of this site is open in this browser; one tab listens, the others just show the log.'))))),
+        h('div.card.tight', { style: { marginTop: '12px' } }, h('div.card-head', h('h3', 'Recent'), h('span.dim.small', 'newest first · kept in this browser')), feed));
+    };
+    render();
+    ctx.onCleanup(U.on('alerts', render));
+    return card;
+  }
 
   /** The score as a pill: number + verdict; "—" with the reason when there is none. */
   function scorePill(sc, c) {
@@ -63,7 +110,7 @@
         ['Drawdown', h('span', s.ddPct == null || !(s.ddPct > 0) ? '—' : U.fmtDd(s.ddPct))],
         ['Activity', h('span', (c.lastAt ? 'last trade ' + U.fmtAgo(c.lastAt) : '—') + (c.tenureD != null ? ` · ${U.fmtNum(c.tenureD, 0)} days on the exchange` : '') + (c.perWeek != null ? ` · ${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} closed / week` : ''))]])));
     UI.modal({ wide: true,
-      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
+      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), MD.bellBtn({ sid: r.sid, address: r.account, name: r.name }), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
         h('div.dim.small', 'Copyability ' + sc.total + ' = 35% track record (' + sc.track + ') + 45% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
@@ -90,8 +137,9 @@
         h('div.roadmap', ROADMAP.map((r) => h('div.it', h('div.row', h('span.t', r.t), h('span.grow'), UI.chip(STATUS[r.s][0], STATUS[r.s][1])), h('div.d', r.d)))));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
       const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), filterSeg, MD.defsLink()), tableWrap);
-      U.replace(root, h('div.page', h('div.stack', hero, leaders, roadmap, h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
+      U.replace(root, h('div.page', h('div.stack', hero, leaders, alertsCard(ctx), roadmap, h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
       ctx.onCleanup(U.on('favorites', () => render()));
+      ctx.onCleanup(U.on('alerts', () => render()));
 
       let data = null;
       try { data = LB ? await LB.loadRemote() : null; } catch (_) {}
@@ -120,7 +168,7 @@
             sort: state.sort, onSort,
             cols: [
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.total >= 70 ? 'top' : '' }, String(i)); } },
-              { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)) },
+              { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: '0–100: track record, copy friction and activity; click a row for the breakdown', render: (x) => scorePill(x.sc, x.c) },
               { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their fills and slippage for a $2K position', render: (x) => (x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg') }, U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'pnl', label: 'All-time PnL', num: true, sortVal: 1, render: (x) => U.pnlEl(x.r.stats.all.pnl, { dp: 0 }) },
