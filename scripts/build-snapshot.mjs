@@ -214,7 +214,10 @@ const ctx = { signal: new AbortController().signal };
 const ref = await A.ref(ctx);
 const subs = await A.allSubaccounts({ signal: ctx.signal, ttl: 0 });
 const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
-console.log(`markets=${ref.active.length} accounts=${subs.length}`);
+// copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
+// the price drift after each account's fills, shared across accounts
+ctx.copy = await AN.copyContext(ref, ctx);
+console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
 
 const results = await U.pLimit(
   subs.map((sa) => () => AN.buildLeaderboardRow(sa, ref, prices, ctx)),
@@ -226,5 +229,6 @@ results.forEach((r, i) => { if (r.ok) rows.push(r.value); else { failed++; conso
 
 const out = { builtAt: Date.now(), rows, partial: failed > 0, source: 'github-actions', accounts: subs.length, failed, durationMs: Date.now() - started };
 fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
-console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows, ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
+console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
 if (!rows.length) process.exit(1);

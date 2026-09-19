@@ -490,6 +490,21 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .roadmap .it { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .roadmap .it .t { font-weight: 600; font-size: 13px; }
 .roadmap .it .d { font-size: 12px; color: var(--text-3); }
+/* copyability: the score pill, the part bars of the breakdown, the hold-time strip */
+.score { display: inline-block; min-width: 34px; text-align: center; font-family: var(--mono); font-weight: 700; font-size: 14px; line-height: 24px; padding: 0 7px; border-radius: 6px; background: var(--bg-4); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.score.green { background: var(--green-dim); color: var(--green); }
+.score.amber { background: var(--amber-dim); color: var(--amber); }
+.score.red { background: var(--red-dim); color: var(--red); }
+.score.sm { font-size: 13px; line-height: 22px; min-width: 30px; }
+.score-part { font-size: 12.5px; }
+.score-part .bar { margin: 4px 0 3px; }
+.hold-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; gap: 1px; font-size: 10px; line-height: 16px; text-align: center; color: var(--bg-1); font-weight: 600; max-width: 360px; }
+.hold-bar span { min-width: 3px; overflow: hidden; }
+.hold-bar .scalp { background: var(--red); }
+.hold-bar .intra { background: var(--amber); }
+.hold-bar .swing { background: var(--accent); }
+.hold-bar .long { background: var(--accent-2); }
+@media (max-width: 900px) { .modal .grid.cols-3 { grid-template-columns: 1fr; } }
 .kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border-3); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text-2); background: var(--bg-3); }
 
 /* Print (tax reports): light palette, no chrome */

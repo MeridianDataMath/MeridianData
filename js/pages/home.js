@@ -45,7 +45,7 @@
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           strip.appendChild(track);
-          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copy-trading candidates')), strip);
+          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copyability scores')), strip);
         }
       } else {
         strip.appendChild(h('div', { style: { textAlign: 'center', fontSize: '12.5px' } }, h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here')));

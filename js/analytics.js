@@ -215,8 +215,9 @@
       for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, funding: 0 };
       return row;
     }
+    const copyCtx = ctx && ctx.copy;   // {depth, candles} from AN.copyContext: the snapshot build adds a copy profile per account
     const [positions, daily, hourly] = await Promise.all([
-      A.positions(sid, { maxPages: 3, signal: o.signal }),
+      A.positions(sid, { maxPages: copyCtx ? 5 : 3, signal: o.signal }),
       AN.loadSeries(sid, { start: AN.startFor('all', sa.createdAt), resolution: 'day1', signal: o.signal, ttl: 60000 }),
       AN.loadSeries(sid, { start: Date.now() - U.DAY, resolution: 'hour1', signal: o.signal, ttl: 60000 }),
     ]);
@@ -226,12 +227,204 @@
     const pick = (s) => ({ pnl: s.pnl, volume: s.volume, roi: s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, funding: s.funding });
     for (const iv of ['7d', '30d', 'all']) row.stats[iv] = pick(AN.intervalStats(daily, AN.startFor(iv, sa.createdAt), live, U.DAY));
     row.stats['24h'] = pick(AN.intervalStats(hourly, Date.now() - U.DAY, live, U.HOUR));
+    if (copyCtx) {
+      // fills and the price drift after them only for accounts with a track record worth copying (the candle cache is shared)
+      let decays = null;
+      if (ps.closed.length >= 3) {
+        try { const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 10, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles); }
+        catch (e) { if (e && e.name === 'AbortError') throw e; }
+      }
+      row.copy = AN.buildCopyProfile({ positions, daily, equity: acct.equity, createdAt: sa.createdAt, ref, depth: copyCtx.depth, decays });
+    }
     return row;
   };
 
   /** A leaderboard row that never traded: no volume and no positions. The exchange's fee-collector subaccount is one —
    *  its "PnL" is fees received — so lists of traders leave these out and the leaderboard labels them. */
   AN.noTrades = (r) => !(U.num(r.volumeAll) > 0) && !(r.positionsCount > 0) && !(r.openCount > 0);
+
+  // ---------- Copy trading: what a follower would actually keep ----------
+  /**
+   * A taker order of `notional` USD walked through one side of the book: average price paid vs the mid, in bps.
+   * Levels further than 20% from the mid are ignored (parked far quotes are not liquidity). `filled` is the share of the
+   * notional the book can absorb inside that band; bps is null when it cannot absorb all of it.
+   */
+  AN.bookSlippage = function (book, buy, notional) {
+    const lv = (side) => (side || []).map(([p, q]) => [U.num(p), U.num(q)]).filter(([p, q]) => p > 0 && q > 0);
+    const asks = lv(book && book.asks).sort((a, b) => a[0] - b[0]), bids = lv(book && book.bids).sort((a, b) => b[0] - a[0]);
+    if (!asks.length || !bids.length) return { bps: null, filled: 0, mid: null };
+    const mid = (asks[0][0] + bids[0][0]) / 2;
+    let left = notional, cost = 0, qty = 0;
+    for (const [p, q] of buy ? asks : bids) {
+      if (Math.abs(p - mid) / mid > 0.2) break;
+      const take = Math.min(left, p * q); cost += take; qty += take / p; left -= take;
+      if (left <= 1e-9) break;
+    }
+    const filled = notional > 0 ? (notional - Math.max(left, 0)) / notional : 1;
+    if (left > 1e-9 || !qty) return { bps: null, filled, mid };
+    return { bps: (Math.abs(cost / qty - mid) / mid) * 1e4, filled: 1, mid };
+  };
+
+  /**
+   * One-minute oracle candles, fetched in 3,000-bar windows and kept for the run, so "the price N minutes after a fill"
+   * is a lookup. Shared by every account of a snapshot build (the same market-days come up again and again).
+   */
+  AN.candleCache = function (o) {
+    const W = 3000 * 60000; const wins = new Map();
+    const load = async (ticker, k) => {
+      const key = ticker + '|' + k; if (wins.has(key)) return wins.get(key);
+      const p = A.candles(ticker, '1', k * W, (k + 1) * W, 3000, o).then((rows) => { const m = new Map(); for (const c of rows) m.set(c.t, c.c); return m; }).catch(() => new Map());
+      wins.set(key, p); return p;
+    };
+    return {
+      /** close of the minute containing t (ms), or null when the window has no bar there */
+      async at(ticker, t) { const minute = Math.floor(t / 60000) * 60000; const m = await load(ticker, Math.floor(minute / W)); const v = m.get(minute); return v == null ? null : U.num(v); },
+      size() { return wins.size; },
+    };
+  };
+
+  /**
+   * Everything a would-be copier needs to know about an account, from its positions, fills and daily series:
+   * sizes, hold times, markets, consistency, and the frictions of following (slippage at the account's size against
+   * today's books, price drift in the minutes after each fill, taker fees). Returns a compact JSON block for the snapshot.
+   *
+   * `depth`: productId → book snapshot (AN.copyContext); `candles`: AN.candleCache. Both optional: without them the
+   * friction fields stay null and the score falls back to hold-time proxies.
+   */
+  AN.buildCopyProfile = function ({ positions = [], daily = [], equity = 0, createdAt = null, ref, depth, decays }) {
+    const now = Date.now();
+    const ps = AN.positionStats(positions, ref);
+    const closed = ps.closed;
+    const r1 = (x) => (x == null || !Number.isFinite(x) ? null : Math.round(x * 10) / 10);
+    const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    const pct = (arr, p) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+    const out = { closed: closed.length, open: ps.open.length, closed30: closed.filter((c) => U.num(c.p.updatedAt) > now - 30 * U.DAY).length, liq: ps.liquidated, adl: positions.filter((p) => p.wasDeleveraged).length };
+    // hold times
+    const holds = closed.map((c) => c.duration).filter((d) => d >= 0);
+    out.holdMed = holds.length ? Math.round(median(holds)) : null;
+    const bucket = (d) => (d < U.HOUR ? 'scalp' : d < U.DAY ? 'intra' : d < 7 * U.DAY ? 'swing' : 'long');
+    out.hold = { scalp: 0, intra: 0, swing: 0, long: 0 }; for (const d of holds) out.hold[bucket(d)]++;
+    // sizes (entry notional of each position: what a copier would mirror)
+    const sizes = closed.concat(ps.open).map((c) => U.num(c.p.totalIncreaseNotional)).filter((x) => x > 0);
+    out.notMed = sizes.length ? Math.round(median(sizes)) : null; out.notP90 = sizes.length ? Math.round(pct(sizes, 0.9)) : null;
+    out.lev = out.notMed && equity > 0 ? Math.round((out.notMed / equity) * 100) / 100 : null;
+    // markets (share of positions)
+    const all = closed.concat(ps.open); const byT = U.groupBy(all, (c) => c.ticker);
+    out.markets = Object.entries(byT).map(([t, arr]) => ({ t, n: arr.length, share: r1((arr.length / all.length) * 100) })).sort((a, b) => b.n - a.n).slice(0, 6);
+    out.nMarkets = Object.keys(byT).length;
+    // result per position in bps of entry notional: gross, and net of trading fees (funding left out on both sides)
+    const withCost = closed.filter((c) => U.num(c.p.totalIncreaseNotional) > 0);
+    const bps = (c) => (U.num(c.p.realizedPnl) / U.num(c.p.totalIncreaseNotional)) * 1e4;
+    const nfBps = (c) => ((U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd)) / U.num(c.p.totalIncreaseNotional)) * 1e4;
+    const costSum = U.sum(withCost, (c) => U.num(c.p.totalIncreaseNotional));
+    out.grossBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl)) / costSum * 1e4) : null;        // notional-weighted
+    out.netFeeBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd)) / costSum * 1e4) : null;
+    out.grossMedBps = withCost.length ? r1(median(withCost.map(bps))) : null;
+    const wins = closed.filter((c) => c.net > 0); const winSum = U.sum(wins, (c) => c.net);
+    out.top = wins.length ? r1((Math.max(...wins.map((c) => c.net)) / winSum) * 100) : null;                             // largest win as % of all wins
+    // consistency: profitable weeks among active weeks (flow-adjusted daily gains)
+    const weeks = {}; let prevUp = null;
+    for (const b of daily) { const gain = b.pnl + (prevUp == null ? 0 : b.upnl - prevUp); prevUp = b.upnl; const k = Math.floor(b.t / (7 * U.DAY)); const w = weeks[k] || (weeks[k] = { gain: 0, active: false }); w.gain += gain; if (b.volume > 0 || Math.abs(gain) > 0.005) w.active = true; }
+    const active = Object.values(weeks).filter((w) => w.active);
+    out.weeksActive = active.length; out.weeksPos = active.filter((w) => w.gain > 0).length;
+    // activity
+    const times = all.map((c) => U.num(c.p.updatedAt)).concat(all.map((c) => U.num(c.p.createdAt))).filter(Boolean);
+    out.lastAt = times.length ? Math.max(...times) : null; out.firstAt = times.length ? Math.min(...times) : null;
+    if (createdAt && (!out.firstAt || U.num(createdAt) < out.firstAt)) out.firstAt = U.num(createdAt);   // the position list is a window; the account's age is not
+    out.tenureD = out.firstAt ? r1((now - out.firstAt) / U.DAY) : null;
+    out.perWeek = out.firstAt && closed.length ? r1(closed.length / Math.max(1, (now - out.firstAt) / (7 * U.DAY))) : null;
+    // frictions: slippage at the account's typical size against today's books, weighted by its market mix; and how much
+    // of its 90th-percentile size the books absorb within 1% of the mid
+    if (depth && out.notMed && ref) {
+      let slipW = 0, slipSum = 0, fillW = 0, fillSum = 0, feeW = 0, feeSum = 0;
+      for (const m of out.markets) {
+        const prod = ref.byTicker[m.t] || Object.values(ref.byId).find((p) => p.displayTicker === m.t); if (!prod || !depth[prod.id]) continue;
+        const s = AN.bookSlippage(depth[prod.id], true, out.notMed), s2 = AN.bookSlippage(depth[prod.id], false, out.notMed);
+        const bpsAvg = s.bps != null && s2.bps != null ? (s.bps + s2.bps) / 2 : s.bps != null ? s.bps : s2.bps;
+        slipW += m.n; slipSum += (bpsAvg == null ? 60 : Math.min(bpsAvg, 60)) * m.n;                                       // unfillable at median size counts as 60 bps
+        const big = AN.bookSlippage(depth[prod.id], true, out.notP90 || out.notMed); const ok = big.bps != null && big.bps <= 100 ? 1 : big.filled;
+        fillW += m.n; fillSum += Math.max(0, Math.min(1, ok)) * m.n;
+        feeW += m.n; feeSum += U.num(prod.takerFee) * 1e4 * m.n;
+      }
+      out.slipBps = slipW ? r1(slipSum / slipW) : null; out.depthOk = fillW ? r1((fillSum / fillW) * 100) : null; out.feeBps = feeW ? r1(feeSum / feeW) : null;
+    } else { out.slipBps = null; out.depthOk = null; out.feeBps = null; }
+    // drift after the account's own fills (measured by the caller, which has the candles): notional-weighted bps a
+    // copier gives up by acting 1 and 5 minutes later, positive = worse price
+    out.drift1 = decays ? decays.drift1 : null; out.drift5 = decays ? decays.drift5 : null; out.driftN = decays ? decays.n : 0;
+    // what is left for a copier per position: the leader's result net of fees, minus a copier's own taker fees, drift
+    // and slippage on the way in and out (fills per position ≈ 2)
+    if (out.netFeeBps != null && out.feeBps != null && out.slipBps != null && out.drift1 != null) {
+      out.copyBps = r1(out.grossBps - 2 * (out.feeBps + out.slipBps + out.drift1));
+      // a leader whose positions lose after fees leaves nothing to copy: that is a measured zero, not an unknown
+      out.edgeLeft = out.netFeeBps > 0 ? r1(Math.max(-100, (out.copyBps / out.netFeeBps) * 100)) : 0;
+    } else { out.copyBps = null; out.edgeLeft = null; }
+    return out;
+  };
+
+  /**
+   * Price drift after each of an account's fills: for a buy, the move up in the minute (and five minutes) after it; for a
+   * sell, the move down. A copier arriving later pays it. Notional-weighted bps over up to `max` fills.
+   */
+  AN.fillDrift = async function (fills, ref, candles, max = 400) {
+    const rows = fills.filter((f) => U.num(f.filled) > 0 && U.num(f.price) > 0).slice(0, max);
+    let w = 0, d1 = 0, d5 = 0, n = 0;
+    await U.pLimit(rows.map((f) => async () => {
+      const prod = ref.byId[f.productId]; if (!prod) return;
+      const t = U.num(f.createdAt), px = U.num(f.price), sign = U.sideName(f.side) === 'BUY' ? 1 : -1, notional = U.num(f.filled) * px;
+      const [p1, p5] = await Promise.all([candles.at(prod.ticker, t + 60000), candles.at(prod.ticker, t + 5 * 60000)]);
+      if (p1 == null || p5 == null) return;
+      w += notional; d1 += sign * ((p1 - px) / px) * 1e4 * notional; d5 += sign * ((p5 - px) / px) * 1e4 * notional; n++;
+    }), 6);
+    if (!n || !w) return { drift1: null, drift5: null, n: 0 };
+    return { drift1: Math.round((d1 / w) * 10) / 10, drift5: Math.round((d5 / w) * 10) / 10, n };
+  };
+
+  /** Shared inputs for the copy profiles of one build: today's books for every active market, and a candle cache. */
+  AN.copyContext = async function (ref, o) {
+    const depth = {};
+    await U.pLimit(ref.active.map((p) => async () => { try { depth[p.id] = await A.liquidity(p.id, o); } catch (_) {} }), 4);
+    return { depth, candles: AN.candleCache(o) };
+  };
+
+  /**
+   * Copyability score, 0–100, from a snapshot row's copy profile. Three pillars a copier cares about, each 0–100 with
+   * its parts exposed for the page: track record (is there an edge, and is it steady), copy friction (how much of that
+   * edge survives being copied a minute later at this size), activity (is the account still trading). Null when there
+   * is not enough history to say anything (fewer than 5 closed positions).
+   */
+  AN.copyScore = function (row) {
+    const c = row.copy; const s = (row.stats && row.stats.all) || {};
+    if (!c || c.closed < 5) return null;
+    const cl = (x, a, b) => Math.min(b, Math.max(a, x));
+    const parts = [];
+    const add = (pillar, key, label, v, w, note) => { parts.push({ pillar, key, label, v: v == null ? null : cl(v, 0, 1), w, note }); };
+    // track record
+    add('track', 'sample', 'Sample size', cl(c.closed / 40, 0, 1), 0.25, `${c.closed} closed positions (40+ for full marks)`);
+    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.2, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far');
+    add('track', 'steady', 'Consistency', c.weeksActive >= 3 ? c.weeksPos / c.weeksActive : null, 0.2, c.weeksActive >= 3 ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable` : 'fewer than 3 active weeks');
+    add('track', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 40, 0, 1), 0.15, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)}`);
+    add('track', 'liq', 'Liquidations', cl(1 - (c.liq / Math.max(c.closed, 1)) * 5, 0, 1), 0.1, c.liq ? `${c.liq} liquidated of ${c.closed}` : 'never liquidated');
+    add('track', 'conc', 'Concentration', c.top == null ? null : cl(1 - (c.top - 30) / 70, 0, 1), 0.1, c.top == null ? 'no winning position yet' : `largest win is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
+    // copy friction
+    const scalp = c.closed ? c.hold.scalp / c.closed : 0, intra = c.closed ? c.hold.intra / c.closed : 0;
+    add('friction', 'edge', 'Edge left after copying', c.edgeLeft == null ? null : cl(c.edgeLeft / 100, 0, 1), 0.4, c.edgeLeft == null ? 'not measurable yet' : c.edgeLeft <= 0 ? 'nothing survives a copier\'s fees, drift and slippage' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's per-trade result survives fees, drift and slippage`);
+    add('friction', 'hold', 'Hold times', cl(1 - scalp - intra * 0.4, 0, 1), 0.25, `median hold ${c.holdMed == null ? '—' : U.fmtDuration(c.holdMed)} · ${U.fmtPct(scalp * 100, { dp: 0 })} scalps`);
+    add('friction', 'slip', 'Slippage at their size', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.2, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })} at today's depth`);
+    add('friction', 'depth', 'Depth for their big trades', c.depthOk == null ? null : c.depthOk / 100, 0.15, c.depthOk == null ? 'no book data' : `${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%`);
+    // activity
+    const daysSince = c.lastAt ? (Date.now() - c.lastAt) / U.DAY : null;
+    add('activity', 'recent', 'Recently active', daysSince == null ? 0 : cl(1 - daysSince / 14, 0, 1), 0.4, daysSince == null ? 'no activity' : `last trade ${U.fmtAgo(c.lastAt)}`);
+    add('activity', 'cadence', 'Cadence', c.perWeek == null ? 0 : cl(c.perWeek / 3, 0, 1), 0.3, c.perWeek == null ? '—' : `${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} positions closed per week`);
+    add('activity', 'tenure', 'Track length', c.tenureD == null ? 0 : cl(c.tenureD / 30, 0, 1), 0.3, c.tenureD == null ? '—' : `${U.fmtNum(c.tenureD, 0)} days on the exchange`);
+    // a pillar is the weighted mean of its known parts (unknown parts are left out, not counted as zero)
+    const pillar = (name) => { const ps = parts.filter((p) => p.pillar === name && p.v != null); const w = U.sum(ps, (p) => p.w); return w ? (U.sum(ps, (p) => p.v * p.w) / w) * 100 : 0; };
+    const track = pillar('track'), friction = pillar('friction'), activity = pillar('activity');
+    let total = 0.4 * track + 0.4 * friction + 0.2 * activity;
+    const losing = !(s.pnl > 0);
+    if (losing) total = Math.min(total * 0.6, 45);   // a losing account keeps its ranking among losing accounts, below every profitable one
+    const verdict = losing ? 'Losing so far' : total >= 70 ? 'Copyable' : total >= 50 ? 'Copy with care' : 'Hard to copy';
+    return { total: Math.round(total), track: Math.round(track), friction: Math.round(friction), activity: Math.round(activity), verdict, losing, parts };
+  };
 
   /** Describe an order's stop / grouping semantics. */
   AN.orderMeta = function (o) {

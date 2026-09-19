@@ -175,9 +175,27 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   `1rpc.io`). That gives the proposer, the proposed outcome, the exact end of the challenge
   window and any disputer. Neg-risk (multi-outcome) markets use a different adapter that keys
   questions differently, so for those only Polymarket's coarse status is shown.
-* **Copy trading** (in development) – roadmap plus leader scouting: every wallet ranked by
-  all-time PnL with ROI, win rate, drawdown and style, one click to watch or open it. Mirroring
-  positions is not implemented yet; nothing on the page places orders.
+* **Copy trading** (phase 1: leaders) – every trading wallet scored for **copyability**, the
+  question a copier actually has: not "who made money" but "what would a follower have kept,
+  entering a minute later, at taker fees, at that size, against these books?". The snapshot
+  build gives each account a copy profile (`row.copy`): closed / open positions, hold-time
+  buckets and median hold, median and 90th-percentile entry notional, market mix, result per
+  position in bps (gross and net of fees), largest-win concentration, profitable weeks among
+  active weeks, tenure and cadence, plus the frictions: slippage at the account's median size
+  walked through today's books (`AN.bookSlippage`), how much of its 90th-percentile size fills
+  within 1%, taker fees, and the price drift one and five minutes after each of its fills
+  (`AN.fillDrift`, one-minute oracle candles from the TradingView endpoint, fetched in 3,000-bar
+  windows and shared across accounts). From these, "edge left" = the share of the leader's
+  after-fee result per position that survives a copier's fees, drift and slippage in and out.
+  The score (`AN.copyScore`, 0–100, computed on the site so the formula can change without a
+  rebuild) is 40% track record, 40% copy friction, 20% activity, each pillar a weighted mean of
+  its measured parts (unmeasured parts are left out, not zeroed), with a losing account scaled
+  down and capped at 45; fewer than 5 closed positions means no score. Verdicts: Copyable
+  (70+), Copy with care (50+), Hard to copy, Losing so far. Every row opens a breakdown with
+  each part's value and reason, the per-position waterfall from the leader's result to the
+  copier's, hold-time strip, sizes, markets and track record. Nothing on the page places
+  orders; the roadmap on the page lists what comes next (simulator, alerts, a local copy agent
+  with a Meridian linked signer).
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line

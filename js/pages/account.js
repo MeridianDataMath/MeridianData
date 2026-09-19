@@ -19,7 +19,7 @@
       h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Open an account'), h('p.muted', { style: { margin: '0 0 12px', maxWidth: '640px' } }, 'Every Meridian account is public. Paste a wallet address or a subaccount ID to see its equity, positions, orders, fills, performance and rewards.'), form, err),
       favs.length ? h('div.card.tight', h('div.card-head', h('h2', 'Favorites')), h('div', { style: { padding: '6px 8px' } }, favs.slice(0, 12).map((f) => h('a.btn.sm.ghost', { href: U.accountUrl(f.address, f.subaccountId), style: { margin: '2px' } }, U.icon('star'), f.name || U.shortAddr(f.address, 4))))) : null,
       h('div.card', h('h3', { style: { marginBottom: '8px' } }, 'Find accounts'), h('div.row.wrap', { style: { gap: '6px' } },
-        h('a.btn.sm', { href: '#/leaderboard' }, U.icon('trophy'), 'Leaderboard'), h('a.btn.sm', { href: '#/copytrade' }, U.icon('users'), 'Top PnL wallets'), h('a.btn.sm', { href: '#/dashboard' }, U.icon('grid'), 'Dashboard trade tape'))));
+        h('a.btn.sm', { href: '#/leaderboard' }, U.icon('trophy'), 'Leaderboard'), h('a.btn.sm', { href: '#/copytrade' }, U.icon('users'), 'Copyable leaders'), h('a.btn.sm', { href: '#/dashboard' }, U.icon('grid'), 'Dashboard trade tape'))));
   }
   const tickerOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].displayTicker : U.shortAddr(pid, 4));
   const tickOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].tickSize : null);
