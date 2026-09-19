@@ -90,11 +90,11 @@
     ? h('span', { style: { color: 'var(--amber)' }, title: hint || '' }, ' · stale: ' + U.fmtDuration(Date.now() - builtAt) + ' old')
     : null);
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
-  UI.modal = function ({ title, body }) {
+  UI.modal = function ({ title, body, wide }) {
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
     const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } },
-      h('div.modal', { role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', title), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', body)));
+      h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', title), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', body)));
     document.body.appendChild(bg); document.addEventListener('keydown', onKey);
     return { close, el: bg };
   };

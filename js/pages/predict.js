@@ -121,12 +121,13 @@
           const now = Date.now();
           const ended = (snap.questionsWithOi || []).filter((q) => !q.settled && q.end && q.end < now && (q.oi > 0 || q.b > 0));
           if (!ended.length) return;
-          await R.load(ended.map((q) => q.id), { signal: ctx.signal, deep: false });
+          await R.load(Array.from(new Set(ended.flatMap((q) => [q.id].concat(R.legIds(q))))), { signal: ctx.signal, deep: false });
           if (ctx.signal.aborted) return;
-          const stuck = ended.filter((q) => !R.questionDead(q, q.id) && R.state(q, q.id).stuck);
-          if (!stuck.length) return;
-          const oldest = Math.max(...stuck.map((q) => R.state(q, q.id).stuckD));
-          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Settlement backlog', String(stuck.length), `question${stuck.length > 1 ? 's' : ''} resolved ${R.STUCK_DAYS}+ days ago, unsettled · oldest ${oldest}d · ${usd(U.sum(stuck, (q) => q.s || 0))} waiting`, 'neg')));
+          // fully won predictions (every leg resolved for the bettor) waiting STUCK_DAYS+ for their payout
+          const preds = new Map(); let oldest = 0;
+          for (const q of ended) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
+          if (!preds.size) return;
+          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Settlement backlog', String(preds.size), `won prediction${preds.size > 1 ? 's' : ''} unpaid ${R.STUCK_DAYS}+ days · oldest ${oldest}d · ${usd(Array.from(preds.values()).reduce((a, x) => a + x, 0))} of stakes`, 'neg')));
         } catch (e) { if (!isAbort(e)) console.warn('backlog tile', e); }
       })();
       const cWager = h('canvas'), cCount = h('canvas');
@@ -272,8 +273,48 @@
   /** Meridian's view of a question as the resolution tracker wants it (live API row or snapshot row). */
   const qView = (c) => (c.conditionId
     ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, question: c.question }
-    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, question: c.q });
+    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, question: c.q, op: c.op });   // op: open predictions with their legs (snapshot rows)
   const qId = (c) => c.conditionId || c.id;
+  /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
+   *  at what odds, and where each leg stands, so a "won" leg can be read together with the rest of the combo. */
+  async function openQuestion(c, ctx) {
+    const id = qId(c); const view = qView(c);
+    const body = h('div', UI.loading('Loading predictions…'));
+    const modal = UI.modal({ title: view.question || 'Question', body, wide: true });
+    let file = null;
+    try { file = await P.snapshotFile('questions/' + id + '.json'); } catch (_) {}
+    if (!file) { U.replace(body, h('div.empty', 'No prediction detail for this question in the snapshot yet (it is written by the next snapshot run).')); return; }
+    const preds = file.predictions.map(P.unslim);
+    const legIds = Array.from(new Set(preds.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
+    const legState = (k, n) => {
+      if (n.settled) return h('span.dim.xs', n.won ? 'won' : n.result === 'NON_DECISIVE' ? 'void' : 'lost');
+      if (!k.id) return h('span.dim.xs', '—');
+      const st = R.state({ end: k.endTime, settled: false, question: k.q }, k.id);
+      if (st.code === 'resolved') { const y = R.resolvedYes(st.m); const forBettor = y === true || y === false ? y === !!k.yes : null; return h('span.xs', { class: forBettor === true ? 'pos' : forBettor === false ? 'neg' : 'dim' }, forBettor === true ? 'resolved for' : forBettor === false ? 'resolved against' : 'resolved · ' + (st.outcome || 'unclear')); }
+      return h('span.xs.dim', st.chip ? st.chip[0] : st.code);
+    };
+    const predState = (n) => {
+      if (n.settled) return resultChip(n);
+      const ps = R.predictionState(n.picks.map((k) => [k.id, k.yes]));
+      return ps.code === 'won' ? UI.chip('won · awaiting payout', 'green') : ps.code === 'lost' ? UI.chip('lost · awaiting settlement', 'red') : UI.chip('open', 'accent');
+    };
+    const render = () => U.replace(body,
+      h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } }, R.chip(view, id), h('span.dim.small', R.state(view, id).main || ''), h('span.grow'), h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`)),
+      h('div.card.tight', UI.table({ cols: [
+        { key: 'b', label: 'Bettor', render: (n) => bettorLink(n.predictor) },
+        { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
+        { key: 'legs', label: 'Legs', render: (n) => h('div', { style: { whiteSpace: 'normal', minWidth: '260px', maxWidth: '460px', lineHeight: '1.35' } }, n.picks.map((k) => h('div', { class: k.id === id ? 'bold' : '' }, sideChip(k.yes), ' ', k.q, ' ', legState(k, n)))) },
+        { key: 's', label: 'Stake', num: true, render: (n) => usd(n.stake) },
+        { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
+        { key: 'p', label: 'Pays', num: true, render: (n) => usd(n.pool) },
+        { key: 'm', label: 'Maker', render: (n) => bettorLink(n.counterparty, 3) },
+        { key: 'r', label: 'State', render: predState },
+      ], rows: preds, empty: 'No predictions' })),
+      h('div.footer-note', { style: { textAlign: 'left' } }, 'A combo pays only if every leg resolves in the bettor\x27s favour; one leg resolved against it loses the whole stake even while the others are still open. The bold leg is this question.'));
+    render();
+    if (legIds.length) R.load(legIds, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && document.body.contains(body)) render(); }).catch(() => {});
+    return modal;
+  }
   let resLoading = 0;   // > 0 while Polymarket / oracle data for the visible rows is on its way (header shows a spinner)
   const resCols = (rows) => [
     { key: 'r', label: h('span', 'Resolution', resLoading ? h('span.spinner.sm', { title: 'loading Polymarket and oracle data' }) : null), title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: P.APP_URL }) },
@@ -371,8 +412,10 @@
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it
       // ended but unsettled questions whose source market already resolved with nobody on the winning side are noise:
       // only the makers are waiting for the settlement. Their resolution state is loaded once so they can be dropped.
-      const alive = (q) => !R.questionDead(q, qId(q));
-      const endedIds = all.filter((q) => exposure(q) && q.end && q.end < now).map(qId);
+      const alive = (q) => !R.questionDead(q);
+      // the ended questions plus every leg of the open predictions on them: a combo's fate depends on all its legs
+      const endedQs = all.filter((q) => exposure(q) && q.end && q.end < now);
+      const endedIds = Array.from(new Set(endedQs.flatMap((q) => [qId(q)].concat(R.legIds(q)))));
       const endedCountOf = () => all.filter((q) => exposure(q) && q.end && q.end < now && alive(q)).length;
       const endedCount = endedCountOf();
       if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
@@ -389,10 +432,12 @@
         if (st.status !== 'ended') { U.clear(backlog); return; }
         const stuck = all.filter((q) => exposure(q) && alive(q) && R.state(q, qId(q)).stuck);
         if (!stuck.length) { U.clear(backlog); return; }
-        const oldest = Math.max(...stuck.map((q) => R.state(q, qId(q)).stuckD));
-        const waiting = U.sum(stuck, (q) => q.s || 0);
+        // predictions, not questions: a combo touching several stuck questions is one payout
+        const preds = new Map(); let oldest = 0;
+        for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
+        const waiting = Array.from(preds.values()).reduce((a, x) => a + x, 0);
         U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('settlement backlog', 'amber'),
-          h('span.small', `${stuck.length} question${stuck.length > 1 ? 's' : ''} resolved on Polymarket more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days) are still not settled on Meridian, with ${usd(waiting)} of bettor stakes waiting on the winning side. Settlement happens on Meridian's side; a combo settles only once every leg has resolved, but these include predictions whose legs have all resolved. They are listed first.`))));
+          h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), still wait for their payout on Meridian: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}. Predictions with a leg still open, or a leg lost, are not counted. The questions are listed first; click one to see the predictions and their legs.`))));
       };
       let renderSeq = 0, endedPreloaded = false;
       if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});
@@ -419,7 +464,7 @@
           { key: 'v7', label: 'Source vol 7d', num: true, title: 'Volume on the mirrored Polymarket market, last 7 days', render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
-        ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match' }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
+        ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`);
         if (!keepTracking) { const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }

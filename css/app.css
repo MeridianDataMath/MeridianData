@@ -242,6 +242,7 @@ a.defs:hover { color: var(--accent); text-decoration: none; }
 a.defs svg { width: 13px; height: 13px; }
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 16px; font-size: 13px; align-items: start; }
 .kv .k { color: var(--text-3); white-space: nowrap; }
+.modal.wide { width: min(1180px, 100%); }
 .rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
 .res-cell { line-height: 1.25; white-space: normal; min-width: 210px; max-width: 340px; }
 .res-cell .res-info { padding: 2px; margin-top: -2px; color: var(--text-3); }

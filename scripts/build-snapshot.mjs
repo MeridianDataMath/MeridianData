@@ -165,6 +165,21 @@ async function buildPredict() {
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
   for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; }
+  // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
+  // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
+  const openBy = {};
+  for (const n of norms) { if (n.settled) continue; for (const k of n.picks) { if (!k.id) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
+  for (const q of withOi) if (openBy[q.id]) q.op = openBy[q.id];
+  // one file per question with all its predictions, legs keeping their ids (the bettor files drop ids of settled legs)
+  const qdir = path.join(outDir, 'questions'); fs.mkdirSync(qdir, { recursive: true });
+  const byQ = {};
+  for (const n of norms) for (const k of n.picks) if (k.id) (byQ[k.id] || (byQ[k.id] = [])).push(n);
+  let qfiles = 0;
+  for (const q of withOi) {
+    const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t);
+    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n), { k: n.picks.map((k) => [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, k.id, k.priceAtBet == null ? null : Math.round(k.priceAtBet * 1e4) / 1e4, n.picks.length > 1 ? k.event || null : null]) })) }));
+    qfiles++;
+  }
   let trades = [];
   try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
@@ -180,7 +195,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: (truncated ? list.slice(0, 600) : list).map(P.slim) }));
     files++;
   }
-  console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (doPredict) {
   try { await buildPredict(); }

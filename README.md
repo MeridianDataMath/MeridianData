@@ -101,7 +101,13 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
     the live position in Polymarket's UMA pipeline — *awaiting proposal*, *proposed X, challenge
     window ends 15:42*, *disputed*, *UMA vote*, *resolved on Polymarket, not settled on Meridian
     yet*. The ⓘ button opens the proposal / dispute details and the market's resolution rules.
-    The same per-leg status sits on the open positions of every bettor page.
+    The same per-leg status sits on the open positions of every bettor page. Every question row
+    opens a panel with the actual predictions on it: bettor, stake, odds, payout, maker, and every
+    leg of the combo with its own state, since a combo pays only if all legs resolve for the bettor.
+    An ended question none of whose open predictions can still win (each has a leg resolved against
+    its bettor) is left out; predictions whose legs have all resolved for the bettor and are still
+    unpaid after a week are the *settlement backlog*, counted on the Overview and listed first on
+    the Ended tab. The snapshot carries `questions/<conditionId>.json` per question for this.
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
     committed, open exposure, PnL, win rate, vig captured.
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at

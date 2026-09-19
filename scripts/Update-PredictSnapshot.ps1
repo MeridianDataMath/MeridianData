@@ -66,17 +66,19 @@ try {
         Copy-Item $file (Join-Path $dataDir 'predict.json') -Force   # local copy for development
         $bettorsSrc = Join-Path $tmp 'bettors'
         if (Test-Path $bettorsSrc) { $bettorsDst = Join-Path $dataDir 'bettors'; if (Test-Path $bettorsDst) { [IO.Directory]::Delete($bettorsDst, $true) }; Copy-Item $bettorsSrc $bettorsDst -Recurse }
+        $qSrc = Join-Path $tmp 'questions'
+        if (Test-Path $qSrc) { $qDst = Join-Path $dataDir 'questions'; if (Test-Path $qDst) { [IO.Directory]::Delete($qDst, $true) }; Copy-Item $qSrc $qDst -Recurse }
     }
     $srcDir = if ($PublishOnly) { $dataDir } else { $tmp }
 
     if ($DryRun) { Log 'dry run: not publishing'; exit 0 }
 
-    # publish the whole snapshot directory (predict.json + bettors/*.json) as a fresh single-commit branch:
+    # publish the whole snapshot directory (predict.json + bettors/*.json + questions/*.json) as a fresh single-commit branch:
     # a temporary index turns the directory into a tree without touching the working copy; no history growth.
     $idx = Join-Path $env:TEMP ('md-index-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $env:GIT_INDEX_FILE = $idx
     $gitDir = Join-Path $Repo '.git'
-    & cmd /c "git --git-dir=`"$gitDir`" --work-tree=`"$srcDir`" add -A -- predict.json bettors 2>&1" | Out-Null
+    & cmd /c "git --git-dir=`"$gitDir`" --work-tree=`"$srcDir`" add -A -- predict.json bettors questions 2>&1" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'git add (temp index) failed' }
     $tree = (& cmd /c "git --git-dir=`"$gitDir`" write-tree").Trim()
     Remove-Item Env:GIT_INDEX_FILE
