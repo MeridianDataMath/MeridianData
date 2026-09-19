@@ -13,12 +13,12 @@
         h('div.sub', 'Public perps analytics for every account on Meridian · Robinhood Chain'),
         form, err,
         h('div.quick',
-          h('a.chipbtn', { href: '#/leaderboard' }, U.icon('trophy'), ' Leaderboard'),
           h('a.chipbtn', { href: '#/dashboard' }, U.icon('grid'), ' Markets dashboard'),
+          h('a.chipbtn', { href: '#/leaderboard' }, U.icon('trophy'), ' Leaderboard'),
           h('a.chipbtn', { href: '#/favorites' }, U.icon('star'), ' Favorites'),
-          h('a.chipbtn', { href: '#/tax' }, U.icon('receipt'), ' Tax center'),
           h('a.chipbtn', { href: '#/predict' }, U.icon('target'), ' Predict'),
-          h('a.chipbtn', { href: '#/copytrade' }, U.icon('users'), ' Copy trading')),
+          h('a.chipbtn', { href: '#/copytrade' }, U.icon('users'), ' Copy trading'),
+          h('a.chipbtn', { href: '#/tax' }, U.icon('receipt'), ' Tax center')),
         strip, foot);
       root.appendChild(h('div.page', hero));
       setTimeout(() => input.focus(), 50);
