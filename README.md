@@ -92,8 +92,19 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   transfers, position closes, daily funding) with type filters; and nine CSV exports: summary
   with monthly and quarterly tables, capital gains (Form 8949-style), closed positions, daily
   ledger, all transactions, fills, transfers, Koinly universal, CoinTracking. The Predict
-  section reports on a cash (claimed) basis with the decided-but-unclaimed tail shown apart.
-  Print-friendly. Records only, not tax advice.
+  section reports on a cash (claimed) basis with the decided-but-unclaimed tail shown apart,
+  placed in the period its questions were decided in. Print-friendly. Records only, not tax advice.
+  Accounting rules worth knowing: the period totals come from the exchange's daily ledger
+  (realized PnL, trading fees, funding, transfers); mPerp position fees are missing from that
+  ledger, so they are taken from the positions and spread over each position's holding time
+  (a position straddling two years is split between them); fiscal quarters run from the fiscal
+  year's first day in three-month steps (UK: 6 Apr – 5 Jul, …); "open at period end" is
+  computed from open/close times for past periods too; every figure is shown in cents; the
+  balance reconciliation (opening + deposits − withdrawals + result = closing) names any pool
+  the ledger cannot explain; the transaction ledger's cash-effect column sums to the balance
+  change. `js/dev/sim-tax.js` (not loaded by the site) fakes a busy two-year account with a
+  ledger built from the same events, for stress-testing the report against a realistic
+  return: `MDSim.install()` in the console, then open `#/tax?address=<its address>`.
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
   * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
