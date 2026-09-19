@@ -72,6 +72,9 @@ table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
 .rail .logo .word { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; white-space: nowrap; }
 .rail .logo .word span { color: var(--accent); }
 .rail .sec { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); padding: 14px 12px 4px; white-space: nowrap; }
+.rail .rule { height: 1px; background: var(--border-3); margin: 10px 10px; flex: none; }
+.rail .rule + .rule { display: none; }
+.app.rail-collapsed .rail .rule { width: 24px; margin: 8px 0; }
 .rail a.nav {
   height: 40px; border-radius: 10px; padding: 0 10px;
   display: flex; align-items: center; gap: 11px; color: var(--text-2);
@@ -536,7 +539,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
   .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; flex-direction: row; justify-content: flex-start; align-items: center; gap: 2px; padding: 6px 8px; border-right: 0; border-top: 1px solid var(--border-2); z-index: 40; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
   .rail::-webkit-scrollbar { display: none; }
   .rail a.nav { flex: none; }
-  .rail .logo, .rail .spacer, .rail .ext, .rail .tip, .rail .sec, .rail .toggle, .rail a.nav .lbl, .rail a.nav .ext-ico { display: none !important; }
+  .rail .logo, .rail .spacer, .rail .ext, .rail .tip, .rail .sec, .rail .rule, .rail .toggle, .rail a.nav .lbl, .rail a.nav .ext-ico { display: none !important; }
   .rail a.nav { width: 40px; padding: 0; justify-content: center; }
   .app:not(.rail-collapsed) .topbar .brand { display: inline; }
   .frame { height: 100vh; }

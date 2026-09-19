@@ -5,10 +5,13 @@
   const SECTIONS = [
     { title: 'Perps', items: [
       { name: 'home', path: '/', icon: 'home', label: 'Home' },
+      { name: 'dashboard', path: '/dashboard', icon: 'grid', label: 'Dashboard' },
       { name: 'account', path: '/account', icon: 'account', label: 'Account' },
       { name: 'favorites', path: '/favorites', icon: 'star', label: 'Favorites' },
       { name: 'leaderboard', path: '/leaderboard', icon: 'trophy', label: 'Leaderboard' },
-      { name: 'dashboard', path: '/dashboard', icon: 'grid', label: 'Dashboard' },
+    ] },
+    // tools that span perps and Predict sit between the two, ruled off above and below
+    { title: null, rule: true, items: [
       { name: 'tax', path: '/tax', icon: 'receipt', label: 'Tax center' },
       { name: 'copytrade', path: '/copytrade', icon: 'users', label: 'Copy trading', badge: 'soon' },
     ] },
@@ -91,7 +94,7 @@
     const ext = (href, icon, label) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener' }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
     U.replace(rail,
       h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
-      SECTIONS.map((s) => [h('div.sec', s.title), s.items.map(navLink)]),
+      SECTIONS.map((s) => [s.rule ? h('div.rule') : h('div.sec', s.title), s.items.map(navLink), s.rule ? h('div.rule') : null]),
       h('span.spacer'),
       h('div.sec', 'Meridian'),
       ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian'),
