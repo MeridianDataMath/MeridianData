@@ -201,7 +201,7 @@
       }
 
       // ---- data ----
-      let series, positions, openNow = [];
+      let series, positions, openNow = [], balRaw = [];
       try {
         const [bal, vol, pos] = await Promise.all([
           A.history('balance', sid, { start: start - U.DAY, end, resolution: 'day1', signal: ctx.signal, ttl: 5 * 60000 }),
@@ -209,6 +209,7 @@
           A.positions(sid, { maxPages: 25, signal: ctx.signal, ttl: 5 * 60000 }),
         ]);
         series = AN.buildSeries({ balance: bal, upnl: [], volume: vol });
+        balRaw = bal;
         positions = pos;
         openNow = positions.filter((p) => U.num(p.size) !== 0);
       } catch (e) { if (isAbort(e)) return; U.replace(status, UI.error(e, () => MD.router.dispatch())); return; }
@@ -265,10 +266,29 @@
       const closing = days.length ? days[days.length - 1].balance : opening;
       const expected = opening + T.deposits - T.withdrawals + T.net;   // T.net already carries position fees
       const reconDiff = closing - expected;
+      const poolDiffs = (() => {
+        const byTok = U.groupBy(balRaw, (r) => r.tokenId || 'x'); const out = [];
+        const signed = (r) => ['deposit', 'withdrawal', 'withdrawalFee', 'depositFee', 'conversionIn', 'conversionOut', 'realizedPnl', 'tradingFee', 'realizedFunding'].reduce((a, k) => a + U.num(r[k]), 0);
+        for (const [tok, rows] of Object.entries(byTok)) {
+          rows.sort((a, b) => a.time - b.time);
+          const inP = rows.filter((r) => r.time >= start && r.time < end); if (!inP.length) continue;
+          const before = rows.filter((r) => r.time < start); const first = before.length ? before[before.length - 1] : null; const lastRow = inP[inP.length - 1];
+          const dBal = U.num(lastRow.balance) - (first ? U.num(first.balance) : 0);
+          const dFlows = signed(lastRow) - (first ? signed(first) : 0);
+          // position fees of this pool's markets, attributed to their close inside the period
+          const t = ref.tokenById[tok]; const addr = t ? String(t.address).toLowerCase() : null;
+          const pf = closed.filter((c) => { const prod = ref.byId[c.p.productId]; return prod && String(prod.quoteTokenAddress).toLowerCase() === addr; }).reduce((a, c) => a + c.pfees, 0)
+            + (end >= now - U.DAY ? openNow.filter((p) => { const prod = ref.byId[p.productId]; return prod && String(prod.quoteTokenAddress).toLowerCase() === addr; }).reduce((a, p) => a + U.num(p.positionFeeAccruedUsd), 0) : 0);
+          const diff = dBal - (dFlows - pf);
+          if (Math.abs(diff) >= 0.005) out.push({ pool: t ? t.name : tok.slice(0, 8), diff });
+        }
+        return out;
+      })();
       const reconRows = [['Opening balance', opening], ['+ Deposits', T.deposits], ['− Withdrawals (incl. fees)', -T.withdrawals], ['+ Realized PnL', T.realized], ['− Trading fees', -T.fees], ['− Position fees (mPerps)', -T.posFees], ['+ Funding', T.funding], ['= Expected closing balance', expected], ['Closing balance (ledger)', closing], ['Difference', reconDiff]];
       const reconCard = h('details.recon', { style: { marginTop: '12px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'Balance reconciliation · ', h('span', { class: Math.abs(reconDiff) < 0.05 ? 'pos' : 'neg' }, Math.abs(reconDiff) < 0.005 ? 'exact' : 'difference ' + money.usd(reconDiff, { sign: true, dp: 2 })), h('span.dim', ' · opening + deposits − withdrawals + result = closing')),
         h('div.card.tight', { style: { marginTop: '8px', maxWidth: '520px' } }, UI.table({ cols: [{ key: 'k', label: 'Step', render: (r) => h('span', { class: /^=|Closing|Difference/.test(r[0]) ? 'bold' : '' }, r[0]) }, { key: 'v', label: 'USD', num: true, render: (r) => h('span', { class: r[0] === 'Difference' ? (Math.abs(r[1]) < 0.05 ? 'pos' : 'neg') : '' }, U.fmtUsd(r[1], { sign: r[0] === 'Difference' || /^[+−]/.test(r[0]), dp: 2 })) }], rows: reconRows })),
-        h('div.dim.small', { style: { marginTop: '6px' } }, 'Balances are summed across the account\'s margin pools; conversions between pools cancel out. Position fees on mPerp markets are not in the exchange\'s daily fee line, so they are taken from the positions themselves; any remaining difference is rounding.'));
+        poolDiffs.length ? h('div.small', { style: { marginTop: '8px', color: 'var(--amber)' } }, 'Unexplained by the ledger: ' + poolDiffs.map((d) => `${d.pool} pool ${U.fmtUsd(d.diff, { sign: true, dp: 2 })}`).join(', ') + '. The exchange changed that pool\'s balance without a deposit, trade, fee or funding entry for it; it is left out of every figure above and noted here so the report stays honest.') : null,
+        h('div.dim.small', { style: { marginTop: '6px' } }, 'Balances are summed across the account\'s margin pools; conversions between pools cancel out. Position fees on mPerp markets are not in the exchange\'s daily fee line, so they are taken from the positions themselves.'));
 
       // ---- summary tiles ----
       const tiles = h('div.stats',
@@ -401,7 +421,7 @@
       // ---- exports ----
       const exportSummary = () => download(fname('summary'), toCsv([['Metric', (r) => r[0]], ['USD', (r) => r[1]], ...(rates ? [[cur, (r) => r[2]]] : [])],
         [['Period start (UTC)', isoDate(start), ''], ['Period end (UTC)', isoDate(end - 1), ''], ['Fiscal year', label, ''], ['Wallet', addr, ''], ['Subaccount', sid, ''], ['Report currency', cur, ''],
-          ['Perps net result', n6(T.net), n6(TC.net)], ['Perps realized PnL', n6(T.realized), n6(TC.realized)], ['Perps gains (closed positions, gross)', n6(gains), n6(gainsC)], ['Perps losses (closed positions, gross)', n6(lossSum), n6(lossSumC)], ['Perps trading fees', n6(T.fees), n6(TC.fees)], ['Perps position fees (mPerps)', n6(T.posFees), n6(TC.posFees)], ['Perps withdrawal & deposit fees', n6(T.wfee), n6(TC.wfee)], ['Perps funding received', n6(fundingIn), n6(fundingInC)], ['Perps funding paid', n6(fundingOut), n6(fundingOutC)], ['Perps funding (net)', n6(T.funding), n6(TC.funding)], ['Perps deposits', n6(T.deposits), n6(TC.deposits)], ['Perps withdrawals', n6(T.withdrawals), n6(TC.withdrawals)], ['Perps volume', n6(T.volume), n6(TC.volume)], ['Closed positions', closed.length, ''], ['Winning positions', wins.length, ''], ['Losing positions', losses.length, ''], ['Liquidations', liqCount, ''], ['Long-term positions (held > 1 year)', longTerm.length, ''], ['Long-term net', n6(longTermNet), n6(longTermNetC)], ['Open positions at period end', openNow.length, ''], ['Unrealized PnL of open positions (now)', n6(openUpnl), ''], ['Predict realized PnL (cash basis)', predictCard.dataset.pnl != null ? predictCard.dataset.pnl : 'see Predict ledger export', '']])
+          ['Perps net result', n6(T.net), n6(TC.net)], ['Perps realized PnL', n6(T.realized), n6(TC.realized)], ['Perps gains (closed positions, gross)', n6(gains), n6(gainsC)], ['Perps losses (closed positions, gross)', n6(lossSum), n6(lossSumC)], ['Perps trading fees', n6(T.fees), n6(TC.fees)], ['Perps position fees (mPerps)', n6(T.posFees), n6(TC.posFees)], ['Perps withdrawal & deposit fees', n6(T.wfee), n6(TC.wfee)], ['Perps funding received', n6(fundingIn), n6(fundingInC)], ['Perps funding paid', n6(fundingOut), n6(fundingOutC)], ['Perps funding (net)', n6(T.funding), n6(TC.funding)], ['Perps deposits', n6(T.deposits), n6(TC.deposits)], ['Perps withdrawals', n6(T.withdrawals), n6(TC.withdrawals)], ['Perps volume', n6(T.volume), n6(TC.volume)], ['Closed positions', closed.length, ''], ['Winning positions', wins.length, ''], ['Losing positions', losses.length, ''], ['Liquidations', liqCount, ''], ['Long-term positions (held > 1 year)', longTerm.length, ''], ['Long-term net', n6(longTermNet), n6(longTermNetC)], ['Open positions at period end', openNow.length, ''], ['Balance reconciliation difference', n6(reconDiff), ''], ['Unrealized PnL of open positions (now)', n6(openUpnl), ''], ['Predict realized PnL (cash basis)', predictCard.dataset.pnl != null ? predictCard.dataset.pnl : 'see Predict ledger export', '']])
         + '\r\n\r\n' + toCsv([['Month', (m) => m.label], ['Realized PnL USD', (m) => n6(m.realized)], ['Fees USD', (m) => n6(m.fees + (m.pfees || 0))], ['Funding USD', (m) => n6(m.funding)], ['Net USD', (m) => n6(m.net)], ['Deposits USD', (m) => n6(m.deposits)], ['Withdrawals USD', (m) => n6(m.withdrawals)], ['Volume USD', (m) => n6(m.volume)], ...(rates ? [['Net ' + cur, (m) => n6(m.C.net)]] : [])], monthly)
         + '\r\n\r\n' + toCsv([['Quarter', (q) => q.label], ['Realized PnL USD', (q) => n6(q.realized)], ['Fees USD', (q) => n6(q.fees + (q.pfees || 0))], ['Funding USD', (q) => n6(q.funding)], ['Net USD', (q) => n6(q.net)], ...(rates ? [['Net ' + cur, (q) => n6(q.C.net)]] : [])], quarters));
       const exportDaily = () => download(fname('daily-ledger'), toCsv([['Date (UTC)', (b) => isoDate(b.t)], ['Realized PnL USD', (b) => n6(b.realizedPnl)], ['Trading fees USD', (b) => n6(b.fee)], ['Funding USD', (b) => n6(b.funding)], ['Net USD', (b) => n6(b.net)], ['Deposits USD', (b) => n6(b.deposit)], ['Withdrawals USD', (b) => n6(b.withdrawal)], ['Volume USD', (b) => n6(b.volume)], ['Balance end of day USD', (b) => n6(b.balance)], ...(rates ? [['USD→' + cur + ' rate', (b) => rates.at(b.t)], ['Net ' + cur, (b) => n6(b.C.net)]] : [])], days));
