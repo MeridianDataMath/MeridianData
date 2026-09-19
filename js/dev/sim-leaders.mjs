@@ -30,7 +30,7 @@ const now = Date.now();
 // maker fills; size: median entry notional; last: days since the last trade; tenure: days on the exchange
 const STYLES = [
   { id: 'ideal-copy-target', expect: 'Copyable', n: 90, hold: 1.5 * DAY, edge: 45, sd: 50, size: 3000, markets: ['BTC-USD', 'ETH-USD'], drift1: 0.5, drift5: 1, tenure: 180, last: 0.3 },
-  { id: 'swing-consistent', expect: 'Copyable', n: 45, hold: 3 * DAY, edge: 35, sd: 60, size: 6000, markets: ['BTC-USD', 'ETH-USD', 'SOL-USD'], drift1: 1, drift5: 1.5, tenure: 150, last: 1 },
+  { id: 'swing-consistent', expect: 'Copyable', n: 45, hold: 3 * DAY, edge: 35, sd: 60, size: 6000, split: 3, markets: ['BTC-USD', 'ETH-USD', 'SOL-USD'], drift1: 1, drift5: 1.5, tenure: 150, last: 1 },
   { id: 'steady-intraday', expect: 'Copyable', n: 120, hold: 6 * HOUR, edge: 25, sd: 40, size: 2500, markets: ['BTC-USD', 'ETH-USD'], drift1: 1.5, drift5: 2, tenure: 100, last: 0.5 },
   { id: 'contrarian-swing', expect: 'Copyable (edge grows after their fills)', n: 40, hold: 2 * DAY, edge: 25, sd: 45, size: 3000, markets: ['BTC-USD', 'ETH-USD'], drift1: -3, drift5: -4, tenure: 120, last: 2 },
   { id: 'long-term-position', expect: 'Copy with care (few positions)', n: 8, hold: 30 * DAY, edge: 400, sd: 500, size: 20000, markets: ['BTC-USD'], drift1: 0.5, drift5: 1, tenure: 300, last: 5 },
@@ -68,7 +68,7 @@ function simulate(st, ref, seed) {
     const p = products[Math.floor(r() * products.length)];
     const hold = st.hold * Math.exp(gauss(r) * 0.8);
     let open = opens[i] + i * 7; if (busy[p.id] && open <= busy[p.id]) open = busy[p.id] + 61000;
-    const close = Math.max(open + 1000, Math.min(open + hold, end - (st.n - i) * 977)); busy[p.id] = close;
+    const close = Math.max(open + (st.split || 1) * 3000 + 1000, Math.min(open + hold, end - (st.n - i) * 977)); busy[p.id] = close;
     const px = { 'BTC-USD': 80000, 'ETH-USD': 2600, 'SOL-USD': 110, 'HYPE-USD': 90, 'XAU-USD': 4300, 'XAG-USD': 66, 'SPY-USD': 760, 'QQQ-USD': 716 }[p.displayTicker] || 100;
     const notional = st.size * Math.exp(gauss(r) * 0.5); const qty = notional / px;
     const long = r() < 0.55; const sign = long ? 1 : -1;
@@ -83,11 +83,16 @@ function simulate(st, ref, seed) {
     const fundingReceived = (st.fund || 0) / 1e4 * notional * ((close - open) / DAY);
     positions.push({ id: st.id + '-' + i, productId: p.id, side: long ? '0' : '1', size: '0', totalIncreaseQuantity: String(qty), totalDecreaseQuantity: String(qty), totalIncreaseNotional: String(notional), totalDecreaseNotional: String(qty * exit), feesAccruedUsd: String(fees), positionFeeAccruedUsd: '0', fundingAccruedUsd: String(-fundingReceived), realizedPnl: String(gross), createdAt: Math.round(open), updatedAt: Math.round(close), isLiquidated: liq, wasDeleveraged: false, gross, fees, fundingReceived });
     // two fills per position, and the "candles" a minute and five minutes after each, moving in the leader's direction
-    for (const [t, price, side] of [[open, entry, long ? 0 : 1], [close, exit, long ? 1 : 0]]) {
-      fills.push({ id: st.id + '-f' + fills.length, createdAt: Math.round(t), productId: p.id, side, filled: String(qty), price: String(price), feeUsd: String(notional * feeRate), isMaker: maker, reduceOnly: t === close });
-      const s = side === 0 ? 1 : -1;
-      candle.set(Math.round(t) + MIN, price * (1 + (s * (st.drift1 + gauss(r) * 2)) / 1e4));
-      candle.set(Math.round(t) + 5 * MIN, price * (1 + (s * (st.drift5 + gauss(r) * 4)) / 1e4));
+    // the opening order arrives in `split` pieces a few seconds apart (as real orders do), the close in one
+    for (const [t, price, side, pieces] of [[open, entry, long ? 0 : 1, st.split || 1], [close, exit, long ? 1 : 0, 1]]) {
+      const oid = st.id + '-o' + fills.length;
+      for (let k = 0; k < pieces; k++) {
+        const tt = Math.round(t) + k * 3000;
+        fills.push({ id: st.id + '-f' + String(fills.length).padStart(6, '0'), orderId: oid, createdAt: tt, productId: p.id, side, filled: String(qty / pieces), price: String(price), feeUsd: String((notional / pieces) * feeRate), isMaker: maker, reduceOnly: t === close });
+        const s = side === 0 ? 1 : -1;
+        candle.set(tt + MIN, price * (1 + (s * (st.drift1 + gauss(r) * 2)) / 1e4));
+        candle.set(tt + 5 * MIN, price * (1 + (s * (st.drift5 + gauss(r) * 4)) / 1e4));
+      }
     }
   }
   // daily ledger: a deposit sized to the style, then each position's net result on its close day
@@ -110,13 +115,18 @@ const copyCtx = await AN.copyContext(ref, ctx);
 if (process.argv.includes('--replay')) {
   const id = process.argv[process.argv.indexOf('--replay') + 1]; const st = STYLES.find((x) => x.id === id); if (!st) throw new Error('unknown style ' + id);
   const sim = simulate(st, ref, 1);
-  const episodes = CS.attachPositions(CS.episodes(sim.fills), sim.positions);
+  const episodes = CS.attachPositions(CS.episodes(sim.fills, sim.positions), sim.positions);
+  // the fill window cut off: the oldest fills missing, as the exchange's newest-first history does for busy accounts
+  { const cut = sim.fills.slice().sort((a, b) => a.createdAt - b.createdAt).slice(7); const eps = CS.attachPositions(CS.episodes(cut, sim.positions), sim.positions);
+    const partial = eps.filter((e) => e.partial).length, phantom = eps.filter((e) => !e.pos).length;
+    console.log(`${id} with the oldest 7 fills missing: ${eps.length} episodes, ${partial} flagged partial, ${phantom} without a position record (${phantom === partial ? 'all of them flagged' : 'MISMATCH'})`); }
   const slip = CS.slippageFor(copyCtx.depth, ref, 2000); const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003;
   const priceAt = CS.priceAtFactory(sim.candles, ref);
   for (const delay of [0, 60, 300]) {
     const R = await CS.replay({ episodes, settings: { mode: 'fixed', size: 2000, delaySec: delay, slipBps: slip, feeRate, priceAt }, marks: {}, since: 0, ref });
     const T = R.T; const n = T.n;
     console.log(`${id} delay ${delay}s: positions ${n} (episodes ${episodes.length}, sim ${sim.positions.length}) · leader net ${T.leaderNet.toFixed(2)} · copier net ${T.copierNet.toFixed(2)} · fees ${T.fees.toFixed(2)} · drift ${T.drift.toFixed(2)} · slip ${T.slip.toFixed(2)} · funding ${T.funding.toFixed(2)}`);
+    const avgEntry = U.sum(R.rows, (r) => r.C.entryNotional) / n; console.log(`   copier average entry ${avgEntry.toFixed(0)} (fixed $2,000 per position)`);
     const perPosBps = (T.copierNet / n / 2000) * 1e4; const expectDrift = delay === 60 ? 2 * st.drift1 : delay === 300 ? 2 * st.drift5 : 0;
     const slipAvg = U.sum(R.rows, (r) => slip[r.e.pid]) / n;
     console.log(`   copier per position ${perPosBps.toFixed(1)} bps · expected ≈ edge ${st.edge} − fees ${(2 * 3).toFixed(0)} − drift ${expectDrift.toFixed(1)} − slip ${(2 * slipAvg).toFixed(1)} + funding ${(st.fund || 0) * (st.hold / DAY)} = ${(st.edge - 6 - expectDrift - 2 * slipAvg + (st.fund || 0) * (st.hold / DAY)).toFixed(1)} bps (sample mean of the edge differs from ${st.edge})`);

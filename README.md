@@ -213,14 +213,24 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   or a percentage of the leader's quantity), delay (instant … 120 s), slippage (from today's
   books at your size, or a set number of bps) and market selection, since a chosen date.
   `js/copy/sim.js`: position episodes are rebuilt from the leader's public fills by signed net
-  quantity per market, a fill that crosses zero being split into the close of one episode and
-  the open of the next (this matched the exchange's own position list 31/31 on a real account);
-  the exchange's position record supplies funding, mPerp position fees and the liquidation
-  flag (a liquidation, which leaves no fill, is closed at the position's average exit price).
-  Each of the leader's fills is copied at the one-minute oracle close `delay` seconds later
-  (interpolated inside the fill's minute), moved against the copier by the slippage, at the
-  market's taker fee; funding and position fees are the leader's scaled to the copier's size;
-  open positions are marked at the current oracle price. The page shows copier vs leader net,
+  quantity per market (ordered by time, then by UUIDv7 id for fills in one millisecond), a fill
+  that crosses zero being split into the close of one episode and the open of the next (this
+  matched the exchange's own position list 44/44 and 31/31 on real accounts, reversals
+  included); the exchange's position records anchor the reconstruction: at every recorded close
+  the net quantity is forced to zero, so a liquidation (which leaves no fill) is closed at the
+  position's average exit, and when the fill history (newest 3,000 fills) starts inside an older
+  position the phantom is confined to that one episode instead of shifting every later one;
+  episodes the window cannot have seen whole are flagged and left out, and the page's "Data
+  limits" note says how many, together with positions lacking a record (funding unknown) and
+  delayed fills without a candle. Sizing: fixed $ per position sizes on the leader's whole
+  opening *order* (all of its fills, since real orders fill in pieces), adds and reductions then
+  follow in proportion; fixed $ per fill sizes every entry fill and cuts reductions by the same
+  share; or a % of the leader's quantity. Each of the leader's fills is copied at the one-minute
+  oracle price `delay` seconds later (from the fill price to its minute's close inside the fill's
+  minute, from the previous close to that minute's close afterwards), moved against the copier
+  by the slippage, at the market's taker fee; funding and position fees are the leader's scaled
+  to the copier's average share of the position; open positions are marked at the current
+  oracle price. The page shows copier vs leader net,
   the share kept, per-position bps, costs split into fees / drift / slippage, funding, the
   copier's max drawdown, the cumulative curves of both, a latency-sensitivity table (the same
   copy at every delay) and every position with both sides' results. `sim-leaders.mjs --replay
@@ -230,10 +240,13 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   the browser's localStorage (`js/copy/paper.js`, `md.paper.<sid>`) mirrors each of the leader's
   fills from the `OrderFill` stream `delay` seconds later at the mark price of that moment
   (`Ticker` stream), so the delay cost is measured on the real tape; a fill that crosses zero is
-  split like the simulator's; fees and slippage as set, funding accrued hourly from each market's
-  current rate while a tab follows. It follows while a tab with the page is open; on return, the
-  fills that happened meanwhile are caught up from the leader's public fills at candle prices
-  (marked "caught up" in the log, their delay cost counted as modelled). Realized, unrealized at
+  split like the simulator's; a fixed-size copy is sized on the leader's whole order (looked up
+  by order id) rather than on its first piece; fees and slippage as set, funding accrued hourly
+  from each market's current rate while a tab follows. It follows while a tab with the page is
+  open; on return, the fills that happened meanwhile are caught up from the leader's public
+  fills at candle prices (marked "caught up" in the log, their delay cost counted as modelled),
+  and a virtual position whose market the leader has left without a fill in the history (a
+  liquidation, a deleveraging) is closed at the mark and marked "closed at mark". Realized, unrealized at
   the live mark, delay cost (measured / modelled), fees and slippage, funding, open virtual
   positions and the mirrored-fill log. Stop & discard removes the account.
 
