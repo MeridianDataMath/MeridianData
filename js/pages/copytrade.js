@@ -6,7 +6,8 @@
   const ROADMAP = [
     { t: 'Leaders & copyability', d: 'Every wallet scored on track record, copy friction (fees, drift, slippage at its size) and activity, with the numbers behind each score.', s: 'live' },
     { t: 'Watchlist', d: 'Star a wallet to keep it on your Favorites page with live equity and open positions.', s: 'live' },
-    { t: 'Copy simulator', d: 'Replay a leader\'s fills with your size, delay and slippage, or paper-copy them live for a week before risking anything.', s: 'building' },
+    { t: 'Copy simulator', d: 'Replay a leader\'s positions with your size, delay and slippage against its real fills and the minute-by-minute price, and see what you would have kept.', s: 'live' },
+    { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape.', s: 'building' },
     { t: 'Leader alerts', d: 'A push when a leader opens, closes or gets liquidated, straight from the exchange WebSocket.', s: 'planned' },
     { t: 'Copy agent', d: 'A local service with a Meridian linked signer (trade-only key, no withdrawals) mirroring leaders into your own subaccount with size and risk limits.', s: 'planned' },
     { t: 'Copy history', d: 'PnL attribution per leader and your realized slippage versus the leader\'s fills.', s: 'planned' },
@@ -62,7 +63,7 @@
         ['Drawdown', h('span', s.ddPct == null || !(s.ddPct > 0) ? '—' : U.fmtDd(s.ddPct))],
         ['Activity', h('span', (c.lastAt ? 'last trade ' + U.fmtAgo(c.lastAt) : '—') + (c.tenureD != null ? ` · ${U.fmtNum(c.tenureD, 0)} days on the exchange` : '') + (c.perWeek != null ? ` · ${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} closed / week` : ''))]])));
     UI.modal({ wide: true,
-      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), h('span.grow'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
+      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
         h('div.dim.small', 'Copyability ' + sc.total + ' = 35% track record (' + sc.track + ') + 45% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
@@ -74,6 +75,7 @@
 
   MD.router.pages.copytrade = {
     async mount(root, route, ctx) {
+      if (route.path === '/copytrade/sim') return MD.copysimPage.mount(root, route, ctx);
       MD.setTopbar(h('span.title', 'Copy trading'));
       const LB = MD.router.pages.leaderboard;
       const tableWrap = h('div');
@@ -129,7 +131,7 @@
               { key: 'size', label: 'Typical size', num: true, sortVal: 1, title: 'Median entry notional per position', render: (x) => (x.c && x.c.notMed ? usd0(x.c.notMed) : h('span.dim', '—')) },
               { key: 'mk', label: 'Markets', render: (x) => (x.c && x.c.markets.length ? h('div.row.wrap', { style: { gap: '4px' } }, x.c.markets.slice(0, 2).map((m) => UI.chip(m.t, '')), x.c.nMarkets > 2 ? h('span.dim.xs', '+' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
-              { key: 'go', label: '', render: (x) => h('a.btn.sm', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation() }, 'Scout') },
+              { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation() }, 'Scout')) },
             ],
             rows, empty: state.filter === 'copyable' ? 'No wallet scores 70 or more yet' : state.filter === 'scored' ? 'No wallet has 5 closed positions yet' : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },

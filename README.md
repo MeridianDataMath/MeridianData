@@ -206,8 +206,26 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   through the same pipeline against today's real books and prints the ranking with the
   expected verdict for each, so the formula is judged against what a copier wants rather than
   against whoever is on the exchange this week. Nothing on the page places orders; the roadmap
-  on the page lists what comes next (simulator, alerts, a local copy agent with a Meridian
+  on the page lists what comes next (paper copy, alerts, a local copy agent with a Meridian
   linked signer).
+* **Copy simulator** (`#/copytrade/sim?address=…&sub=…`, the Simulate button on every leader)
+  – replays a leader's positions as a follower with a chosen size (fixed dollars per position,
+  or a percentage of the leader's quantity), delay (instant … 120 s), slippage (from today's
+  books at your size, or a set number of bps) and market selection, since a chosen date.
+  `js/copy/sim.js`: position episodes are rebuilt from the leader's public fills by signed net
+  quantity per market, a fill that crosses zero being split into the close of one episode and
+  the open of the next (this matched the exchange's own position list 31/31 on a real account);
+  the exchange's position record supplies funding, mPerp position fees and the liquidation
+  flag (a liquidation, which leaves no fill, is closed at the position's average exit price).
+  Each of the leader's fills is copied at the one-minute oracle close `delay` seconds later
+  (interpolated inside the fill's minute), moved against the copier by the slippage, at the
+  market's taker fee; funding and position fees are the leader's scaled to the copier's size;
+  open positions are marked at the current oracle price. The page shows copier vs leader net,
+  the share kept, per-position bps, costs split into fees / drift / slippage, funding, the
+  copier's max drawdown, the cumulative curves of both, a latency-sensitivity table (the same
+  copy at every delay) and every position with both sides' results. `sim-leaders.mjs --replay
+  <style>` runs the engine on a synthetic leader and checks the arithmetic against the style's
+  known parameters (the leader's cash flows are conserved exactly).
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
@@ -258,7 +276,10 @@ js/analytics.js         series building, interval stats, position stats, margin 
 js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
-js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, predict
+js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, predict
+js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
+js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
+                        sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client
 js/predict/analytics.js Predict normalisation, aggregation, per-wallet slim records
 js/predict/resolution.js Polymarket Gamma + UMA oracle resolution tracker

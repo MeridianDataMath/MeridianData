@@ -42,9 +42,11 @@
       borderWidth: type === 'bar' ? 0 : 2, pointRadius: 0, pointHoverRadius: 4, pointHoverBackgroundColor: color, pointHoverBorderColor: '#0e0e0f',
       fill: type === 'line' && opts.fill !== false ? 'origin' : false, tension: 0.25, borderRadius: 2, maxBarThickness: 18, stepped: opts.stepped || false,
     };
+    // several lines on one chart: opts.series = [{points, color, label}] (no fill, a legend)
+    const datasets = opts.series ? opts.series.map((sr) => Object.assign({}, ds, { data: sr.points, label: sr.label, borderColor: sr.color, backgroundColor: hexA(sr.color, 0.1), fill: false, borderDash: sr.dash || undefined })) : [ds];
     const config = {
       type,
-      data: { datasets: [ds] },
+      data: { datasets },
       options: {
         responsive: true, maintainAspectRatio: false, parsing: false, normalized: true,
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
@@ -53,11 +55,12 @@
           y: { position: 'right', grid: { color: (c) => (c.tick.value === 0 && opts.zero !== false ? '#3a3a3d' : col.grid), drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 6, callback: (v) => yFmt(v), padding: 8 }, beginAtZero: opts.beginAtZero || false },
         },
         plugins: {
+          legend: { display: !!opts.series, position: 'top', align: 'end', labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: 'circle', padding: 12 } },
           tooltip: {
-            backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, titleColor: '#a1a1a8', bodyColor: '#ececee', padding: 10, displayColors: false,
+            backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, titleColor: '#a1a1a8', bodyColor: '#ececee', padding: 10, displayColors: !!opts.series,
             callbacks: {
               title: (items) => (items[0] ? U.fmtDateTime(items[0].raw.x) : ''),
-              label: (item) => (opts.tooltipLabel ? opts.tooltipLabel(item.raw) : (opts.label || '') + ' ' + (opts.tipFmt || U.fmtUsd)(item.raw.y)),
+              label: (item) => (opts.tooltipLabel ? opts.tooltipLabel(item.raw, item.dataset) : (item.dataset.label || opts.label || '') + ' ' + (opts.tipFmt || U.fmtUsd)(item.raw.y)),
             },
           },
         },

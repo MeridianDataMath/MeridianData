@@ -18,8 +18,8 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 globalThis.window = globalThis;
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
-for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js']) vm.runInThisContext(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f });
-const { MD } = globalThis; const A = MD.api, AN = MD.analytics, U = MD.util;
+for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/copy/sim.js']) vm.runInThisContext(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f });
+const { MD } = globalThis; const A = MD.api, AN = MD.analytics, U = MD.util, CS = MD.copysim;
 const DAY = 86400000, HOUR = 3600000, MIN = 60000;
 const now = Date.now();
 
@@ -62,12 +62,13 @@ function simulate(st, ref, seed) {
   let results = Array.from({ length: st.n }, () => st.edge + gauss(r) * st.sd);
   if (st.jackpot) results[Math.floor(st.n / 2)] = st.jackpot;
   if (st.streak === 'lossesFirst') results.sort((a, b) => a - b);
-  const positions = [], fills = [], candle = new Map();
+  const positions = [], fills = [], candle = new Map(); const busy = {};   // a market holds one position at a time, as on a netted exchange
   const opens = Array.from({ length: st.n }, () => start + r() * Math.max(DAY, end - start)).sort((a, b) => a - b);
   for (let i = 0; i < st.n; i++) {
     const p = products[Math.floor(r() * products.length)];
     const hold = st.hold * Math.exp(gauss(r) * 0.8);
-    const open = opens[i] + i * 7; const close = Math.min(open + hold, end - (st.n - i) * 977);
+    let open = opens[i] + i * 7; if (busy[p.id] && open <= busy[p.id]) open = busy[p.id] + 61000;
+    const close = Math.max(open + 1000, Math.min(open + hold, end - (st.n - i) * 977)); busy[p.id] = close;
     const px = { 'BTC-USD': 80000, 'ETH-USD': 2600, 'SOL-USD': 110, 'HYPE-USD': 90, 'XAU-USD': 4300, 'XAG-USD': 66, 'SPY-USD': 760, 'QQQ-USD': 716 }[p.displayTicker] || 100;
     const notional = st.size * Math.exp(gauss(r) * 0.5); const qty = notional / px;
     const long = r() < 0.55; const sign = long ? 1 : -1;
@@ -105,6 +106,25 @@ function simulate(st, ref, seed) {
 const ctx = { signal: new AbortController().signal };
 const ref = await A.ref(ctx);
 const copyCtx = await AN.copyContext(ref, ctx);
+// --replay <style>: run the copy simulator on one synthetic account and compare with what the style implies
+if (process.argv.includes('--replay')) {
+  const id = process.argv[process.argv.indexOf('--replay') + 1]; const st = STYLES.find((x) => x.id === id); if (!st) throw new Error('unknown style ' + id);
+  const sim = simulate(st, ref, 1);
+  const episodes = CS.attachPositions(CS.episodes(sim.fills), sim.positions);
+  const slip = CS.slippageFor(copyCtx.depth, ref, 2000); const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003;
+  const priceAt = CS.priceAtFactory(sim.candles, ref);
+  for (const delay of [0, 60, 300]) {
+    const R = await CS.replay({ episodes, settings: { mode: 'fixed', size: 2000, delaySec: delay, slipBps: slip, feeRate, priceAt }, marks: {}, since: 0, ref });
+    const T = R.T; const n = T.n;
+    console.log(`${id} delay ${delay}s: positions ${n} (episodes ${episodes.length}, sim ${sim.positions.length}) · leader net ${T.leaderNet.toFixed(2)} · copier net ${T.copierNet.toFixed(2)} · fees ${T.fees.toFixed(2)} · drift ${T.drift.toFixed(2)} · slip ${T.slip.toFixed(2)} · funding ${T.funding.toFixed(2)}`);
+    const perPosBps = (T.copierNet / n / 2000) * 1e4; const expectDrift = delay === 60 ? 2 * st.drift1 : delay === 300 ? 2 * st.drift5 : 0;
+    const slipAvg = U.sum(R.rows, (r) => slip[r.e.pid]) / n;
+    console.log(`   copier per position ${perPosBps.toFixed(1)} bps · expected ≈ edge ${st.edge} − fees ${(2 * 3).toFixed(0)} − drift ${expectDrift.toFixed(1)} − slip ${(2 * slipAvg).toFixed(1)} + funding ${(st.fund || 0) * (st.hold / DAY)} = ${(st.edge - 6 - expectDrift - 2 * slipAvg + (st.fund || 0) * (st.hold / DAY)).toFixed(1)} bps (sample mean of the edge differs from ${st.edge})`);
+    const leaderSim = U.sum(sim.positions, (p) => p.gross - p.fees + p.fundingReceived);
+    console.log(`   leader net from the simulated positions ${leaderSim.toFixed(2)} vs replay's leader net ${T.leaderNet.toFixed(2)}`);
+  }
+  process.exit(0);
+}
 const rows = [];
 let seed = process.argv.includes('--seed') ? Number(process.argv[process.argv.indexOf('--seed') + 1]) : 1;
 for (const st of STYLES) {

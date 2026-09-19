@@ -496,6 +496,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .score.amber { background: var(--amber-dim); color: var(--amber); }
 .score.red { background: var(--red-dim); color: var(--red); }
 .score.sm { font-size: 13px; line-height: 22px; min-width: 30px; }
+button.chip { font: inherit; font-size: 11px; line-height: inherit; }
 .score-part { font-size: 12.5px; }
 .score-part .bar { margin: 4px 0 3px; }
 .hold-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; gap: 1px; font-size: 10px; line-height: 16px; text-align: center; color: var(--bg-1); font-weight: 600; max-width: 360px; }
