@@ -343,7 +343,7 @@
    *  `all=1` switches to the server-side explorer over every question on the exchange. */
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
-    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST' };
+    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'all', sort: route.params.sort || 'OPEN_INTEREST', col: { key: route.params.col || 'sw', desc: route.params.dir !== 'asc' } };
     // The default view never waits for the API probe (a refused CORS preflight can take a second); only `all=1` needs it.
     const liveP = P.live();
     if (route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, liveP);
@@ -394,14 +394,14 @@
       trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
     resTicker(ctx, () => { if (!loading) renderRows(); });
-    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
+    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'all' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
 
   /** Questions people have actually bet on through Meridian (from the snapshot): open interest now, open predictions,
    *  and questions settled in the last 30 days. Rows carry n = predictions ever, b = open predictions, s = open stake. */
   const hasBets = (q) => q.oi > 0 || q.b > 0 || q.n > 0 || q.n == null;   // n == null: snapshot older than this field
-  const betsNote = (c) => { const parts = []; if (c.b) parts.push(`${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}`); if (c.u) parts.push(`${c.u} decided, unclaimed`); if (!parts.length && c.n) parts.push(`${c.n} bet${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`); return parts.length ? parts.join(' · ') : null; };
+  const betsNote = (c) => { const parts = []; if (c.b) parts.push(`${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}`); if (c.u) parts.push(`${c.u} decided, unclaimed`); return parts.length ? parts.join(' · ') : null; };
   async function mountQuestionsWithBets(body, route, ctx, st, liveP) {
     await withSnapshot(body, ctx, (snap) => {
       let live = false;
@@ -419,12 +419,15 @@
       const endedIds = Array.from(new Set(endedQs.flatMap((q) => [qId(q)].concat(R.legIds(q)))));
       const endedCountOf = () => all.filter((q) => exposure(q) && q.end && q.end < now && alive(q)).length;
       const endedCount = endedCountOf();
-      if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
+      if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'all';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
-        h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); renderBacklog(); }, 'sm')),
-        h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'BETS', label: 'Open bets' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], ['OPEN_INTEREST', 'BETS', 'END_TIME', 'PROB'].includes(st.sort) ? st.sort : 'OPEN_INTEREST', (v) => { st.sort = v; page = 1; render(); }, 'sm'),
+        h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; headerSorted = false; render(); renderBacklog(); }, 'sm')),
         h('span.grow'), summary));
+      // header sorting like the leaderboard; the Ended tab keeps its pipeline order unless a header is chosen
+      const SORTS = { q: (q) => (q.q || '').toLowerCase(), c: (q) => (q.cat || '').toLowerCase(), p: (q) => (q.ep == null ? -1 : q.ep), sw: (q) => (q.sw || 0) * 1e9 + (q.s || 0), oi: (q) => (q.oi || 0) * 1e9 + (q.s || 0), b: (q) => (q.b || 0) * 1e9 + (q.s || 0), v7: (q) => q.v7 || 0, end: (q) => q.end || Infinity, l: (q) => q.l || 0 };
+      let headerSorted = false;
+      const onSort = (k) => { if (!SORTS[k]) return; if (st.col.key === k) st.col.desc = !st.col.desc; else st.col = { key: k, desc: !['q', 'c', 'end'].includes(k) }; headerSorted = true; page = 1; MD.router.setParams({ col: st.col.key === 'sw' ? null : st.col.key, dir: st.col.desc ? null : 'asc' }, { silent: true }); render(); };
       // the link to the full explorer appears once the API probe says this origin may query the exchange directly
       Promise.resolve(liveP).then((ok) => { live = !!ok; if (!live || ctx.signal.aborted) return; controls.appendChild(h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Only questions with Meridian bets are listed.'), h('a.small', { href: '#/predict/questions?all=1', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null }); } }, 'Search all ' + (snap.questions ? U.fmtCompact(snap.questions.all, 0) + ' ' : '') + 'questions on the exchange'))); }).catch(() => {});
       const refreshEndedLabel = () => { const n = endedCountOf(); const btn = Array.from(controls.querySelectorAll('.status-seg button')).find((x) => x.textContent.startsWith('Ended')); if (btn) btn.textContent = 'Ended · unsettled' + (n ? ' (' + n + ')' : ''); };
@@ -449,20 +452,16 @@
         if (st.status === 'open') rows = rows.filter(exposure);
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
         else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
-        rows = st.status === 'ended' ? byStage(rows)
-          : st.status === 'settled' ? U.sortBy(rows, (q) => q.l || q.end || 0, true)
-          : st.sort === 'BETS' ? U.sortBy(rows, (q) => (q.b || 0) * 1e9 + (q.s || 0), true)
-          : st.sort === 'END_TIME' ? U.sortBy(rows, (q) => q.end || Infinity)
-          : st.sort === 'PROB' ? U.sortBy(rows, (q) => (q.ep == null ? -1 : q.ep), true)
-          : U.sortBy(rows, (q) => (q.oi || 0) * 1e9 + (q.s || 0), true);
+        rows = st.status === 'ended' && !headerSorted ? byStage(rows) : U.sortBy(rows, SORTS[st.col.key] || SORTS.sw, st.col.desc);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE);
-        U.replace(wrap, UI.table({ cols: [
-          { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
-          { key: 'c', label: 'Category', render: (c) => c.cat || '—' },
-          { key: 'p', label: 'Probability', num: true, render: (c) => probBar(c.ep) },
-          { key: 'oi', label: 'Meridian OI', num: true, title: 'Collateral escrowed on Meridian right now · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, betsNote(c)) : null) },
-          { key: 'v7', label: 'Source vol 7d', num: true, title: 'Volume on the mirrored Polymarket market, last 7 days', render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
+        U.replace(wrap, UI.table({ sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
+          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+          { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
+          { key: 'p', label: 'Probability', num: true, sortVal: 1, render: (c) => probBar(c.ep) },
+          { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes ever placed on this question · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, `${c.n} prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`) : null) },
+          { key: 'oi', label: 'Meridian OI', num: true, sortVal: 1, title: 'Collateral escrowed on Meridian right now · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, betsNote(c)) : null) },
+          { key: 'v7', label: 'Source vol 7d', num: true, sortVal: 1, title: 'Volume on the mirrored Polymarket market, last 7 days', render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
         ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));

@@ -146,8 +146,8 @@ async function buildPredict() {
   const act = {};
   for (const n of norms) {
     for (const k of n.picks) {
-      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0, u: 0 });
-      a.n++; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (!n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
+      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0, u: 0, sw: 0 });
+      a.n++; a.sw += n.stake; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (!n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
     }
   }
   const r2 = (x) => Math.round(x * 100) / 100;
@@ -164,7 +164,7 @@ async function buildPredict() {
     if (withOi.length >= 1200) break;
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
-  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; q.u = a ? a.u : 0; }
+  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; q.u = a ? a.u : 0; q.sw = a ? r2(a.sw) : 0; }   // sw: bettor stake ever placed on the question
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   const openBy = {};
