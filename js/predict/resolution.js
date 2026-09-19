@@ -148,6 +148,7 @@
   R.get = (id) => { const m = markets.get(lc(id)); const o = oracles.get(lc(id)); return { m: m ? m.m : undefined, o: o ? o.o : undefined, loaded: !!m }; };
   /** Which side of a Meridian question the source market resolved to: true = YES (Polymarket's first outcome, the one
    *  Meridian's YES mirrors), false = NO, 'void' = 50/50, null = not resolved or unknown. */
+  R.STUCK_DAYS = 7;   // resolved on the source market this long ago and still unsettled on Meridian = settlement backlog
   R.resolvedYes = (m) => { if (!m || !m.prices || !m.prices.length) return null; const i = m.prices.findIndex((p) => p >= 0.99); if (i === 0) return true; if (i === 1) return false; if (m.prices.every((p) => Math.abs(p - 0.5) < 0.01)) return 'void'; return null; };
   /** A pick the source market has already resolved against (the question not yet settled on Meridian): the bettor's
    *  stake is gone, only the settlement is pending. */
@@ -174,7 +175,10 @@
     const bond = o && o.bond ? Number(o.bond) / 1e6 : m.bond || R.BOND_USD;
     if (m.closed || m.uma === 'resolved' || (o && o.settled)) {
       const out = R.resolvedOutcome(m) || (o && o.settled ? priceName(o.resolvedPrice, o, m) : null); const at = m.resolvedAt || m.closedAt;
-      return { code: 'resolved', chip: ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''), sub: 'on Polymarket · not settled on Meridian yet', at, outcome: out, m, o };
+      // settlement normally follows within a day or two; beyond a week the question is stuck on Meridian's side
+      const stuckD = at ? Math.floor((now - at) / 86400000) : 0;
+      const stuck = stuckD >= R.STUCK_DAYS;
+      return { code: 'resolved', stuck, stuckD, chip: stuck ? ['resolved · stuck ' + stuckD + 'd', 'amber'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''), sub: stuck ? 'on Polymarket ' + stuckD + ' days ago · still not settled on Meridian' : 'on Polymarket · not settled on Meridian yet', at, outcome: out, m, o };
     }
     if (o && o.paused) return { code: 'paused', chip: ['paused', 'amber'], main: 'Resolution paused by Polymarket', sub: 'under review · no timeline', m, o };
     if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };

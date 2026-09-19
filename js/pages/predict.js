@@ -115,6 +115,20 @@
         UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'settled · mirror = maker profit', U.pnlClass(T.bettorPnl)),
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
+      // settlement backlog: ended questions resolved on the source market a week or more ago and still unsettled
+      (async () => {
+        try {
+          const now = Date.now();
+          const ended = (snap.questionsWithOi || []).filter((q) => !q.settled && q.end && q.end < now && (q.oi > 0 || q.b > 0));
+          if (!ended.length) return;
+          await R.load(ended.map((q) => q.id), { signal: ctx.signal, deep: false });
+          if (ctx.signal.aborted) return;
+          const stuck = ended.filter((q) => !R.questionDead(q, q.id) && R.state(q, q.id).stuck);
+          if (!stuck.length) return;
+          const oldest = Math.max(...stuck.map((q) => R.state(q, q.id).stuckD));
+          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Settlement backlog', String(stuck.length), `question${stuck.length > 1 ? 's' : ''} resolved ${R.STUCK_DAYS}+ days ago, unsettled · oldest ${oldest}d · ${usd(U.sum(stuck, (q) => q.s || 0))} waiting`, 'neg')));
+        } catch (e) { if (!isAbort(e)) console.warn('backlog tile', e); }
+      })();
       const cWager = h('canvas'), cCount = h('canvas');
       const tapeBody = h('div.feed.pause-hover');
       const tapeCard = h('div.card.tight', h('div.card-head', h('h2', 'Live predictions'), h('span.dim.small', 'newest first · refreshes every 20 s'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), tapeBody);
@@ -280,7 +294,7 @@
   const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
   /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
   const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, resolved: 5, paused: 6, unknown: 7, trading: 8, settled: 9 };
-  const byStage = (rows) => U.sortBy(rows, (c) => (STAGE_RANK[R.state(qView(c), qId(c)).code] || 0) * 1e13 + (qView(c).end || 0));
+  const byStage = (rows) => U.sortBy(rows, (c) => { const st = R.state(qView(c), qId(c)); return (st.code === 'resolved' && st.stuck ? -1 : (STAGE_RANK[st.code] || 0)) * 1e13 + (st.stuck ? (st.at || 0) : (qView(c).end || 0)); });
   const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
 
   /** Default view: only questions Meridian users have actually bet on (from the snapshot). With live API access,
@@ -364,14 +378,24 @@
       if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
-        h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); }, 'sm')),
+        h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); renderBacklog(); }, 'sm')),
         h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'BETS', label: 'Open bets' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], ['OPEN_INTEREST', 'BETS', 'END_TIME', 'PROB'].includes(st.sort) ? st.sort : 'OPEN_INTEREST', (v) => { st.sort = v; page = 1; render(); }, 'sm'),
         h('span.grow'), summary));
       // the link to the full explorer appears once the API probe says this origin may query the exchange directly
       Promise.resolve(liveP).then((ok) => { live = !!ok; if (!live || ctx.signal.aborted) return; controls.appendChild(h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Only questions with Meridian bets are listed.'), h('a.small', { href: '#/predict/questions?all=1', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null }); } }, 'Search all ' + (snap.questions ? U.fmtCompact(snap.questions.all, 0) + ' ' : '') + 'questions on the exchange'))); }).catch(() => {});
       const refreshEndedLabel = () => { const n = endedCountOf(); const btn = Array.from(controls.querySelectorAll('.status-seg button')).find((x) => x.textContent.startsWith('Ended')); if (btn) btn.textContent = 'Ended · unsettled' + (n ? ' (' + n + ')' : ''); };
+      const backlog = h('div');
+      const renderBacklog = () => {
+        if (st.status !== 'ended') { U.clear(backlog); return; }
+        const stuck = all.filter((q) => exposure(q) && alive(q) && R.state(q, qId(q)).stuck);
+        if (!stuck.length) { U.clear(backlog); return; }
+        const oldest = Math.max(...stuck.map((q) => R.state(q, qId(q)).stuckD));
+        const waiting = U.sum(stuck, (q) => q.s || 0);
+        U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('settlement backlog', 'amber'),
+          h('span.small', `${stuck.length} question${stuck.length > 1 ? 's' : ''} resolved on Polymarket more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days) are still not settled on Meridian, with ${usd(waiting)} of bettor stakes waiting on the winning side. Settlement happens on Meridian's side; a combo settles only once every leg has resolved, but these include predictions whose legs have all resolved. They are listed first.`))));
+      };
       let renderSeq = 0, endedPreloaded = false;
-      if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); }).catch(() => {});
+      if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});
       function render(keepTracking) {
         let rows = all.filter(alive); const t = Date.now();
         if (st.search) rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(st.search));
@@ -399,7 +423,7 @@
         U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`);
         if (!keepTracking) { const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
-      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: open interest now, open predictions, and questions settled in the last 30 days, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '.' + ' Searching every question on the exchange needs live API access (the Predict API only allows Meridian\'s own origins).'), resFootnote());
+      U.replace(body, controls, backlog, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: open interest now, open predictions, and questions settled in the last 30 days, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '.' + ' Searching every question on the exchange needs live API access (the Predict API only allows Meridian\'s own origins).'), resFootnote());
       render();
       resTicker(ctx, () => render(true));
     });
