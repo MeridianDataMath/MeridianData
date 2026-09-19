@@ -226,6 +226,16 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   copy at every delay) and every position with both sides' results. `sim-leaders.mjs --replay
   <style>` runs the engine on a synthetic leader and checks the arithmetic against the style's
   known parameters (the leader's cash flows are conserved exactly).
+* **Paper copy** (the card under the simulator) – the same copier, live: a virtual account in
+  the browser's localStorage (`js/copy/paper.js`, `md.paper.<sid>`) mirrors each of the leader's
+  fills from the `OrderFill` stream `delay` seconds later at the mark price of that moment
+  (`Ticker` stream), so the delay cost is measured on the real tape; a fill that crosses zero is
+  split like the simulator's; fees and slippage as set, funding accrued hourly from each market's
+  current rate while a tab follows. It follows while a tab with the page is open; on return, the
+  fills that happened meanwhile are caught up from the leader's public fills at candle prices
+  (marked "caught up" in the log, their delay cost counted as modelled). Realized, unrealized at
+  the live mark, delay cost (measured / modelled), fees and slippage, funding, open virtual
+  positions and the mirrored-fill log. Stop & discard removes the account.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
@@ -278,6 +288,7 @@ js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
 js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, predict
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
+js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client

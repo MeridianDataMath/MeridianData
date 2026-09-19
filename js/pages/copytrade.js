@@ -7,7 +7,7 @@
     { t: 'Leaders & copyability', d: 'Every wallet scored on track record, copy friction (fees, drift, slippage at its size) and activity, with the numbers behind each score.', s: 'live' },
     { t: 'Watchlist', d: 'Star a wallet to keep it on your Favorites page with live equity and open positions.', s: 'live' },
     { t: 'Copy simulator', d: 'Replay a leader\'s positions with your size, delay and slippage against its real fills and the minute-by-minute price, and see what you would have kept.', s: 'live' },
-    { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape.', s: 'building' },
+    { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape; kept in your browser and caught up from the exchange when you come back.', s: 'live' },
     { t: 'Leader alerts', d: 'A push when a leader opens, closes or gets liquidated, straight from the exchange WebSocket.', s: 'planned' },
     { t: 'Copy agent', d: 'A local service with a Meridian linked signer (trade-only key, no withdrawals) mirroring leaders into your own subaccount with size and risk limits.', s: 'planned' },
     { t: 'Copy history', d: 'PnL attribution per leader and your realized slippage versus the leader\'s fills.', s: 'planned' },

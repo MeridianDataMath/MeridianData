@@ -98,17 +98,17 @@
       function renderResults(runs, base, slipAuto) {
         const R = runs[st.delay]; const T = R.T; const R0 = runs[0].T;
         if (!R.rows.length) { U.replace(results, h('div.card', h('div.empty', 'No positions opened since ' + st.since + (st.markets ? ' in the chosen markets' : '') + '. Move the start date back.'))); return; }
-        const sizeLabel = st.mode === 'fixed' ? usd0(st.size) + ' per position' : U.fmtNum(st.ratio, 1) + '% of the leader\'s size';
+        const sizeLabel = st.mode === 'fixed' ? usd0(st.size) + ' on the first fill of each position' : U.fmtNum(st.ratio, 1) + '% of the leader\'s size';
         const perPos = T.n ? T.copierNet / T.n : 0, perPosL = T.n ? T.leaderNet / T.n : 0;
         const avgEntry = T.n ? U.sum(R.rows, (r) => r.C.entryNotional) / T.n : 0, avgEntryL = T.n ? U.sum(R.rows, (r) => r.L.entryNotional) / T.n : 0;
         const tiles = h('div.stats',
           UI.stat('Copier net', usd0(T.copierNet, { sign: true }), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's result` : ''), U.pnlClass(T.copierNet)),
           UI.stat('Leader net', usd0(T.leaderNet, { sign: true }), 'same positions, their fills, fees and funding', U.pnlClass(T.leaderNet)),
-          UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps`, U.pnlClass(perPos)),
+          UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps`, U.pnlClass(perPos)),
           UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '')),
           UI.stat('Costs', usd0(T.fees + T.drift + T.slip + T.posFee), `${usd0(T.fees)} fees · ${usd0(T.drift, { sign: true })} drift · ${usd0(T.slip)} slippage` + (T.posFee ? ` · ${usd0(T.posFee)} position fees` : ''), 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'the leader\'s, scaled to your size', U.pnlClass(T.funding)),
-          UI.stat('Max drawdown', usd0(T.maxDd), st.mode === 'fixed' && st.size ? `${U.fmtNum(T.maxDd / st.size, 1)}× one position's size · on the copier's cumulative result` : 'on the copier\'s cumulative result', T.maxDd > 0 ? 'neg' : ''),
+          UI.stat('Max drawdown', usd0(T.maxDd), avgEntry ? `${U.fmtNum(T.maxDd / avgEntry, 1)}× an average position · on the copier's cumulative result` : 'on the copier\'s cumulative result', T.maxDd > 0 ? 'neg' : ''),
           UI.stat('If instant', usd0(R0.copierNet, { sign: true }), 'the same copy with zero delay: what latency costs is the gap', U.pnlClass(R0.copierNet)));
         const canvas = h('canvas');
         const col = C.colors();
@@ -153,6 +153,89 @@
         U.replace(results, tiles, h('div.grid.cols-2', chartCard, sensCard), UI.card('Positions', wrap, h('span.dim.small', `${T.n} since ${st.since}, newest first`)), notes);
         C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: (v) => U.fmtUsd(v, { compact: true }), tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
       }
+
+      // ---- paper copy: the same copier, live, in a virtual account kept in this browser
+      const PP = MD.paper;
+      const paperCard = h('div.card'); body.appendChild(paperCard);
+      let paper = PP.load(sid); const live = {}; let unsubs = []; let fundingTimer = null; let pending = 0;
+      const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode === 'fixed' ? st.size : AN.COPY_SIZE) : st.slip, feeRate }; };
+      const detach = () => { for (const u of unsubs) { try { u(); } catch (_) {} } unsubs = []; if (fundingTimer) clearInterval(fundingTimer); fundingTimer = null; };
+      ctx.onCleanup(detach);
+      const markOf = (pid) => (live[pid] != null ? live[pid] : marks[pid]);
+      const marksNow = () => { const m = {}; for (const p of ref.active) { const v = markOf(p.id); if (v) m[p.id] = v; } return m; };
+      async function catchUp() {
+        // fills that happened while no tab was following: priced from candles, like the simulator
+        const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: paper.lastSeen - 1000 }, { maxPages: 5, signal: ctx.signal });
+        const priceAt = S.priceAtFactory(candles, ref); let n = 0;
+        for (const f of fills.slice().sort((a, b) => U.num(a.createdAt) - U.num(b.createdAt))) {
+          if (paper.seen[f.id] || U.num(f.createdAt) < paper.startedAt) continue;
+          const prod = ref.byId[f.productId]; if (!prod) continue;
+          const px = await priceAt(f.productId, U.num(f.createdAt), U.num(f.price), paper.settings.delay);
+          if (PP.apply(paper, { id: f.id, t: U.num(f.createdAt), pid: f.productId, ticker: prod.displayTicker, side: U.sideName(f.side), qty: U.num(f.filled), px: U.num(f.price) }, { px, live: false, at: U.num(f.createdAt) + paper.settings.delay * 1000 })) n++;
+        }
+        paper.lastSeen = Date.now(); PP.save(paper); return n;
+      }
+      function attach() {
+        detach();
+        for (const p of ref.active) unsubs.push(A.ws.subscribe('Ticker', p.ticker, (m) => { const d = m.data || {}; const prod = ref.byTicker[d.s]; if (prod && U.num(d.markPx)) live[prod.id] = U.num(d.markPx); }));
+        unsubs.push(A.ws.subscribe('OrderFill', sid, (m) => {
+          const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [];
+          for (const it of items) {
+            const prod = ref.byTicker[it.s]; if (!prod || !paper) continue;
+            const fill = { id: it.id, t: U.num(it.t || d.t) || Date.now(), pid: prod.id, ticker: prod.displayTicker, side: U.sideName(it.sd), qty: U.num(it.sz), px: U.num(it.px) };
+            pending++; renderPaper();
+            // act `delay` seconds later at the mark of that moment: the wait is measured on the real tape
+            setTimeout(() => { pending--; if (!paper || ctx.signal.aborted) return; const px = markOf(prod.id) || fill.px; PP.apply(paper, fill, { px, live: true, at: Date.now() }); paper.lastSeen = Date.now(); PP.save(paper); renderPaper(); }, paper.settings.delay * 1000);
+          }
+        }));
+        fundingTimer = setInterval(() => { if (!paper) return; PP.accrueFunding(paper, ref, marksNow(), 1 / 60); PP.save(paper); renderPaper(); }, 60000);
+      }
+      async function startPaper() {
+        paper = PP.start(sid, sa.account, paperSettings()); attach(); renderPaper();
+      }
+      function renderPaper() {
+        if (!paper) {
+          U.replace(paperCard, h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Paper copy'), UI.chip('live', 'blue'), h('span.grow'), h('button.btn.primary.sm', { onclick: startPaper }, 'Start following')),
+            h('p.muted', { style: { margin: 0, maxWidth: '900px' } }, 'Follow this account in a virtual account with the settings above. Each of its fills is mirrored ' + (st.delay ? st.delay + ' seconds' : 'immediately') + ' later at the mark price of that moment, so the delay cost is measured on the real tape rather than modelled. The account lives in this browser: it follows while a tab with this page is open, and fills that happen while it is closed are caught up from the exchange\'s fill history at candle prices when you come back.'));
+          return;
+        }
+        const mk = marksNow(); const unreal = PP.unrealized(paper, mk); const T = paper.totals;
+        const openRows = Object.values(paper.open);
+        const tiles = h('div.stats',
+          UI.stat('Realized', usd0(T.realized, { sign: true }), `${paper.closed.length} closed position${paper.closed.length === 1 ? '' : 's'}`, U.pnlClass(T.realized)),
+          UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark`, U.pnlClass(unreal)),
+          UI.stat('Delay cost', usd0(-(T.driftLive + T.driftModeled), { sign: true }), `${usd0(-T.driftLive, { sign: true })} measured on ${T.liveFills} live fill${T.liveFills === 1 ? '' : 's'} · ${usd0(-T.driftModeled, { sign: true })} modelled on ${T.caughtUp} caught up`, T.driftLive + T.driftModeled > 0 ? 'neg' : T.driftLive + T.driftModeled < 0 ? 'pos' : ''),
+          UI.stat('Fees & slippage', usd0(T.fees + T.slip), `${usd0(T.fees)} fees · ${usd0(T.slip)} slippage`, 'neg'),
+          UI.stat('Funding', usd0(T.funding, { sign: true }), 'accrued hourly from each market\'s current rate while a tab follows', U.pnlClass(T.funding)));
+        const openTbl = UI.table({ cols: [
+          { key: 'm', label: 'Market', render: (p) => UI.marketCell(p.ticker) },
+          { key: 's', label: 'Side', render: (p) => U.sideEl(p.qty > 0, true) },
+          { key: 'q', label: 'Size', num: true, render: (p) => h('span', U.fmtQty(Math.abs(p.qty)), h('span.dim.xs', ' · ' + usd0(p.entryNotional))) },
+          { key: 'e', label: 'Avg entry', num: true, render: (p) => U.fmtPrice(Math.abs(p.cash / p.qty), (ref.byId[p.pid] || {}).tickSize) },
+          { key: 'mk', label: 'Mark', num: true, render: (p) => (mk[p.pid] ? U.fmtPrice(mk[p.pid], (ref.byId[p.pid] || {}).tickSize) : h('span.dim', '—')) },
+          { key: 'u', label: 'Unrealized', num: true, render: (p) => (mk[p.pid] ? U.pnlEl(p.cash + p.qty * mk[p.pid] - p.fees + p.funding, { dp: 2 }) : h('span.dim', '—')) },
+          { key: 't', label: 'Since', render: (p) => h('span.dim', U.fmtAgo(p.openedAt)) },
+        ], rows: openRows, empty: 'No open virtual position' });
+        const logTbl = UI.table({ cols: [
+          { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
+          { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
+          { key: 's', label: 'Side', render: (r) => U.sideEl(r.side === 'BUY') },
+          { key: 'q', label: 'Size', num: true, render: (r) => U.fmtQty(r.qty) },
+          { key: 'lp', label: 'Leader px', num: true, render: (r) => U.fmtPrice(r.leaderPx, (ref.byTicker[r.ticker] || {}).tickSize) },
+          { key: 'cp', label: 'Copier px', num: true, render: (r) => U.fmtPrice(r.px, (ref.byTicker[r.ticker] || {}).tickSize) },
+          { key: 'd', label: 'Wait cost', num: true, render: (r) => (Math.abs(r.drift) < 0.005 ? h('span.dim', '—') : h('span', { class: r.drift > 0 ? 'neg' : 'pos' }, U.fmtUsd(-r.drift, { sign: true, dp: 2 }))) },
+          { key: 'f', label: 'Fee', num: true, render: (r) => U.fmtUsd(r.fee, { dp: 2 }) },
+          { key: 'k', label: '', render: (r) => h('span', r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null) },
+        ], rows: paper.log.slice(0, 30), empty: 'No fills mirrored yet' });
+        U.replace(paperCard,
+          h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
+            h('button.btn.sm.ghost', { onclick: () => { if (confirm('Stop following and discard this paper account?')) { detach(); PP.clear(sid); paper = null; renderPaper(); } } }, 'Stop & discard')),
+          tiles,
+          h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('Open virtual positions', openTbl), UI.card('Mirrored fills', logTbl, h('span.dim.small', 'newest first'))),
+          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account only proves what following would have done from here on; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.'));
+      }
+      if (paper) { renderPaper(); try { const n = await catchUp(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } attach(); renderPaper(); }
+      else renderPaper();
       await run();
     },
   };
