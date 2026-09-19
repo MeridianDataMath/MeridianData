@@ -354,25 +354,31 @@
       let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const now = Date.now();
-      const endedCount = all.filter((q) => q.end && q.end < now && !q.settled && (q.oi > 0 || q.b > 0 || q.b == null)).length;
+      const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it
+      // ended but unsettled questions whose source market already resolved with nobody on the winning side are noise:
+      // only the makers are waiting for the settlement. Their resolution state is loaded once so they can be dropped.
+      const alive = (q) => !R.questionDead(q, qId(q));
+      const endedIds = all.filter((q) => exposure(q) && q.end && q.end < now).map(qId);
+      const endedCountOf = () => all.filter((q) => exposure(q) && q.end && q.end < now && alive(q)).length;
+      const endedCount = endedCountOf();
       if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
-        UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); }, 'sm'),
+        h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; render(); }, 'sm')),
         h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'BETS', label: 'Open bets' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'PROB', label: 'Probability' }], ['OPEN_INTEREST', 'BETS', 'END_TIME', 'PROB'].includes(st.sort) ? st.sort : 'OPEN_INTEREST', (v) => { st.sort = v; page = 1; render(); }, 'sm'),
         h('span.grow'), summary));
       // the link to the full explorer appears once the API probe says this origin may query the exchange directly
       Promise.resolve(liveP).then((ok) => { live = !!ok; if (!live || ctx.signal.aborted) return; controls.appendChild(h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Only questions with Meridian bets are listed.'), h('a.small', { href: '#/predict/questions?all=1', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null }); } }, 'Search all ' + (snap.questions ? U.fmtCompact(snap.questions.all, 0) + ' ' : '') + 'questions on the exchange'))); }).catch(() => {});
+      const refreshEndedLabel = () => { const n = endedCountOf(); const btn = Array.from(controls.querySelectorAll('.status-seg button')).find((x) => x.textContent.startsWith('Ended')); if (btn) btn.textContent = 'Ended · unsettled' + (n ? ' (' + n + ')' : ''); };
       let renderSeq = 0, endedPreloaded = false;
+      if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); }).catch(() => {});
       function render(keepTracking) {
-        let rows = all; const t = Date.now();
+        let rows = all.filter(alive); const t = Date.now();
         if (st.search) rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(st.search));
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
-        const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it
         if (st.status === 'open') rows = rows.filter(exposure);
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
         else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
-        if (st.status === 'ended' && !endedPreloaded) { endedPreloaded = true; R.load(rows.map(qId), { signal: ctx.signal, deep: false }).then(() => { if (st.status === 'ended') render(true); }).catch(() => {}); }
         rows = st.status === 'ended' ? byStage(rows)
           : st.status === 'settled' ? U.sortBy(rows, (q) => q.l || q.end || 0, true)
           : st.sort === 'BETS' ? U.sortBy(rows, (q) => (q.b || 0) * 1e9 + (q.s || 0), true)
@@ -525,7 +531,7 @@
       ]);
       const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
       const posRows = (openPos.nodes || []).map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
-      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: openPos.totalCount || 0, builtAt: Date.now() };
+      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: openPos.totalCount || (openPos.nodes || []).length, builtAt: Date.now() };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
@@ -570,7 +576,10 @@
       ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: P.APP_URL }); } }, R.line(legView(k), k.id))
       : h('div.res-line', h('span.dim.small', k.endTime ? (k.endTime > Date.now() ? 'in ' + U.fmtCountdown(k.endTime - Date.now()) : 'pending') : '—')))));
     const openWrap = h('div');
-    const renderOpen = () => U.replace(openWrap, UI.table({ cols: [
+    // a position with a leg the source market already resolved against is lost, only the settlement is pending: it
+    // leaves the table (nothing to watch) and is counted underneath instead
+    const lostPos = (r) => r.side !== 'COUNTERPARTY' && r.picks.some((k) => R.pickLost(k, k.id));
+    const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replace(openWrap, UI.table({ cols: [
       { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q))) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip('maker', 'blue') : UI.chip('bettor', '')) },
       { key: 's', label: 'Stake', num: true, render: (r) => usd(r.stake) },
@@ -578,7 +587,7 @@
       { key: 'f', label: 'Source now', num: true, title: 'Current probability on the source market', render: (r) => pct(r.fair, 1) },
       { key: 'p', label: 'Pays', num: true, render: (r) => h('span', usd(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
       { key: 'e', label: 'Resolution', title: 'Where each leg is in the Polymarket / UMA resolution pipeline', render: legCell },
-    ], rows: posRows, empty: 'No open positions' }));
+    ], rows, empty: lost.length ? 'Nothing still in play' : 'No open positions' }), lost.length ? h('div.footer-note', { style: { textAlign: 'left', padding: '10px 14px' } }, `${lost.length} position${lost.length > 1 ? 's' : ''} (${usd(U.sum(lost, (r) => r.stake))} staked) already resolved against this bettor on Polymarket and only await settlement on Meridian.`) : null); };
     renderOpen();
     const legIds = posRows.flatMap((r) => r.picks.map((k) => k.id)).filter(Boolean);
     if (legIds.length) (async () => { try { await R.load(legIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();

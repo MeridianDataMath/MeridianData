@@ -56,9 +56,11 @@
   /** For containers that re-render on every tick: skip a render while the reader is selecting text inside it or
    *  holding the mouse button over it, so copying a price or an address is possible; the next tick catches up. */
   let pointerDown = false;
-  document.addEventListener('pointerdown', () => { pointerDown = true; }, true);
-  document.addEventListener('pointerup', () => { pointerDown = false; }, true);
-  document.addEventListener('pointercancel', () => { pointerDown = false; }, true);
+  if (typeof document !== 'undefined') {   // the snapshot builder loads this file in Node, where there is no document
+    document.addEventListener('pointerdown', () => { pointerDown = true; }, true);
+    document.addEventListener('pointerup', () => { pointerDown = false; }, true);
+    document.addEventListener('pointercancel', () => { pointerDown = false; }, true);
+  }
   U.replaceLive = (el, ...children) => {
     const sel = document.getSelection ? document.getSelection() : null;
     const selecting = sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);

@@ -146,6 +146,15 @@
     if (need.length) await R.oracle(need, { signal });
   };
   R.get = (id) => { const m = markets.get(lc(id)); const o = oracles.get(lc(id)); return { m: m ? m.m : undefined, o: o ? o.o : undefined, loaded: !!m }; };
+  /** Which side of a Meridian question the source market resolved to: true = YES (Polymarket's first outcome, the one
+   *  Meridian's YES mirrors), false = NO, 'void' = 50/50, null = not resolved or unknown. */
+  R.resolvedYes = (m) => { if (!m || !m.prices || !m.prices.length) return null; const i = m.prices.findIndex((p) => p >= 0.99); if (i === 0) return true; if (i === 1) return false; if (m.prices.every((p) => Math.abs(p - 0.5) < 0.01)) return 'void'; return null; };
+  /** A pick the source market has already resolved against (the question not yet settled on Meridian): the bettor's
+   *  stake is gone, only the settlement is pending. */
+  R.pickLost = (pick, id) => { if (!id || pick.settled) return false; const { m } = R.get(id); if (!m || !(m.closed || m.uma === 'resolved')) return false; const y = R.resolvedYes(m); return y === true || y === false ? y !== !!pick.yes : false; };
+  /** An unsettled question that has resolved on the source market with nobody on the winning side (by / bn = open
+   *  bets on YES / NO from the snapshot): only the makers are waiting, so lists of questions leave it out. */
+  R.questionDead = (q, id) => { if (q.settled || q.by == null || q.bn == null) return false; const { m } = R.get(id); if (!m || !(m.closed || m.uma === 'resolved')) return false; const y = R.resolvedYes(m); if (y === true) return !(q.by > 0); if (y === false) return !(q.bn > 0); return false; };
 
   // ---------------------------------------------------------------- state machine
   /**

@@ -146,8 +146,8 @@ async function buildPredict() {
   const act = {};
   for (const n of norms) {
     for (const k of n.picks) {
-      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0 });
-      a.n++; if (!n.settled) { a.b++; a.s += n.stake; } if (n.t > a.l) a.l = n.t;
+      const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0 });
+      a.n++; if (!n.settled) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
     }
   }
   const r2 = (x) => Math.round(x * 100) / 100;
@@ -164,7 +164,7 @@ async function buildPredict() {
     if (withOi.length >= 1200) break;
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); withOi.push(rowOf(k)); } }
   }
-  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; }
+  for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; }
   let trades = [];
   try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
