@@ -291,6 +291,7 @@
    * `depth`: productId → book snapshot (AN.copyContext); `candles`: AN.candleCache. Both optional: without them the
    * friction fields stay null and the score falls back to hold-time proxies.
    */
+  AN.COPY_SIZE = 2000;   // the copier this score is written for: a $2,000 position, or the leader's median size when that is smaller
   AN.buildCopyProfile = function ({ positions = [], daily = [], equity = 0, createdAt = null, ref, depth, decays }) {
     const now = Date.now();
     const ps = AN.positionStats(positions, ref);
@@ -320,6 +321,21 @@
     out.grossBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl)) / costSum * 1e4) : null;        // notional-weighted
     out.netFeeBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd)) / costSum * 1e4) : null;
     out.grossMedBps = withCost.length ? r1(median(withCost.map(bps))) : null;
+    out.fundBps = withCost.length ? r1(U.sum(withCost, (c) => -U.num(c.p.fundingAccruedUsd)) / costSum * 1e4) : null;   // received, a copier gets it too
+    // A copier at a fixed size gets each position's result in equal measure, so the edge is the plain per-position mean,
+    // not the notional-weighted one; both tails are winsorized at the 5th / 95th percentile so one jackpot or one blow-up
+    // cannot carry it (a normal trader's mean is unchanged). The t-statistic says whether that mean is more than luck.
+    const mean = (arr) => (arr.length ? U.sum(arr) / arr.length : null);
+    const wins5 = (arr) => { if (arr.length < 10) return arr.slice(); const lo = pct(arr, 0.05), hi = pct(arr, 0.95); return arr.map((x) => Math.min(hi, Math.max(lo, x))); };
+    const perPos = (f) => withCost.map((c) => (f(c) / U.num(c.p.totalIncreaseNotional)) * 1e4);
+    const wGross = wins5(perPos((c) => U.num(c.p.realizedPnl)));
+    const wNet = wins5(perPos((c) => U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd) - U.num(c.p.fundingAccruedUsd)));   // what the leader kept: gross − fees + funding received
+    out.grossTrimBps = wGross.length ? r1(mean(wGross)) : null;
+    out.netTrimBps = wNet.length ? r1(mean(wNet)) : null;
+    const sd = wNet.length > 2 ? Math.sqrt(U.sum(wNet, (x) => (x - mean(wNet)) ** 2) / (wNet.length - 1)) : null;
+    out.tStat = sd > 0 ? r1(mean(wNet) / (sd / Math.sqrt(wNet.length))) : null;
+    out.feesBps = withCost.length ? r1(mean(perPos((c) => U.num(c.p.feesAccruedUsd) + U.num(c.p.positionFeeAccruedUsd)))) : null;   // the leader's own, per position
+    out.fundPosBps = withCost.length ? r1(mean(perPos((c) => -U.num(c.p.fundingAccruedUsd)))) : null;
     const wins = closed.filter((c) => c.net > 0); const winSum = U.sum(wins, (c) => c.net);
     out.top = wins.length ? r1((Math.max(...wins.map((c) => c.net)) / winSum) * 100) : null;                             // largest win as % of all wins
     // consistency: profitable weeks among active weeks (flow-adjusted daily gains)
@@ -335,29 +351,29 @@
     out.perWeek = out.firstAt && closed.length ? r1(closed.length / Math.max(1, (now - out.firstAt) / (7 * U.DAY))) : null;
     // frictions: slippage at the account's typical size against today's books, weighted by its market mix; and how much
     // of its 90th-percentile size the books absorb within 1% of the mid
+    out.copySize = out.notMed ? Math.min(out.notMed, AN.COPY_SIZE) : null;
     if (depth && out.notMed && ref) {
-      let slipW = 0, slipSum = 0, fillW = 0, fillSum = 0, feeW = 0, feeSum = 0;
+      let w = 0, slipSum = 0, slipOwn = 0, fillSum = 0, feeSum = 0;
+      const both = (book, notional) => { const s = AN.bookSlippage(book, true, notional), s2 = AN.bookSlippage(book, false, notional); const v = s.bps != null && s2.bps != null ? (s.bps + s2.bps) / 2 : s.bps != null ? s.bps : s2.bps; return v == null ? 60 : Math.min(v, 60); };   // unfillable counts as 60 bps
       for (const m of out.markets) {
         const prod = ref.byTicker[m.t] || Object.values(ref.byId).find((p) => p.displayTicker === m.t); if (!prod || !depth[prod.id]) continue;
-        const s = AN.bookSlippage(depth[prod.id], true, out.notMed), s2 = AN.bookSlippage(depth[prod.id], false, out.notMed);
-        const bpsAvg = s.bps != null && s2.bps != null ? (s.bps + s2.bps) / 2 : s.bps != null ? s.bps : s2.bps;
-        slipW += m.n; slipSum += (bpsAvg == null ? 60 : Math.min(bpsAvg, 60)) * m.n;                                       // unfillable at median size counts as 60 bps
+        w += m.n; slipSum += both(depth[prod.id], out.copySize) * m.n; slipOwn += both(depth[prod.id], out.notMed) * m.n;
         const big = AN.bookSlippage(depth[prod.id], true, out.notP90 || out.notMed); const ok = big.bps != null && big.bps <= 100 ? 1 : big.filled;
-        fillW += m.n; fillSum += Math.max(0, Math.min(1, ok)) * m.n;
-        feeW += m.n; feeSum += U.num(prod.takerFee) * 1e4 * m.n;
+        fillSum += Math.max(0, Math.min(1, ok)) * m.n; feeSum += U.num(prod.takerFee) * 1e4 * m.n;
       }
-      out.slipBps = slipW ? r1(slipSum / slipW) : null; out.depthOk = fillW ? r1((fillSum / fillW) * 100) : null; out.feeBps = feeW ? r1(feeSum / feeW) : null;
-    } else { out.slipBps = null; out.depthOk = null; out.feeBps = null; }
+      out.slipBps = w ? r1(slipSum / w) : null; out.slipOwnBps = w ? r1(slipOwn / w) : null; out.depthOk = w ? r1((fillSum / w) * 100) : null; out.feeBps = w ? r1(feeSum / w) : null;
+    } else { out.slipBps = null; out.slipOwnBps = null; out.depthOk = null; out.feeBps = null; }
     // drift after the account's own fills (measured by the caller, which has the candles): notional-weighted bps a
     // copier gives up by acting 1 and 5 minutes later, positive = worse price
     out.drift1 = decays ? decays.drift1 : null; out.drift5 = decays ? decays.drift5 : null; out.driftN = decays ? decays.n : 0;
-    // what is left for a copier per position: the leader's result net of fees, minus a copier's own taker fees, drift
-    // and slippage on the way in and out (fills per position ≈ 2)
-    if (out.netFeeBps != null && out.feeBps != null && out.slipBps != null && out.drift1 != null) {
-      out.copyBps = r1(out.grossBps - 2 * (out.feeBps + out.slipBps + out.drift1));
+    // what is left for a copier per position: the leader's trimmed result plus funding (both sides get it) net of fees,
+    // minus a copier's own taker fees, drift and slippage on the way in and out (fills per position ≈ 2)
+    if (out.grossTrimBps != null && out.feeBps != null && out.slipBps != null && out.drift1 != null) {
+      out.leaderBps = out.netTrimBps;
+      out.copyBps = r1(out.netTrimBps + out.feesBps - 2 * (out.feeBps + out.slipBps + out.drift1));   // the leader's fees swapped for the copier's, then drift and slippage
       // a leader whose positions lose after fees leaves nothing to copy: that is a measured zero, not an unknown
-      out.edgeLeft = out.netFeeBps > 0 ? r1(Math.max(-100, (out.copyBps / out.netFeeBps) * 100)) : 0;
-    } else { out.copyBps = null; out.edgeLeft = null; }
+      out.edgeLeft = out.leaderBps > 0 ? r1(Math.max(-100, (out.copyBps / out.leaderBps) * 100)) : 0;
+    } else { out.leaderBps = null; out.copyBps = null; out.edgeLeft = null; }
     return out;
   };
 
@@ -397,10 +413,12 @@
     if (!c || c.closed < 5) return null;
     const cl = (x, a, b) => Math.min(b, Math.max(a, x));
     const parts = [];
+    const daysSince = c.lastAt ? (Date.now() - c.lastAt) / U.DAY : null;
     const add = (pillar, key, label, v, w, note) => { parts.push({ pillar, key, label, v: v == null ? null : cl(v, 0, 1), w, note }); };
     // track record
-    add('track', 'sample', 'Sample size', cl(c.closed / 40, 0, 1), 0.25, `${c.closed} closed positions (40+ for full marks)`);
-    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.2, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far');
+    add('track', 'sample', 'Sample size', cl(c.closed / 40, 0, 1), 0.15, `${c.closed} closed positions (40+ for full marks)`);
+    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.15, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far');
+    add('track', 'signal', 'Skill, not luck', c.tStat == null ? null : cl(c.tStat / 4, 0, 1), 0.2, c.tStat == null ? 'too few positions to tell' : `per-position result ${U.fmtNum(c.netTrimBps, 1)} bps after fees and funding, t = ${U.fmtNum(c.tStat, 1)} (4+ for full marks: the mean is well clear of the noise)`);
     add('track', 'steady', 'Consistency', c.weeksActive >= 3 ? c.weeksPos / c.weeksActive : null, 0.2, c.weeksActive >= 3 ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable` : 'fewer than 3 active weeks');
     add('track', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 40, 0, 1), 0.15, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)}`);
     add('track', 'liq', 'Liquidations', cl(1 - (c.liq / Math.max(c.closed, 1)) * 5, 0, 1), 0.1, c.liq ? `${c.liq} liquidated of ${c.closed}` : 'never liquidated');
@@ -409,21 +427,31 @@
     const scalp = c.closed ? c.hold.scalp / c.closed : 0, intra = c.closed ? c.hold.intra / c.closed : 0;
     add('friction', 'edge', 'Edge left after copying', c.edgeLeft == null ? null : cl(c.edgeLeft / 100, 0, 1), 0.4, c.edgeLeft == null ? 'not measurable yet' : c.edgeLeft <= 0 ? 'nothing survives a copier\'s fees, drift and slippage' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's per-trade result survives fees, drift and slippage`);
     add('friction', 'hold', 'Hold times', cl(1 - scalp - intra * 0.4, 0, 1), 0.25, `median hold ${c.holdMed == null ? '—' : U.fmtDuration(c.holdMed)} · ${U.fmtPct(scalp * 100, { dp: 0 })} scalps`);
-    add('friction', 'slip', 'Slippage at their size', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.2, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })} at today's depth`);
+    add('friction', 'slip', 'Slippage for a copier', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.2, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.copySize, { compact: true, dp: 0 })} at today's depth` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` (${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })})` : ''));
     add('friction', 'depth', 'Depth for their big trades', c.depthOk == null ? null : c.depthOk / 100, 0.15, c.depthOk == null ? 'no book data' : `${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%`);
-    // activity
-    const daysSince = c.lastAt ? (Date.now() - c.lastAt) / U.DAY : null;
     add('activity', 'recent', 'Recently active', daysSince == null ? 0 : cl(1 - daysSince / 14, 0, 1), 0.4, daysSince == null ? 'no activity' : `last trade ${U.fmtAgo(c.lastAt)}`);
     add('activity', 'cadence', 'Cadence', c.perWeek == null ? 0 : cl(c.perWeek / 3, 0, 1), 0.3, c.perWeek == null ? '—' : `${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} positions closed per week`);
     add('activity', 'tenure', 'Track length', c.tenureD == null ? 0 : cl(c.tenureD / 30, 0, 1), 0.3, c.tenureD == null ? '—' : `${U.fmtNum(c.tenureD, 0)} days on the exchange`);
     // a pillar is the weighted mean of its known parts (unknown parts are left out, not counted as zero)
     const pillar = (name) => { const ps = parts.filter((p) => p.pillar === name && p.v != null); const w = U.sum(ps, (p) => p.w); return w ? (U.sum(ps, (p) => p.v * p.w) / w) * 100 : 0; };
     const track = pillar('track'), friction = pillar('friction'), activity = pillar('activity');
-    let total = 0.4 * track + 0.4 * friction + 0.2 * activity;
+    let total = 0.35 * track + 0.45 * friction + 0.2 * activity;
+    // caps: a single disqualifier must not be averaged away by strong pillars. Each carries its reason for the page.
+    const caps = [];
+    const cap = (at, why) => { if (total > at) { total = at; } caps.push({ at, why }); };
     const losing = !(s.pnl > 0);
-    if (losing) total = Math.min(total * 0.6, 45);   // a losing account keeps its ranking among losing accounts, below every profitable one
+    if (losing) { total = Math.min(total * 0.6, 45); caps.push({ at: 45, why: 'not profitable so far' }); }
+    if (c.edgeLeft != null && c.edgeLeft <= 0) cap(40, 'nothing survives copying: fees, drift and slippage exceed the per-position result');
+    else if (c.edgeLeft != null && c.edgeLeft < 100) cap(Math.round(30 + c.edgeLeft * 0.7), `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the per-position result survives copying`);   // graded: 57% left is the least that can be Copyable
+    if (c.closed < 10) cap(55, `only ${c.closed} closed positions`); else if (c.closed < 20) cap(65, `only ${c.closed} closed positions`);
+    if (c.tStat != null && c.tStat < 2 && c.closed >= 10) cap(60, `the per-position result is not clear of the noise (t = ${U.fmtNum(c.tStat, 1)})`);
+    if (c.depthOk != null && c.depthOk < 50) cap(60, `their sizes exceed today's books (${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%)`);
+    if (daysSince != null && daysSince > 60) cap(45, `no trade for ${Math.round(daysSince)} days`); else if (daysSince != null && daysSince > 30) cap(60, `no trade for ${Math.round(daysSince)} days`);
+    if (c.closed && c.liq / c.closed >= 0.1) cap(55, `${c.liq} of ${c.closed} positions ended in liquidation`);
+    if (c.top != null && c.top >= 60) cap(60, `one position is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
+    if (s.ddPct != null && s.ddPct >= 40) cap(60, `max drawdown ${U.fmtDd(s.ddPct)}`);
     const verdict = losing ? 'Losing so far' : total >= 70 ? 'Copyable' : total >= 50 ? 'Copy with care' : 'Hard to copy';
-    return { total: Math.round(total), track: Math.round(track), friction: Math.round(friction), activity: Math.round(activity), verdict, losing, parts };
+    return { total: Math.round(total), track: Math.round(track), friction: Math.round(friction), activity: Math.round(activity), verdict, losing, parts, caps: caps.filter((x) => x.at <= Math.round(total) + 0.5 || x.at === 45 && losing) };
   };
 
   /** Describe an order's stop / grouping semantics. */

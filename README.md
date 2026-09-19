@@ -185,17 +185,29 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   walked through today's books (`AN.bookSlippage`), how much of its 90th-percentile size fills
   within 1%, taker fees, and the price drift one and five minutes after each of its fills
   (`AN.fillDrift`, one-minute oracle candles from the TradingView endpoint, fetched in 3,000-bar
-  windows and shared across accounts). From these, "edge left" = the share of the leader's
-  after-fee result per position that survives a copier's fees, drift and slippage in and out.
-  The score (`AN.copyScore`, 0–100, computed on the site so the formula can change without a
-  rebuild) is 40% track record, 40% copy friction, 20% activity, each pillar a weighted mean of
-  its measured parts (unmeasured parts are left out, not zeroed), with a losing account scaled
-  down and capped at 45; fewer than 5 closed positions means no score. Verdicts: Copyable
-  (70+), Copy with care (50+), Hard to copy, Losing so far. Every row opens a breakdown with
-  each part's value and reason, the per-position waterfall from the leader's result to the
-  copier's, hold-time strip, sizes, markets and track record. Nothing on the page places
-  orders; the roadmap on the page lists what comes next (simulator, alerts, a local copy agent
-  with a Meridian linked signer).
+  windows and shared across accounts). The per-position result is the plain mean over positions
+  (a fixed-size copier gets each position in equal measure), both tails winsorized at the 5th /
+  95th percentile so one jackpot or blow-up cannot carry it, with a t-statistic saying whether
+  it is clear of the noise; funding counts on both sides (a copier receives it too). "Edge
+  left" = the share of that result that survives a copier's taker fees, drift and slippage (for
+  a $2,000 position, `AN.COPY_SIZE`) in and out. The score (`AN.copyScore`, 0–100, computed on
+  the site so the formula can change without a rebuild) is 35% track record, 45% copy
+  friction, 20% activity, each pillar a weighted mean of its measured parts (unmeasured parts
+  are left out, not zeroed), then capped with the reason shown: nothing survives copying → 40;
+  less than all of it → 30 + 0.7 × edge left; fewer than 10 / 20 closed positions → 55 / 65;
+  t < 2 → 60; no trade for 30 / 60 days → 60 / 45; a tenth of positions liquidated → 55; one
+  position over 60% of all wins → 60; drawdown over 40% → 60; not profitable → scaled down and
+  capped at 45; fewer than 5 closed positions means no score. Verdicts: Copyable (70+), Copy
+  with care (50+), Hard to copy, Losing so far. Every row opens a breakdown with each part's
+  value and reason, the caps that applied, the per-position waterfall from the leader's result
+  to the copier's, hold-time strip, sizes, markets and track record. `js/dev/sim-leaders.mjs`
+  runs twenty synthetic traders of very different styles (steady swing trader, profitable
+  scalper, market maker, grid bot, whale, one-hit wonder, gambler, funding harvester, …)
+  through the same pipeline against today's real books and prints the ranking with the
+  expected verdict for each, so the formula is judged against what a copier wants rather than
+  against whoever is on the exchange this week. Nothing on the page places orders; the roadmap
+  on the page lists what comes next (simulator, alerts, a local copy agent with a Meridian
+  linked signer).
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line

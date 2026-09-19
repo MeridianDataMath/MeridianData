@@ -20,7 +20,7 @@
   /** The score as a pill: number + verdict; "—" with the reason when there is none. */
   function scorePill(sc, c) {
     if (!sc) return h('span.dim.small', { title: 'Fewer than 5 closed positions: nothing to score yet' }, c ? `${c.closed} closed · too few` : 'no profile');
-    return h('div.row', { style: { gap: '8px' } }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
+    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `track ${sc.track} · friction ${sc.friction} · activity ${sc.activity}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
   }
 
   /** The full story behind one leader's score. */
@@ -33,12 +33,12 @@
       h('div.stack', { style: { gap: '8px' } }, sc.parts.filter((p) => p.pillar === key).map((p) => barRow(p.label, p.v, p.note))))));
     // what is left for a copier, per position, in bps of entry notional
     const wf = c.copyBps != null ? [
-      ['Leader, before fees', c.grossBps, ''],
-      ['Leader, after their fees', c.netFeeBps, 'their taker / maker fees on the position'],
+      ['Leader, per position', c.netTrimBps, `${U.fmtNum(c.grossTrimBps, 1)} bps gross − ${U.fmtNum(c.feesBps, 1)} their fees` + (c.fundPosBps ? ` ${c.fundPosBps > 0 ? '+' : '−'} ${U.fmtNum(Math.abs(c.fundPosBps), 1)} funding` : '') + ' · plain mean over positions, both tails winsorized at 5% / 95% so one jackpot or blow-up cannot carry it'],
+      ['+ Their fees back', c.feesBps, 'a copier pays its own fees instead'],
       ['− Copier taker fees', -2 * c.feeBps, `${U.fmtNum(c.feeBps, 1)} bps in and out`],
       ['− Price drift after their fills', -2 * c.drift1, `${U.fmtNum(c.drift1, 1)} bps per fill one minute later, in and out · measured over ${U.fmtNum(c.driftN, 0)} fills (${U.fmtNum(c.drift5, 1)} bps after five minutes)`],
-      ['− Slippage at their size', -2 * c.slipBps, `${U.fmtNum(c.slipBps, 1)} bps to fill ${usd0(c.notMed)} against today's books, in and out`],
-      ['= Copier, after everything', c.copyBps, c.edgeLeft == null ? 'the leader loses money after fees, so there is no edge to keep' : c.edgeLeft <= 0 ? 'nothing survives: the copier\'s costs exceed the leader\'s result' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's after-fee result`],
+      ['− Slippage for a copier', -2 * c.slipBps, `${U.fmtNum(c.slipBps, 1)} bps to fill ${usd0(c.copySize)} against today's books, in and out` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` · ${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${usd0(c.notMed)}` : '')],
+      ['= Copier, per position', c.copyBps, c.netTrimBps <= 0 ? 'the leader\'s positions lose after fees, so there is no edge to keep' : c.edgeLeft <= 0 ? 'nothing survives: the copier\'s costs exceed the leader\'s result' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's result survives`],
     ] : null;
     const wfTbl = wf ? UI.table({ cols: [
       { key: 'k', label: 'Per position, on entry notional', render: (x) => h('span', { class: /^=/.test(x[0]) ? 'bold' : '' }, x[0]) },
@@ -54,7 +54,7 @@
         ['Typical size', h('span', usd0(c.notMed), h('span.dim.small', ` median · ${usd0(c.notP90)} at the 90th percentile` + (c.lev ? ` · ${U.fmtNum(c.lev, 1)}× equity` : '')))],
         ['Markets', h('div.row.wrap', { style: { gap: '4px' } }, c.markets.map((m) => UI.chip(`${m.t} ${U.fmtPct(m.share, { dp: 0 })}`, '')))],
         ['Positions', h('span', `${c.closed} closed · ${c.open} open · ${c.closed30} closed in 30d` + (c.liq ? ` · ${c.liq} liquidated` : '') + (c.adl ? ` · ${c.adl} deleveraged` : ''))],
-        ['Per position', h('span', bps(c.grossMedBps, { sign: true }), h('span.dim.small', ' median gross · '), bps(c.grossBps, { sign: true }), h('span.dim.small', ' weighted'))]])),
+        ['Per position', h('span', bps(c.netTrimBps, { sign: true }), h('span.dim.small', ' after fees and funding · '), bps(c.grossMedBps, { sign: true }), h('span.dim.small', ' median gross' + (c.tStat != null ? ` · t = ${U.fmtNum(c.tStat, 1)}` : '')))]])),
       h('div.card.tight', { style: { padding: '12px 14px' } }, h('h3', 'Track record'), kv([
         ['All-time PnL', h('span', U.pnlEl(s.pnl, { dp: 0 }), h('span.dim.small', s.roi == null ? '' : ` · ROI ${U.fmtPct(s.roi, { dp: 1, sign: true })}`))],
         ['Win rate', h('span', r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 }), h('span.dim.small', c.top == null ? '' : ` · largest win ${U.fmtPct(c.top, { dp: 0 })} of all wins`))],
@@ -64,9 +64,10 @@
     UI.modal({ wide: true,
       title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), h('span.grow'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
-        h('div.dim.small', 'Copyability ' + sc.total + ' = 40% track record (' + sc.track + ') + 40% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
+        h('div.dim.small', 'Copyability ' + sc.total + ' = 35% track record (' + sc.track + ') + 45% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
+        sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
         pillars,
-        UI.card('What is left for a copier', wfTbl, h('span.dim.small', 'a copier gets the same moves one minute later, at taker fees, at this size')),
+        UI.card('What is left for a copier', wfTbl, h('span.dim.small', `the same moves one minute later, at taker fees, with a ${usd0(c.copySize)} position`)),
         facts,
         h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after each fill, and the order books as they were when the snapshot was built. Past results are not a promise of future returns; copyability says how much of a result a copier could have kept, not whether there will be one.')) });
   }
@@ -119,7 +120,7 @@
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.total >= 70 ? 'top' : '' }, String(i)); } },
               { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: '0–100: track record, copy friction and activity; click a row for the breakdown', render: (x) => scorePill(x.sc, x.c) },
-              { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s after-fee result per position that survives a copier\'s fees, one-minute drift and slippage at this size', render: (x) => (x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg') }, U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
+              { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their fills and slippage for a $2K position', render: (x) => (x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg') }, U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'pnl', label: 'All-time PnL', num: true, sortVal: 1, render: (x) => U.pnlEl(x.r.stats.all.pnl, { dp: 0 }) },
               { key: 'roi', label: 'ROI', num: true, sortVal: 1, render: (x) => UI.pct(x.r.stats.all.roi, { dp: 1 }) },
               { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (x) => (x.r.winRate == null ? h('span.dim', '—') : U.fmtPct(x.r.winRate, { dp: 0 })) },
