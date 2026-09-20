@@ -24,7 +24,7 @@
     ] },
   ];
   const NAV = SECTIONS.flatMap((s) => s.items);
-  const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', tax: 'Tax center', copytrade: 'Copy trading', predict: 'Predict' };
+  const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', tax: 'Tax center', copytrade: 'Copy trading', predict: 'Predict', status: 'Data status' };
   const PATH_TITLES = { '/predict': 'Predict · Overview', '/predict/bettors': 'Predict · Bettors', '/predict/questions': 'Predict · Questions', '/predict/makers': 'Predict · Market makers', '/predict/vig': 'Predict · Vig & edge', '/predict/bettor': 'Predict · Bettor' };
   const X_URL = 'https://x.com/meridiandotxyz';
 

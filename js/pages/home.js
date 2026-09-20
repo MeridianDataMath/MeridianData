@@ -63,7 +63,8 @@
           h('span', '24h volume ', h('b', U.fmtUsd(vol, { compact: true }))),
           h('span', 'Open interest ', h('b', U.fmtUsd(oi, { compact: true }))),
           subs ? h('span', 'Accounts ', h('b', String(subs.length))) : null,
-          h('span', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz')));
+          h('span', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz')),
+          h('span', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data ', h('b', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—'))));
       } catch (e) { if (e.name !== 'AbortError') U.replace(foot, h('span.dim', 'Exchange stats unavailable')); }
     },
   };

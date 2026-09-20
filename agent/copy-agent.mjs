@@ -121,8 +121,8 @@ async function run() {
   // persisted state: what we follow from whom, so a restart does not orphan positions
   let saved = {}; try { saved = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) {}
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderPosAt: {}, resyncAt: {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
-  const persist = () => { try { fs.writeFileSync(statePath, JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 1000), savedAt: Date.now() })); } catch (_) {} };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
+  const persist = () => { try { fs.writeFileSync(statePath, JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 1000), savedAt: Date.now() })); } catch (_) {} };
   const note = (kind, msg, extra) => { const e = Object.assign({ t: Date.now(), kind, msg }, extra || {}); S.events.unshift(e); if (S.events.length > 300) S.events.length = 300; log(kind, msg, extra || ''); };
   const push = async (title, msg) => { if (!(cfg.ntfy && cfg.ntfy.topic)) return; try { await fetch(((cfg.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')) + '/' + encodeURIComponent(cfg.ntfy.topic), { method: 'POST', body: msg, headers: { Title: title, Tags: 'robot', Priority: '4' } }); } catch (_) {} };
   const who = (l) => (l.name && l.name !== 'primary' ? l.name : l.address.slice(0, 6) + '…' + l.address.slice(-4));
@@ -144,6 +144,7 @@ async function run() {
     else for (const p of pos.data || []) { const size = num(p.size); if (!size) continue; const m = mark[p.productId] || 0; const entry = Math.abs(size) ? num(p.cost) / Math.abs(size) : 0; const u = m && entry ? size * (m - entry) : num(p.unrealizedPnl); own[p.productId] = { size, entry, mark: m, notional: Math.abs(size) * m, upnl: u }; upnl += u; notional += Math.abs(size) * m; }
     const balance = (bal.data || []).reduce((a, b) => a + num(b.amount), 0);
     S.own = own; S.mark = mark; S.equity = balance + upnl; S.notional = notional; S.balance = balance; S.ownAt = Date.now();
+    for (const pid of Object.keys(S.carry)) if (!own[pid] || !(S.carry[pid] > 1e-12)) delete S.carry[pid];   // nothing left to reduce, nothing owed
     const day = dayKeyOf(serverNow());
     if (S.dayKey !== day) { S.dayKey = day; S.equityDayStart = S.equity; S.flowsDay = 0; }
     else S.flowsDay = await flows(dayStartMs());
@@ -171,9 +172,13 @@ async function run() {
   async function place({ prod, side, qty, reduceOnly = false, close = false, why, leader, leaderSid, leaderPx, leaderT, kind, resync = false }) {
     const mark = S.mark[prod.id] || 0;
     let q = close ? 0 : roundDown(Math.min(qty, num(prod.maxQuantity) || Infinity), prod.lotSize);
-    if (!close && q < num(prod.minQuantity)) { note('skip', `${prod.displayTicker}: ${qty} is below the minimum ${prod.minQuantity}`, { leader }); return null; }
-    if (!close && mark && q * mark < (risk.minOrderUsd || 0)) { note('skip', `${prod.displayTicker}: ${(q * mark).toFixed(2)} USD is below minOrderUsd`, { leader }); return null; }
-    if (!close && !mark) { note('skip', `${prod.displayTicker}: no mark price, not trading blind`, { leader }); return null; }
+    // a reduction the exchange will not take yet (below its minimum, or a remainder an IOC left) is not lost: it is
+    // carried and folded into the next reduction of that market, so the copy does not stay bigger than the leader's share
+    const carry = (dq, why) => { if (!(reduceOnly && !close) || !(dq > 1e-12)) return; S.carry[prod.id] = (S.carry[prod.id] || 0) + dq; if (why) note('leader', `${prod.displayTicker}: ${dq} of the reduction ${why}; carried to the next one (${S.carry[prod.id]} pending)`, { leader }); };
+    if (!close && q < num(prod.minQuantity)) { if (reduceOnly) carry(qty, `is below the minimum ${prod.minQuantity}`); else note('skip', `${prod.displayTicker}: ${qty} is below the minimum ${prod.minQuantity}`, { leader }); return null; }
+    if (!close && mark && q * mark < (risk.minOrderUsd || 0)) { if (reduceOnly) carry(qty, 'is below minOrderUsd'); else note('skip', `${prod.displayTicker}: ${(q * mark).toFixed(2)} USD is below minOrderUsd`, { leader }); return null; }
+    if (!close && !mark) { note('skip', `${prod.displayTicker}: no mark price, not trading blind`, { leader }); carry(qty, 'had no mark price'); return null; }
+    carry(qty - q, null);   // the lot-size rounding remainder, kept quietly
     const useLimit = !close && ex.type !== 'MARKET';
     const px = useLimit ? roundTick(mark * (1 + (side === 0 ? 1 : -1) * ((ex.slippageBps || 15) / 1e4)), prod.tickSize, side === 0) : 0;
     const n = nonce(); const signedAt = Math.floor(serverNow() / 1000); const cid = randomUUID();
@@ -206,18 +211,22 @@ async function run() {
         rec.status = rec.orderStatus === 'REJECTED' ? 'rejected' : got < 1e-12 ? 'unfilled' : Math.abs(got - (close ? Math.abs(before) : q)) > num(prod.lotSize) ? 'partial' : 'filled';
         note(rec.status === 'filled' ? 'order' : 'warn', `${rec.side} ${close ? 'close' : q} ${prod.displayTicker} ${data.type}${px ? ' @ ' + px : ''} · ${why} · ${rec.status}${rec.filled != null ? ' ' + rec.filled : ''}${rec.reason ? ' · ' + rec.reason : ''}`, { id: rec.id });
         if (rec.reason === 'SignerRevoked' || rec.code === 'SignerRevoked') { S.paused = true; note('error', 'the signer was revoked: paused; link a new one on the site'); push('Copy agent paused', 'signer revoked'); }
+        if (!close && got < q - 1e-12) carry(q - got, rec.status === 'rejected' ? 'was rejected' : 'did not fill inside the slippage cap');   // an opening is never chased; a reduction is owed
       }
     } catch (e) {
       rec.status = 'rejected'; rec.error = e.message; S.errors++; S.lastError = { t: Date.now(), msg: e.message };
       note('error', `${prod.displayTicker} ${rec.side} rejected: ${e.message}`, { why }); push('Copy agent order rejected', `${prod.displayTicker} ${rec.side}: ${e.message}`);
       if (/SignerRevoked|Unauthorized/i.test(e.message) || e.status === 401) { S.paused = true; note('error', 'the exchange no longer accepts this signer: paused'); }
+      if (!close) carry(q, 'was rejected');
     }
     if (DRY) await refreshOwn().catch(() => {});
     persist();
     return rec;
   }
-  async function closeAll(why) { for (const [pid, o] of Object.entries(S.own)) { const prod = byId[pid]; if (prod && o.size) await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why }); } }
-  const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; const r = await place(Object.assign({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }, ctxL || {}, { kind: 'close' })); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
+  async function closeAll(why) { for (const [pid, o] of Object.entries(S.own)) { const prod = byId[pid]; if (prod && o.size) { delete S.carry[pid]; await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why }); } } }
+  const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; delete S.carry[pid]; const r = await place(Object.assign({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }, ctxL || {}, { kind: 'close' })); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
+  /** A reduction of `share` of what is held, plus whatever earlier reductions of that market still owe (see place). */
+  const reduceBy = async (pid, share, args) => { const o = S.own[pid]; if (!o || !o.size) return null; const owed = Math.min(S.carry[pid] || 0, Math.abs(o.size)); delete S.carry[pid]; const qty = Math.min(Math.abs(o.size), (Math.abs(o.size) - owed) * share + owed); return place(Object.assign({ prod: byId[pid], side: o.size > 0 ? 1 : 0, qty, reduceOnly: true }, args, owed ? { why: args.why + ` + ${owed} carried` } : {})); };   // the share applies to what should be held, i.e. without what is still owed
 
   /** May a new or larger position be taken? The reason, in words, when not. */
   const allowed = (prod, addNotional, leaderSid) => {
@@ -300,8 +309,8 @@ async function run() {
       if (!followed || !ownQty) return;
       // a resync that read the position after every fill of this order already mirrored the reduction
       const r = S.resyncAt[prod.id]; if (r && (g.parts || []).every((p) => p.t > 0 && p.t <= r)) { note('leader', `${prod.displayTicker} reduce: already mirrored by the resync`); return; }
-      const share = Math.abs(g.q) / Math.abs(prev); const q = Math.abs(ownQty) * share;
-      await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: q, reduceOnly: true, why: `${name} reduced ${(share * 100).toFixed(0)}%`, leader: name }, ctxL));
+      const share = Math.abs(g.q) / Math.abs(prev);
+      await reduceBy(prod.id, share, Object.assign({ why: `${name} reduced ${(share * 100).toFixed(0)}%`, leader: name }, ctxL));
       return;
     }
     if (kind === 'reverse' && followed && ownQty) await closeMarket(prod.id, `${name} reversed`, name, ctxL);
@@ -311,7 +320,7 @@ async function run() {
     let q;
     if (sizing.mode === 'ratio') q = leaderDelta * (num(sizing.ratio) / 100);
     else if (sizing.mode === 'perfill') q = num(sizing.size) / px;
-    else if (kind === 'add' && followed && ownNow && prev) q = leaderDelta * Math.abs(ownNow / prev);   // in proportion to what we actually hold
+    else if (kind === 'add' && followed && ownNow && prev) q = leaderDelta * Math.max(0, Math.abs(ownNow) - (S.carry[prod.id] || 0)) / Math.abs(prev);   // in proportion to what we actually hold, less a reduction still owed
     else { const orderQty = g.orderQty && g.orderQty > leaderDelta ? g.orderQty : leaderDelta; const k = num(sizing.size) / (orderQty * px); book[prod.id] = { k, openedAt: Date.now() }; q = leaderDelta * k; }
     if (kind === 'add' && !followed && ownNow) { note('skip', `${prod.displayTicker} add: we hold a position here that is not a copy of ${name}`); return; }
     const side = next > 0 ? 0 : 1;
@@ -345,7 +354,7 @@ async function run() {
       const acted = () => { S.resyncAt[pid] = read.at[pid] || Date.now(); };   // a fill of that time or earlier is covered by this
       if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); acted(); await closeMarket(pid, `leader flat (${why})`, who(l), Object.assign({ resync: true }, ctxL)); } }
       else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); acted(); await closeMarket(pid, `leader reversed (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
-      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); acted(); await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: Math.abs(ownQty) * share, reduceOnly: true, why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
+      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); acted(); await reduceBy(pid, share, Object.assign({ why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
     }
     persist();
   }

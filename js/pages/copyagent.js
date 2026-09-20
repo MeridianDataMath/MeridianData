@@ -243,7 +243,7 @@
             UI.card('My positions', UI.table({ cols: [
               { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
               { key: 's', label: 'Side', render: (r) => U.sideEl(r.o.size > 0, true) },
-              { key: 'q', label: 'Size', num: true, render: (r) => h('span', U.fmtQty(Math.abs(r.o.size)), h('span.dim.xs', ' · ' + usd0(r.o.notional))) },
+              { key: 'q', label: 'Size', num: true, render: (r) => h('span', U.fmtQty(Math.abs(r.o.size)), h('span.dim.xs', ' · ' + usd0(r.o.notional)), (S.carry || {})[r.pid] > 0 ? h('span.xs', { style: { color: 'var(--amber)' }, title: 'A reduction the exchange would not take yet (below its minimum, or unfilled); it is added to the next reduction of this market' }, ' · −' + U.fmtQty(S.carry[r.pid]) + ' owed') : null) },
               { key: 'e', label: 'Entry', num: true, render: (r) => U.fmtPrice(r.o.entry) },
               { key: 'u', label: 'uPnL', num: true, render: (r) => U.pnlEl(r.o.upnl, { dp: 2 }) },
               { key: 'l', label: 'Following', render: (r) => (r.leader ? who(r.leader) : h('span.dim', 'not from a leader')) },

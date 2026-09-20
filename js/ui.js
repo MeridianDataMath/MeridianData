@@ -88,7 +88,7 @@
   /** Inline warning when a published snapshot is older than it should be (the publishers run every 30 minutes). */
   UI.STALE_MS = 2 * 3600000;
   UI.staleNote = (builtAt, hint) => (builtAt && Date.now() - builtAt > UI.STALE_MS
-    ? h('span', { style: { color: 'var(--amber)' }, title: (hint ? hint + ' · ' : '') + 'refreshed every 30 minutes normally' }, ' · stale')   // the age itself is printed just before
+    ? h('span', { style: { color: 'var(--amber)' } }, ' · ', h('a', { href: '#/status', style: { color: 'inherit' }, title: (hint ? hint + ' · ' : '') + 'refreshed every 30 minutes normally; click for the data status page' }, 'stale'))   // the age itself is printed just before
     : null);
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
   UI.modal = function ({ title, body, wide }) {

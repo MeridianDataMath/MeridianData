@@ -184,6 +184,8 @@ async function buildPredict() {
   try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
+  // a few hundred bytes the site's status page can read without the 1 MB snapshot
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = {};
   for (const n of norms) { (byWallet[n.predictor] || (byWallet[n.predictor] = [])).push(n); (byWallet[n.counterparty] || (byWallet[n.counterparty] = [])).push(n); }
@@ -203,6 +205,7 @@ if (doPredict) {
     // No agg → the site falls back; the error is published so it can be read without Action logs.
     console.warn('predict snapshot failed:', e && e.stack);
     fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify({ builtAt: Date.now(), error: String(e && (e.stack || e.message || e)), requests: P.stats.requests, retries: P.stats.retries }));
+    fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: Date.now(), error: String(e && (e.message || e)), requests: P.stats.requests, retries: P.stats.retries }));
     if (!doPerps) process.exit(1);
   }
 }
@@ -219,16 +222,22 @@ const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
 ctx.copy = await AN.copyContext(ref, ctx);
 console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
 
+// A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): an account takes
+// about two seconds, an active one with fills and candles more, so past a few hundred accounts the build would outlast
+// the job. Accounts not reached are left out and the snapshot is marked partial rather than the whole deploy failing.
+const budgetMs = (args.includes('--budget') ? Number(args[args.indexOf('--budget') + 1]) : 540) * 1000;
+let skipped = 0;
 const results = await U.pLimit(
-  subs.map((sa) => () => AN.buildLeaderboardRow(sa, ref, prices, ctx)),
+  subs.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
   4,
-  (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total}`); },
+  (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
 );
 const rows = []; let failed = 0;
-results.forEach((r, i) => { if (r.ok) rows.push(r.value); else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
+results.forEach((r, i) => { if (r.ok) { if (r.value) rows.push(r.value); } else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
+if (skipped) console.warn(`time budget of ${budgetMs / 1000}s reached: ${skipped} of ${subs.length} accounts not built this run`);
 
-const out = { builtAt: Date.now(), rows, partial: failed > 0, source: 'github-actions', accounts: subs.length, failed, durationMs: Date.now() - started };
+const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: 'github-actions', accounts: subs.length, failed, skipped, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
 fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
 const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
-console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed, ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
 if (!rows.length) process.exit(1);

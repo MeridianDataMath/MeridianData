@@ -48,6 +48,14 @@ assembles `dist/` and deploys it:
 The Predict snapshot is produced on a PC (see the Predict section below) whichever host is used.
 `_headers` sets cache and security headers on Cloudflare Pages and is ignored elsewhere.
 
+The perps build has a time budget (`--budget` seconds, 9 minutes by default: an account takes
+about two seconds, an active one with fills and candles more, and the job has 15 minutes in all);
+accounts not reached are left out and the snapshot is marked partial (`skipped`) rather than the
+deploy failing. `#/status` (**Data status**, linked from the home page's footer and from every
+"stale" note) shows both snapshots' age, builder, counts and build time, plus the exchange's
+round trip, maintenance flag and clock offset; the Predict builder writes a few hundred bytes to
+`data/predict-status.json` for it so the page does not need the 1 MB snapshot.
+
 ### Privacy notes
 
 * Fonts are self-hosted (`css/fonts.css`, `assets/fonts/`); no request goes to Google.
@@ -325,7 +333,11 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   record's `updatedAt` is the time of its last fill, so a grouped fill dated at or before the
   record last read is already inside that size and only classifies the order, and a re-read
   leaves markets alone whose fills are still being grouped (a resync landing mid-order used to
-  be able to take a close for a reversal and open the other side); no order without a live
+  be able to take a close for a reversal and open the other side); a reduction the exchange
+  will not take yet (below the market's minimum quantity, or the remainder an IOC left, or a
+  rejection) is carried and folded into the next reduction of that market, with adds sized on
+  what should be held, so the copy does not stay bigger than the leader's share ("owed" on the
+  dashboard's positions; a close clears it); no order without a live
   mark, none while the own-account read is more
   than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
   stops take deposits and withdrawals out (`/v1/token/transfer`) so a transfer can neither trip
@@ -391,7 +403,7 @@ js/analytics.js         series building, interval stats, position stats, margin 
 js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
-js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, copyagent, predict
+js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, copyagent, predict, status
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy
