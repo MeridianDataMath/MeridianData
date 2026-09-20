@@ -1,0 +1,17 @@
+{
+  "name": "meridian-copy-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MeridianDataHub copy agent: mirrors leaders' Meridian positions into your own subaccount through a linked signer, with size and risk limits. Runs on your machine; the key never leaves it.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "keygen": "node copy-agent.mjs keygen",
+    "link": "node copy-agent.mjs link",
+    "start": "node copy-agent.mjs run",
+    "status": "node copy-agent.mjs status"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}

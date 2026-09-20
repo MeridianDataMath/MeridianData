@@ -1,0 +1,23 @@
+{
+  "$comment": "MeridianDataHub copy agent. The site's Copy agent page writes this file for you; every field is explained there.",
+  "owner": "0xYOUR_WALLET_ADDRESS",
+  "subaccountId": "00000000-0000-0000-0000-000000000000",
+  "keyFile": "signer.key",
+  "leaders": [
+    { "sid": "00000000-0000-0000-0000-000000000000", "address": "0xLEADER", "name": "" }
+  ],
+  "sizing": { "mode": "fixed", "size": 200, "ratio": 10 },
+  "execution": { "type": "IOC", "slippageBps": 15, "groupMs": 1200, "onLeaderFlat": "close", "onLeaderLiquidation": "close" },
+  "risk": {
+    "maxNotionalPerMarket": 1000,
+    "maxOpenPositions": 5,
+    "maxLeverage": 3,
+    "dailyLossStop": 100,
+    "drawdownStopPct": 15,
+    "minOrderUsd": 10,
+    "markets": { "deny": [] },
+    "onTrip": "reduceOnly"
+  },
+  "status": { "port": 8790, "token": "change-me" },
+  "ntfy": { "server": "https://ntfy.sh", "topic": "" }
+}

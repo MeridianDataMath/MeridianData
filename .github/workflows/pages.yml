@@ -53,6 +53,7 @@ jobs:
         run: |
           mkdir -p dist
           cp -r index.html css js vendor assets _headers .nojekyll dist/
+          mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/config.example.json dist/agent/
           [ -d data ] && cp -r data dist/ || true
           echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"
 

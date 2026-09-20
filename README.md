@@ -260,6 +260,35 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   POSTs to the topic, which is the only secret). Alerts flow while a tab of the site is open in
   that browser; one tab is elected listener through a localStorage heartbeat so several tabs
   never double-send, the others mirror the log. History (last 200) is kept in localStorage.
+* **Copy agent** (`#/copytrade/agent`, `agent/copy-agent.mjs`) – the copying itself, as a program
+  the user runs on their own machine (Node 22+, one dependency: ethers). Non-custodial by
+  construction: `keygen` makes a fresh key on that machine; `link` has it sign a Meridian
+  `LinkSigner` message and prints the request; on the site the owner's wallet co-signs the same
+  EIP-712 message (`eth_signTypedData_v4`) and the page POSTs both signatures to
+  `/v1/linked-signer/link` (the API's CORS allows it). The exchange then treats the key as an
+  API signer of that subaccount: submit and cancel orders only, never withdrawals, revocable
+  from the same page. The site never sees a key. `run` follows the leaders in `config.json`
+  over the exchange WebSocket (fills grouped per order, sized on the whole opening order), keeps
+  a book per leader and market, and mirrors: open → sized order (fixed $ per position, fixed $
+  per fill, or a % of the leader's quantity), add → in proportion, reduce → the same share of
+  its own position (reduce-only), close → a close order (quantity 0, reduce-only), reverse →
+  close then open, leader liquidated or found flat on the 5-minute resync → close (or hold, by
+  config). Orders are limit IOC at the mark ± a slippage cap (or market), EIP-712-signed with
+  the domain and type strings from `/v1/rpc/config`, exactly as the official SDK does; the
+  unfilled remainder of an IOC is logged, never chased. Risk limits, checked before every new
+  or larger position: max notional per market, max open positions, max leverage on equity,
+  daily loss stop and drawdown stop (a trip makes the agent reduce-only, or close everything,
+  until resumed), minimum order size, denied markets; one leader per market. A local status
+  port (127.0.0.1 only, origin-checked, token-guarded for pause / resume / close all) feeds
+  the page's dashboard: equity, day and peak change, leverage, own positions against the
+  leaders', every order with its status and fill, the event log. `run --dry` sends every order
+  to the exchange's dry-run endpoint instead (margin check, nothing placed) and keeps a virtual
+  book, so the whole loop can be watched before any money moves; `/simulate` on the status
+  port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected orders,
+  risk stops and leader liquidations. The page builds `config.json` from the followed leaders
+  and the limits, lists and revokes signers, and shows the dashboard. The deploy publishes only
+  `copy-agent.mjs`, `package.json` and `config.example.json`; keys, configs, link requests and
+  logs are gitignored.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
@@ -310,10 +339,12 @@ js/analytics.js         series building, interval stats, position stats, margin 
 js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
-js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, predict
+js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, copyagent, predict
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy
+agent/copy-agent.mjs    the copy agent (runs on the user's machine): keygen, link, run [--dry], status
+agent/package.json      its one dependency (ethers); config.example.json documents every setting
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client

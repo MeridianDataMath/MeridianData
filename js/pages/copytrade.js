@@ -9,7 +9,7 @@
     { t: 'Copy simulator', d: 'Replay a leader\'s positions with your size, delay and slippage against its real fills and the minute-by-minute price, and see what you would have kept.', s: 'live' },
     { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape; kept in your browser and caught up from the exchange when you come back.', s: 'live' },
     { t: 'Leader alerts', d: 'A toast, a browser notification or an ntfy push to your phone when a followed leader opens, adds, reduces, closes, reverses or gets liquidated, straight from the exchange WebSocket, while a tab of this site is open.', s: 'live' },
-    { t: 'Copy agent', d: 'A local service with a Meridian linked signer (trade-only key, no withdrawals) mirroring leaders into your own subaccount with size and risk limits.', s: 'planned' },
+    { t: 'Copy agent', d: 'A program on your own machine with a Meridian linked signer (orders only, never withdrawals) mirroring leaders into your subaccount with your sizing and risk limits; set up, watched and controlled from the Copy agent page.', s: 'live' },
     { t: 'Copy history', d: 'PnL attribution per leader and your realized slippage versus the leader\'s fills.', s: 'planned' },
   ];
   const STATUS = { live: ['live', 'green'], building: ['in progress', 'accent'], planned: ['planned', ''] };
@@ -125,6 +125,7 @@
   MD.router.pages.copytrade = {
     async mount(root, route, ctx) {
       if (route.path === '/copytrade/sim') return MD.copysimPage.mount(root, route, ctx);
+      if (route.path === '/copytrade/agent') return MD.copyagentPage.mount(root, route, ctx);
       MD.setTopbar(h('span.title', 'Copy trading'));
       const LB = MD.router.pages.leaderboard;
       const tableWrap = h('div');
@@ -134,7 +135,8 @@
         h('div.row', { style: { marginBottom: '8px' } }, UI.chip('Phase 1 · leaders', 'accent'), h('span.dim.small', 'scouting and scoring; the copy agent comes next')),
         h('h1', 'Copy trading on Meridian'),
         h('p', 'A leaderboard tells you who made money. Copying needs a different question: what would a follower have kept, entering a minute later, at taker fees, at that size, against these books? Every wallet below is scored on exactly that, and the numbers behind each score are one click away.'),
-        h('p', 'Nothing on this page places orders. The plan stays non-custodial: a copy agent you run yourself with a Meridian linked signer (a trade-only key that cannot withdraw), with this page as its control room.'));
+        h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
+        h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first')));
       const roadmap = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Roadmap'),
         h('div.roadmap', ROADMAP.map((r) => h('div.it', h('div.row', h('span.t', r.t), h('span.grow'), UI.chip(STATUS[r.s][0], STATUS[r.s][1])), h('div.d', r.d)))));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
