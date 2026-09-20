@@ -49,7 +49,8 @@
       (async () => {
         try {
           let s = null;
-          try { const r = await fetch('data/predict-status.json', { cache: 'no-cache', signal: ctx.signal }); if (r.ok) s = await r.json(); } catch (e) { if (isAbort(e)) return; }
+          // (the host answers unknown paths with the app's index.html, status 200: only JSON counts)
+          try { const r = await fetch('data/predict-status.json', { cache: 'no-cache', signal: ctx.signal }); if (r.ok && /json/i.test(r.headers.get('content-type') || '')) s = await r.json(); } catch (e) { if (isAbort(e)) return; }
           // a publish from before the status file existed: read the snapshot's own header (the 1 MB the Predict pages load anyway)
           if (!s && MD.predict && MD.predict.loadSnapshot) {
             U.replace(predict, UI.loading('No status file yet: reading the Predict snapshot itself…'));
@@ -60,7 +61,7 @@
           U.replace(predict, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Predict snapshot'), UI.chip(state, cls)),
             s ? kv([
               ['Built', when(s.builtAt)],
-              ['Builder', s.source === 'pc' ? 'site owner\'s PC → snapshots branch' : s.source === 'github-actions' ? 'GitHub Actions' : s.source || '—'],
+              ['Builder', s.source === 'pc' ? 'the site owner\'s PC' : s.source === 'github-actions' ? 'GitHub Actions' : s.source || '—'],
               s.error ? ['Error', s.error, 'neg'] : null,
               s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : ''), s.apiTotal && s.predictions < s.apiTotal - 50 ? 'neg' : ''] : null,
               s.bettors != null ? ['Bettors · makers', `${U.fmtNum(s.bettors, 0)} · ${U.fmtNum(s.makers || 0, 0)}`] : null,
