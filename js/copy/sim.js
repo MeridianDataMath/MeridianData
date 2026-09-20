@@ -89,28 +89,39 @@
     return { qty: U.sum(same, (f) => Math.abs(f.q)), notional: U.sum(same, (f) => Math.abs(f.q) * f.px) };
   };
 
+  /** The most a fixed-size or per-fill copy may hold in one position: `maxPos` when set, else five times `size`. A leader
+   *  who opens small and scales in would otherwise make the copier's position any multiple of the size it asked for. */
+  S.maxPosition = (settings) => (settings.mode === 'ratio' ? Infinity : settings.maxPos > 0 ? settings.maxPos : S.MAX_SCALE * settings.size);
+  S.MAX_SCALE = 5;
+
   /**
-   * Replay one episode as a copier. settings: {mode: 'fixed' | 'perfill' | 'ratio', size (USD), ratio, delaySec,
-   * slipBps (per pid or number), feeRate (per pid or number), priceAt(pid, t, px, delaySec) → price the copier gets}.
-   *   fixed:   the leader's opening order is `size` USD for the copier; later adds and reductions follow in proportion.
-   *   perfill: every entry fill is `size` USD; reductions cut the copier's position by the same share as the leader's.
+   * Replay one episode as a copier. settings: {mode: 'fixed' | 'perfill' | 'ratio', size (USD), ratio, maxPos (USD),
+   * delaySec, slipBps (per pid or number), feeRate (per pid or number), priceAt(pid, t, px, delaySec) → price the copier gets}.
+   *   fixed:   the leader's opening order is `size` USD for the copier; later adds follow in proportion, up to `maxPos`.
+   *   perfill: every entry fill is `size` USD, up to `maxPos` in the position.
    *   ratio:   every fill is `ratio` × the leader's quantity.
-   * Funding and position fees scale with the copier's average share of the leader's position over the episode.
+   * In every mode a reduction cuts the copier's position by the same share as the leader's, so a capped position is
+   * still closed when the leader closes. Funding and position fees scale with the copier's average share of the
+   * leader's position over the episode.
    */
   S.replayEpisode = async function (e, settings, mark) {
     const fo = S.firstOrderNotional(e);
     const kFixed = settings.mode === 'ratio' ? settings.ratio : settings.size / fo.notional;
+    const maxPos = S.maxPosition(settings);
     const slip = typeof settings.slipBps === 'number' ? settings.slipBps : (settings.slipBps && settings.slipBps[e.pid]) || 0;
     const feeRate = typeof settings.feeRate === 'number' ? settings.feeRate : (settings.feeRate && settings.feeRate[e.pid]) || 0.0003;
-    let cash = 0, fees = 0, driftCost = 0, slipCost = 0, notional = 0, entryNotional = 0, leaderQty = 0, copierQty = 0, shareSum = 0, shareN = 0;
+    let cash = 0, fees = 0, driftCost = 0, slipCost = 0, notional = 0, entryNotional = 0, leaderQty = 0, copierQty = 0, shareSum = 0, shareN = 0, capped = false;
     const legs = [];
     for (const f of e.fills) {
       let q;
-      if (settings.mode === 'perfill') {
-        const entry = Math.sign(f.q) === e.side;
-        q = entry ? Math.sign(f.q) * (settings.size / f.px) : (leaderQty ? (f.q / leaderQty) * copierQty : 0);   // a reduction cuts the same share
-        if (!entry && Math.abs(q) > Math.abs(copierQty)) q = -copierQty;
-      } else q = f.q * kFixed;
+      const entry = Math.sign(f.q) === e.side;
+      if (!entry) { q = leaderQty ? (f.q / leaderQty) * copierQty : 0; if (Math.abs(q) > Math.abs(copierQty)) q = -copierQty; }   // the same share as the leader cut
+      else {
+        q = settings.mode === 'perfill' ? Math.sign(f.q) * (settings.size / f.px) : f.q * kFixed;
+        const room = maxPos / f.px - Math.abs(copierQty);   // what the cap still allows in this position
+        if (Math.abs(q) > room + EPS) { q = Math.sign(q) * Math.max(0, room); capped = true; }
+      }
+      if (Math.abs(q) < EPS) { leaderQty += f.q; continue; }   // nothing to do for the copier (the cap is full, or nothing to cut)
       const dir = Math.sign(q);
       const late = f.synthetic ? f.px : await settings.priceAt(e.pid, f.t, f.px, settings.delaySec);   // a liquidation exit is taken at the leader's exit price
       const px = late * (1 + (dir * slip) / 1e4);
@@ -125,7 +136,7 @@
     const openQ = copierQty; const m = openQ ? (mark || e.fills[e.fills.length - 1].px) : 0;
     const gross = cash + openQ * m;
     const funding = (e.fundingRecv || 0) * k, posFee = (e.posFee || 0) * k;
-    return { k, gross, fees, funding, posFee, driftCost, slipCost, net: gross - fees + funding - posFee, notional, entryNotional, legs };
+    return { k, gross, fees, funding, posFee, driftCost, slipCost, net: gross - fees + funding - posFee, notional, entryNotional, legs, capped };
   };
 
   /**
@@ -147,11 +158,11 @@
         leaderBps: L.entryNotional ? (L.net / L.entryNotional) * 1e4 : null, copierBps: Cp.entryNotional ? (Cp.net / Cp.entryNotional) * 1e4 : null });
     }
     rows.sort((a, b) => a.t1 - b.t1);
-    const T = { leaderNet: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, notional: 0, partial, noFunding };
+    const T = { leaderNet: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
     let cum = 0, cumL = 0, peak = 0, dd = 0; const curve = [], curveL = [];
     for (const r of rows) {
       T.leaderNet += r.L.net; T.leaderGross += r.L.gross; T.leaderFees += r.L.fees; T.copierNet += r.C.net; T.copierGross += r.C.gross; T.fees += r.C.fees; T.drift += r.C.driftCost; T.slip += r.C.slipCost; T.funding += r.C.funding; T.posFee += r.C.posFee; T.notional += r.C.notional;
-      if (r.C.net > 0) T.wins++; if (r.open) T.open++; if (r.liq) T.liq++;
+      if (r.C.net > 0) T.wins++; if (r.open) T.open++; if (r.liq) T.liq++; if (r.C.capped) T.capped++;
       cum += r.C.net; cumL += r.L.net; curve.push({ x: r.t1, y: cum }); curveL.push({ x: r.t1, y: cumL });
       if (cum > peak) peak = cum; if (peak - cum > dd) dd = peak - cum;
     }

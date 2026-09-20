@@ -21,6 +21,8 @@
  *   - a close order is quantity "0" + reduceOnly + close (dry-run: Ok); an IOC limit fills what it can and cancels the rest
  *   - signedAt must be within the exchange's clock tolerance: the clock offset to /v1/time is measured and applied
  *   - a signer's expiresAt is in milliseconds; a revoked signer makes every order fail with SignerRevoked
+ *   - a position record's updatedAt is the time of its last fill, which tells a fill already inside a freshly read
+ *     position size from one that still has to be added (a resync and the socket must not count a fill twice)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -102,6 +104,10 @@ async function run() {
   const ex = Object.assign({ type: 'IOC', slippageBps: 15, groupMs: 1200, onLeaderFlat: 'close', onLeaderLiquidation: 'close', onOrphan: 'hold' }, cfg.execution || {});
   const risk = Object.assign({ maxNotionalPerMarket: 0, maxOpenPositions: 0, maxLeverage: 0, dailyLossStop: 0, drawdownStopPct: 0, minOrderUsd: 0, markets: {}, onTrip: 'reduceOnly' }, cfg.risk || {});
   const sizing = Object.assign({ mode: 'fixed', size: 200, ratio: 10 }, cfg.sizing || {});
+  // a fixed-size copy follows the leader's adds in proportion, so a leader who opens small and scales in would make a
+  // position any multiple of `size`; without a per-market cap of your own, five times the size is the most one gets
+  const MAX_SCALE = 5; let capDerived = false;
+  if (sizing.mode !== 'ratio' && !(num(risk.maxNotionalPerMarket) > 0)) { risk.maxNotionalPerMarket = MAX_SCALE * num(sizing.size); capDerived = true; }
   const offset = await syncClock();
   const rpc = await api('/v1/rpc/config');
   const products = (await api('/v1/product?limit=200')).data || [];
@@ -115,7 +121,7 @@ async function run() {
   // persisted state: what we follow from whom, so a restart does not orphan positions
   let saved = {}; try { saved = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) {}
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderPosAt: {}, resyncAt: {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
   const persist = () => { try { fs.writeFileSync(statePath, JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 1000), savedAt: Date.now() })); } catch (_) {} };
   const note = (kind, msg, extra) => { const e = Object.assign({ t: Date.now(), kind, msg }, extra || {}); S.events.unshift(e); if (S.events.length > 300) S.events.length = 300; log(kind, msg, extra || ''); };
   const push = async (title, msg) => { if (!(cfg.ntfy && cfg.ntfy.topic)) return; try { await fetch(((cfg.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')) + '/' + encodeURIComponent(cfg.ntfy.topic), { method: 'POST', body: msg, headers: { Title: title, Tags: 'robot', Priority: '4' } }); } catch (_) {} };
@@ -230,10 +236,29 @@ async function run() {
     const owner = S.marketOwner[prod.id]; if (owner && owner !== leaderSid) return `${prod.displayTicker} is being copied from another leader`;
     return null;
   };
+  /** How much notional may still be added in a market under the per-market cap, the market's own cap and the leverage
+   *  limit: an order that would overshoot is cut to this rather than dropped, so the copy stays as close as the limits allow. */
+  const roomFor = (prod) => {
+    const cur = S.own[prod.id]; const curNotional = cur ? cur.notional : 0; let room = Infinity;
+    if (risk.maxNotionalPerMarket) room = Math.min(room, risk.maxNotionalPerMarket - curNotional);
+    if (num(prod.maxPositionNotionalUsd)) room = Math.min(room, num(prod.maxPositionNotionalUsd) - curNotional);
+    if (risk.maxLeverage && S.equity > 0) room = Math.min(room, risk.maxLeverage * S.equity - S.notional);
+    return room;
+  };
 
   // ---- leaders: positions seeded from the exchange, resynced on every hint and every five minutes
-  const readLeader = async (l) => { const cur = {}; for (const p of (await api('/v1/position', { params: { subaccountId: l.sid, open: true, limit: 100 } })).data || []) cur[p.productId] = num(p.size); return cur; };
-  const seedLeader = async (l) => { try { S.leaderPos[l.sid] = await readLeader(l); S.leaderSeeded[l.sid] = true; } catch (e) { S.leaderSeeded[l.sid] = false; note('warn', `could not read ${who(l)}'s positions: ${e.message}; not copying its openings until it can be read`); } S.books[l.sid] = S.books[l.sid] || {}; };
+  // A position record's updatedAt is the time of the last fill in it, so a fill whose time is at or before the record's
+  // updatedAt is already inside the size that was read; the socket's copy of that fill must not be added on top
+  // (a resync landing while an order's fills are still being grouped would otherwise count them twice and, say, take
+  // a close for a reversal). Open records carry the sizes; the newest records carry the updatedAt of recent closes.
+  const readLeader = async (l) => {
+    const [openR, recentR] = await Promise.all([api('/v1/position', { params: { subaccountId: l.sid, open: true, limit: 100 } }), api('/v1/position', { params: { subaccountId: l.sid, limit: 50 } })]);
+    const pos = {}, at = {};
+    for (const p of (openR.data || []).concat(recentR.data || [])) { const t = num(p.updatedAt) || num(p.createdAt); if (t > (at[p.productId] || 0)) at[p.productId] = t; }
+    for (const p of openR.data || []) if (num(p.size)) pos[p.productId] = num(p.size);
+    return { pos, at };
+  };
+  const seedLeader = async (l) => { try { const r = await readLeader(l); S.leaderPos[l.sid] = r.pos; S.leaderPosAt[l.sid] = r.at; S.leaderSeeded[l.sid] = true; } catch (e) { S.leaderSeeded[l.sid] = false; note('warn', `could not read ${who(l)}'s positions: ${e.message}; not copying its openings until it can be read`); } S.books[l.sid] = S.books[l.sid] || {}; };
   for (const l of cfg.leaders) await seedLeader(l);
   await refreshOwn();
 
@@ -243,6 +268,8 @@ async function run() {
   if (S.equity <= 0) note('warn', 'the copy account has no equity; nothing can be opened');
   if (ex.type === 'MARKET') note('warn', 'execution.type is MARKET: the only slippage protection is the exchange\'s own cap (MarketOrderReachedMaxSlippage); IOC with a bps cap is safer');
   if (sizing.mode !== 'ratio' && num(sizing.size) < (risk.minOrderUsd || 0)) note('warn', `sizing.size ${sizing.size} is below risk.minOrderUsd ${risk.minOrderUsd}: every order would be skipped`);
+  if (capDerived) note('start', `risk.maxNotionalPerMarket is not set: using ${MAX_SCALE} × sizing.size = ${risk.maxNotionalPerMarket} USD per market, the most a position may grow to when a leader adds to it`);
+  if (sizing.mode !== 'ratio' && num(risk.maxNotionalPerMarket) < num(sizing.size)) note('warn', `risk.maxNotionalPerMarket ${risk.maxNotionalPerMarket} is below sizing.size ${sizing.size}: every opening is cut to the cap`);
   // what the last run followed in markets we no longer hold is forgotten (a close while the agent was down)
   for (const pid of Object.keys(S.marketOwner)) if (!S.own[pid]) { delete S.marketOwner[pid]; for (const bk of Object.values(S.books)) delete bk[pid]; }
   // positions already open on the copy account: adopt the ones a leader also holds, flag the rest
@@ -257,7 +284,10 @@ async function run() {
 
   /** One leader order (its fills grouped): decide and place the mirror. Runs inside the serial queue. */
   async function onLeaderOrder(l, prod, g) {
-    const lp = S.leaderPos[l.sid] || (S.leaderPos[l.sid] = {}); const prev = lp[prod.id] || 0;
+    const lp = S.leaderPos[l.sid] || (S.leaderPos[l.sid] = {}); const at = (S.leaderPosAt[l.sid] || {})[prod.id] || 0;
+    // fills at or before the last read of the leader's positions are already inside that size: classify from it, do not add
+    const qIn = (g.parts || []).reduce((a, p) => a + (p.t > 0 && p.t <= at ? p.q : 0), 0);
+    const prev = (lp[prod.id] || 0) - qIn;
     const next = prev + g.q; lp[prod.id] = Math.abs(next) < 1e-12 ? 0 : next;
     const book = S.books[l.sid] || (S.books[l.sid] = {}); const px = g.notional / Math.abs(g.q);
     const own = S.own[prod.id]; const ownQty = own ? own.size : 0; const followed = S.marketOwner[prod.id] === l.sid;
@@ -268,6 +298,8 @@ async function run() {
     if (kind === 'close') { if (followed && ownQty) await closeMarket(prod.id, `${name} closed`, name, ctxL); return; }
     if (kind === 'reduce') {
       if (!followed || !ownQty) return;
+      // a resync that read the position after every fill of this order already mirrored the reduction
+      const r = S.resyncAt[prod.id]; if (r && (g.parts || []).every((p) => p.t > 0 && p.t <= r)) { note('leader', `${prod.displayTicker} reduce: already mirrored by the resync`); return; }
       const share = Math.abs(g.q) / Math.abs(prev); const q = Math.abs(ownQty) * share;
       await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: q, reduceOnly: true, why: `${name} reduced ${(share * 100).toFixed(0)}%`, leader: name }, ctxL));
       return;
@@ -283,24 +315,37 @@ async function run() {
     else { const orderQty = g.orderQty && g.orderQty > leaderDelta ? g.orderQty : leaderDelta; const k = num(sizing.size) / (orderQty * px); book[prod.id] = { k, openedAt: Date.now() }; q = leaderDelta * k; }
     if (kind === 'add' && !followed && ownNow) { note('skip', `${prod.displayTicker} add: we hold a position here that is not a copy of ${name}`); return; }
     const side = next > 0 ? 0 : 1;
+    // the size limits cut the order to what they allow (a leader scaling in beyond the cap is followed up to it);
+    // everything else (paused, stopped, stale data, denied market, another leader's market, no equity) skips it
+    const room = roomFor(prod); let why = `${name} ${kind}`;
+    if (q * px > room) {
+      const mkt = S.own[prod.id] ? S.own[prod.id].notional : 0;
+      const minUsd = Math.max(num(prod.minQuantity) * px, risk.minOrderUsd || 0);
+      if (room < minUsd) { note('skip', `${prod.displayTicker} ${kind}: ${allowed(prod, q * px, l.sid) || 'at the size limit'} (${mkt.toFixed(0)} USD held)`, { leader: name }); return; }
+      note('leader', `${prod.displayTicker} ${kind}: ${(q * px).toFixed(0)} USD cut to ${room.toFixed(0)} USD by the size limits`, { leader: name });
+      q = room / px; why += ' (cut to the size limit)';
+    }
     const no = allowed(prod, q * px, l.sid);
     if (no) { note('skip', `${prod.displayTicker} ${kind}: ${no}`, { leader: name }); return; }
-    const r = await place(Object.assign({ prod, side, qty: q, why: `${name} ${kind}`, leader: name }, ctxL, { kind: kind === 'reverse' ? 'open' : kind }));
+    const r = await place(Object.assign({ prod, side, qty: q, why, leader: name }, ctxL, { kind: kind === 'reverse' ? 'open' : kind }));
     if (r && S.own[prod.id] && Math.sign(S.own[prod.id].size) === (side === 0 ? 1 : -1)) { S.marketOwner[prod.id] = l.sid; book[prod.id] = book[prod.id] || { k: q / leaderDelta, openedAt: Date.now() }; }
     persist();
   }
 
   /** Compare a leader's positions with what we last knew and mirror what the socket may have missed. */
   async function resync(l, why) {
-    let after; try { after = await readLeader(l); } catch (e) { note('warn', `resync ${who(l)}: ${e.message}`); return; }
-    const before = S.leaderPos[l.sid] || {}; S.leaderPos[l.sid] = after; S.leaderSeeded[l.sid] = true;
+    let read; try { read = await readLeader(l); } catch (e) { note('warn', `resync ${who(l)}: ${e.message}`); return; }
+    const after = read.pos; const before = S.leaderPos[l.sid] || {}; S.leaderPos[l.sid] = after; S.leaderPosAt[l.sid] = read.at; S.leaderSeeded[l.sid] = true;
     for (const pid of Object.keys(S.own)) {
       if (S.marketOwner[pid] !== l.sid) continue;
+      // fills of this market still being grouped: the flush mirrors them with the read just taken, so nothing is done twice
+      if (Array.from(pending.keys()).some((k) => k.startsWith(l.sid + '|' + pid + '|'))) continue;
       const prod = byId[pid]; const b = before[pid] || 0, a = after[pid] || 0; const ownQty = S.own[pid].size;
       const ctxL = { leaderSid: l.sid, leaderPx: S.mark[pid] || null, leaderT: Date.now() };   // the leader's own price is unknown here: the mark stands in, flagged
-      if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); await closeMarket(pid, `leader flat (${why})`, who(l), Object.assign({ resync: true }, ctxL)); } }
-      else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); await closeMarket(pid, `leader reversed (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
-      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: Math.abs(ownQty) * share, reduceOnly: true, why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
+      const acted = () => { S.resyncAt[pid] = read.at[pid] || Date.now(); };   // a fill of that time or earlier is covered by this
+      if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); acted(); await closeMarket(pid, `leader flat (${why})`, who(l), Object.assign({ resync: true }, ctxL)); } }
+      else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); acted(); await closeMarket(pid, `leader reversed (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
+      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); acted(); await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: Math.abs(ownQty) * share, reduceOnly: true, why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
     }
     persist();
   }
@@ -313,8 +358,8 @@ async function run() {
   const pending = new Map(); const seen = new Set();
   const onFill = (l, prod, f) => {
     const key = l.sid + '|' + prod.id + '|' + f.oid; const cur = pending.get(key);
-    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; cur.t = Math.max(cur.t, f.t); clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), ex.groupMs); return; }
-    pending.set(key, { l, prod, q: f.q, notional: Math.abs(f.q) * f.px, oid: f.oid, t: f.t, timer: setTimeout(() => flush(key), ex.groupMs) });
+    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; cur.t = Math.max(cur.t, f.t); cur.parts.push({ q: f.q, t: f.t }); clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), ex.groupMs); return; }
+    pending.set(key, { l, prod, q: f.q, notional: Math.abs(f.q) * f.px, oid: f.oid, t: f.t, parts: [{ q: f.q, t: f.t }], timer: setTimeout(() => flush(key), ex.groupMs) });
   };
   const flush = (key) => serial(async () => {
     const g = pending.get(key); pending.delete(key); if (!g) return;
@@ -361,7 +406,7 @@ async function run() {
       else if (url.pathname === '/resume') { S.paused = false; S.tripped = null; note('control', 'resumed from the site'); persist(); }
       else if (url.pathname === '/close-all') { note('control', 'close all from the site'); await serial(() => closeAll('closed from the site')); }
       else if (url.pathname === '/resync') { note('control', 'resync from the site'); for (const l of cfg.leaders) await serial(() => resync(l, 'manual')); await serial(() => refreshOwn().catch(() => {})); }
-      else if (url.pathname === '/simulate' && DRY) { const l = cfg.leaders[0]; const prod = Object.values(byId).find((p) => p.displayTicker === bodyJ.ticker); if (l && prod) { note('control', `simulated leader fill ${bodyJ.side} ${bodyJ.qty} ${bodyJ.ticker}`); route({ e: 'OrderFill', data: { sid: l.sid, d: [{ sid: l.sid, s: prod.ticker, sd: bodyJ.side === 'SELL' ? 1 : 0, sz: String(bodyJ.qty), px: String(bodyJ.px || S.mark[prod.id] || 0), oid: 'sim-' + Date.now(), id: 'sim-' + Date.now() }] } }); } }
+      else if (url.pathname === '/simulate' && DRY) { const l = cfg.leaders[0]; const prod = Object.values(byId).find((p) => p.displayTicker === bodyJ.ticker); if (l && prod) { note('control', `simulated leader fill ${bodyJ.side} ${bodyJ.qty} ${bodyJ.ticker}`); route({ e: 'OrderFill', data: { sid: l.sid, d: [{ sid: l.sid, s: prod.ticker, sd: bodyJ.side === 'SELL' ? 1 : 0, sz: String(bodyJ.qty), px: String(bodyJ.px || S.mark[prod.id] || 0), t: bodyJ.t ? num(bodyJ.t) : undefined, oid: bodyJ.oid || 'sim-' + Date.now(), id: 'sim-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) }] } }); } }
       else { res.writeHead(404, cors); return res.end('{"error":"unknown"}'); }
       res.writeHead(200, cors); return res.end('{"ok":true}');
     }

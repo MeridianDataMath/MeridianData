@@ -46,7 +46,8 @@
     return h('div.pager', h('span', loading ? h('span.loading', h('span.spinner'), 'Loading') : `${count} rows · page ${page}`), h('span.grow'), h('button.btn.sm.icon', { disabled: page <= 1 || loading, title: 'Previous', onclick: onPrev }, U.icon('chevL')), h('button.btn.sm.icon', { disabled: !hasNext || loading, title: 'Next', onclick: onNext }, U.icon('chevR')));
   };
 
-  UI.stat = (k, v, sub, cls) => h('div.stat', h('div.k', k), h('div.v', { class: cls || '' }, v), sub ? h('div.sub', sub) : null);
+  // a value longer than a tile is wide ("$1,000,060.00") shrinks a step instead of being cut with an ellipsis
+  UI.stat = (k, v, sub, cls) => h('div.stat', h('div.k', k), h('div.v', { class: (cls || '') + (String(typeof v === 'string' ? v : (v && v.textContent) || '').length > 12 ? ' long' : '') }, v), sub ? h('div.sub', sub) : null);
   UI.metric = (k, v, s, cls) => h('div.metric', h('div.k', k), h('div.v', { class: cls || '' }, v), s ? h('div.s', s) : null);
   UI.card = (title, body, extra) => h('div.card.tight', h('div.card-head', h('h2', title), extra || null), body);
   UI.loading = (text) => h('div.empty', h('span.loading', h('span.spinner'), text || 'Loading…'));
@@ -87,7 +88,7 @@
   /** Inline warning when a published snapshot is older than it should be (the publishers run every 30 minutes). */
   UI.STALE_MS = 2 * 3600000;
   UI.staleNote = (builtAt, hint) => (builtAt && Date.now() - builtAt > UI.STALE_MS
-    ? h('span', { style: { color: 'var(--amber)' }, title: hint || '' }, ' · stale: ' + U.fmtDuration(Date.now() - builtAt) + ' old')
+    ? h('span', { style: { color: 'var(--amber)' }, title: (hint ? hint + ' · ' : '') + 'refreshed every 30 minutes normally' }, ' · stale')   // the age itself is printed just before
     : null);
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
   UI.modal = function ({ title, body, wide }) {

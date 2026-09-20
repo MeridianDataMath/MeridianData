@@ -18,6 +18,7 @@
         since: route.params.since || null,
         mode: ['ratio', 'perfill'].includes(route.params.mode) ? route.params.mode : 'fixed',
         size: Math.max(10, U.num(route.params.size) || AN.COPY_SIZE),
+        maxPos: U.num(route.params.max) > 0 ? U.num(route.params.max) : null,   // null = five times the size (S.MAX_SCALE)
         ratio: Math.max(0.1, U.num(route.params.ratio) || 10),
         delay: route.params.delay != null && DELAYS.includes(U.num(route.params.delay)) ? U.num(route.params.delay) : 30,
         slip: route.params.slip === 'auto' || route.params.slip == null ? 'auto' : U.num(route.params.slip),
@@ -59,10 +60,12 @@
       // ---- settings
       const sinceIn = h('input.input.sm', { type: 'date', value: st.since, min: isoDate(firstT), max: isoDate(Date.now()), style: { width: 'auto' } });
       const sizeIn = h('input.input.sm', { type: 'number', min: 10, step: 100, value: st.size, style: { width: '110px' } });
+      const maxIn = h('input.input.sm', { type: 'number', min: 10, step: 100, placeholder: String(S.MAX_SCALE) + '× size', value: st.maxPos || '', style: { width: '110px' }, title: 'The most one position may grow to when the leader adds to it (empty = ' + S.MAX_SCALE + ' times the size)' });
       const ratioIn = h('input.input.sm', { type: 'number', min: 0.1, step: 1, value: st.ratio, style: { width: '90px' } });
-      const modeSeg = UI.seg([{ v: 'fixed', label: 'Fixed $ per position', title: 'the leader\'s opening order becomes this much; adds and reductions follow in proportion' }, { v: 'perfill', label: 'Fixed $ per fill', title: 'every entry fill becomes this much; reductions cut the same share' }, { v: 'ratio', label: '% of the leader\'s size' }], st.mode, (v) => { st.mode = v; sizeIn.style.display = v === 'ratio' ? 'none' : ''; ratioIn.parentElement.style.display = v === 'ratio' ? '' : 'none'; }, 'sm');
+      const maxWrap = h('span.row', { style: { gap: '4px' } }, h('span.dim.small', 'max'), maxIn);
+      const modeSeg = UI.seg([{ v: 'fixed', label: '$ per position', title: 'the leader\'s opening order becomes this much; adds follow in proportion up to the maximum, reductions cut the same share' }, { v: 'perfill', label: '$ per fill', title: 'every entry fill becomes this much, up to the maximum per position; reductions cut the same share' }, { v: 'ratio', label: '% of leader', title: 'every fill is this share of the leader\'s quantity' }], st.mode, (v) => { st.mode = v; sizeIn.style.display = maxWrap.style.display = v === 'ratio' ? 'none' : ''; ratioIn.parentElement.style.display = v === 'ratio' ? '' : 'none'; }, 'sm');
       const ratioWrap = h('span.row', { style: { gap: '4px', display: st.mode === 'ratio' ? '' : 'none' } }, ratioIn, h('span.dim.small', '%'));
-      sizeIn.style.display = st.mode === 'ratio' ? 'none' : '';
+      sizeIn.style.display = maxWrap.style.display = st.mode === 'ratio' ? 'none' : '';
       const delaySeg = UI.seg(DELAYS.map((d) => ({ v: d, label: d ? d + ' s' : 'instant' })), st.delay, (v) => { st.delay = v; }, 'sm');
       const slipIn = h('input.input.sm', { type: 'number', min: 0, step: 0.5, placeholder: 'auto', value: st.slip === 'auto' ? '' : st.slip, style: { width: '80px' }, title: 'Leave empty to take today\'s books at your size' });
       const mkWrap = h('div.row.wrap', { style: { gap: '4px' } });
@@ -70,7 +73,7 @@
       renderMarkets();
       const runBtn = h('button.btn.primary.sm', { onclick: () => run() }, 'Run');
       const settings = h('div.card.no-print', h('div.stack', { style: { gap: '10px' } },
-        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Copy since'), sinceIn, h('span.dim.small', 'Size'), modeSeg, sizeIn, ratioWrap, h('span.dim.small', 'Delay'), delaySeg),
+        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Copy since'), sinceIn, h('span.dim.small', 'Size'), modeSeg, sizeIn, maxWrap, ratioWrap, h('span.dim.small', 'Delay'), delaySeg),
         h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Slippage'), slipIn, h('span.dim.small', 'bps each way (empty = from today\'s books at your size)'), h('span.dim.small', { style: { marginLeft: '8px' } }, 'Markets'), mkWrap, h('span.grow'), runBtn)));
       const results = h('div.stack');
       U.replace(body, head, settings, results);
@@ -78,15 +81,16 @@
       async function run() {
         runBtn.disabled = true;
         st.since = sinceIn.value || st.since; st.size = Math.max(10, U.num(sizeIn.value) || AN.COPY_SIZE); st.ratio = Math.max(0.1, U.num(ratioIn.value) || 10);
+        st.maxPos = U.num(maxIn.value) >= st.size ? U.num(maxIn.value) : null; maxIn.value = st.maxPos || '';
         st.slip = slipIn.value === '' ? 'auto' : Math.max(0, U.num(slipIn.value));
-        MD.router.setParams({ address: addr, sub: sid, since: st.since, mode: st.mode !== 'fixed' ? st.mode : null, size: st.mode !== 'ratio' && st.size !== AN.COPY_SIZE ? st.size : null, ratio: st.mode === 'ratio' ? st.ratio : null, delay: st.delay !== 30 ? st.delay : null, slip: st.slip === 'auto' ? null : st.slip, markets: st.markets ? Array.from(st.markets).join(',') : null }, { silent: true });
+        MD.router.setParams({ address: addr, sub: sid, since: st.since, mode: st.mode !== 'fixed' ? st.mode : null, size: st.mode !== 'ratio' && st.size !== AN.COPY_SIZE ? st.size : null, max: st.mode !== 'ratio' && st.maxPos ? st.maxPos : null, ratio: st.mode === 'ratio' ? st.ratio : null, delay: st.delay !== 30 ? st.delay : null, slip: st.slip === 'auto' ? null : st.slip, markets: st.markets ? Array.from(st.markets).join(',') : null }, { silent: true });
         U.replace(results, h('div.card', UI.loading('Replaying fills against one-minute candles…')));
         try {
           const since = Date.parse(st.since + 'T00:00:00Z');
           const copyNotional = st.mode !== 'ratio' ? st.size : null;
           const slipAuto = S.slippageFor(depth, ref, copyNotional || AN.COPY_SIZE);
           const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003;
-          const base = { mode: st.mode, size: st.size, ratio: st.ratio / 100, slipBps: st.slip === 'auto' ? slipAuto : st.slip, feeRate, priceAt: S.priceAtFactory(candles, ref), markets: st.markets };
+          const base = { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, slipBps: st.slip === 'auto' ? slipAuto : st.slip, feeRate, priceAt: S.priceAtFactory(candles, ref), markets: st.markets };
           const runs = {};
           for (const d of DELAYS) runs[d] = await S.replay({ episodes, settings: Object.assign({}, base, { delaySec: d }), marks, since, ref });
           if (ctx.signal.aborted) return;
@@ -98,6 +102,7 @@
       function renderResults(runs, base, slipAuto, candleStats) {
         const R = runs[st.delay]; const T = R.T; const R0 = runs[0].T;
         if (!R.rows.length) { U.replace(results, h('div.card', h('div.empty', 'No positions opened since ' + st.since + (st.markets ? ' in the chosen markets' : '') + '. Move the start date back.'))); return; }
+        const maxPos = S.maxPosition(base);
         const sizeLabel = st.mode === 'fixed' ? usd0(st.size) + ' per position (the opening order)' : st.mode === 'perfill' ? usd0(st.size) + ' per entry fill' : U.fmtNum(st.ratio, 1) + '% of the leader\'s size';
         const perPos = T.n ? T.copierNet / T.n : 0, perPosL = T.n ? T.leaderNet / T.n : 0;
         const avgEntry = T.n ? U.sum(R.rows, (r) => r.C.entryNotional) / T.n : 0, avgEntryL = T.n ? U.sum(R.rows, (r) => r.L.entryNotional) / T.n : 0;
@@ -105,7 +110,7 @@
           UI.stat('Copier net', usd0(T.copierNet, { sign: true }), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's result` : ''), U.pnlClass(T.copierNet)),
           UI.stat('Leader net', usd0(T.leaderNet, { sign: true }), 'same positions, their fills, fees and funding', U.pnlClass(T.leaderNet)),
           UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps`, U.pnlClass(perPos)),
-          UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '')),
+          UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '') + (T.capped ? ` · ${T.capped} capped at ${usd0(maxPos)}` : '')),
           UI.stat('Costs', usd0(T.fees + T.drift + T.slip + T.posFee), `${usd0(T.fees)} fees · ${usd0(T.drift, { sign: true })} drift · ${usd0(T.slip)} slippage` + (T.posFee ? ` · ${usd0(T.posFee)} position fees` : ''), 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'the leader\'s, scaled to your size', U.pnlClass(T.funding)),
           UI.stat('Max drawdown', usd0(T.maxDd), avgEntry ? `${U.fmtNum(T.maxDd / avgEntry, 1)}× an average position · on the copier's cumulative result` : 'on the copier\'s cumulative result', T.maxDd > 0 ? 'neg' : ''),
@@ -133,7 +138,7 @@
             { key: 'h', label: 'Held', num: true, render: (r) => h('span', U.fmtDuration(r.hold), r.open ? UI.chip('open', 'blue') : r.liq ? UI.chip('LIQ', 'red') : null) },
             { key: 'ls', label: 'Leader size', num: true, render: (r) => usd0(r.L.entryNotional) },
             { key: 'ln', label: 'Leader net', num: true, render: (r) => h('span', U.pnlEl(r.L.net, { dp: 2 }), bpsEl(r.leaderBps)) },
-            { key: 'cs', label: 'Copier size', num: true, render: (r) => usd0(r.C.entryNotional) },
+            { key: 'cs', label: 'Copier size', num: true, render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
             { key: 'cn', label: 'Copier net', num: true, render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
             { key: 'dr', label: 'Drift', num: true, title: 'what the price move between the leader\'s fills and the copier\'s cost', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(-r.C.driftCost, { sign: true, dp: 2 }))) },
             { key: 'sl', label: 'Slippage', num: true, render: (r) => (r.C.slipCost ? U.fmtUsd(r.C.slipCost, { dp: 2 }) : h('span.dim', '—')) },
@@ -142,11 +147,11 @@
           ], rows: slice }), rows.length > PAGE ? UI.pager({ page, pageSize: PAGE, total: rows.length, onPage: (p) => { page = p; renderTbl(); } }) : null);
         };
         renderTbl();
-        const slipNote = st.slip === 'auto' ? 'Slippage from today\'s books at ' + usd0(base.mode === 'fixed' ? st.size : AN.COPY_SIZE) + ': ' + traded.map((p) => `${p.displayTicker} ${U.fmtNum(slipAuto[p.id] == null ? 0 : slipAuto[p.id], 1)} bps`).join(' · ') : `Slippage set to ${U.fmtNum(st.slip, 1)} bps each way.`;
+        const slipNote = st.slip === 'auto' ? 'Slippage from today\'s books at ' + usd0(base.mode !== 'ratio' ? st.size : AN.COPY_SIZE) + ': ' + traded.map((p) => `${p.displayTicker} ${U.fmtNum(slipAuto[p.id] == null ? 0 : slipAuto[p.id], 1)} bps`).join(' · ') : `Slippage set to ${U.fmtNum(st.slip, 1)} bps each way.`;
         const notes = h('div.card', h('h3', { style: { marginBottom: '8px' } }, 'What this assumes'), h('div.roadmap',
           h('div.it', h('div.t', 'Prices'), h('div.d', 'Each of the leader\'s fills is copied at the one-minute oracle close ' + (st.delay ? st.delay + ' seconds' : '0 seconds') + ' later (interpolated inside the fill\'s minute), then moved against you by the slippage. The leader\'s own fills are what it actually paid.')),
           h('div.it', h('div.t', 'Fees, funding, position fees'), h('div.d', 'You pay the taker fee of each market on every fill. Funding and mPerp position fees are the leader\'s for the same position, scaled to your size: you would hold it over the same hours.')),
-          h('div.it', h('div.t', 'Sizing'), h('div.d', st.mode === 'fixed' ? `The leader's opening order (all of its fills, not just the first piece) becomes ${usd0(st.size)} for you; later adds and reductions follow the leader in proportion, so a leader who scales in makes your position bigger than ${usd0(st.size)}.` : st.mode === 'perfill' ? `Every entry fill becomes ${usd0(st.size)} for you; a reduction cuts your position by the same share as the leader's.` : `Every fill is ${U.fmtNum(st.ratio, 1)}% of the leader's quantity.`)),
+          h('div.it', h('div.t', 'Sizing'), h('div.d', st.mode === 'fixed' ? `The leader's opening order (all of its fills, not just the first piece) becomes ${usd0(st.size)} for you; later adds follow the leader in proportion until the position reaches ${usd0(maxPos)}, the most one position may hold (a leader who opens small and scales in would otherwise make yours any multiple of ${usd0(st.size)}). A reduction cuts your position by the same share as the leader's.` : st.mode === 'perfill' ? `Every entry fill becomes ${usd0(st.size)} for you, until the position reaches ${usd0(maxPos)}, the most one position may hold; a reduction cuts your position by the same share as the leader's.` : `Every fill is ${U.fmtNum(st.ratio, 1)}% of the leader's quantity.`)),
           h('div.it', h('div.t', 'Liquidations and open positions'), h('div.d', 'A position the leader was liquidated out of is closed at the leader\'s exit price; whether you would have been liquidated depends on your own margin. Positions still open are marked at the current oracle price.')),
           h('div.it', h('div.t', 'Books'), h('div.d', slipNote + '. Unfillable sizes count as 60 bps.')),
           h('div.it', h('div.t', 'Not modelled'), h('div.d', 'Your own market impact on top of the leader\'s, rejected or partially filled orders, and the leader trading in more than one subaccount.')),
@@ -163,7 +168,7 @@
       const PP = MD.paper;
       const paperCard = h('div.card'); body.appendChild(paperCard);
       let paper = PP.load(sid); const live = {}; let unsubs = []; let fundingTimer = null; let pending = 0;
-      const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode !== 'ratio' ? st.size : AN.COPY_SIZE) : st.slip, feeRate }; };
+      const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode !== 'ratio' ? st.size : AN.COPY_SIZE) : st.slip, feeRate }; };
       const detach = () => { for (const u of unsubs) { try { u(); } catch (_) {} } unsubs = []; if (fundingTimer) clearInterval(fundingTimer); fundingTimer = null; };
       ctx.onCleanup(detach);
       const markOf = (pid) => (live[pid] != null ? live[pid] : marks[pid]);

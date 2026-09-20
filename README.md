@@ -223,9 +223,15 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   episodes the window cannot have seen whole are flagged and left out, and the page's "Data
   limits" note says how many, together with positions lacking a record (funding unknown) and
   delayed fills without a candle. Sizing: fixed $ per position sizes on the leader's whole
-  opening *order* (all of its fills, since real orders fill in pieces), adds and reductions then
-  follow in proportion; fixed $ per fill sizes every entry fill and cuts reductions by the same
-  share; or a % of the leader's quantity. Each of the leader's fills is copied at the one-minute
+  opening *order* (all of its fills, since real orders fill in pieces), adds then follow in
+  proportion; fixed $ per fill sizes every entry fill; or a % of the leader's quantity. In the
+  two fixed modes a position may grow to at most a maximum (the "max" field, five times the
+  size by default, `S.MAX_SCALE`): a leader who opens small and scales in would otherwise make
+  the copier's position any multiple of the size it asked for (a $923 position opened with an
+  $8 order made a $226,804 "fixed $2,000" copy before the cap), and adds beyond it are skipped
+  ("capped" on the position). In every mode a reduction cuts the copier's position by the same
+  share as the leader's, so a capped position is still closed when the leader closes. Each of
+  the leader's fills is copied at the one-minute
   oracle price `delay` seconds later (from the fill price to its minute's close inside the fill's
   minute, from the previous close to that minute's close afterwards), moved against the copier
   by the slippage, at the market's taker fee; funding and position fees are the leader's scaled
@@ -241,7 +247,8 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   fills from the `OrderFill` stream `delay` seconds later at the mark price of that moment
   (`Ticker` stream), so the delay cost is measured on the real tape; a fill that crosses zero is
   split like the simulator's; a fixed-size copy is sized on the leader's whole order (looked up
-  by order id) rather than on its first piece; fees and slippage as set, funding accrued hourly
+  by order id) rather than on its first piece and capped per position like the simulator's;
+  fees and slippage as set, funding accrued hourly
   from each market's current rate while a tab follows. It follows while a tab with the page is
   open; on return, the fills that happened meanwhile are caught up from the leader's public
   fills at candle prices (marked "caught up" in the log, their delay cost counted as modelled),
@@ -254,7 +261,10 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   closes or reverses a position, or is liquidated. `js/copy/alerts.js` subscribes to each
   followed account's `OrderFill` and `SubaccountLiquidation` streams (seeded from its open
   positions, resynced every ten minutes), groups the fills of one order for 2.5 s and classifies
-  the order against the running position; events and a minimum notional are configurable.
+  the order against the running position; a fill dated at or before the `updatedAt` of the
+  position record last read is already inside that size and is not added again, so a resync
+  landing mid-order cannot turn a close into a "reversed" alert. Events and a minimum notional
+  are configurable.
   Delivery: a toast on the site, a browser notification (permission asked on the page), and
   optionally an ntfy push to a phone (topic and server on the page, "Send a test"; the tab
   POSTs to the topic, which is the only secret). Alerts flow while a tab of the site is open in
@@ -278,7 +288,11 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   unfilled remainder of an IOC is logged, never chased. Risk limits, checked before every new
   or larger position: max notional per market, max open positions, max leverage on equity,
   daily loss stop and drawdown stop (a trip makes the agent reduce-only, or close everything,
-  until resumed), minimum order size, denied markets; one leader per market. A local status
+  until resumed), minimum order size, denied markets; one leader per market. The three size
+  limits cut an order to what they allow rather than dropping it, so a leader scaling in is
+  followed up to the cap; in the fixed modes a per-market cap of 0 is replaced by five times
+  the size (logged at start), because proportional adds would otherwise make a position any
+  multiple of the size. A local status
   port (127.0.0.1 only, origin-checked, token-guarded for pause / resume / close all) feeds
   the page's dashboard: equity, day and peak change, leverage, own positions against the
   leaders', every order with its status and fill, the event log. `run --dry` sends every order
@@ -307,7 +321,12 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   adopted while the rest are flagged as orphans (left alone, or closed with `onOrphan`); the
   leaders are re-read on every `PositionUpdate` / liquidation hint, on reconnect and every five
   minutes, and a close, a reduction or a side change missed over a disconnect is mirrored (an
-  opening is not chased); no order without a live mark, none while the own-account read is more
+  opening is not chased); a re-read and the socket never count a fill twice: a position
+  record's `updatedAt` is the time of its last fill, so a grouped fill dated at or before the
+  record last read is already inside that size and only classifies the order, and a re-read
+  leaves markets alone whose fills are still being grouped (a resync landing mid-order used to
+  be able to take a close for a reversal and open the other side); no order without a live
+  mark, none while the own-account read is more
   than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
   stops take deposits and withdrawals out (`/v1/token/transfer`) so a transfer can neither trip
   nor mask them; quantities are capped at the market's `maxQuantity` and rounded to its lot.

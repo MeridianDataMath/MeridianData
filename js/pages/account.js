@@ -160,8 +160,9 @@
   async function mountOverview(el, st, cx) {
     const { sa, ref } = st;
     const sid = sa.id;
-    let range = MD.router.parse().params.range || 'all';
-    let metric = MD.router.parse().params.metric || 'pnl';
+    const q = MD.router.parse().params;   // a hand-edited link with an unknown range or metric falls back rather than failing the tab
+    let range = RANGES.some((r) => r.v === q.range) ? q.range : 'all';
+    let metric = METRICS.some((m) => m.v === q.metric) ? q.metric : 'pnl';
     let cumulative = U.storage.get('md.chart.cum', true);
 
     const stateCard = h('div.card.state-card', UI.loading('Loading account state…'));

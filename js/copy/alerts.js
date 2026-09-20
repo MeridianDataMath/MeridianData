@@ -9,7 +9,17 @@
   const TAB = Math.random().toString(36).slice(2, 10);
   const DEF = () => ({ v: 1, leaders: [], events: { open: true, add: false, reduce: false, close: true, reverse: true, liq: true }, minNotional: 0, browser: true, ntfy: { server: 'https://ntfy.sh', topic: '' }, history: [] });
   AL.MAX_LEADERS = 15;   // each followed account takes two account streams of the socket's fifty
-  let st = null; const subs = new Map(); const pos = {}; const pending = new Map(); const seenFills = new Set(); let owner = false; let ownerT = null; let started = false;
+  let st = null; const subs = new Map(); const pos = {}; const posAt = {}; const pending = new Map(); const seenFills = new Set(); let owner = false; let ownerT = null; let started = false;
+  /** The leader's open sizes per market, and per market the time of the last fill the exchange's position records show
+   *  (open records carry the sizes, the newest records the closes). A fill at or before that time is already inside the
+   *  size read, so the socket's copy of it must not be added again when the two meet (see flush). */
+  async function readPositions(sid) {
+    const [open, recent] = await Promise.all([A.openPositions(sid), A.page(A.BASE, '/v1/position', { subaccountId: sid }, { maxPages: 1, limit: 50 }).catch(() => [])]);
+    const cur = {}, at = {};
+    for (const p of open.concat(recent)) { const t = U.num(p.updatedAt) || U.num(p.createdAt); if (t > (at[p.productId] || 0)) at[p.productId] = t; }
+    for (const p of open) cur[p.productId] = U.num(p.size);
+    pos[sid] = cur; posAt[sid] = at;
+  }
 
   AL.state = () => (st || (st = Object.assign(DEF(), U.storage.get(KEY, null) || {})));
   AL.save = () => { U.storage.set(KEY, st); U.emit('alerts'); };
@@ -68,8 +78,8 @@
     subs.set(sid, null);           // claimed: a second call during the awaits below must not subscribe twice
     let ref; try { ref = await A.ref(); } catch (_) { subs.delete(sid); return; }
     // the leader's open positions now, so the first fill can be told apart from an add
-    pos[sid] = {};
-    try { for (const p of await A.openPositions(sid)) pos[sid][p.productId] = U.num(p.size); } catch (_) {}
+    pos[sid] = {}; posAt[sid] = {};
+    try { await readPositions(sid); } catch (_) {}
     const unFill = A.ws.subscribe('OrderFill', sid, (m) => {
       const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [];
       for (const it of items) { const prod = ref.byTicker[it.s]; if (!prod) continue; if (it.id) { if (seenFills.has(it.id)) continue; seenFills.add(it.id); if (seenFills.size > 2000) seenFills.delete(seenFills.values().next().value); } onFill(sid, prod, { q: (U.sideName(it.sd) === 'BUY' ? 1 : -1) * U.num(it.sz), px: U.num(it.px), t: U.num(it.t || d.t) || Date.now(), oid: it.oid || it.id }); }
@@ -82,19 +92,21 @@
     if (pendingUn.has(sid) || !subs.has(sid)) { pendingUn.delete(sid); un(); subs.delete(sid); return; }   // unfollowed meanwhile
     subs.set(sid, un);
     // resync positions now and then, in case a fill was missed while the socket reconnected
-    const t = setInterval(async () => { if (!subs.has(sid)) { clearInterval(t); return; } try { const cur = {}; for (const p of await A.openPositions(sid)) cur[p.productId] = U.num(p.size); pos[sid] = cur; } catch (_) {} }, 10 * 60000);
+    const t = setInterval(async () => { if (!subs.has(sid)) { clearInterval(t); return; } try { await readPositions(sid); } catch (_) {} }, 10 * 60000);
   }
 
   /** Fills of one order arrive in pieces; gather them for a moment and classify the whole order once. */
   function onFill(sid, prod, f) {
     const key = sid + '|' + prod.id + '|' + f.oid;
     const cur = pending.get(key);
-    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), 2500); return; }
-    pending.set(key, { sid, prod, q: f.q, notional: Math.abs(f.q) * f.px, px: f.px, t: f.t, timer: setTimeout(() => flush(key), 2500) });
+    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; cur.parts.push({ q: f.q, t: f.t }); clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), 2500); return; }
+    pending.set(key, { sid, prod, q: f.q, notional: Math.abs(f.q) * f.px, px: f.px, t: f.t, parts: [{ q: f.q, t: f.t }], timer: setTimeout(() => flush(key), 2500) });
   }
   function flush(key) {
     const e = pending.get(key); pending.delete(key); if (!e) return;
-    const book = pos[e.sid] || (pos[e.sid] = {}); const prev = book[e.prod.id] || 0; const next = prev + e.q; book[e.prod.id] = Math.abs(next) < 1e-9 ? 0 : next;
+    const book = pos[e.sid] || (pos[e.sid] = {}); const at = (posAt[e.sid] || {})[e.prod.id] || 0;
+    const qIn = e.parts.reduce((a, p) => a + (p.t > 0 && p.t <= at ? p.q : 0), 0);   // already inside the size read from the exchange
+    const prev = (book[e.prod.id] || 0) - qIn; const next = prev + e.q; book[e.prod.id] = Math.abs(next) < 1e-9 ? 0 : next;
     const s = Math.sign; let kind;
     if (!prev) kind = 'open'; else if (!book[e.prod.id]) kind = 'close'; else if (s(next) !== s(prev)) kind = 'reverse'; else if (Math.abs(next) > Math.abs(prev)) kind = 'add'; else kind = 'reduce';
     emit({ sid: e.sid, kind, ticker: e.prod.displayTicker, pid: e.prod.id, qty: Math.abs(e.q), px: e.notional / Math.abs(e.q), notional: e.notional, side: kind === 'close' || kind === 'reduce' ? (prev > 0 ? 'LONG' : 'SHORT') : (next > 0 ? 'LONG' : 'SHORT'), t: e.t, tick: e.prod.tickSize });

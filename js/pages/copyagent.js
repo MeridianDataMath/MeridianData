@@ -141,7 +141,7 @@
           h('div',
             fld('Your account', h('div.row.wrap', { style: { gap: '6px' } }, ownerIn, subIn, useWallet)),
             fld('Leaders to copy', h('div', leadersWrap, h('div.row', { style: { gap: '6px', marginTop: '6px' } }, addrIn, addBtn))),
-            fld('Sizing', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.sizing, 'mode', [['fixed', 'Fixed $ per position (the leader\'s opening order)'], ['perfill', 'Fixed $ per fill'], ['ratio', '% of the leader\'s quantity']]), inp(c.sizing, 'size', { type: 'number', min: 10, step: 10, style: { width: '110px' } }), h('span.dim.small', 'USD ·'), inp(c.sizing, 'ratio', { type: 'number', min: 0.1, step: 1, style: { width: '80px' } }), h('span.dim.small', '% (ratio mode)')), 'the same three modes as the simulator; a fixed size is set from the leader\'s whole opening order, not its first fill'),
+            fld('Sizing', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.sizing, 'mode', [['fixed', 'Fixed $ per position (the leader\'s opening order)'], ['perfill', 'Fixed $ per fill'], ['ratio', '% of the leader\'s quantity']]), inp(c.sizing, 'size', { type: 'number', min: 10, step: 10, style: { width: '110px' } }), h('span.dim.small', 'USD ·'), inp(c.sizing, 'ratio', { type: 'number', min: 0.1, step: 1, style: { width: '80px' } }), h('span.dim.small', '% (ratio mode)')), 'the same three modes as the simulator; a fixed size is set from the leader\'s whole opening order, not its first fill. Adds follow in proportion only up to the USD max per market below (a leader who opens small and scales in would otherwise make a position any multiple of the size); left at 0, the agent uses five times the size'),
             fld('Execution', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.execution, 'type', [['IOC', 'Limit IOC at mark ± slippage cap'], ['MARKET', 'Market order']]), inp(c.execution, 'slippageBps', { type: 'number', min: 1, step: 1, style: { width: '80px' } }), h('span.dim.small', 'bps cap'), sel(c.execution, 'onLeaderFlat', [['close', 'Leader flat without a fill → close'], ['hold', 'Leader flat without a fill → hold']]), sel(c.execution, 'onLeaderLiquidation', [['close', 'Leader liquidated → close'], ['hold', 'Leader liquidated → hold']])), 'an IOC order fills up to the cap and cancels the rest; what did not fill is logged and not chased')),
           h('div',
             fld('Risk limits', h('div.row.wrap', { style: { gap: '6px 12px' } },
@@ -172,7 +172,7 @@
         renderHistory();
       };
       function renderHistory() {
-        if (!last) { U.replace(histWrap); return; }
+        if (!last) { U.replace(histWrap, h('div.empty', 'Appears once the agent is running: every position it opens, attributed to the leader whose order caused it, with your slippage against their fills and the delay behind them.')); return; }
         const H = history(last, MD._agentRef, ownPositions);
         if (!H) { U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
         const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : 'no leader');

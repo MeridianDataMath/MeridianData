@@ -8,7 +8,8 @@
     const [pathPart, query] = h.split('?');
     const path = (pathPart || '/').replace(/\/+$/, '') || '/';
     const params = {};
-    if (query) for (const kv of query.split('&')) { const [k, v] = kv.split('='); if (k) params[decodeURIComponent(k)] = decodeURIComponent((v || '').replace(/\+/g, ' ')); }
+    const dec = (s) => { try { return decodeURIComponent(s); } catch (_) { return s; } };   // a stray "%" in a pasted link is not worth a blank page
+    if (query) for (const kv of query.split('&')) { const [k, v] = kv.split('='); if (k) params[dec(k)] = dec((v || '').replace(/\+/g, ' ')); }
     return { path, params, name: path === '/' ? 'home' : path.slice(1).split('/')[0] };
   };
   R.url = (path, params) => '#' + path + (params && Object.keys(params).length ? '?' + Object.entries(params).filter(([, v]) => v != null && v !== '').map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v)).join('&') : '');
@@ -47,7 +48,7 @@
     if (prev && prev.path === route.path && JSON.stringify(prev.params) === JSON.stringify(route.params)) return;
     if (prev && curHash) scrollPos.set(curHash, R.root.scrollTop);
     curHash = location.hash || '#/';
-    if (R.ctx) { try { R.ctx.abort.abort(); } catch (_) {} if (R.ctx.cleanup) { try { R.ctx.cleanup.forEach((f) => f()); } catch (_) {} } }
+    if (R.ctx) { try { R.ctx.abort.abort(); } catch (_) {} for (const f of R.ctx.cleanup || []) { try { f(); } catch (_) {} } }   // one failing cleanup must not leave the others (timers, socket subscriptions) running
     const abort = new AbortController();
     const ctx = { abort, signal: abort.signal, cleanup: [], route, onCleanup(fn) { this.cleanup.push(fn); } };
     R.ctx = ctx; R.current = route;

@@ -71,8 +71,8 @@
       h('div.row', h('h3', label), h('span.grow'), h('span.score.sm', { class: sc[key] >= 67 ? 'green' : sc[key] >= 34 ? 'amber' : 'red' }, String(sc[key]))),
       h('div.dim.xs', { style: { marginBottom: '8px' } }, sub),
       h('div.stack', { style: { gap: '8px' } }, sc.parts.filter((p) => p.pillar === key).map((p) => barRow(p.label, p.v, p.note))))));
-    // what is left for a copier, per position, in bps of entry notional
-    const wf = c.copyBps != null ? [
+    // what is left for a copier, per position, in bps of entry notional (a profile from an older snapshot may lack the parts)
+    const wf = c.copyBps != null && c.netTrimBps != null && c.feesBps != null ? [
       ['Leader, per position', c.netTrimBps, `${U.fmtNum(c.grossTrimBps, 1)} bps gross − ${U.fmtNum(c.feesBps, 1)} their fees` + (c.fundPosBps ? ` ${c.fundPosBps > 0 ? '+' : '−'} ${U.fmtNum(Math.abs(c.fundPosBps), 1)} funding` : '') + ' · plain mean over positions, both tails winsorized at 5% / 95% so one jackpot or blow-up cannot carry it'],
       ['+ Their fees back', c.feesBps, 'a copier pays its own fees instead'],
       ['− Copier taker fees', -2 * c.feeBps, `${U.fmtNum(c.feeBps, 1)} bps in and out`],
@@ -107,7 +107,7 @@
         h('div.dim.small', 'Copyability ' + sc.total + ' = 35% track record (' + sc.track + ') + 45% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
         pillars,
-        UI.card('What is left for a copier', wfTbl, h('span.dim.small', `the same moves one minute later, at taker fees, with a ${usd0(c.copySize)} position`)),
+        UI.card('What is left for a copier', wfTbl, h('span.dim.small', `the same moves one minute later, at taker fees, with a ${usd0(c.copySize || AN.COPY_SIZE)} position`)),
         facts,
         h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after each fill, and the order books as they were when the snapshot was built. Past results are not a promise of future returns; copyability says how much of a result a copier could have kept, not whether there will be one.')) });
   }

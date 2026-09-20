@@ -42,11 +42,15 @@
         pos = st.open[fill.pid] = { pid: fill.pid, ticker: fill.ticker, k, qty: 0, leaderQty: 0, cash: 0, fees: 0, slip: 0, drift: 0, funding: 0, openedAt: exec.at, fills: 0, entryNotional: 0, leaderPx0: fill.px, side: Math.sign(part.q) };
       }
       let q;
-      if (s.mode === 'perfill') {
-        const entry = Math.sign(part.q) === pos.side;
-        q = entry ? Math.sign(part.q) * (s.size / exec.px) : (pos.leaderQty ? (part.q / pos.leaderQty) * pos.qty : 0);
-        if (!entry && Math.abs(q) > Math.abs(pos.qty)) q = -pos.qty;
-      } else q = part.q * pos.k;
+      const entry = Math.sign(part.q) === pos.side;
+      if (!entry) { q = pos.leaderQty ? (part.q / pos.leaderQty) * pos.qty : 0; if (Math.abs(q) > Math.abs(pos.qty)) q = -pos.qty; }   // the same share as the leader cut
+      else {
+        q = s.mode === 'perfill' ? Math.sign(part.q) * (s.size / exec.px) : part.q * pos.k;
+        const maxPos = MD.copysim ? MD.copysim.maxPosition(s) : Infinity;   // a scaled-in leader must not make the position any multiple of `size`
+        const room = maxPos / exec.px - Math.abs(pos.qty);
+        if (Math.abs(q) > room + EPS) { q = Math.sign(q) * Math.max(0, room); pos.capped = true; }
+      }
+      if (Math.abs(q) < EPS) { pos.leaderQty += part.q; if (Math.abs(pos.leaderQty) < EPS && Math.abs(pos.qty) < EPS) delete st.open[fill.pid]; continue; }
       const d = Math.sign(q);
       const slip = typeof s.slipBps === 'number' ? s.slipBps : (s.slipBps && s.slipBps[fill.pid]) || 0;
       const px = exec.px * (1 + (d * slip) / 1e4);

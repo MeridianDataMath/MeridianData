@@ -143,8 +143,7 @@
     }
     const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
     if (n !== 0 && Math.abs(n) < 0.01 && opts.dp == null) return s + '<$0.01';   // dust: "+$0.000716" helps nobody
-    const dp = opts.dp ?? (Math.abs(n) >= 1 || n === 0 ? 2 : 4);
-    return s + '$' + fmtN(Math.abs(n), dp);
+    return s + '$' + fmtN(Math.abs(n), opts.dp ?? 2);   // one format per column: "-$0.07" next to "$37.94", not "-$0.0738"
   };
   /** Price formatting with sensible decimals for the magnitude (or tickSize decimals if given) */
   U.fmtPrice = (x, tick) => {

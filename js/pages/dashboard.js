@@ -39,11 +39,12 @@
       try { gaps = await A.gaps(ids, now, now + 7 * U.DAY, ctx); } catch (_) {}
       const gapsBy = U.groupBy(gaps, (g) => g.productId);
       const closureNote = (p) => {
-        const list = (gapsBy[p.id] || []).filter((g) => g.endTime > now).sort((a, b) => a.startTime - b.startTime);
+        const t = Date.now();   // the table re-renders on every ticker, so the countdown must read the clock, not the mount time
+        const list = (gapsBy[p.id] || []).filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime);
         if (!list.length) return null;
         const g = list[0];
-        if (g.startTime <= now) return h('span.closure', 'closed · reopens in ' + U.fmtCountdown(g.endTime - now));
-        return h('span.closure', { style: { color: 'var(--text-3)' } }, 'closes in ' + U.fmtCountdown(g.startTime - now));
+        if (g.startTime <= t) return h('span.closure', 'closed · reopens in ' + U.fmtCountdown(g.endTime - t));
+        return h('span.closure', { style: { color: 'var(--text-3)' } }, 'closes in ' + U.fmtCountdown(g.startTime - t));
       };
 
       function renderTiles() {
