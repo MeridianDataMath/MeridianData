@@ -23,7 +23,12 @@
         h('div.row', { style: { marginBottom: '8px' } }, UI.chip('Phase 4 · copy agent', 'accent'), h('span.dim.small', 'non-custodial · linked signer · your machine')),
         h('h1', 'Copy leaders into your own account'),
         h('p', 'A small program on your computer follows the leaders you choose and mirrors their positions into your Meridian subaccount, sized and limited the way you set here. It trades with a Meridian linked signer: a key made on your machine that can submit and cancel orders and can never withdraw. Your wallet signs the link once, on this page; the site holds nothing.'),
-        h('p', 'Before running it with money, replay the leaders in the simulator and paper-copy them for a while. Copying is not a promise of the leader\'s result: see "Edge left" on every leader.'));
+        h('p', 'Before running it with money: replay the leaders in the simulator, paper-copy them for a while, then run the agent with --dry (every order goes to the exchange\'s margin check, nothing is placed) and watch it here. Copying is not a promise of the leader\'s result: see "Edge left" on every leader.'),
+        h('details', { style: { marginTop: '6px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'What the agent does and does not do'), h('ul.small.muted', { style: { margin: '6px 0 0 18px', padding: 0, lineHeight: '1.6' } },
+          h('li', 'It mirrors position changes it sees on the leader\'s fill stream, sized by your rule; it reads its own fills back from the exchange after every order rather than assuming them, and re-reads the leaders every five minutes and on every hint, so a close or a reduction missed over a disconnect is caught up. An opening missed over a disconnect is not chased.'),
+          h('li', 'It never places an order without a live mark price, never sends a market order unless you choose to (limit IOC with a slippage cap is the default), never chases an unfilled remainder, never opens a position in a market another followed leader already occupies, and never trades while its view of your own account is more than two minutes old.'),
+          h('li', 'Stops: today\'s loss and the drawdown from the peak, both with deposits and withdrawals taken out so a transfer cannot trip or mask them. A stop blocks new and larger positions (or closes everything, by config) until you resume.'),
+          h('li', 'What it cannot protect you from: the leader being wrong; a partial fill leaving you smaller than intended (later reductions scale to what you actually hold); the exchange rejecting a close because it would breach a limit; your machine, network or the exchange going down while positions are open (they stay open; the next start adopts them). The dashboard shows every order with what the exchange reported.'))));
 
       // ---- step 1: install
       const step1 = UI.card('1 · Install and make a key', h('div', { style: { padding: '12px 16px' } },
@@ -145,14 +150,18 @@
             UI.chip(S.paused ? 'paused' : S.tripped ? 'risk stop' : 'running', S.paused ? 'amber' : S.tripped ? 'red' : 'green'), S.dry ? UI.chip('DRY RUN · nothing is placed', 'amber') : null, UI.chip('socket ' + S.ws, S.ws === 'open' ? 'green' : 'amber'),
             h('span.dim.small', `up ${U.fmtDuration(S.uptime)} · signer ${U.shortAddr(S.signer, 4)} · ${(S.leaders || []).length} leader(s) · ${S.orders ? S.orders.length : 0} orders · ${S.errors || 0} errors`), h('span.grow'),
             S.paused || S.tripped ? h('button.btn.sm.primary', { onclick: () => post('resume') }, 'Resume') : h('button.btn.sm', { onclick: () => post('pause') }, 'Pause'),
+            h('button.btn.sm.ghost', { onclick: () => post('resync'), title: 'Read the leaders\' positions again now and mirror anything the socket missed' }, 'Resync'),
             h('button.btn.sm.ghost', { onclick: () => { if (confirm('Close every open position of the copy account at market?')) post('close-all'); } }, 'Close all')),
-          S.tripped ? h('div.small', { style: { color: 'var(--red)', marginBottom: '8px' } }, 'Risk stop: ' + S.tripped.why + ' · resume to lift it') : null,
+          S.tripped ? h('div.small', { style: { color: 'var(--red)', marginBottom: '8px' } }, 'Risk stop: ' + S.tripped.why + ' · new and larger positions are blocked until you resume') : null,
+          S.orphans && S.orphans.length ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, `${S.orphans.length} open position${S.orphans.length > 1 ? 's' : ''} no leader holds (opened by hand, or a leader that is no longer followed): the agent leaves ${S.orphans.length > 1 ? 'them' : 'it'} alone`) : null,
+          Math.abs(S.clockOffset || 0) > 5000 ? h('div.small.dim', { style: { marginBottom: '8px' } }, `This machine's clock is ${(S.clockOffset / 1000).toFixed(1)} s off the exchange's; the agent corrects for it when signing.`) : null,
+          Date.now() - (S.ownAt || 0) > 120000 ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, 'The agent has not managed to read the copy account for over two minutes: no new positions until it can.') : null,
           h('div.stats',
             UI.stat('Equity', usd0(S.equity || 0), `${usd0(S.balance || 0)} balance · ${usd0(S.notional || 0)} in positions`),
-            UI.stat('Today', U.fmtUsd((S.equity || 0) - (S.equityDayStart || 0), { sign: true, dp: 0 }), 'equity change since 00:00 UTC (deposits count)', U.pnlClass((S.equity || 0) - (S.equityDayStart || 0))),
-            UI.stat('From peak', S.equityPeak ? U.fmtPct(-((S.equityPeak - S.equity) / S.equityPeak) * 100, { dp: 1 }) : '—', 'since the agent started', 'neg'),
-            UI.stat('Leverage', S.equity > 0 ? U.fmtNum((S.notional || 0) / S.equity, 2) + '×' : '—', 'positions ÷ equity'),
-            UI.stat('Signer expires', S.signerExpiresAt ? U.fmtDate(U.num(S.signerExpiresAt) < 1e12 ? U.num(S.signerExpiresAt) * 1000 : U.num(S.signerExpiresAt)) : '—', 'extend it from the agent before then')),
+            UI.stat('Today', U.fmtUsd(S.dayPnl || 0, { sign: true, dp: 0 }), 'since 00:00 UTC · deposits and withdrawals taken out' + (S.risk && S.risk.dailyLossStop ? ` · stop at −${usd0(S.risk.dailyLossStop)}` : ''), U.pnlClass(S.dayPnl || 0)),
+            UI.stat('From peak', S.ddPct != null ? U.fmtPct(-S.ddPct, { dp: 1 }) : '—', 'since the agent started · flows taken out' + (S.risk && S.risk.drawdownStopPct ? ` · stop at −${S.risk.drawdownStopPct}%` : ''), S.ddPct > 0 ? 'neg' : ''),
+            UI.stat('Leverage', S.equity > 0 ? U.fmtNum((S.notional || 0) / S.equity, 2) + '×' : '—', 'positions ÷ equity' + (S.risk && S.risk.maxLeverage ? ` · max ${S.risk.maxLeverage}×` : '')),
+            UI.stat('Signer expires', S.signerExpiresAt ? U.fmtDate(U.num(S.signerExpiresAt)) : (S.dry ? 'dry run' : '—'), 'extend it from the agent before then')),
           h('div.grid.cols-2', { style: { marginTop: '12px' } },
             UI.card('My positions', UI.table({ cols: [
               { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
@@ -176,7 +185,7 @@
             { key: 's', label: 'Side', render: (r) => U.sideEl(r.side === 'BUY') },
             { key: 'q', label: 'Size', num: true, render: (r) => (r.close ? 'close' : U.fmtQty(r.qty)) },
             { key: 'ty', label: 'Type', render: (r) => h('span.dim.small', r.type + (r.px ? ' @ ' + U.fmtPrice(r.px) : '') + (r.reduceOnly ? ' · reduce-only' : '')) },
-            { key: 'st', label: 'Status', render: (r) => h('span', UI.chip(r.status, r.status === 'accepted' ? 'green' : r.status === 'rejected' ? 'red' : 'amber'), r.filled != null ? h('span.dim.xs', ' filled ' + U.fmtQty(r.filled)) : null, r.error ? h('span.neg.xs', ' ' + r.error) : null) },
+            { key: 'st', label: 'Status', title: 'filled / partial / unfilled are read back from the exchange after the order, not assumed', render: (r) => h('span', UI.chip(r.status, r.status === 'filled' || r.status === 'dry' ? 'green' : r.status === 'rejected' || r.status === 'unfilled' ? 'red' : 'amber'), r.filled != null && r.status !== 'dry' ? h('span.dim.xs', ' ' + U.fmtQty(r.filled) + ' of ' + (r.close ? U.fmtQty(Math.abs(r.before || 0)) : U.fmtQty(r.qty))) : null, r.reason ? h('span.neg.xs', ' ' + r.reason) : null, r.error ? h('span.neg.xs', ' ' + r.error) : null) },
             { key: 'w', label: 'Why', render: (r) => h('span.dim.small', r.why) },
           ], rows: (S.orders || []).slice(0, 30), empty: 'No order yet' }), h('span.dim.small', 'newest first · from the agent\'s log')),
           UI.card('Events', UI.table({ cols: [

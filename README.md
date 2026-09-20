@@ -289,6 +289,28 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   and the limits, lists and revokes signers, and shows the dashboard. The deploy publishes only
   `copy-agent.mjs`, `package.json` and `config.example.json`; keys, configs, link requests and
   logs are gitignored.
+  Facts the agent relies on, each checked against the exchange rather than assumed: a position's
+  `size` is signed (long > 0) and its `fundingAccruedUsd` is positive when *paid* (the SDK's
+  docstring says the opposite; the archive ledger, which reconciles to the cent, settles it:
+  Σ positions = −Σ ledger on a closed account); the order submission response's `filled` is
+  deprecated and always 0, so fills are read back from `GET /v1/order/{id}` until the status is
+  final and the position is re-read until it reflects the order (status filled / partial /
+  unfilled / rejected, with the exchange's `rejectedReason`); a close is quantity "0" +
+  reduceOnly + close, and a reduce-only IOC on an existing position, both accepted by the
+  dry-run endpoint; `signedAt` must sit inside the exchange's clock tolerance, so the offset to
+  `/v1/time` is measured and applied (this PC was 3 s off); a signer's `expiresAt` is in
+  milliseconds and a revoked signer fails every order with `SignerRevoked`, on which the agent
+  pauses. Safety rules: one serial queue for every decision and order (two leader orders arriving
+  together cannot both size against the same stale position); adds scale to what is actually
+  held after partial fills; state (`state.json`: what is followed from whom, stops, the order
+  log) survives restarts, and on start open positions that a followed leader also holds are
+  adopted while the rest are flagged as orphans (left alone, or closed with `onOrphan`); the
+  leaders are re-read on every `PositionUpdate` / liquidation hint, on reconnect and every five
+  minutes, and a close, a reduction or a side change missed over a disconnect is mirrored (an
+  opening is not chased); no order without a live mark, none while the own-account read is more
+  than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
+  stops take deposits and withdrawals out (`/v1/token/transfer`) so a transfer can neither trip
+  nor mask them; quantities are capped at the market's `maxQuantity` and rounded to its lot.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
