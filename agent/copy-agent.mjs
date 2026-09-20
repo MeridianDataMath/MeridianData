@@ -115,8 +115,8 @@ async function run() {
   // persisted state: what we follow from whom, so a restart does not orphan positions
   let saved = {}; try { saved = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch (_) {}
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 300), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
-  const persist = () => { try { fs.writeFileSync(statePath, JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 300), savedAt: Date.now() })); } catch (_) {} };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', leaderPos: {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [] };
+  const persist = () => { try { fs.writeFileSync(statePath, JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 1000), savedAt: Date.now() })); } catch (_) {} };
   const note = (kind, msg, extra) => { const e = Object.assign({ t: Date.now(), kind, msg }, extra || {}); S.events.unshift(e); if (S.events.length > 300) S.events.length = 300; log(kind, msg, extra || ''); };
   const push = async (title, msg) => { if (!(cfg.ntfy && cfg.ntfy.topic)) return; try { await fetch(((cfg.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')) + '/' + encodeURIComponent(cfg.ntfy.topic), { method: 'POST', body: msg, headers: { Title: title, Tags: 'robot', Priority: '4' } }); } catch (_) {} };
   const who = (l) => (l.name && l.name !== 'primary' ? l.name : l.address.slice(0, 6) + '…' + l.address.slice(-4));
@@ -162,7 +162,7 @@ async function run() {
   const roundDown = (x, step) => { const d = dec(step); const st = num(step) || Math.pow(10, -d); return Number((Math.floor(x / st + 1e-9) * st).toFixed(d)); };
   const roundTick = (x, tick, up) => { const d = dec(tick); const st = num(tick) || 1; return Number(((up ? Math.ceil : Math.floor)(x / st) * st).toFixed(d)); };
   /** Sign, submit and read back one order. side 0 buy / 1 sell. close: quantity 0 + reduceOnly closes the whole position. */
-  async function place({ prod, side, qty, reduceOnly = false, close = false, why, leader }) {
+  async function place({ prod, side, qty, reduceOnly = false, close = false, why, leader, leaderSid, leaderPx, leaderT, kind, resync = false }) {
     const mark = S.mark[prod.id] || 0;
     let q = close ? 0 : roundDown(Math.min(qty, num(prod.maxQuantity) || Infinity), prod.lotSize);
     if (!close && q < num(prod.minQuantity)) { note('skip', `${prod.displayTicker}: ${qty} is below the minimum ${prod.minQuantity}`, { leader }); return null; }
@@ -177,8 +177,8 @@ async function run() {
     if (useLimit) { data.price = String(px); data.timeInForce = 'IOC'; }
     if (close) data.close = true;
     const before = S.own[prod.id] ? S.own[prod.id].size : 0;
-    const rec = { t: Date.now(), leader, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, reduceOnly: data.reduceOnly, type: data.type, px: px || null, why, status: 'sent', before };
-    S.orders.unshift(rec); if (S.orders.length > 300) S.orders.length = 300;
+    const rec = { t: Date.now(), leader, leaderSid: leaderSid || null, leaderPx: leaderPx || null, leaderT: leaderT || null, kind: kind || (close ? 'close' : reduceOnly ? 'reduce' : 'open'), cid, pid: prod.id, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, reduceOnly: data.reduceOnly, type: data.type, px: px || null, mark, why, status: 'sent', before, fills: [], resync: !!resync };
+    S.orders.unshift(rec); if (S.orders.length > 1000) S.orders.length = 1000;
     try {
       if (DRY) {   // the exchange checks margin and fields, places nothing; a virtual book stands in for the fill
         const r = await api('/v1/order/dry-run', { method: 'POST', body: { data: Object.assign({}, data, { sender: sa.account }) } });
@@ -186,7 +186,8 @@ async function run() {
         const fillPx = px || mark; const cur = S.own[prod.id]; const dq = close ? -(cur ? cur.size : 0) : (side === 0 ? q : -q);
         if (!cur) { if (dq) S.own[prod.id] = { size: dq, entry: fillPx, mark: fillPx, notional: Math.abs(dq) * fillPx, upnl: 0, virtual: true }; }
         else { const size = cur.size + dq; if (Math.abs(size) < 1e-12) delete S.own[prod.id]; else S.own[prod.id] = Object.assign(cur, { size, entry: Math.sign(size) === Math.sign(cur.size) && Math.abs(size) > Math.abs(cur.size) ? (cur.entry * Math.abs(cur.size) + fillPx * Math.abs(dq)) / Math.abs(size) : cur.entry }); }
-        rec.filled = close ? Math.abs(before) : q; rec.after = S.own[prod.id] ? S.own[prod.id].size : 0;
+        rec.filled = close ? Math.abs(before) : q; rec.after = S.own[prod.id] ? S.own[prod.id].size : 0; rec.id = 'dry-' + cid.slice(0, 8);
+        if (rec.filled) rec.fills.push({ id: 'dry-' + cid, t: Date.now(), px: fillPx, qty: rec.filled, fee: rec.filled * fillPx * (num(prod.takerFee) || 0.0003), maker: false, virtual: true });
         note('order', `DRY ${rec.side} ${close ? 'close' : q} ${prod.displayTicker} ${data.type}${px ? ' @ ' + px : ''} · ${why} · margin ${rec.margin} · ${rec.code}`);
       } else {
         const r = await api('/v1/order', { method: 'POST', body: { data, signature } });
@@ -210,7 +211,7 @@ async function run() {
     return rec;
   }
   async function closeAll(why) { for (const [pid, o] of Object.entries(S.own)) { const prod = byId[pid]; if (prod && o.size) await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why }); } }
-  const closeMarket = async (pid, why, leaderName) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; const r = await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
+  const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; const r = await place(Object.assign({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }, ctxL || {}, { kind: 'close' })); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
 
   /** May a new or larger position be taken? The reason, in words, when not. */
   const allowed = (prod, addNotional, leaderSid) => {
@@ -263,14 +264,15 @@ async function run() {
     const kind = !prev ? 'open' : !lp[prod.id] ? 'close' : Math.sign(next) !== Math.sign(prev) ? 'reverse' : Math.abs(next) > Math.abs(prev) ? 'add' : 'reduce';
     const name = who(l);
     note('leader', `${name} ${kind} ${prod.displayTicker} ${g.q > 0 ? '+' : ''}${g.q} @ ${px}`);
-    if (kind === 'close') { if (followed && ownQty) await closeMarket(prod.id, `${name} closed`, name); return; }
+    const ctxL = { leaderSid: l.sid, leaderPx: px, leaderT: g.t || Date.now(), kind };
+    if (kind === 'close') { if (followed && ownQty) await closeMarket(prod.id, `${name} closed`, name, ctxL); return; }
     if (kind === 'reduce') {
       if (!followed || !ownQty) return;
       const share = Math.abs(g.q) / Math.abs(prev); const q = Math.abs(ownQty) * share;
-      await place({ prod, side: ownQty > 0 ? 1 : 0, qty: q, reduceOnly: true, why: `${name} reduced ${(share * 100).toFixed(0)}%`, leader: name });
+      await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: q, reduceOnly: true, why: `${name} reduced ${(share * 100).toFixed(0)}%`, leader: name }, ctxL));
       return;
     }
-    if (kind === 'reverse' && followed && ownQty) await closeMarket(prod.id, `${name} reversed`, name);
+    if (kind === 'reverse' && followed && ownQty) await closeMarket(prod.id, `${name} reversed`, name, ctxL);
     const ownNow = S.own[prod.id] ? S.own[prod.id].size : 0;
     // open, add, or the new leg of a reversal
     const leaderDelta = kind === 'reverse' ? Math.abs(next) : Math.abs(g.q);
@@ -283,7 +285,7 @@ async function run() {
     const side = next > 0 ? 0 : 1;
     const no = allowed(prod, q * px, l.sid);
     if (no) { note('skip', `${prod.displayTicker} ${kind}: ${no}`, { leader: name }); return; }
-    const r = await place({ prod, side, qty: q, why: `${name} ${kind}`, leader: name });
+    const r = await place(Object.assign({ prod, side, qty: q, why: `${name} ${kind}`, leader: name }, ctxL, { kind: kind === 'reverse' ? 'open' : kind }));
     if (r && S.own[prod.id] && Math.sign(S.own[prod.id].size) === (side === 0 ? 1 : -1)) { S.marketOwner[prod.id] = l.sid; book[prod.id] = book[prod.id] || { k: q / leaderDelta, openedAt: Date.now() }; }
     persist();
   }
@@ -295,19 +297,24 @@ async function run() {
     for (const pid of Object.keys(S.own)) {
       if (S.marketOwner[pid] !== l.sid) continue;
       const prod = byId[pid]; const b = before[pid] || 0, a = after[pid] || 0; const ownQty = S.own[pid].size;
-      if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); await closeMarket(pid, `leader flat (${why})`, who(l)); } }
-      else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); await closeMarket(pid, `leader reversed (${why})`, who(l)); }
-      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); await place({ prod, side: ownQty > 0 ? 1 : 0, qty: Math.abs(ownQty) * share, reduceOnly: true, why: `${who(l)} reduced (${why})`, leader: who(l) }); }
+      const ctxL = { leaderSid: l.sid, leaderPx: S.mark[pid] || null, leaderT: Date.now() };   // the leader's own price is unknown here: the mark stands in, flagged
+      if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); await closeMarket(pid, `leader flat (${why})`, who(l), Object.assign({ resync: true }, ctxL)); } }
+      else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); await closeMarket(pid, `leader reversed (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
+      else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); await place(Object.assign({ prod, side: ownQty > 0 ? 1 : 0, qty: Math.abs(ownQty) * share, reduceOnly: true, why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
     }
     persist();
   }
 
   // ---- socket: leaders' fills (grouped per order), anything else about a leader triggers a resync
+  const attachFill = (fl) => { if (!fl.orderId) return; const rec = S.orders.find((r) => r.id === fl.orderId); if (!rec) return; if (rec.fills.some((x) => x.id === fl.id)) return; rec.fills.push({ id: fl.id, t: fl.t, px: fl.px, qty: fl.qty, fee: fl.fee, maker: fl.maker }); persist(); };
+  // fills that arrived while the agent was down: read back for every recorded order that has fewer fills than its size
+  const backfillFills = async () => { try { const rows = (await api('/v1/order/fill', { params: { subaccountId: SID, limit: 100 } })).data || []; for (const f of rows) attachFill({ id: f.id, orderId: f.orderId, t: num(f.createdAt), px: num(f.price), qty: num(f.filled), fee: num(f.feeUsd), maker: !!f.isMaker }); } catch (_) {} };
+  if (!DRY) await backfillFills();
   const pending = new Map(); const seen = new Set();
   const onFill = (l, prod, f) => {
     const key = l.sid + '|' + prod.id + '|' + f.oid; const cur = pending.get(key);
-    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), ex.groupMs); return; }
-    pending.set(key, { l, prod, q: f.q, notional: Math.abs(f.q) * f.px, oid: f.oid, timer: setTimeout(() => flush(key), ex.groupMs) });
+    if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; cur.t = Math.max(cur.t, f.t); clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), ex.groupMs); return; }
+    pending.set(key, { l, prod, q: f.q, notional: Math.abs(f.q) * f.px, oid: f.oid, t: f.t, timer: setTimeout(() => flush(key), ex.groupMs) });
   };
   const flush = (key) => serial(async () => {
     const g = pending.get(key); pending.delete(key); if (!g) return;
@@ -326,9 +333,9 @@ async function run() {
     if (!m || !m.e) return; const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [d];
     for (const it of items) {
       const sid = it.sid || d.sid; const l = cfg.leaders.find((x) => x.sid === sid);
-      if (m.e === 'OrderFill' && sid === SID) { serial(() => refreshOwn().catch(() => {})); continue; }
+      if (m.e === 'OrderFill' && sid === SID) { attachFill({ id: it.id, orderId: it.oid, t: num(it.t || d.t) || Date.now(), px: num(it.px), qty: num(it.sz), fee: num(it.fee), maker: !!it.m }); serial(() => refreshOwn().catch(() => {})); continue; }
       if (!l) continue;
-      if (m.e === 'OrderFill') { const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); } onFill(l, prod, { q: (String(it.sd) === '0' ? 1 : -1) * num(it.sz), px: num(it.px), oid: it.oid || it.id }); }
+      if (m.e === 'OrderFill') { const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); } onFill(l, prod, { q: (String(it.sd) === '0' ? 1 : -1) * num(it.sz), px: num(it.px), oid: it.oid || it.id, t: num(it.t || d.t) || Date.now() }); }
       else if (m.e === 'SubaccountLiquidation') { note('leader', `${who(l)}: liquidation event`); push('Leader liquidated', who(l)); setTimeout(() => serial(() => resync(l, 'liquidation')), 1500); }
       else if (m.e === 'PositionUpdate') { clearTimeout(S._pu); S._pu = setTimeout(() => serial(() => resync(l, 'position update')), 4000); }   // after the fills of the same order have been handled
     }

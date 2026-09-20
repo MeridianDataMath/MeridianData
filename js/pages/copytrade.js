@@ -10,7 +10,7 @@
     { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape; kept in your browser and caught up from the exchange when you come back.', s: 'live' },
     { t: 'Leader alerts', d: 'A toast, a browser notification or an ntfy push to your phone when a followed leader opens, adds, reduces, closes, reverses or gets liquidated, straight from the exchange WebSocket, while a tab of this site is open.', s: 'live' },
     { t: 'Copy agent', d: 'A program on your own machine with a Meridian linked signer (orders only, never withdrawals) mirroring leaders into your subaccount with your sizing and risk limits; set up, watched and controlled from the Copy agent page.', s: 'live' },
-    { t: 'Copy history', d: 'PnL attribution per leader and your realized slippage versus the leader\'s fills.', s: 'planned' },
+    { t: 'Copy history', d: 'Every position the agent opened, attributed to the leader whose order caused it: net per leader, your realized slippage against their fills and the delay behind them, on the Copy agent page.', s: 'live' },
   ];
   const STATUS = { live: ['live', 'green'], building: ['in progress', 'accent'], planned: ['planned', ''] };
   const VERDICT_CLS = { 'Copyable': 'green', 'Copy with care': 'amber', 'Hard to copy': 'red', 'Losing so far': 'red' };

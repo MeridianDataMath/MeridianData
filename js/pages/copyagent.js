@@ -2,7 +2,7 @@
    config), then watch and control it through its local status port. The site never holds a key: the signer key stays
    on the user's machine, the owner wallet signs the link in the browser. */
 (function () {
-  const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const h = U.h;
+  const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';
   const KEY = 'md.agent.v1';   // page state kept in this browser: config draft, status port, token
   const DEF = () => ({ port: 8790, token: '', cfg: { owner: '', subaccountId: '', leaders: [], sizing: { mode: 'fixed', size: 200, ratio: 10 }, execution: { type: 'IOC', slippageBps: 15, groupMs: 1200, onLeaderFlat: 'close', onLeaderLiquidation: 'close' }, risk: { maxNotionalPerMarket: 1000, maxOpenPositions: 5, maxLeverage: 3, dailyLossStop: 100, drawdownStopPct: 15, minOrderUsd: 10, markets: { deny: [] }, onTrip: 'reduceOnly' }, ntfy: { server: 'https://ntfy.sh', topic: '' } } });
@@ -10,6 +10,39 @@
   const usd0 = (v) => U.fmtUsd(v, { dp: 0 });
   const code = (text) => h('pre.code', h('code', text));
   const files = ['copy-agent.mjs', 'package.json', 'config.example.json'];
+
+  /**
+   * Copy history from the agent's order records: our own positions rebuilt from the fills the exchange reported for the
+   * agent's orders (the same episode engine as the simulator), each attributed to the leader whose order opened it;
+   * slippage against the leader's own fill price and the delay behind it per fill.
+   */
+  function history(S, ref, positions) {
+    const CS = MD.copysim; const recs = (S.orders || []).filter((r) => r.fills && r.fills.length);
+    const byOrder = {}; const fills = [];
+    for (const r of recs) { byOrder[r.id] = r; for (const fl of r.fills) fills.push({ id: fl.id, createdAt: fl.t, productId: r.pid, side: r.side === 'BUY' ? 0 : 1, filled: fl.qty, price: fl.px, feeUsd: fl.fee, orderId: r.id }); }
+    if (!fills.length) return null;
+    const eps = CS.attachPositions(CS.episodes(fills, positions || []), positions || []);
+    const leaderOf = (sid) => (S.leaders || []).find((l) => l.sid === sid) || null;
+    const rows = eps.map((e) => {
+      const first = e.fills.find((x) => !x.synthetic); const rec = first && byOrder[first.oid]; const l = rec ? leaderOf(rec.leaderSid) : null;
+      const L = CS.leaderResult(e, S.mark && S.mark[e.pid]);
+      // slippage and delay per fill of this position, from the orders that produced them
+      let slipW = 0, slipSum = 0, delaySum = 0, delayN = 0, standIn = 0;
+      for (const fl of e.fills) { const r = byOrder[fl.oid]; if (!r || !r.leaderPx) continue; const dir = r.side === 'BUY' ? 1 : -1; const w = Math.abs(fl.q) * fl.px; if (r.resync) { standIn += w; continue; } slipW += w; slipSum += dir * ((fl.px - r.leaderPx) / r.leaderPx) * 1e4 * w; if (r.leaderT) { delaySum += Math.max(0, fl.t - r.leaderT); delayN++; } }
+      const prod = ref && ref.byId[e.pid];
+      return { e, ticker: prod ? prod.displayTicker : e.pid, leader: l, leaderSid: rec ? rec.leaderSid : null, open: !!e.qty, t0: e.start, t1: e.end, hold: (e.end || Date.now()) - e.start, net: L.net, gross: L.gross, fees: L.fees, funding: L.funding, entryNotional: L.entryNotional, slipBps: slipW ? slipSum / slipW : null, delayMs: delayN ? delaySum / delayN : null, standIn: standIn > 0, liq: e.liq, why: rec ? rec.why : '' };
+    }).sort((a, b) => (b.t1 || Date.now()) - (a.t1 || Date.now()));
+    const perLeader = {};
+    for (const r of rows) { const k = r.leaderSid || 'none'; const p = perLeader[k] || (perLeader[k] = { leader: r.leader, sid: k, n: 0, open: 0, wins: 0, net: 0, fees: 0, funding: 0, slipW: 0, slipSum: 0, delaySum: 0, delayN: 0, notional: 0 }); p.n++; if (r.open) p.open++; else if (r.net > 0) p.wins++; p.net += r.net; p.fees += r.fees; p.funding += r.funding; p.notional += r.entryNotional; if (r.slipBps != null) { p.slipW += r.entryNotional; p.slipSum += r.slipBps * r.entryNotional; } if (r.delayMs != null) { p.delaySum += r.delayMs; p.delayN++; } }
+    const leaders = Object.values(perLeader).map((p) => Object.assign(p, { slipBps: p.slipW ? p.slipSum / p.slipW : null, delayMs: p.delayN ? p.delaySum / p.delayN : null, closed: p.n - p.open, winRate: p.n - p.open ? (p.wins / (p.n - p.open)) * 100 : null })).sort((a, b) => b.net - a.net);
+    const closed = rows.filter((r) => !r.open).slice().sort((a, b) => a.t1 - b.t1);
+    const series = {}; const cum = {};
+    for (const r of closed) { const k = r.leaderSid || 'none'; cum[k] = (cum[k] || 0) + r.net; (series[k] || (series[k] = [])).push({ x: r.t1, y: cum[k] }); }
+    const T = { net: U.sum(rows, (r) => r.net), realized: U.sum(closed, (r) => r.net), fees: U.sum(rows, (r) => r.fees), funding: U.sum(rows, (r) => r.funding), n: rows.length, open: rows.filter((r) => r.open).length, wins: closed.filter((r) => r.net > 0).length };
+    const slipRows = rows.filter((r) => r.slipBps != null); T.slipBps = slipRows.length ? U.sum(slipRows, (r) => r.slipBps * r.entryNotional) / U.sum(slipRows, (r) => r.entryNotional) : null;
+    const dRows = rows.filter((r) => r.delayMs != null); T.delayMs = dRows.length ? U.sum(dRows, (r) => r.delayMs) / dRows.length : null;
+    return { rows, leaders, series, T };
+  }
 
   MD.copyagentPage = {
     async mount(root, route, ctx) {
@@ -127,14 +160,58 @@
       renderJson();
 
       // ---- step 4 + dashboard
-      const dash = h('div');
-      let timer = null, last = null, lastErr = null;
+      const dash = h('div'); const histWrap = h('div');
+      let timer = null, last = null, lastErr = null, ownPositions = null, ownPosAt = 0;
       const post = async (p) => { try { const r = await fetch(`http://127.0.0.1:${U.num(st.port) || 8790}/${p}`, { method: 'POST', headers: { 'x-agent-token': st.token || '' } }); if (!r.ok) throw new Error(r.status === 401 ? 'wrong token' : 'HTTP ' + r.status); U.toast(p + ' sent'); poll(); } catch (e) { U.toast(`${p} failed: ${e.message}`); } };
       const poll = async () => {
         try { const r = await fetch(`http://127.0.0.1:${U.num(st.port) || 8790}/status`, { signal: ctx.signal }); last = await r.json(); lastErr = null; }
         catch (e) { if (isAbort(e)) return; last = null; lastErr = e.message; }
         renderDash();
+        // the copy account's position records (funding, liquidations) for the history, refreshed every minute
+        if (last && last.subaccountId && !last.dry && Date.now() - ownPosAt > 60000) { ownPosAt = Date.now(); try { ownPositions = await A.positions(last.subaccountId, { maxPages: 3, signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; } }
+        renderHistory();
       };
+      function renderHistory() {
+        if (!last) { U.replace(histWrap); return; }
+        const H = history(last, MD._agentRef, ownPositions);
+        if (!H) { U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
+        const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : 'no leader');
+        const col = C.colors(); const palette = [col.accent, col.blue, col.amber, col.green, col.red];
+        const tiles = h('div.stats',
+          UI.stat('Realized', U.fmtUsd(H.T.realized, { sign: true, dp: 2 }), `${H.T.n - H.T.open} closed position${H.T.n - H.T.open === 1 ? '' : 's'} · ${H.T.n - H.T.open ? U.fmtPct((H.T.wins / (H.T.n - H.T.open)) * 100, { dp: 0 }) : '—'} profitable`, U.pnlClass(H.T.realized)),
+          UI.stat('Open', U.fmtUsd(H.T.net - H.T.realized, { sign: true, dp: 2 }), `${H.T.open} at the live mark`, U.pnlClass(H.T.net - H.T.realized)),
+          UI.stat('Slippage vs leader', H.T.slipBps == null ? '—' : (H.T.slipBps > 0 ? '+' : '') + U.fmtNum(H.T.slipBps, 1) + ' bps', 'your fill price against the leader\'s, per fill, size-weighted · positive = you paid more', H.T.slipBps > 0 ? 'neg' : H.T.slipBps < 0 ? 'pos' : ''),
+          UI.stat('Delay', H.T.delayMs == null ? '—' : U.fmtNum(H.T.delayMs / 1000, 1) + ' s', 'from the leader\'s fill to yours, average'),
+          UI.stat('Fees & funding', U.fmtUsd(-H.T.fees + H.T.funding, { sign: true, dp: 2 }), `${U.fmtUsd(H.T.fees, { dp: 2 })} fees · ${U.fmtUsd(H.T.funding, { sign: true, dp: 2 })} funding`, 'neg'));
+        const leadersTbl = UI.table({ cols: [
+          { key: 'l', label: 'Leader', render: (p) => (p.leader ? h('a.addr', { href: U.accountUrl(p.leader.address, p.leader.sid) }, who(p.leader)) : h('span.dim', 'no leader')) },
+          { key: 'n', label: 'Positions', num: true, render: (p) => h('span', String(p.closed), p.open ? h('span.dim.xs', ' + ' + p.open + ' open') : null) },
+          { key: 'wr', label: 'Profitable', num: true, render: (p) => (p.winRate == null ? h('span.dim', '—') : U.fmtPct(p.winRate, { dp: 0 })) },
+          { key: 'net', label: 'Net', num: true, render: (p) => U.pnlEl(p.net, { dp: 2 }) },
+          { key: 'f', label: 'Fees', num: true, render: (p) => U.fmtUsd(p.fees, { dp: 2 }) },
+          { key: 'fu', label: 'Funding', num: true, render: (p) => U.pnlEl(p.funding, { dp: 2 }) },
+          { key: 'sl', label: 'Slippage', num: true, render: (p) => (p.slipBps == null ? h('span.dim', '—') : h('span', { class: p.slipBps > 0 ? 'neg' : 'pos' }, (p.slipBps > 0 ? '+' : '') + U.fmtNum(p.slipBps, 1) + ' bps')) },
+          { key: 'd', label: 'Delay', num: true, render: (p) => (p.delayMs == null ? h('span.dim', '—') : U.fmtNum(p.delayMs / 1000, 1) + ' s') },
+          { key: 'sim', label: '', render: (p) => (p.leader ? h('a.btn.sm.ghost', { href: '#/copytrade/sim?address=' + p.leader.address + '&sub=' + p.leader.sid }, 'Simulate') : null) },
+        ], rows: H.leaders });
+        const posTbl = UI.table({ cols: [
+          { key: 't', label: 'Closed (UTC)', render: (r) => h('span.dim', r.open ? 'open' : new Date(r.t1).toISOString().replace('T', ' ').slice(0, 16)) },
+          { key: 'l', label: 'Leader', render: (r) => (r.leader ? who(r.leader) : h('span.dim', '—')) },
+          { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
+          { key: 's', label: 'Side', render: (r) => U.sideEl(r.e.side > 0, true) },
+          { key: 'sz', label: 'Size', num: true, render: (r) => U.fmtUsd(r.entryNotional, { dp: 0 }) },
+          { key: 'h', label: 'Held', num: true, render: (r) => U.fmtDuration(r.hold) },
+          { key: 'net', label: 'Net', num: true, render: (r) => h('span', U.pnlEl(r.net, { dp: 2 }), r.liq ? UI.chip('LIQ', 'red') : null) },
+          { key: 'sl', label: 'Slippage', num: true, title: 'your fill price against the leader\'s, size-weighted over the position\'s fills; "at mark" when the leader\'s price was unknown (a close after a resync)', render: (r) => (r.slipBps == null ? h('span.dim', r.standIn ? 'at mark' : '—') : h('span', { class: r.slipBps > 0 ? 'neg' : 'pos' }, (r.slipBps > 0 ? '+' : '') + U.fmtNum(r.slipBps, 1) + ' bps', r.standIn ? h('span.dim.xs', ' · part at mark') : null)) },
+          { key: 'd', label: 'Delay', num: true, render: (r) => (r.delayMs == null ? h('span.dim', '—') : U.fmtNum(r.delayMs / 1000, 1) + ' s') },
+        ], rows: H.rows.slice(0, 40) });
+        const canvas = h('canvas');
+        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Realized by leader'), h('span.grow'), h('span.dim.small', 'cumulative, by position close')), h('div.chart-box.sm', canvas));
+        U.replace(histWrap, tiles, h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('By leader', leadersTbl), chartCard), UI.card('Positions', posTbl, h('span.dim.small', `${H.rows.length} from the agent's orders, newest first` + (last.dry ? ' · dry run: fills are virtual' : ''))),
+          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. Net is realized PnL less fees plus funding; funding and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".'));
+        const ser = Object.entries(H.series).map(([sid, pts], i) => ({ points: pts, color: palette[i % palette.length], label: who((last.leaders || []).find((l) => l.sid === sid) || null) }));
+        if (ser.length) C.timeSeries(canvas, { series: ser, yFmt: (v) => U.fmtUsd(v, { compact: true }), tipFmt: (v) => U.fmtUsd(v, { dp: 2, sign: true }) });
+      }
       const renderDash = () => {
         if (!last) {
           U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No agent answering on 127.0.0.1:' + (U.num(st.port) || 8790) + (lastErr ? ' (' + lastErr + ')' : '')), code('node copy-agent.mjs run'), h('div.dim.small', { style: { marginTop: '8px' } }, 'The dashboard connects to the agent on your own machine; nothing about it leaves your browser.')));
@@ -196,7 +273,8 @@
       };
       const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Keep it running (a terminal, a scheduled task, a service). It logs to agent/logs/ and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
       const dashCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Dashboard'), UI.chip('local', 'blue'), h('span.grow'), h('span.dim.small', 'polls the agent every 3 s')), dash);
-      U.replace(body, hero, step1, step2, step3, step4, dashCard,
+      const histCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Copy history'), UI.chip('attribution', 'accent'), h('span.grow'), h('span.dim.small', 'per leader · your slippage against their fills')), histWrap);
+      U.replace(body, hero, step1, step2, step3, step4, dashCard, histCard,
         h('div.footer-note', 'The agent is software you run; MeridianDataHub places no orders and holds no keys. Losses follow the leaders you pick and the limits you set. Past performance is not a promise of future returns.'));
       try { MD._agentRef = await A.ref(ctx); } catch (_) {}
       listSigners();

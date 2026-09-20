@@ -311,6 +311,17 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
   stops take deposits and withdrawals out (`/v1/token/transfer`) so a transfer can neither trip
   nor mask them; quantities are capped at the market's `maxQuantity` and rounded to its lot.
+* **Copy history** (the last card of the Copy agent page) – attribution of what the agent did.
+  Every mirrored order carries the leader's own fill price and time; the exchange's fills for
+  the agent's orders attach to their order (from the `OrderFill` stream, backfilled from
+  `/v1/order/fill` on start), and the page rebuilds the copy account's positions from those
+  fills with the simulator's episode engine, each position attributed to the leader whose
+  order opened it. Per leader: closed and open positions, share profitable, net (realized less
+  fees plus funding, the latter and liquidations from the exchange's position records),
+  size-weighted slippage of your fills against the leader's (positive = you paid more), average
+  delay from the leader's fill to yours; a cumulative realized chart per leader; every
+  position with its slippage and delay. A close made after a resync has no leader price and is
+  marked "at mark". Positions traded by hand on the same subaccount are not attributed.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
