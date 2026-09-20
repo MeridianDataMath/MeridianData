@@ -1,18 +1,8 @@
-/* MeridianDataHub — Copy trading, phase 1: leaders ranked by copyability (what a follower would actually keep), with the
-   full breakdown behind every score. Nothing here places orders; that is the copy agent of a later phase. */
+/* MeridianDataHub — Copy trading: leaders ranked by copyability (what a follower would actually keep), with the full
+   breakdown behind every score. Nothing here places orders; that is the copy agent (#/copytrade/agent). */
 (function () {
   const MD = window.MD; const U = MD.util; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const h = U.h;
 
-  const ROADMAP = [
-    { t: 'Leaders & copyability', d: 'Every wallet scored on track record, copy friction (fees, drift, slippage at its size) and activity, with the numbers behind each score.', s: 'live' },
-    { t: 'Watchlist', d: 'Star a wallet to keep it on your Favorites page with live equity and open positions.', s: 'live' },
-    { t: 'Copy simulator', d: 'Replay a leader\'s positions with your size, delay and slippage against its real fills and the minute-by-minute price, and see what you would have kept.', s: 'live' },
-    { t: 'Paper copy', d: 'Follow a leader live in a virtual account for a week before risking anything, with the delay cost measured on the real tape; kept in your browser and caught up from the exchange when you come back.', s: 'live' },
-    { t: 'Leader alerts', d: 'A toast, a browser notification or an ntfy push to your phone when a followed leader opens, adds, reduces, closes, reverses or gets liquidated, straight from the exchange WebSocket, while a tab of this site is open.', s: 'live' },
-    { t: 'Copy agent', d: 'A program on your own machine with a Meridian linked signer (orders only, never withdrawals) mirroring leaders into your subaccount with your sizing and risk limits; set up, watched and controlled from the Copy agent page.', s: 'live' },
-    { t: 'Copy history', d: 'Every position the agent opened, attributed to the leader whose order caused it: net per leader, your realized slippage against their fills and the delay behind them, on the Copy agent page.', s: 'live' },
-  ];
-  const STATUS = { live: ['live', 'green'], building: ['in progress', 'accent'], planned: ['planned', ''] };
   const VERDICT_CLS = { 'Copyable': 'green', 'Copy with care': 'amber', 'Hard to copy': 'red', 'Losing so far': 'red' };
   const PILLARS = [['track', 'Track record', 'is there an edge, and is it steady'], ['friction', 'Copy friction', 'how much of it survives being copied a minute later at this size'], ['activity', 'Activity', 'is the account still trading']];
   const usd0 = (v) => U.fmtUsd(v || 0, { compact: true, dp: 0 });
@@ -132,16 +122,13 @@
       const summary = h('span.dim.small');
       const state = { filter: route.params.show || 'scored', sort: { key: 'score', desc: true } };
       const hero = h('div.card.ct-hero',
-        h('div.row', { style: { marginBottom: '8px' } }, UI.chip('Phase 1 · leaders', 'accent'), h('span.dim.small', 'scouting and scoring; the copy agent comes next')),
         h('h1', 'Copy trading on Meridian'),
         h('p', 'A leaderboard tells you who made money. Copying needs a different question: what would a follower have kept, entering a minute later, at taker fees, at that size, against these books? Every wallet below is scored on exactly that, and the numbers behind each score are one click away.'),
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
         h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first')));
-      const roadmap = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Roadmap'),
-        h('div.roadmap', ROADMAP.map((r) => h('div.it', h('div.row', h('span.t', r.t), h('span.grow'), UI.chip(STATUS[r.s][0], STATUS[r.s][1])), h('div.d', r.d)))));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
       const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), filterSeg, MD.defsLink()), tableWrap);
-      U.replace(root, h('div.page', h('div.stack', hero, leaders, alertsCard(ctx), roadmap, h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
+      U.replace(root, h('div.page', h('div.stack', hero, leaders, alertsCard(ctx), h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
       ctx.onCleanup(U.on('favorites', () => render()));
       ctx.onCleanup(U.on('alerts', () => render()));
 

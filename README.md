@@ -175,7 +175,7 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   `1rpc.io`). That gives the proposer, the proposed outcome, the exact end of the challenge
   window and any disputer. Neg-risk (multi-outcome) markets use a different adapter that keys
   questions differently, so for those only Polymarket's coarse status is shown.
-* **Copy trading** (phase 1: leaders) – every trading wallet scored for **copyability**, the
+* **Copy trading** (`#/copytrade`, leaders) – every trading wallet scored for **copyability**, the
   question a copier actually has: not "who made money" but "what would a follower have kept,
   entering a minute later, at taker fees, at that size, against these books?". The snapshot
   build gives each account a copy profile (`row.copy`): closed / open positions, hold-time
@@ -205,9 +205,9 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
   scalper, market maker, grid bot, whale, one-hit wonder, gambler, funding harvester, …)
   through the same pipeline against today's real books and prints the ranking with the
   expected verdict for each, so the formula is judged against what a copier wants rather than
-  against whoever is on the exchange this week. Nothing on the page places orders; the roadmap
-  on the page lists what comes next (paper copy, alerts, a local copy agent with a Meridian
-  linked signer).
+  against whoever is on the exchange this week. Nothing on the page places orders; copying is
+  done by the copy agent below, a program on the user's own machine with a Meridian linked
+  signer.
 * **Copy simulator** (`#/copytrade/sim?address=…&sub=…`, the Simulate button on every leader)
   – replays a leader's positions as a follower with a chosen size (fixed dollars per position,
   or a percentage of the leader's quantity), delay (instant … 120 s), slippage (from today's

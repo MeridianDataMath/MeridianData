@@ -53,7 +53,7 @@
 
       // ---- hero
       const hero = h('div.card.ct-hero',
-        h('div.row', { style: { marginBottom: '8px' } }, UI.chip('Phase 4 · copy agent', 'accent'), h('span.dim.small', 'non-custodial · linked signer · your machine')),
+        h('div.row', { style: { marginBottom: '8px' } }, UI.chip('non-custodial', 'accent'), h('span.dim.small', 'linked signer · your machine · orders only, never withdrawals')),
         h('h1', 'Copy leaders into your own account'),
         h('p', 'A small program on your computer follows the leaders you choose and mirrors their positions into your Meridian subaccount, sized and limited the way you set here. It trades with a Meridian linked signer: a key made on your machine that can submit and cancel orders and can never withdraw. Your wallet signs the link once, on this page; the site holds nothing.'),
         h('p', 'Before running it with money: replay the leaders in the simulator, paper-copy them for a while, then run the agent with --dry (every order goes to the exchange\'s margin check, nothing is placed) and watch it here. Copying is not a promise of the leader\'s result: see "Edge left" on every leader.'),
