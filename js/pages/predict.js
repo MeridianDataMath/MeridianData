@@ -166,7 +166,15 @@
         { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
         { key: 'f', label: 'Last active', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
       ], rows: a.makers.slice(0, 5), onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
+      // secondary market: closed by default (few people need it); opening it loads the trades, and the choice is remembered
       const secBody = h('div', UI.loading('Loading secondary market…'));
+      const SEC_KEY = 'md.predict.secOpen'; let secLoaded = false;
+      const secTotal = snap.tradesTotal || (snap.trades || []).length;
+      const secCard = h('div.card.tight.collapsible');
+      const setSec = (open) => { secCard.classList.toggle('open', open); secBody.style.display = open ? '' : 'none'; secHead.setAttribute('aria-expanded', String(open)); if (open && !secLoaded) { secLoaded = true; loadSec(); } };
+      const secHead = h('button.card-head.toggle-head', { type: 'button', onclick: () => { const open = !secCard.classList.contains('open'); U.storage.set(SEC_KEY, open); setSec(open); } },
+        h('span.chev', U.icon('chevR')), h('h2', 'Secondary market'), h('span.dim.small', (secTotal ? U.fmtNum(secTotal, 0) + ' trades · ' : '') + 'positions sold before resolution'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      U.append(secCard, [secHead, secBody]);
       U.replace(body,
         h('div.row.wrap', h('span.dim.small', snapNote(snap)), h('span.grow'), h('span.dim.small', 'Meridian Predict runs on Sapience; questions mirror Polymarket markets, USDe collateral, RFQ auctions against market makers.')),
         tiles,
@@ -174,7 +182,7 @@
         tapeCard,
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
-        h('div.card.tight', h('div.card-head', h('h2', 'Secondary market'), h('span.dim.small', 'positions sold before resolution')), secBody),
+        secCard,
         h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL is realized on settled predictions only.'));
       const col = C.colors();
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
@@ -202,8 +210,8 @@
       if (live) pollTape();
       const tT = setInterval(pollTape, live ? 20000 : 60000); ctx.onCleanup(() => clearInterval(tT));
 
-      // secondary market
-      (async () => {
+      // secondary market (loaded the first time the card is opened)
+      async function loadSec() {
         try {
           let rows, total;
           if (live) { const t = await P.trades({ first: 10, signal: ctx.signal, ttl: 60000 }); rows = t.nodes.map(P.compactTrade); total = t.totalCount; }
@@ -224,7 +232,8 @@
             { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener' }, U.icon('external')) : '') },
           ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(total, 0)} trades in total`));
         } catch (e) { if (!isAbort(e)) U.replace(secBody, UI.error(e)); }
-      })();
+      }
+      setSec(!!U.storage.get(SEC_KEY, false));
     });
   }
 

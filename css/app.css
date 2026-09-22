@@ -172,6 +172,16 @@ h3 { font-size: 13px; color: var(--text-2); font-weight: 500; text-transform: up
    move to a second line instead */
 .card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-2); }
 .card-head h2 { flex: 1 1 auto; white-space: nowrap; }
+/* a card whose body folds away behind its header (the header is the toggle) */
+button.card-head.toggle-head { width: 100%; background: transparent; border: 0; border-bottom: 1px solid var(--border-2); text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.collapsible:not(.open) > .toggle-head { border-bottom-color: transparent; }
+.toggle-head:hover { background: var(--bg-3); }
+.toggle-head h2 { flex: 0 1 auto; }
+.toggle-head .chev { display: inline-grid; place-items: center; color: var(--text-3); transition: transform .15s; }
+.toggle-head .chev svg { width: 14px; height: 14px; }
+.collapsible.open > .toggle-head .chev { transform: rotate(90deg); }
+.toggle-head .toggle-hint::after { content: 'Show'; }
+.collapsible.open > .toggle-head .toggle-hint::after { content: 'Hide'; }
 .grid { display: grid; gap: 16px; }
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
