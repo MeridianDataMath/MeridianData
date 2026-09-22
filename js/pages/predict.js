@@ -17,11 +17,11 @@
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
   /** A prediction's result from one side (the bettor's unless asMaker). "Unclaimed" is shown only where that side has
    *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
-  const resultChip = (n, asMaker) => {
+  const resultChip = (n, asMaker, held = 1) => {   // held: the share of its tokens this side still holds (sold on the secondary market otherwise)
     if (!n.decided) return UI.chip('open', 'accent');
-    const won = asMaker ? n.lost : n.won;
-    if (n.nd) return UI.chip(n.unclaimed ? 'void · refund unclaimed' : 'void', 'amber');
-    if (won) return UI.chip(n.unclaimed ? 'won · unclaimed' : 'won', 'green');
+    const won = asMaker ? n.lost : n.won; const mineToClaim = n.unclaimed && held > 1e-6;
+    if (n.nd) return UI.chip(mineToClaim ? 'void · refund unclaimed' : 'void', 'amber');
+    if (won) return UI.chip(mineToClaim ? 'won · unclaimed' : 'won', 'green');
     return h('span.chip.red', { title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : '' }, 'lost');
   };
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
@@ -122,7 +122,7 @@
         UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
         UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${T.makers} market makers`),
         UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of decided predictions'),
-        UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'decided, claimed or not · mirror = maker profit', U.pnlClass(T.bettorPnl)),
+        UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'decided, claimed or not · incl. positions sold on the secondary market', U.pnlClass(T.bettorPnl)),
         T.unclaimedWon ? h('a', { href: '#/predict/questions?status=settled', style: { display: 'contents' } }, UI.stat('Unclaimed winnings', U.fmtNum(T.unclaimedWon, 0), `won predictions not yet claimed · ${usd(T.unclaimedWonPayout, { compact: true })} of payouts · ${U.fmtNum(T.unclaimedLost, 0)} lost ones unclaimed by makers`, 'pos')) : null,
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
@@ -214,13 +214,19 @@
           let rows, total;
           if (live) { const t = await P.trades({ first: 10, signal: ctx.signal, ttl: 60000 }); rows = t.nodes.map(P.compactTrade); total = t.totalCount; }
           else { rows = (snap.trades || []).slice(0, 10); total = snap.tradesTotal || rows.length; }
+          // the snapshot ties each trade to its prediction (question, and its outcome once decided); live rows lack that
+          const byTok = new Map((snap.trades || []).filter((x) => x.pc).map((x) => [x.token, x]));
+          rows = rows.map((r) => { const m = byTok.get(r.token); return m && !r.pc ? Object.assign({}, r, { q: m.q, legs: m.legs, side: m.side, vP: m.vP, vC: m.vC }) : r; });
+          const outcome = (r) => { const v = r.side === 'C' ? r.vC : r.vP; return v == null ? (r.side ? UI.chip('open', 'accent') : h('span.dim', '—')) : v >= 0.999 ? UI.chip('won', 'green') : v <= 1e-9 ? UI.chip('lost', 'red') : UI.chip('void', 'amber'); };
           U.replace(secBody, UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.t)) },
+            { key: 'q', label: 'Prediction', render: (r) => (r.q ? h('div', { style: { whiteSpace: 'normal', maxWidth: '340px', lineHeight: '1.3' } }, r.q, r.legs > 1 ? h('span.dim.xs', ' +' + (r.legs - 1) + ' legs') : null) : h('span.dim', '—')) },
             { key: 's', label: 'Seller', render: (r) => bettorLink(r.seller) },
             { key: 'b', label: 'Buyer', render: (r) => bettorLink(r.buyer) },
             { key: 'tk', label: 'Face value', num: true, title: 'Position tokens pay 1 USDe each if the prediction wins', render: (r) => usd(r.tokens) },
             { key: 'p', label: 'Paid', num: true, render: (r) => usd(r.paid) },
             { key: 'px', label: 'Price / token', num: true, title: 'Implied probability the buyer assigned', render: (r) => pct(r.px, 1) },
+            { key: 'o', label: 'Outcome', title: 'How the traded position turned out: a won token paid the buyer $1', render: outcome },
             { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener' }, U.icon('external')) : '') },
           ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(total, 0)} trades in total`));
         } catch (e) { if (!isAbort(e)) U.replace(secBody, UI.error(e)); }
@@ -603,15 +609,17 @@
   async function loadBettor(addr, ctx) {
     const live = await P.live();
     if (live) {
-      const [acct, raw, openPos] = await Promise.all([
+      const [acct, raw, openPos, tf] = await Promise.all([
         P.account(addr, { interval: 'DAY', fromSec: P.LAUNCH_SEC, signal: ctx.signal, ttl: 60000 }),
         P.predictionsOf(addr, { maxPages: 12, signal: ctx.signal }),
         P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
+        P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal }).catch(() => null),   // the wallet's secondary-market trades, tied to their predictions by the snapshot builder
       ]);
       const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
-      const undecided = (openPos.nodes || []).filter((p) => !(p.pickConfig && p.pickConfig.resolved));   // decided-but-unclaimed positions are not open
+      // decided-but-unclaimed positions are not open; a position whose tokens were all sold is not this wallet's any more
+      const undecided = (openPos.nodes || []).filter((p) => !(p.pickConfig && p.pickConfig.resolved) && P.usd(p.balance) > 1e-9);
       const posRows = undecided.map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
-      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: undecided.length, builtAt: Date.now() };
+      return { live: true, norms, truncated: !!raw.truncated, hist: acct.history, totalVolume: acct.totalVolume, balance: acct.balance, posRows, openCount: undecided.length, builtAt: Date.now(), trades: (tf && tf.trades) || [] };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
@@ -619,8 +627,8 @@
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
     const open = mine.filter((n) => !n.decided);
-    const posRows = open.map((n) => ({ side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: false, resolvedToYes: null })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
-    return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt };
+    const posRows = open.map((n) => ({ id: n.id, side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: false, resolvedToYes: null })), fair: asMaker ? (n.fair == null ? null : 1 - n.fair) : n.fair, t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
+    return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt, trades: f.trades || [] };
   }
   P.loadBettor = loadBettor;
   P.renderBettor = async function (el, addr, ctx) {
@@ -631,11 +639,15 @@
     UI.progress.done();
     if (ctx.signal.aborted) return;
     if (!m) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address (as of the last snapshot).'))); return; }
-    const { norms, hist, posRows } = m;
+    const { norms, hist } = m;
     const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
     const isMaker = asMaker.length > asBettor.length;
     const mine = isMaker ? asMaker : asBettor;
-    if (!mine.length && !hist.some((x) => x.total)) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
+    // the secondary market: PnL follows the position tokens, so a sold prediction's result is no longer (all) this wallet's
+    const L = P.ledger(norms, m.trades || [], addr);
+    const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? bp.held : 1; };
+    const posRows = m.posRows.filter((r) => !r.id || heldOf(r) > 1e-6);
+    if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
     // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
@@ -658,9 +670,12 @@
       const unclaimed = mine.filter((n) => n.unclaimed);
       const uWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
       const uPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
-      F = { pnl: m.live ? totals.pnl : totals.pnl + uPnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions',
+      // live, the exchange's PnL already follows the tokens (checked for every wallet that traded); the snapshot's
+      // per-prediction history does not, so the ledger's adjustment is added there
+      F = { pnl: m.live ? totals.pnl : totals.pnl + uPnl + L.adj, pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''),
         won: totals.won + uWon.length, lost: totals.lost + unclaimed.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd, open: Math.max(0, totals.pending - unclaimed.length),
-        unclaimedWon: uWon.length, unclaimedPayout: U.sum(uWon, (n) => n.pool), roi: s.roi, roiNote: 'on decided stakes', avgOdds: s.avgOdds, avgLegs: s.avgLegs, fromSnap: false };
+        // a won prediction whose tokens were sold pays the buyer, not this wallet
+        unclaimedWon: uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: U.sum(uWon, (n) => n.pool * heldOf(n)), roi: s.roi, roiNote: 'on decided stakes', avgOdds: s.avgOdds, avgLegs: s.avgLegs, fromSnap: false };
     }
     const tiles = h('div.stats',
       UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
@@ -705,20 +720,37 @@
       { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
       { key: 'v', label: 'Vig', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (n) => vigCell(n.vig, n) },
       { key: 'cp', label: isMaker ? 'Bettor' : 'Maker', render: (n) => bettorLink(isMaker ? n.predictor : n.counterparty) },
-      { key: 'r', label: 'Result', render: (n) => resultChip(n, isMaker) },
-      { key: 'p', label: 'PnL', num: true, render: (n) => pnlEl(isMaker ? -n.pnl : n.pnl) },
+      { key: 'r', label: 'Result', render: (n) => { const bp = L.byPrediction[n.id]; return h('span', resultChip(n, isMaker, bp ? bp.held : 1), bp && bp.held < 0.999 ? h('span.dim.xs', { title: 'Its tokens were sold on the secondary market: the result below is the sale plus whatever was still held at the verdict' }, bp.held < 1e-6 ? ' sold' : ` ${U.fmtPct((1 - bp.held) * 100, { dp: 0 })} sold`) : null); } },
+      // a prediction whose tokens were traded shows its share of the ledger's result (the sale, and the verdict on what was still held)
+      { key: 'p', label: 'PnL', num: true, render: (n) => { const bp = L.byPrediction[n.id]; return bp ? (n.decided || Math.abs(bp.pnl) > 0.005 ? pnlEl(bp.pnl) : h('span.dim', '—')) : pnlEl(isMaker ? -n.pnl : n.pnl); } },
     ], rows: slice, empty: 'No predictions' }), mine.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: mine.length, onPage: (p) => { hpage = p; renderHist(); } }) : null); };
     renderHist();
+    // secondary-market trades of this wallet: what it sold or bought, at what price, and what that did
+    const secWrap = h('div'); let spage = 1;
+    const saleOf = new Map(L.events.filter((e) => e.kind === 'sale' && e.trade).map((e) => [e.trade, e]));
+    const tokValue = (t) => (t.side === 'P' ? t.vP : t.vC);
+    const renderSec = () => { const slice = L.trades.slice((spage - 1) * PAGE, spage * PAGE); U.replace(secWrap, UI.table({ cols: [
+      { key: 't', label: 'When', render: (t) => h('span.dim', U.fmtDateTimeS(t.t)) },
+      { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + ' legs') : null) },
+      { key: 'k', label: 'Trade', render: (t) => h('span', t.seller === addr ? UI.chip('sold', 'amber') : UI.chip('bought', 'blue'), h('span.dim.xs', t.seller === addr ? ' to ' : ' from '), bettorLink(t.seller === addr ? t.buyer : t.seller, 3)) },
+      { key: 'n', label: 'Tokens', num: true, title: 'A token pays $1 if its side wins', render: (t) => U.fmtNum(t.tokens, 2) },
+      { key: 'x', label: 'Price', num: true, title: 'Paid per token, i.e. per $1 of payout', render: (t) => (t.tokens ? U.fmtNum((t.paid / t.tokens) * 100, 1) + '¢' : '—') },
+      { key: 'a', label: 'Amount', num: true, render: (t) => usd(t.paid) },
+      { key: 'o', label: 'Outcome', render: (t) => { const v = tokValue(t); return v == null ? UI.chip('open', 'accent') : v >= 0.999 ? UI.chip('won', 'green') : v <= 1e-9 ? UI.chip('lost', 'red') : UI.chip('void', 'amber'); } },
+      { key: 'r', label: 'Result', num: true, title: 'A sale: its price minus what the tokens cost this wallet. A purchase: the payout minus the price, once decided', render: (t) => { if (t.seller === addr) { const e = saleOf.get(t); return e ? h('span', { title: `sold for ${usd(e.cash)} · cost ${usd(e.cost)}` }, pnlEl(e.pnl)) : h('span.dim', '—'); } const v = tokValue(t); return v == null ? h('span.dim', 'open') : pnlEl(t.tokens * v - t.paid); } },
+    ], rows: slice, empty: 'No trades' }), L.trades.length > PAGE ? UI.pager({ page: spage, pageSize: PAGE, total: L.trades.length, onPage: (p) => { spage = p; renderSec(); } }) : null); };
+    if (L.trades.length) renderSec();
     const sum = P.bettorSummary(mine);
     const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
     const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
     U.replace(el, h('div.stack',
-      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       // offline, the curves are rebuilt from the loaded predictions (PnL booked when claimed): say so when those are not all of them
       h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions · booked when claimed`) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),
       UI.card('Open positions', openWrap, h('span.dim.small', posRows.length < F.open ? `newest ${posRows.length} of ${U.fmtNum(F.open, 0)}` : String(posRows.length))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
+      L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
     const col = C.colors();
     const firstAct = hist.findIndex((x) => x.total || x.volume);

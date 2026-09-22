@@ -151,6 +151,24 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
     not resolved although Polymarket has; those are listed first on the Ended tab. The tax center
     stays on a cash basis (claimed).
+  * *Secondary market* – a position can be sold before the verdict. Position tokens belong to a
+    pick configuration and a side (every prediction on the same picks shares them, so one trade
+    can move many predictions' tokens); a token pays 1 USDe if its side wins. The snapshot builder
+    fetches every trade and ties it to its pick configuration and side through the predictions'
+    `predictorToken` / `counterpartyToken`, with the value per token once decided, and ships each
+    wallet's trades in its file. `P.ledger` then follows the tokens: per pick configuration and
+    side an average cost (own predictions add the pool at their collateral, purchases what was
+    paid); a sale books its price minus the cost of the tokens sold, at the sale; holding both
+    sides books the matched amount (it pays for sure), at that moment; what is still held settles
+    at the verdict. Checked on 2026-09-22 against the exchange's own account PnL for every one of
+    the 82 wallets that ever traded: 80 match to the cent, open positions included (the other two
+    differ by $0.50 / $0.35 on predictions they never traded). Some wallets sell a bet's tokens
+    seconds before its prediction is timestamped; such a sale is covered by the next acquisition.
+    The aggregate (Overview, Bettors, Market makers) carries the adjustment; a bettor page marks
+    sold predictions, shows their ledger result and a *Secondary market* card (price per token,
+    outcome, the sale's result against its cost), and no longer lists a sold winner as the
+    seller's unclaimed winnings; the tax center books a sale as a disposal on its date and the
+    held share on its claim, with a trades CSV.
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
     committed, open exposure, PnL, win rate, vig captured.
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at

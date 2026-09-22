@@ -111,6 +111,33 @@ async function attachPricesAtBet(norms) {
   console.log(`  predict: price-at-bet ready for ${got}/${norms.length} predictions (${conds.length} history requests)`);
 }
 
+// ---------------------------------------------------------------- secondary market
+// Every trade (the market is small), each tied to its pick configuration and side through the predictions' position
+// tokens (predictorToken / counterpartyToken, shared by every prediction on the same picks), with the value per token
+// once the picks are decided: 1 for the winning side, 0 for the losing one, the side's collateral share when void.
+async function buildTrades(norms) {
+  const raw = []; let after = null;
+  try { do { const pg = await P.trades({ first: 25, after }); raw.push(...pg.nodes); after = pg.pageInfo.hasNextPage ? pg.pageInfo.endCursor : null; } while (after); }
+  catch (e) { console.warn('predict: trades failed', e.message); }
+  const byTok = {};
+  for (const n of norms) for (const [tok, side] of [[n.tokP, 'P'], [n.tokC, 'C']]) if (tok) (byTok[tok] || (byTok[tok] = { side, list: [] })).list.push(n);
+  let unmapped = 0;
+  const out = raw.map((x) => {
+    const t = P.compactTrade(x); const token = String(x.token || '').toLowerCase(); const m = byTok[token];
+    if (!m) { unmapped++; return Object.assign(t, { token }); }
+    const list = m.list; const n0 = list[0]; const dec = list.find((n) => n.decided);
+    const pool = list.reduce((a, n) => a + n.pool, 0), stake = list.reduce((a, n) => a + n.stake, 0), cp = list.reduce((a, n) => a + n.cp, 0);
+    const claims = list.filter((n) => n.settled && n.settledAt).map((n) => n.settledAt);
+    for (const n of list) n.pcTraded = true;
+    return Object.assign(t, { token, pc: n0.pc, side: m.side, pid: n0.id, q: n0.picks[0] ? n0.picks[0].q : '', legs: n0.legs,
+      vP: dec ? (dec.nd ? stake / pool : dec.won ? 1 : 0) : null, vC: dec ? (dec.nd ? cp / pool : dec.won ? 0 : 1) : null,
+      dAt: dec ? Math.max(...list.map(P.decidedAt)) : null, sa: claims.length ? Math.max(...claims) : null });
+  }).sort((a, b) => b.t - a.t);
+  if (unmapped) console.warn(`  predict: ${unmapped} of ${raw.length} trades have a token no prediction carries`);
+  out.total = raw.length;
+  return out;
+}
+
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
   const t0 = Date.now();
@@ -127,7 +154,11 @@ async function buildPredict() {
   });
   const norms = (limit ? raw.slice(0, limit) : raw).map(P.norm);
   try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
-  const agg = P.aggregate(norms, { tapeSize: 100 });
+  // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
+  // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
+  const trades = await buildTrades(norms);
+  const agg = P.aggregate(norms, { tapeSize: 100, trades });
+  if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
   try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
@@ -180,21 +211,24 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n), { k: n.picks.map((k) => [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, k.id, k.priceAtBet == null ? null : Math.round(k.priceAtBet * 1e4) / 1e4, n.picks.length > 1 ? k.event || null : null]) })) }));
     qfiles++;
   }
-  let trades = [];
-  try { const t1 = await P.trades({ first: 25 }); trades = t1.nodes.map(P.compactTrade); if (t1.pageInfo.hasNextPage) { const t2 = await P.trades({ first: 25, after: t1.pageInfo.endCursor }); trades.push(...t2.nodes.map(P.compactTrade)); } trades.total = t1.totalCount; } catch (e) { console.warn('predict: trades failed', e.message); }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
-  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = {};
   for (const n of norms) { (byWallet[n.predictor] || (byWallet[n.predictor] = [])).push(n); (byWallet[n.counterparty] || (byWallet[n.counterparty] = [])).push(n); }
+  // each wallet's secondary-market trades travel with its file (a buyer who never bet gets a file for them alone)
+  const tradesOf = {};
+  for (const t of trades) for (const a of new Set([t.seller, t.buyer])) { (tradesOf[a] || (tradesOf[a] = [])).push(t); if (!byWallet[a]) byWallet[a] = []; }
   const dir = path.join(outDir, 'bettors'); fs.mkdirSync(dir, { recursive: true });
   let files = 0;
   for (const [addr, list] of Object.entries(byWallet)) {
     list.sort((a, b) => b.t - a.t);
     const truncated = list.length > 600;
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: (truncated ? list.slice(0, 600) : list).map(P.slim) }));
+    // a truncated file still carries every prediction on a pick configuration the wallet traded, so its ledger is whole
+    const kept = truncated ? list.slice(0, 600).concat(list.slice(600).filter((n) => n.pcTraded && (tradesOf[addr] || []).some((t) => t.pc === n.pc))) : list;
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: kept.map(P.slim), trades: tradesOf[addr] || undefined }));
     files++;
   }
   console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
