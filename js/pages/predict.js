@@ -664,7 +664,7 @@
     }
     const tiles = h('div.stats',
       UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
-      UI.stat('Volume', usd(m.totalVolume, { compact: true }), 'all time'),
+      UI.stat('Volume', usd(agg && !m.live ? agg.wagered : m.totalVolume, { compact: true }), 'all time'),   // a snapshot file holds only the newest predictions; the aggregate has them all
       // a decided loss is a loss whether or not the winner has claimed: only this side's own wins waiting to be collected are called out
       UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, [F.open ? U.fmtNum(F.open, 0) + ' open' : null, F.unclaimedWon ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · ') || null),
       UI.stat('Win rate', F.won + F.lost ? U.fmtPct((F.won / (F.won + F.lost)) * 100, { dp: 0 }) : '—', 'of decided predictions'),
