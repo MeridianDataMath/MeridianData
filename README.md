@@ -36,8 +36,10 @@ assembles `dist/` and deploys it:
   Create → *Upload assets*, upload the site folder without `.git` and `data/bettors`), create an
   API token from the *Edit Cloudflare Workers* template, and add two repository secrets:
   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow runs
-  `wrangler deploy` with `dist/`. The default URL is `https://meridiandatahub.<your-subdomain>.workers.dev`;
-  the subdomain can be changed under Workers & Pages → Overview. The public address
+  `wrangler deploy` with `dist/`. The `*.workers.dev` address and the per-version preview URLs are
+  switched off in `wrangler.jsonc` (`workers_dev: false`, `preview_urls: false`): wrangler treats a
+  missing setting as "on" and re-enabled both at every deploy, even after they were disabled in the
+  dashboard. To use them again, set them to `true` there, not in the dashboard. The public address
   `meridian.thedatahub.xyz` is a custom domain on the Worker (Settings → Domains & Routes) on the
   zone `thedatahub.xyz`, registered through Cloudflare Registrar; Cloudflare issues and renews the
   certificate itself. Turn on *Always Use HTTPS* under the zone's SSL/TLS → Edge Certificates.
