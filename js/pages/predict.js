@@ -15,7 +15,15 @@
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
-  const resultChip = (n) => (!n.decided ? UI.chip('open', 'accent') : n.unclaimed ? (n.won ? UI.chip('won · unclaimed', 'green') : n.nd ? UI.chip('void · unclaimed', 'amber') : UI.chip('lost · unclaimed', 'red')) : n.won ? UI.chip('won', 'green') : n.result === 'NON_DECISIVE' ? UI.chip('void', 'amber') : UI.chip('lost', 'red'));
+  /** A prediction's result from one side (the bettor's unless asMaker). "Unclaimed" is shown only where that side has
+   *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
+  const resultChip = (n, asMaker) => {
+    if (!n.decided) return UI.chip('open', 'accent');
+    const won = asMaker ? n.lost : n.won;
+    if (n.nd) return UI.chip(n.unclaimed ? 'void · refund unclaimed' : 'void', 'amber');
+    if (won) return UI.chip(n.unclaimed ? 'won · unclaimed' : 'won', 'green');
+    return h('span.chip.red', { title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : '' }, 'lost');
+  };
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same Polymarket event: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
   const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
@@ -628,25 +636,43 @@
     const isMaker = asMaker.length > asBettor.length;
     const mine = isMaker ? asMaker : asBettor;
     if (!mine.length && !hist.some((x) => x.total)) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
-    const s = P.bettorSummary(mine).stats || {};
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
+    // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
+    // predictions, so the decided-but-unclaimed ones come from the predictions loaded here, which is exact while they are
+    // all loaded (up to 300 live, 600 in a snapshot file). A larger account (every market maker, heavy bettors) would
+    // count only the unclaimed ones inside that window, so its figures come from the published snapshot's aggregate for
+    // this wallet instead, which covers every prediction as of its build.
+    let F;
+    const agg = m.truncated ? await (async () => { try { const snap = await P.loadSnapshot({ signal: ctx.signal }); if (!snap || !snap.remote || !snap.agg) return null; const row = (isMaker ? snap.agg.makers : snap.agg.bettors).find((r) => r.address === addr); return row ? Object.assign({ at: snap.builtAt }, row) : null; } catch (e) { return null; } })() : null;
+    if (ctx.signal.aborted) return;
+    // Checked against the exchange: its account history books PnL at the verdict (its cumulative PnL equals the sum of
+    // every decided prediction's result, claimed or not), while its won / lost counts move only when a prediction is
+    // claimed. So live, the PnL is the exchange's as it stands and only the counts need the unclaimed ones added; the
+    // snapshot fallback rebuilds its history from claims, so there the unclaimed results are added to the PnL too.
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
-    // decided but unclaimed: the verdict is in, the money has not moved yet (this side's wins are collectable now)
-    const unclaimed = mine.filter((n) => n.unclaimed);
-    const unclaimedWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
-    const unclaimedPayout = U.sum(unclaimedWon, (n) => n.pool);
-    const unclaimedPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
+    if (agg) {
+      F = { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: agg.unclaimedWon, unclaimedPayout: agg.unclaimedPayout, roi: agg.roi, roiNote: 'on decided stakes · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true };
+    } else {
+      const s = P.bettorSummary(mine).stats || {};
+      const unclaimed = mine.filter((n) => n.unclaimed);
+      const uWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
+      const uPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
+      F = { pnl: m.live ? totals.pnl : totals.pnl + uPnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions',
+        won: totals.won + uWon.length, lost: totals.lost + unclaimed.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd, open: Math.max(0, totals.pending - unclaimed.length),
+        unclaimedWon: uWon.length, unclaimedPayout: U.sum(uWon, (n) => n.pool), roi: s.roi, roiNote: 'on decided stakes', avgOdds: s.avgOdds, avgLegs: s.avgLegs, fromSnap: false };
+    }
     const tiles = h('div.stats',
-      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(totals.pnl + unclaimedPnl, { sign: true }), (m.live ? 'decided · exchange stats' : 'decided · from predictions') + (unclaimed.length ? ` · ${usd(totals.pnl, { sign: true })} claimed so far` : ''), U.pnlClass(totals.pnl + unclaimedPnl)),
+      UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
       UI.stat('Volume', usd(m.totalVolume, { compact: true }), 'all time'),
-      UI.stat('Record', `${totals.won}W / ${totals.lost}L`, [totals.pending - unclaimed.length > 0 ? (totals.pending - unclaimed.length) + ' open' : null, unclaimed.length ? unclaimed.length + ' decided, unclaimed (' + (isMaker ? unclaimedWon.length + ' won' : unclaimedWon.length + 'W / ' + (unclaimed.length - unclaimedWon.length) + 'L') + ')' : null, totals.nd ? totals.nd + ' void' : null].filter(Boolean).join(' · ') || null),
-      UI.stat('Win rate', totals.won + totals.lost ? U.fmtPct((totals.won / (totals.won + totals.lost)) * 100, { dp: 0 }) : '—'),
-      UI.stat('ROI', s.roi == null ? '—' : U.fmtPct(s.roi, { sign: true, dp: 0 }), 'on decided stakes (last ' + mine.length + ')', U.pnlClass(s.roi)),
-      UI.stat('Avg odds', pct(s.avgOdds, 0), s.avgLegs ? 'avg ' + U.fmtNum(s.avgLegs, 1) + ' legs' : null),
+      // a decided loss is a loss whether or not the winner has claimed: only this side's own wins waiting to be collected are called out
+      UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, [F.open ? U.fmtNum(F.open, 0) + ' open' : null, F.unclaimedWon ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · ') || null),
+      UI.stat('Win rate', F.won + F.lost ? U.fmtPct((F.won / (F.won + F.lost)) * 100, { dp: 0 }) : '—', 'of decided predictions'),
+      UI.stat('ROI', F.roi == null ? '—' : U.fmtPct(F.roi, { sign: true, dp: 0 }), F.roiNote, U.pnlClass(F.roi)),
+      UI.stat('Avg odds', pct(F.avgOdds, 0), F.avgLegs ? 'avg ' + U.fmtNum(F.avgLegs, 1) + ' legs' : null),
       m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
-      UI.stat('Open', String(m.openCount), 'positions, not yet decided'),
-      unclaimedWon.length ? UI.stat('Unclaimed winnings', usd(unclaimedPayout), `${unclaimedWon.length} won prediction${unclaimedWon.length > 1 ? 's' : ''} to claim · ${usd(unclaimedPnl, { sign: true })} net once claimed`, 'pos') : null);
+      UI.stat('Open', U.fmtNum(F.open, 0), 'predictions, not yet decided'),
+      F.unclaimedWon ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`, 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: false, question: k.q });
@@ -679,7 +705,7 @@
       { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
       { key: 'v', label: 'Vig', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (n) => vigCell(n.vig, n) },
       { key: 'cp', label: isMaker ? 'Bettor' : 'Maker', render: (n) => bettorLink(isMaker ? n.predictor : n.counterparty) },
-      { key: 'r', label: 'Result', render: (n) => resultChip(n) },
+      { key: 'r', label: 'Result', render: (n) => resultChip(n, isMaker) },
       { key: 'p', label: 'PnL', num: true, render: (n) => pnlEl(isMaker ? -n.pnl : n.pnl) },
     ], rows: slice, empty: 'No predictions' }), mine.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: mine.length, onPage: (p) => { hpage = p; renderHist(); } }) : null); };
     renderHist();
@@ -687,10 +713,10 @@
     const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
     const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
     U.replace(el, h('div.stack',
-      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', m.live ? `${mine.length}${m.truncated ? '+' : ''} predictions loaded · stats from Meridian's own account history` : `${mine.length}${m.truncated ? '+' : ''} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', cPnl)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily volume'), h('div.chart-box.sm', cVol))),
-      UI.card('Open positions', openWrap, h('span.dim.small', String(m.openCount))),
+      UI.card('Open positions', openWrap, h('span.dim.small', posRows.length < F.open ? `newest ${posRows.length} of ${U.fmtNum(F.open, 0)}` : String(posRows.length))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
     const col = C.colors();

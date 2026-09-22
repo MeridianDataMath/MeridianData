@@ -66,7 +66,7 @@
               s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : ''), s.apiTotal && s.predictions < s.apiTotal - 50 ? 'neg' : ''] : null,
               s.bettors != null ? ['Bettors · makers', `${U.fmtNum(s.bettors, 0)} · ${U.fmtNum(s.makers || 0, 0)}`] : null,
               s.questions != null ? ['Questions listed', U.fmtNum(s.questions, 0)] : null,
-              s.vigCoverage != null ? ['Vig coverage', `${U.fmtNum(s.vigCoverage, 0)} with a source price at bet time`] : null,
+              s.vigCoverage != null ? ['Priced at bet time', `${U.fmtNum(s.vigCoverage, 0)}` + (s.predictions ? ` of ${U.fmtNum(s.predictions, 0)}` : '')] : null,   // predictions with the source market's price at the moment of the bet (the vig needs it)
               s.requests != null ? ['API requests', `${U.fmtNum(s.requests, 0)}` + (s.retries ? ` · ${s.retries} retried` : '')] : null,
               s.durationMs ? ['Build took', U.fmtDuration(s.durationMs)] : null,
             ]) : h('div.empty', 'No Predict snapshot published yet.'),

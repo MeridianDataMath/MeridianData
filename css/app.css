@@ -64,8 +64,10 @@ table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
   background: var(--bg-1);
   border-right: 1px solid var(--border-2);
   display: flex; flex-direction: column; align-items: stretch;
-  padding: 12px 10px; gap: 2px; overflow: hidden; min-width: 0;
+  padding: 12px 10px; gap: 2px; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; min-width: 0;
 }
+.rail::-webkit-scrollbar { display: none; }
+.rail > * { flex-shrink: 0; }   /* a short screen scrolls the rail rather than squeezing its rows */
 .rail .logo { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 6px; margin-bottom: 10px; color: var(--text-1); }
 .rail .logo:hover { text-decoration: none; }
 .rail .logo img { width: 26px; height: auto; display: block; flex: none; }
@@ -87,8 +89,9 @@ table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
 .rail a.nav .ext-ico { margin-left: auto; opacity: .45; }
 .rail a.nav .ext-ico svg { width: 13px; height: 13px; }
 .rail .spacer { flex: 1; }
+/* fixed, placed by app.js next to the hovered row: an absolute tip was clipped by the rail's own overflow */
 .rail .tip {
-  display: none; position: absolute; left: 50px; top: 50%; transform: translateY(-50%);
+  display: none; position: fixed; left: 0; top: 0; transform: translateY(-50%);
   background: var(--bg-5); border: 1px solid var(--border-3); color: var(--text-1);
   padding: 4px 8px; border-radius: 6px; font-size: 12px; white-space: nowrap;
   pointer-events: none; z-index: 50;
@@ -117,7 +120,7 @@ table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
 .topbar .title { display: block; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* page-load progress: a 2px line along the bottom of the topbar */
 .topbar { position: relative; }
-.topbar .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; opacity: 0; transition: opacity .3s; }
+.topbar .progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; opacity: 0; transition: opacity .3s; background: transparent; border-radius: 0; }   /* no grey track (that is the leaderboard's bar) */
 .topbar .progress.on { opacity: 1; }
 .topbar .progress i { display: block; height: 100%; width: 0; background: var(--accent); box-shadow: 0 0 8px var(--accent); transition: width .25s ease-out; }
 .topbar .grow { flex: 1; min-width: 0; }
@@ -165,8 +168,10 @@ h3 { font-size: 13px; color: var(--text-2); font-weight: 500; text-transform: up
   padding: 16px;
 }
 .card.tight { padding: 0; overflow: hidden; }
-.card-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-2); }
-.card-head h2 { flex: 1; }
+/* a title never breaks mid-phrase ("Leaders by / copyability"); when the head runs out of room its notes and controls
+   move to a second line instead */
+.card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-2); }
+.card-head h2 { flex: 1 1 auto; white-space: nowrap; }
 .grid { display: grid; gap: 16px; }
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -176,6 +181,7 @@ h3 { font-size: 13px; color: var(--text-2); font-weight: 500; text-transform: up
 .row.wrap { flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
+.stack > div:empty { display: none; }   /* an empty mount point (a progress bar not showing) must not add a gap */
 
 .btn {
   background: var(--bg-4); border: 1px solid var(--border-3); border-radius: 8px;
@@ -243,8 +249,6 @@ label.lbl { display: block; font-size: 11.5px; color: var(--text-3); margin-bott
 a.defs { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); }
 a.defs:hover { color: var(--accent); text-decoration: none; }
 a.defs svg { width: 13px; height: 13px; }
-.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 16px; font-size: 13px; align-items: start; }
-.kv .k { color: var(--text-3); white-space: nowrap; }
 .modal.wide { width: min(1180px, 100%); }
 .rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
 .res-cell { line-height: 1.25; white-space: normal; min-width: 210px; max-width: 340px; }
@@ -270,8 +274,8 @@ a.addr:hover { text-decoration: underline; }
 .stat .sub { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
 .stat.inline { background: transparent; border: 0; padding: 0; }
 
-/* Key-value list */
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+/* Key-value list (one definition: a second, older one used to override the columns) */
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 13px; align-items: start; }
 .kv .k { color: var(--text-3); white-space: nowrap; }
 .kv .v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kv .sep { grid-column: 1 / -1; border-top: 1px solid var(--border-2); margin: 4px 0; }
@@ -469,13 +473,10 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .error { background: var(--red-dim); border: 1px solid rgba(239,69,74,.35); color: #ffb3b5; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 .notice { background: var(--accent-dim); border: 1px solid rgba(35,212,188,.3); color: var(--text-1); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
-.skeleton { background: linear-gradient(90deg, var(--bg-3), var(--bg-5), var(--bg-3)); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 6px; height: 14px; }
-@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-5); border: 1px solid var(--border-3); border-radius: 8px; padding: 8px 14px; font-size: 13px; z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 
-.tooltip-note { font-size: 11.5px; color: var(--text-3); }
 
 /* Predict */
 .prob { position: relative; display: inline-block; width: 110px; height: 18px; background: var(--bg-5); border-radius: 4px; overflow: hidden; vertical-align: middle; font-family: var(--mono); font-size: 11.5px; }
@@ -488,10 +489,10 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .ct-hero { position: relative; overflow: hidden; background: radial-gradient(700px 300px at 85% 0%, rgba(35,212,188,.18), transparent 60%), var(--bg-2); }
 .ct-hero h1 { font-size: 24px; margin-bottom: 6px; }
 .ct-hero p { color: var(--text-2); max-width: 760px; margin: 0 0 6px; }
-.roadmap { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
-.roadmap .it { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
-.roadmap .it .t { font-weight: 600; font-size: 13px; }
-.roadmap .it .d { font-size: 12px; color: var(--text-3); }
+.note-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.note-grid .it { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.note-grid .it .t { font-weight: 600; font-size: 13px; }
+.note-grid .it .d { font-size: 12px; color: var(--text-3); }
 /* copyability: the score pill, the part bars of the breakdown, the hold-time strip */
 .score { display: inline-block; min-width: 34px; text-align: center; font-family: var(--mono); font-weight: 700; font-size: 14px; line-height: 24px; padding: 0 7px; border-radius: 6px; background: var(--bg-4); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .score.green { background: var(--green-dim); color: var(--green); }

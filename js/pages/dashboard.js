@@ -81,7 +81,7 @@
             { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
             { key: 'fr', label: 'Current 1h', num: true, render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
             { key: 'proj', label: 'Projected 1h', num: true, render: (r) => (r.proj == null ? '—' : h('span', { class: U.pnlClass(r.proj) }, U.fmtPct(r.proj * 100, { dp: 4, sign: true }))) },
-            { key: 'apr', label: 'Annualized', num: true, render: (r) => U.fmtPct(r.fr * 24 * 365 * 100, { dp: 1, sign: true }) },
+            { key: 'apr', label: 'Annualized', num: true, render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 24 * 365 * 100, { dp: 1, sign: true })) },
             { key: 'base', label: 'Baseline / clamp / max APR', num: true, render: (r) => h('span.dim', U.fmtPct(U.num(r.p.fundingBaselineApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingClampApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingMaxApr) * 100, { dp: 0 })) },
             { key: 'cum', label: 'Cumulative funding', num: true, render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.fundingUpdatedAt)) },
@@ -277,8 +277,8 @@
       U.replace(gapBody, UI.table({
         cols: [
           { key: 'm', label: 'Market', render: (g) => (ref.byId[g.productId] ? ref.byId[g.productId].displayTicker : '—') },
-          { key: 's', label: 'Closes', render: (g) => h('span', { class: g.startTime <= now ? 'neg' : '' }, g.startTime <= now ? 'now' : U.fmtDateTime(g.startTime)) },
-          { key: 'e', label: 'Reopens', render: (g) => U.fmtDateTime(g.endTime) },
+          { key: 's', label: 'Closes', render: (g) => h('span', { class: g.startTime <= now ? 'neg' : '' }, g.startTime <= now ? 'closed now' : U.fmtWhen(g.startTime)) },
+          { key: 'e', label: 'Reopens', render: (g) => U.fmtWhen(g.endTime) },
           { key: 'd', label: 'Duration', num: true, render: (g) => U.fmtDuration(g.endTime - g.startTime) },
         ], rows: upcoming, empty: 'No closures scheduled',
       }));

@@ -57,30 +57,32 @@
   const busyFn = (btn, fn) => async () => { btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = ''; U.append(btn, [h('span.spinner'), ' Preparing…']); try { await fn(); } catch (e) { if (!isAbort(e)) U.toast('Export failed: ' + e.message); } btn.disabled = false; btn.innerHTML = old; };
   const exBtn = (label, sub, fn, async) => { const b = h('button.btn', {}, U.icon('download'), label); b.addEventListener('click', async ? busyFn(b, fn) : fn); return h('div.metric', h('div', b), h('div.s', { style: { marginTop: '6px' } }, sub)); };
 
-  /** Meridian Predict section: cash basis (claimed) like the exchange's own account stats, with the decided-but-unclaimed
-   *  tail shown separately so the two never get confused. */
+  /** Meridian Predict section: cash basis (booked when a prediction is settled, i.e. claimed), with the decided-but-
+   *  unclaimed tail shown separately so the two never get confused. Built from the wallet's own predictions in both modes:
+   *  the exchange's account stats book PnL at the verdict, not at the claim (checked: their cumulative PnL equals the sum
+   *  of every decided prediction, claimed or not), so they serve only for the collateral figures of right now. */
   async function renderPredict(card, addr, start, end, fname, money, pnlEl) {
     const P = MD.predict;
     const live = await P.live();
-    let history, snapNorms = null, builtAt = null;
-    if (live) { const acct = await P.account(addr, { interval: 'DAY', fromSec: Math.floor(start / 1000) - 86400, toSec: Math.floor(end / 1000), ttl: 60000 }); history = acct.history; }
-    else {
+    let history, snapNorms = null, builtAt = null, lastAll = null, truncated = false;
+    if (live) {
+      const [acct, raw] = await Promise.all([P.account(addr, { interval: 'DAY', fromSec: Math.floor(start / 1000) - 86400, toSec: Math.floor(end / 1000), ttl: 60000 }), P.predictionsOf(addr, { maxPages: 40 })]);
+      lastAll = acct.history.length ? acct.history[acct.history.length - 1] : null;
+      snapNorms = raw.map(P.norm).filter((n) => n.predictor === addr); truncated = !!raw.truncated;
+    } else {
       const f = await P.snapshotFile('bettors/' + addr + '.json');
       if (!f) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', 'No Meridian Predict activity for this wallet (as of the last snapshot).')); return null; }
-      snapNorms = f.predictions.map(P.unslim).filter((n) => n.predictor === addr); builtAt = f.builtAt;
-      history = P.historyFromPredictions(snapNorms, addr, false);
+      snapNorms = f.predictions.map(P.unslim).filter((n) => n.predictor === addr); builtAt = f.builtAt; truncated = !!f.truncated;
     }
+    history = P.historyFromPredictions(snapNorms, addr, false);
     const rows = history.filter((x) => x.t >= start && x.t < end);
     const T = rows.reduce((a, x) => { a.pnl += x.pnl; a.pnlC += money.fx(x.pnl, x.t); a.volume += x.volume; a.won += x.won; a.lost += x.lost; a.nd += x.nonDecisive; a.total += x.total; return a; }, { pnl: 0, pnlC: 0, volume: 0, won: 0, lost: 0, nd: 0, total: 0 });
-    const lastAll = history.length ? history[history.length - 1] : null;
     if (!T.total && !T.volume && !T.pnl && !(lastAll && (lastAll.claimable || lastAll.deployed))) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', 'No Meridian Predict activity for this wallet in the period.')); return null; }
-    // decided but unclaimed: the verdict is in, no cash has moved (snapshot mode; live mode asks the API for open positions)
-    let unclaimed = [];
-    // decided when its last question ended (the API keeps no decision timestamp), so the tail lands in the right year
+    // decided but unclaimed: the verdict is in, no cash has moved. Decided when its last question ended (the API keeps no
+    // decision timestamp), so the tail lands in the right year
     const decidedAt = (n) => Math.max(n.t, ...n.picks.map((k) => U.num(k.endTime) || 0));
     const inPeriod = (n) => { const t = decidedAt(n); return t >= start && t < end; };
-    if (snapNorms) unclaimed = snapNorms.filter((n) => n.unclaimed && inPeriod(n));
-    else { try { const raw = await P.predictionsOf(addr, { maxPages: 6, filter: { settled: false } }); unclaimed = raw.map(P.norm).filter((n) => n.predictor === addr && n.unclaimed && inPeriod(n)); } catch (_) {} }
+    const unclaimed = snapNorms.filter((n) => n.unclaimed && inPeriod(n));
     const unclaimedPnl = U.sum(unclaimed, (n) => n.pnl), unclaimedWon = unclaimed.filter((n) => n.won);
     const months = {};
     for (const x of rows) { const d = new Date(x.t); const k = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0'); const m = months[k] || (months[k] = { key: k, label: MON[d.getUTCMonth()] + ' ' + d.getUTCFullYear(), pnl: 0, pnlC: 0, volume: 0, won: 0, lost: 0, total: 0 }); m.pnl += x.pnl; m.pnlC += money.fx(x.pnl, x.t); m.volume += x.volume; m.won += x.won; m.lost += x.lost; m.total += x.total; }
@@ -100,19 +102,18 @@
       { key: 'n', label: 'Predictions', num: true, render: (m) => String(m.total) },
       { key: 'w', label: 'Won / lost', num: true, render: (m) => `${m.won} / ${m.lost}` },
     ], rows: monthly, empty: 'No activity in this period' });
-    const exportDaily = () => download(fname('predict-daily-ledger'), toCsv([['Date (UTC)', (x) => isoDate(x.t)], ['Realized PnL USD', (x) => n6(x.pnl)], ...money.csvCol((x) => x.pnl, (x) => x.t, 'Realized PnL'), ['Cumulative PnL USD', (x) => n6(x.cumPnl)], ['Wagered USD', (x) => n6(x.volume)], ['Predictions', (x) => x.total], ['Won', (x) => x.won], ['Lost', (x) => x.lost], ['Void', (x) => x.nonDecisive], ['Deployed collateral USD', (x) => n6(x.deployed)], ['Claimable USD', (x) => n6(x.claimable)]], rows));
+    const exportDaily = () => download(fname('predict-daily-ledger'), toCsv([['Date (UTC)', (x) => isoDate(x.t)], ['Realized PnL USD', (x) => n6(x.pnl)], ...money.csvCol((x) => x.pnl, (x) => x.t, 'Realized PnL'), ['Cumulative PnL USD', (x) => n6(x.cumPnl)], ['Wagered USD', (x) => n6(x.volume)], ['Predictions placed', (x) => x.total], ['Settled won', (x) => x.won], ['Settled lost', (x) => x.lost], ['Settled void', (x) => x.nonDecisive]], rows));
     const exportBets = async () => {
-      let norms;
-      if (live) { const raw = await P.predictionsOf(addr, { maxPages: 24, filter: { settled: true } }); norms = raw.map(P.norm); if (raw.truncated) U.toast('More than 600 settled predictions; export truncated'); }
-      else norms = snapNorms;
-      norms = norms.filter((n) => n.predictor === addr && n.settled && n.settledAt && n.settledAt >= start && n.settledAt < end).sort((a, b) => b.settledAt - a.settledAt);
+      if (truncated) U.toast('Only the newest predictions could be read; the export may miss older ones');
+      const norms = snapNorms.filter((n) => n.settled && n.settledAt && n.settledAt >= start && n.settledAt < end).sort((a, b) => b.settledAt - a.settledAt);
       download(fname('predict-settled-bets'), toCsv([['Settled (UTC)', (n) => isoTime(n.settledAt)], ['Placed (UTC)', (n) => isoTime(n.t)], ['Picks', (n) => n.picks.map((k) => (k.yes ? 'YES: ' : 'NO: ') + k.q).join(' | ')], ['Legs', (n) => n.legs], ['Category', (n) => n.cat], ['Stake USD', (n) => n6(n.stake)], ['Maker collateral USD', (n) => n6(n.cp)], ['Locked odds', (n) => (n.odds == null ? '' : n6(n.odds))], ['Result', (n) => n.result], ['Realized PnL USD', (n) => n6(n.pnl)], ...money.csvCol((n) => n.pnl, (n) => n.settledAt, 'Realized PnL'), ['Market maker', (n) => n.counterparty], ['Prediction ID', (n) => n.id], ['Tx', (n) => n.tx || '']], norms));
     };
     U.replace(card,
-      h('div.row', { style: { marginBottom: '10px' } }, h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), h('span.dim.small', live ? 'from the exchange\'s daily account stats · USDe' : 'from the wallet\'s predictions in the published snapshot · USDe')),
+      h('div.row', { style: { marginBottom: '10px' } }, h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), h('span.dim.small', (live ? 'from the wallet\'s predictions (collateral now from the exchange\'s account stats)' : 'from the wallet\'s predictions in the published snapshot') + ' · USDe')),
+      truncated ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '10px' } }, `Only the newest ${U.fmtNum(snapNorms.length, 0)} predictions of this wallet could be read${live ? '' : ' from the snapshot'}; settlements of older ones are missing from the figures below.`) : null,
       tiles,
       h('div', { style: { margin: '14px 0' } }, h('div.card.tight', tbl)),
-      h('div.metric-list.no-print', exBtn('Predict daily ledger', 'One row per day: realized PnL, wagered, predictions won and lost, deployed and claimable collateral.', exportDaily), exBtn('Predict settled bets', 'Every prediction settled in the period with picks, stake, odds, result and PnL.', exportBets, true)),
+      h('div.metric-list.no-print', exBtn('Predict daily ledger', 'One row per day: realized PnL (on settlement), wagered, predictions placed, and those settled won, lost or void.', exportDaily), exBtn('Predict settled bets', 'Every prediction settled in the period with picks, stake, odds, result and PnL.', exportBets, true)),
       h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Predict PnL is booked here when a prediction is settled (claimed): a win pays the maker\'s collateral, a loss forfeits the stake. Predictions the exchange has already decided but nobody has claimed are shown separately; whether they count in the year they were decided or the year they are claimed depends on your rules.'));
     return { pnl: T.pnl, pnlC: T.pnlC, unclaimedPnl };
   }
@@ -504,7 +505,7 @@
           exBtn('CoinTracking CSV', 'Daily totals as Derivatives / Futures Profit, Loss and Fee rows plus deposits and withdrawals.', exportCoinTracking)));
 
       const info = h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'What counts on Meridian'),
-        h('div.roadmap',
+        h('div.note-grid',
           h('div.it', h('div.t', 'Realized PnL'), h('div.d', 'Booked whenever a position is reduced or closed, including liquidations and auto-deleveraging. The period totals use the exchange\'s settled daily figures, so they include partial closes of positions you still hold; the per-position tables list only positions fully closed in the period, each with its whole result (a position partly closed before the period shows here in full, and the difference line goes the other way), and the difference is shown as its own line.')),
           h('div.it', h('div.t', 'Gains, losses and holding periods'), h('div.d', 'Each perpetual position is its own lot: it is opened, possibly added to, and closed, with one net result. There is no cost-basis method to choose (FIFO, LIFO, average) because nothing is carried between positions. Holding period runs from the first fill to the last; a position held over a year is flagged long-term.')),
           h('div.it', h('div.t', 'Funding'), h('div.d', 'Paid or received every hour while a position is open. The daily ledger nets it per day; received and paid are split by the sign of each day\'s total.')),

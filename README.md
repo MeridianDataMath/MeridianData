@@ -139,7 +139,16 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     winner claims, which most do late or never (roughly 1,000 of 1,300 "unsettled" predictions are
     decided). Results, win rates, PnL and the ex-post vig therefore count from the verdict; the
     Overview shows *Unclaimed winnings* (won, not claimed) and bettor pages an *Unclaimed winnings*
-    tile. *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
+    tile. A result chip reads from the side of the page it is on (the maker's on a maker's page)
+    and says *unclaimed* only where that side has something to collect: a decided loss is simply
+    *lost*, whether or not the winner has claimed. Checked against the exchange: an account's
+    `statsHistory` books PnL at the verdict (its cumulative PnL equals the sum of every decided
+    prediction's result, claimed or not) while its won / lost counts move only at the claim, so a
+    bettor page takes the PnL as the exchange reports it and adds only the decided-but-unclaimed
+    predictions to the record. The page loads a wallet's newest 300 predictions (600 in a snapshot
+    file); beyond that (every market maker, heavy bettors) the record, win rate, ROI, open count and
+    unclaimed winnings come from the snapshot's aggregate for the wallet, which covers all of them.
+    *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
     not resolved although Polymarket has; those are listed first on the Ended tab. The tax center
     stays on a cash basis (claimed).
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral

@@ -38,12 +38,15 @@
       // narrow screens stack the filters under the table, so a toolbar above it carries the interval and a Filters toggle
       const lbEl = h('div.lb');
       const toolbar = h('div.row.lb-toolbar');
-      const renderToolbar = () => U.replace(toolbar, UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'), h('span.grow'), h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters'));
+      const intervalNote = 'PnL, ROI, Sharpe and drawdown follow the selected interval';
+      const renderToolbar = () => { const seg = UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'); seg.title = intervalNote; U.replace(toolbar, seg, h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters')); };
       const filtersCard = h('div.card.filters', filters);
-      U.replace(root, h('div.page', U.append(lbEl, [h('div.stack', h('div.row', summary, h('span.grow'), h('span.dim.small', 'PnL, ROI, Sharpe and drawdown follow the selected interval'), updateBtn), toolbar, progress, h('div.card.tight', tableWrap)), filtersCard])));
-      // narrow screens: the filters sit right under the toolbar that toggles them; wide screens: the side column
+      // one header row: what is shown, then (narrow screens) the interval and the filters toggle, then Update
+      const headRow = h('div.row.wrap', { style: { rowGap: '8px' } }, summary, h('span.grow'), toolbar, updateBtn);
+      U.replace(root, h('div.page', U.append(lbEl, [h('div.stack', headRow, progress, h('div.card.tight', tableWrap)), filtersCard])));
+      // narrow screens: the filters sit right under the header row that toggles them; wide screens: the side column
       const narrow = window.matchMedia('(max-width: 1500px)');
-      const placeFilters = () => { if (narrow.matches) toolbar.after(filtersCard); else lbEl.appendChild(filtersCard); };
+      const placeFilters = () => { if (narrow.matches) headRow.after(filtersCard); else lbEl.appendChild(filtersCard); };
       placeFilters(); narrow.addEventListener('change', placeFilters); window.addEventListener('resize', placeFilters); ctx.onCleanup(() => { narrow.removeEventListener('change', placeFilters); window.removeEventListener('resize', placeFilters); });
       ctx.onCleanup(U.on('favorites', () => renderTable()));
 
@@ -55,7 +58,7 @@
           h('div.row', h('h2', 'Filters'), h('span.grow'), h('button.btn.sm.ghost', { onclick: () => { state.q = ''; state.favOnly = false; state.style = ''; state.min = {}; state.max = {}; state.page = 1; renderFilters(); renderTable(); } }, 'Reset all')),
           h('div', { style: { marginTop: '10px' } }, h('input.input', { placeholder: 'Search by address', value: state.q, oninput: (e) => { state.q = e.target.value.trim().toLowerCase(); state.page = 1; renderTable(); } })),
           h('div', { style: { marginTop: '10px' } }, UI.seg([{ v: 'all', label: 'All' }, { v: 'fav', label: '★ Favorites' }], state.favOnly ? 'fav' : 'all', (v) => { state.favOnly = v === 'fav'; state.page = 1; renderTable(); })),
-          h('div.sec', h('h3', 'Interval'), UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderTable(); })),
+          h('div.sec', h('h3', 'Interval'), UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderToolbar(); renderTable(); }), h('div.dim.xs', { style: { marginTop: '6px' } }, intervalNote)),
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
             fld('Trading style', h('select.input.sm', { onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
           h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
@@ -97,7 +100,7 @@
             { key: 'volume', label: 'Volume', num: true, sortVal: 1, render: (r) => (s(r) ? U.fmtUsd(s(r).volume) : '—') },
             { key: 'roi', label: 'ROI', num: true, sortVal: 1, render: (r) => UI.pct(s(r) ? s(r).roi : null) },
             { key: 'positions', label: 'Positions', num: true, sortVal: 1, title: 'Total positions (open in brackets)', render: (r) => h('span', String(r.positionsCount), r.openCount ? h('span.dim.xs', ' (' + r.openCount + ')') : null) },
-            { key: 'winRate', label: 'Winrate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 1 })) },
+            { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 1 })) },
             { key: 'sharpe', label: 'Sharpe', num: true, sortVal: 1, render: (r) => { const v = s(r) ? s(r).sharpe : null; return v == null ? h('span.dim', '—') : h('span', { class: U.pnlClass(v) }, U.fmtNum(v, 2)); } },
             { key: 'ddPct', label: 'Max DD', num: true, sortVal: 1, render: (r) => { const v = s(r) ? s(r).ddPct : null; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
             { key: 'style', label: 'Trading style', sortVal: 1, render: (r) => (r.style === '—' ? h('span.dim', '—') : r.style) },

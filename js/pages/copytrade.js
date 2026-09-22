@@ -83,7 +83,7 @@
     const wfTbl = wf ? UI.table({ cols: [
       { key: 'k', label: 'Per position, on entry notional', render: (x) => h('span', { class: /^=/.test(x[0]) ? 'bold' : '' }, x[0]) },
       { key: 'v', label: 'bps', num: true, render: (x) => h('span', { class: 'num ' + (/^=|Leader/.test(x[0]) ? U.pnlClass(x[1]) : x[1] < 0 ? 'neg' : '') }, (x[1] > 0 ? '+' : '') + U.fmtNum(x[1], 1)) },
-      { key: 'n', label: '', render: (x) => h('span.dim.small', x[2]) },
+      { key: 'n', label: '', render: (x) => h('div.dim.small', { style: { whiteSpace: 'normal', minWidth: '260px', lineHeight: '1.35' } }, x[2]) },   // the explanations wrap rather than scroll the table sideways
     ], rows: wf }) : h('div.empty', 'The frictions are measured from the leader\'s fills against one-minute oracle candles and today\'s books; this account has too few fills for that yet.');
     const holdTotal = c.closed || 1;
     const holdBar = h('div.hold-bar', [['scalp', 'under 1h'], ['intra', '1h – 1d'], ['swing', '1 – 7d'], ['long', 'over 7d']].map(([k, label]) => { const n = c.hold[k]; return n ? h('span', { class: k, style: { flex: String(n) }, title: `${n} positions held ${label}` }, n / holdTotal > 0.12 ? U.fmtPct((n / holdTotal) * 100, { dp: 0 }) : '') : null; }));
@@ -168,9 +168,10 @@
               { key: 'closed', label: 'Closed', num: true, sortVal: 1, title: 'Closed positions · last trade', render: (x) => h('div', { style: { lineHeight: '1.25' } }, String(val(x, 'closed') || 0), x.c && x.c.lastAt ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, U.fmtAgo(x.c.lastAt)) : null) },
               { key: 'hold', label: 'Median hold', num: true, sortVal: 1, render: (x) => (x.c && x.c.holdMed != null ? U.fmtDuration(x.c.holdMed) : h('span.dim', '—')) },
               { key: 'size', label: 'Typical size', num: true, sortVal: 1, title: 'Median entry notional per position', render: (x) => (x.c && x.c.notMed ? usd0(x.c.notMed) : h('span.dim', '—')) },
-              { key: 'mk', label: 'Markets', render: (x) => (x.c && x.c.markets.length ? h('div.row.wrap', { style: { gap: '4px' } }, x.c.markets.slice(0, 2).map((m) => UI.chip(m.t, '')), x.c.nMarkets > 2 ? h('span.dim.xs', '+' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
+              // one line: the two main markets by share, the rest counted (chips stacked made every row three lines tall)
+              { key: 'mk', label: 'Markets', render: (x) => (x.c && x.c.markets.length ? h('span', { title: x.c.markets.map((m) => `${m.t} ${U.fmtPct(m.share, { dp: 0 })}`).join(' · ') }, x.c.markets.slice(0, 2).map((m) => m.t.replace(/-USD$/, '')).join(' · '), x.c.nMarkets > 2 ? h('span.dim', ' +' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
-              { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation() }, 'Scout')) },
+              { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],
             rows, empty: state.filter === 'copyable' ? 'No wallet scores 70 or more yet' : state.filter === 'scored' ? 'No wallet has 5 closed positions yet' : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },

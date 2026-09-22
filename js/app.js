@@ -17,7 +17,7 @@
     ] },
     { title: 'Predict', items: [
       { name: 'predict', path: '/predict', icon: 'target', label: 'Overview' },
-      { name: 'predict', path: '/predict/bettors', icon: 'trophy', label: 'Bettors', prefix: '/predict/bettor' },
+      { name: 'predict', path: '/predict/bettors', icon: 'ticket', label: 'Bettors', prefix: '/predict/bettor' },
       { name: 'predict', path: '/predict/questions', icon: 'help', label: 'Questions' },
       { name: 'predict', path: '/predict/makers', icon: 'layers', label: 'Market makers' },
       { name: 'predict', path: '/predict/vig', icon: 'scale', label: 'Vig & edge' },
@@ -71,7 +71,12 @@
   MD.openDefinitions = () => MD.ui.modal({ title: 'How the numbers are calculated', body: h('div', h('div.kv', MD.DEFINITIONS.flatMap(([k, v]) => [h('div.k', k), h('div', { style: { color: 'var(--text-2)' } }, v)])), h('p.muted.small', { style: { margin: '14px 0 0' } }, 'All figures come from Meridian\'s public API and archive; nothing is estimated. Amounts are USD-equivalent (USDe-settled). Times are shown in your local time zone, except the Tax center, which uses UTC.')) });
   MD.defsLink = () => h('a.defs.small', { href: '#', onclick: (e) => { e.preventDefault(); MD.openDefinitions(); } }, U.icon('help'), 'How are these calculated?');
 
-  MD.router.pages.notfound = { async mount(root) { U.replace(root, h('div.page', h('div.card', h('div.empty', 'Page not found. ', h('a', { href: '#/' }, 'Go home'))))); } };
+  MD.router.pages.notfound = { async mount(root) {
+    MD.setTopbar(h('span.title', 'Page not found')); document.title = 'Page not found · MeridianDataHub';
+    const go = (href, icon, label) => h('a.btn.sm', { href }, U.icon(icon), label);
+    U.replace(root, h('div.page', h('div.card', h('div.empty', h('div', { style: { fontSize: '15px', color: 'var(--text-1)', marginBottom: '6px' } }, 'There is no page at this address.'), h('div', { style: { marginBottom: '14px' } }, 'The link may be mistyped or from an older version of the site.'),
+      h('div.row.wrap', { style: { justifyContent: 'center', gap: '6px' } }, go('#/', 'home', 'Home'), go('#/dashboard', 'grid', 'Dashboard'), go('#/leaderboard', 'trophy', 'Leaderboard'), go('#/copytrade', 'users', 'Copy trading'), go('#/predict', 'target', 'Predict'))))));
+  } };
 
   // Account / Tax center reopen the last viewed account; before any has been viewed in this browser they open the
   // pages' own "pick an account" screens (a bare "#/" made the buttons look dead on a fresh domain).
@@ -97,12 +102,15 @@
       h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
       SECTIONS.map((s) => [s.rule ? h('div.rule') : h('div.sec', s.title), s.items.map(navLink), s.rule ? h('div.rule') : null]),
       h('span.spacer'),
+      navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),
       h('div.sec', 'Meridian'),
       ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian'),
       ext('https://docs.meridian.xyz', U.icon('book'), 'Docs'),
       ext(X_URL, U.icon('x'), 'Meridian on X'),
       h('button.toggle', { type: 'button', onclick: () => { const c = !U.$('.app').classList.contains('rail-collapsed'); U.storage.set(RAIL_KEY, c); applyRail(c); } }));
     applyRail(railCollapsed());
+    // collapsed rail: the hover label sits just right of the row it names (fixed, so the rail's overflow cannot clip it)
+    if (!rail.__tips) { rail.__tips = true; rail.addEventListener('mouseover', (e) => { const row = e.target.closest('a.nav, .toggle'); const tip = row && row.querySelector('.tip'); if (!tip) return; const r = row.getBoundingClientRect(); tip.style.top = (r.top + r.height / 2) + 'px'; tip.style.left = (r.right + 10) + 'px'; }); }
   }
 
   function onRoute(route) {

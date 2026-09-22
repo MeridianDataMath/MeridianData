@@ -108,6 +108,8 @@
     wrench: I('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
     check: I('<path d="M20 6 9 17l-5-5"/>'),
     target: I('<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>'),
+    ticket: I('<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>'),
+    pulse: I('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>'),
     help: I('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>'),
     info: I('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>'),
     gavel: I('<path d="m14 13-7.5 7.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L11 10"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/>'),
@@ -139,10 +141,10 @@
       if (a >= 1e9) return s + '$' + fmtN(a / 1e9, 2) + 'B';
       if (a >= 1e6) return s + '$' + fmtN(a / 1e6, 2) + 'M';
       if (a >= 1e4) return s + '$' + fmtN(a / 1e3, 1) + 'K';
-      return s + '$' + fmtN(a, opts.dp ?? 2);
+      return s + '$' + fmtN(a, opts.dp ?? (a >= 1000 ? 0 : 2));   // a compact column reads "$9,160" beside "$10.2K", not "$9,159.76"
     }
     const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
-    if (n !== 0 && Math.abs(n) < 0.01 && opts.dp == null) return s + '<$0.01';   // dust: "+$0.000716" helps nobody
+    if (n !== 0 && Math.abs(n) < 0.01 && opts.dp == null) return '<$0.01';   // dust: "+$0.000716" helps nobody, and "+<$0.01" reads oddly; the colour still says which way
     return s + '$' + fmtN(Math.abs(n), opts.dp ?? 2);   // one format per column: "-$0.07" next to "$37.94", not "-$0.0738"
   };
   /** Price formatting with sensible decimals for the magnitude (or tickSize decimals if given) */
@@ -190,6 +192,8 @@
   /** Feed timestamps: clock time today, "Sep 17 21:06" for anything older, so a tape that spans days stays readable. */
   U.fmtFeedTime = (ms) => { const d = new Date(U.num(ms)); const now = new Date(); return d.toDateString() === now.toDateString() ? U.fmtTime(ms) : `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   U.fmtDateTime = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  /** "Sep 22, 23:00" within the current year, "Sep 22, 2025 23:00" otherwise: for schedules where the year is noise */
+  U.fmtWhen = (ms) => { const d = new Date(U.num(ms)); return d.getFullYear() === new Date().getFullYear() ? `${MON[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : U.fmtDateTime(ms); };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   U.fmtAgo = (ms) => {
     const s = Math.max(0, (Date.now() - U.num(ms)) / 1000);

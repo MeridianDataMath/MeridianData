@@ -10,7 +10,7 @@
       const foot = h('div.foot');
       const hero = h('div.hero',
         h('h1', 'Explore ', h('span', 'Meridian'), ' account performance'),
-        h('div.sub', 'Public perps analytics for every account on Meridian · Robinhood Chain'),
+        h('div.sub', 'Public perps and Predict analytics, copy trading and tax records for every account on Meridian · Robinhood Chain'),
         form, err,
         h('div.quick',
           h('a.chipbtn', { href: '#/dashboard' }, U.icon('grid'), ' Markets dashboard'),
@@ -40,7 +40,8 @@
           const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: 'Open account' },
             h('span.rank', { class: i < 3 ? 'top' : '', style: { width: 'auto' } }, '#' + (i + 1)),
             h('span.addr', U.shortAddr(r.account)), U.pnlEl(r.stats.all.pnl),
-            r.stats.all.roi != null ? h('span.tag', U.fmtPct(r.stats.all.roi, { sign: true, dp: 0 }) + ' ROI') : null,
+            // a big account's small percentage reads "+0.3%", not "+0%"
+            r.stats.all.roi != null ? h('span.tag', U.fmtPct(r.stats.all.roi, { sign: true, dp: Math.abs(r.stats.all.roi) < 10 ? 1 : 0 }) + ' ROI') : null,
             h('span.tag', r.style !== '—' ? r.style : 'all-time'));
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           items.forEach((r, i) => track.appendChild(mk(r, i)));
@@ -64,7 +65,7 @@
           h('span', 'Open interest ', h('b', U.fmtUsd(oi, { compact: true }))),
           subs ? h('span', 'Accounts ', h('b', String(subs.length))) : null,
           h('span', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz')),
-          h('span', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data ', h('b', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—'))));
+          h('span', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data updated ', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—')));
       } catch (e) { if (e.name !== 'AbortError') U.replace(foot, h('span.dim', 'Exchange stats unavailable')); }
     },
   };
