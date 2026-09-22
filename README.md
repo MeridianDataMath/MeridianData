@@ -48,6 +48,16 @@ assembles `dist/` and deploys it:
 The Predict snapshot is produced on a PC (see the Predict section below) whichever host is used.
 `_headers` sets cache and security headers on Cloudflare Pages and is ignored elsewhere.
 
+**Tests.** `node --test "tests/*.test.mjs"` (Node 22+, no dependencies, no network, well under a
+second) runs before anything else in the workflow; a failure stops the job, so nothing is
+deployed. They load the site's own scripts the way the snapshot builder does and cover the money
+math: the Predict secondary-market ledger with the cases checked against the exchange
+(`predict-ledger`), prediction semantics, result chips and a bettor page's headline figures
+(`predict-analytics`), the copy simulator's and paper copy's sizing, cap and reductions
+(`copy-engines`), the copy agent's decisions (`agent`: the lines between `@pure-begin` and
+`@pure-end` in `agent/copy-agent.mjs`, loaded on their own since the agent needs ethers and a
+key), account analytics and the copyability caps (`analytics`), formatting and routing (`util`).
+
 The perps build has a time budget (`--budget` seconds, 9 minutes by default: an account takes
 about two seconds, an active one with fills and candles more, and the job has 15 minutes in all);
 accounts not reached are left out and the snapshot is marked partial (`skipped`) rather than the

@@ -35,6 +35,11 @@ jobs:
         with:
           node-version: '24'
 
+      # the money math (Predict ledger and figures, copy sizing, the agent's decisions, analytics, formatting): no network,
+      # under a second; a failure stops the job here, so nothing is deployed
+      - name: Tests
+        run: node --test "tests/*.test.mjs"
+
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
         continue-on-error: true   # an API hiccup must not take the site down; visitors fall back to a browser build

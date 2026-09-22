@@ -17,13 +17,7 @@
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
   /** A prediction's result from one side (the bettor's unless asMaker). "Unclaimed" is shown only where that side has
    *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
-  const resultChip = (n, asMaker, held = 1) => {   // held: the share of its tokens this side still holds (sold on the secondary market otherwise)
-    if (!n.decided) return UI.chip('open', 'accent');
-    const won = asMaker ? n.lost : n.won; const mineToClaim = n.unclaimed && held > 1e-6;
-    if (n.nd) return UI.chip(mineToClaim ? 'void · refund unclaimed' : 'void', 'amber');
-    if (won) return UI.chip(mineToClaim ? 'won · unclaimed' : 'won', 'green');
-    return h('span.chip.red', { title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : '' }, 'lost');
-  };
+  const resultChip = (n, asMaker, held = 1) => { const r = P.resultFor(n, asMaker, held); return h('span.chip', { class: r.tone, title: r.title || '' }, r.label); };
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same Polymarket event: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
   const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
@@ -666,16 +660,7 @@
     if (agg) {
       F = { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: agg.unclaimedWon, unclaimedPayout: agg.unclaimedPayout, roi: agg.roi, roiNote: 'on decided stakes · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true };
     } else {
-      const s = P.bettorSummary(mine).stats || {};
-      const unclaimed = mine.filter((n) => n.unclaimed);
-      const uWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
-      const uPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
-      // live, the exchange's PnL already follows the tokens (checked for every wallet that traded); the snapshot's
-      // per-prediction history does not, so the ledger's adjustment is added there
-      F = { pnl: m.live ? totals.pnl : totals.pnl + uPnl + L.adj, pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''),
-        won: totals.won + uWon.length, lost: totals.lost + unclaimed.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd, open: Math.max(0, totals.pending - unclaimed.length),
-        // a won prediction whose tokens were sold pays the buyer, not this wallet
-        unclaimedWon: uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: U.sum(uWon, (n) => n.pool * heldOf(n)), roi: s.roi, roiNote: 'on decided stakes', avgOdds: s.avgOdds, avgLegs: s.avgLegs, fromSnap: false };
+      F = Object.assign(P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L }), { pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''), roiNote: 'on decided stakes', fromSnap: false });
     }
     const tiles = h('div.stats',
       UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),

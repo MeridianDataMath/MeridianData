@@ -38,8 +38,50 @@ const opt = (name, def) => { const i = args.indexOf('--' + name); return i >= 0 
 const API = 'https://api.meridian.xyz';
 const WS_URL = 'wss://ws.meridian.xyz/v1/stream';
 const SITE = 'https://meridian.thedatahub.xyz';
-const num = (x) => { const n = typeof x === 'number' ? x : parseFloat(String(x)); return Number.isFinite(n) ? n : 0; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------- the copy decisions (pure)
+// No I/O and nothing from the rest of this file: tests/agent.test.mjs loads exactly the lines between the markers and
+// checks them, so the arithmetic the agent trades on is covered without the exchange, a key or ethers.
+// @pure-begin
+const num = (x) => { const n = typeof x === 'number' ? x : parseFloat(String(x)); return Number.isFinite(n) ? n : 0; };
+const dec = (s) => { const m = String(s).split('.'); return m[1] ? m[1].replace(/0+$/, '').length : 0; };
+/** down to a multiple of the market's lot size (never more than asked) */
+const roundDown = (x, step) => { const d = dec(step); const st = num(step) || Math.pow(10, -d); return Number((Math.floor(x / st + 1e-9) * st).toFixed(d)); };
+/** to the market's tick, up or down (a buy's limit rounds up, a sell's down: the cap is never tighter than asked) */
+const roundTick = (x, tick, up) => { const d = dec(tick); const st = num(tick) || 1; return Number(((up ? Math.ceil : Math.floor)(x / st) * st).toFixed(d)); };
+/** open / add / reduce / close / reverse, from the leader's position before and after its order */
+const classify = (prev, next) => (!prev ? 'open' : !next ? 'close' : Math.sign(next) !== Math.sign(prev) ? 'reverse' : Math.abs(next) > Math.abs(prev) ? 'add' : 'reduce');
+/**
+ * The quantity for an opening, an add or a reversal's new leg. ratio: that share of the leader's quantity; perfill: `size`
+ * USD per fill; fixed: the leader's whole opening order (orderQty, not its first piece) becomes `size` USD, and an add of
+ * a position we follow scales with what we hold less what earlier reductions still owe. Returns {q, k}: k is the copy
+ * ratio fixed at a fixed-size opening (null otherwise).
+ */
+const sizeOrder = (sizing, { kind, leaderDelta, px, followed, ownNow, prev, orderQty, owed = 0 }) => {
+  if (sizing.mode === 'ratio') return { q: leaderDelta * (num(sizing.ratio) / 100), k: null };
+  if (sizing.mode === 'perfill') return { q: num(sizing.size) / px, k: null };
+  if (kind === 'add' && followed && ownNow && prev) return { q: leaderDelta * Math.max(0, Math.abs(ownNow) - owed) / Math.abs(prev), k: null };
+  const oq = orderQty && orderQty > leaderDelta ? orderQty : leaderDelta; const k = num(sizing.size) / (oq * px);
+  return { q: leaderDelta * k, k };
+};
+/** USD that may still be added in a market under the per-market cap, the market's own cap and the leverage limit */
+const roomLeft = ({ curNotional = 0, maxPerMarket = 0, marketCap = 0, maxLeverage = 0, equity = 0, totalNotional = 0 }) => {
+  let room = Infinity;
+  if (maxPerMarket) room = Math.min(room, maxPerMarket - curNotional);
+  if (marketCap) room = Math.min(room, marketCap - curNotional);
+  if (maxLeverage && equity > 0) room = Math.min(room, maxLeverage * equity - totalNotional);
+  return room;
+};
+/** An order the size limits would overshoot is cut to the room left, or skipped when that is below the smallest order */
+const fitToRoom = (q, px, room, minUsd) => (q * px <= room ? { q, cut: false, skip: false } : room < minUsd ? { q: 0, cut: false, skip: true } : { q: room / px, cut: true, skip: false });
+/** A reduction: `share` of what should be held (what is held less what is owed), plus what earlier reductions still owe */
+const reduceQty = (held, share, owed = 0) => { const a = Math.abs(held); const o = Math.min(owed, a); return Math.min(a, (a - o) * share + o); };
+/** In the fixed modes a per-market cap left at 0 becomes five times the size: proportional adds would otherwise make a
+ *  position any multiple of it. null: keep the config's. */
+const MAX_SCALE = 5;
+const defaultCap = (sizing, risk) => (sizing.mode !== 'ratio' && !(num(risk.maxNotionalPerMarket) > 0) ? MAX_SCALE * num(sizing.size) : null);
+// @pure-end
 const FINAL = new Set(['FILLED', 'CANCELED', 'REJECTED', 'EXPIRED']);
 
 // ---------------------------------------------------------------- files
@@ -106,8 +148,8 @@ async function run() {
   const sizing = Object.assign({ mode: 'fixed', size: 200, ratio: 10 }, cfg.sizing || {});
   // a fixed-size copy follows the leader's adds in proportion, so a leader who opens small and scales in would make a
   // position any multiple of `size`; without a per-market cap of your own, five times the size is the most one gets
-  const MAX_SCALE = 5; let capDerived = false;
-  if (sizing.mode !== 'ratio' && !(num(risk.maxNotionalPerMarket) > 0)) { risk.maxNotionalPerMarket = MAX_SCALE * num(sizing.size); capDerived = true; }
+  const derivedCap = defaultCap(sizing, risk); const capDerived = derivedCap != null;
+  if (capDerived) risk.maxNotionalPerMarket = derivedCap;
   const offset = await syncClock();
   const rpc = await api('/v1/rpc/config');
   const products = (await api('/v1/product?limit=200')).data || [];
@@ -165,9 +207,6 @@ async function run() {
   const settle = async (pid, before) => { for (let i = 0; i < 4; i++) { await sleep(i ? 700 : 300); await refreshOwn().catch(() => {}); const now = S.own[pid] ? S.own[pid].size : 0; if (Math.abs(now - before) > 1e-12 || i === 3) return now; } return S.own[pid] ? S.own[pid].size : 0; };
 
   // ---- orders
-  const dec = (s) => { const m = String(s).split('.'); return m[1] ? m[1].replace(/0+$/, '').length : 0; };
-  const roundDown = (x, step) => { const d = dec(step); const st = num(step) || Math.pow(10, -d); return Number((Math.floor(x / st + 1e-9) * st).toFixed(d)); };
-  const roundTick = (x, tick, up) => { const d = dec(tick); const st = num(tick) || 1; return Number(((up ? Math.ceil : Math.floor)(x / st) * st).toFixed(d)); };
   /** Sign, submit and read back one order. side 0 buy / 1 sell. close: quantity 0 + reduceOnly closes the whole position. */
   async function place({ prod, side, qty, reduceOnly = false, close = false, why, leader, leaderSid, leaderPx, leaderT, kind, resync = false }) {
     const mark = S.mark[prod.id] || 0;
@@ -226,7 +265,7 @@ async function run() {
   async function closeAll(why) { for (const [pid, o] of Object.entries(S.own)) { const prod = byId[pid]; if (prod && o.size) { delete S.carry[pid]; await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why }); } } }
   const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; delete S.carry[pid]; const r = await place(Object.assign({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }, ctxL || {}, { kind: 'close' })); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
   /** A reduction of `share` of what is held, plus whatever earlier reductions of that market still owe (see place). */
-  const reduceBy = async (pid, share, args) => { const o = S.own[pid]; if (!o || !o.size) return null; const owed = Math.min(S.carry[pid] || 0, Math.abs(o.size)); delete S.carry[pid]; const qty = Math.min(Math.abs(o.size), (Math.abs(o.size) - owed) * share + owed); return place(Object.assign({ prod: byId[pid], side: o.size > 0 ? 1 : 0, qty, reduceOnly: true }, args, owed ? { why: args.why + ` + ${owed} carried` } : {})); };   // the share applies to what should be held, i.e. without what is still owed
+  const reduceBy = async (pid, share, args) => { const o = S.own[pid]; if (!o || !o.size) return null; const owed = Math.min(S.carry[pid] || 0, Math.abs(o.size)); delete S.carry[pid]; const qty = reduceQty(o.size, share, owed); return place(Object.assign({ prod: byId[pid], side: o.size > 0 ? 1 : 0, qty, reduceOnly: true }, args, owed ? { why: args.why + ` + ${owed} carried` } : {})); };   // the share applies to what should be held, i.e. without what is still owed
 
   /** May a new or larger position be taken? The reason, in words, when not. */
   const allowed = (prod, addNotional, leaderSid) => {
@@ -248,11 +287,8 @@ async function run() {
   /** How much notional may still be added in a market under the per-market cap, the market's own cap and the leverage
    *  limit: an order that would overshoot is cut to this rather than dropped, so the copy stays as close as the limits allow. */
   const roomFor = (prod) => {
-    const cur = S.own[prod.id]; const curNotional = cur ? cur.notional : 0; let room = Infinity;
-    if (risk.maxNotionalPerMarket) room = Math.min(room, risk.maxNotionalPerMarket - curNotional);
-    if (num(prod.maxPositionNotionalUsd)) room = Math.min(room, num(prod.maxPositionNotionalUsd) - curNotional);
-    if (risk.maxLeverage && S.equity > 0) room = Math.min(room, risk.maxLeverage * S.equity - S.notional);
-    return room;
+    const cur = S.own[prod.id];
+    return roomLeft({ curNotional: cur ? cur.notional : 0, maxPerMarket: num(risk.maxNotionalPerMarket), marketCap: num(prod.maxPositionNotionalUsd), maxLeverage: num(risk.maxLeverage), equity: S.equity, totalNotional: S.notional });
   };
 
   // ---- leaders: positions seeded from the exchange, resynced on every hint and every five minutes
@@ -300,7 +336,7 @@ async function run() {
     const next = prev + g.q; lp[prod.id] = Math.abs(next) < 1e-12 ? 0 : next;
     const book = S.books[l.sid] || (S.books[l.sid] = {}); const px = g.notional / Math.abs(g.q);
     const own = S.own[prod.id]; const ownQty = own ? own.size : 0; const followed = S.marketOwner[prod.id] === l.sid;
-    const kind = !prev ? 'open' : !lp[prod.id] ? 'close' : Math.sign(next) !== Math.sign(prev) ? 'reverse' : Math.abs(next) > Math.abs(prev) ? 'add' : 'reduce';
+    const kind = classify(prev, lp[prod.id]);
     const name = who(l);
     note('leader', `${name} ${kind} ${prod.displayTicker} ${g.q > 0 ? '+' : ''}${g.q} @ ${px}`);
     const ctxL = { leaderSid: l.sid, leaderPx: px, leaderT: g.t || Date.now(), kind };
@@ -317,23 +353,16 @@ async function run() {
     const ownNow = S.own[prod.id] ? S.own[prod.id].size : 0;
     // open, add, or the new leg of a reversal
     const leaderDelta = kind === 'reverse' ? Math.abs(next) : Math.abs(g.q);
-    let q;
-    if (sizing.mode === 'ratio') q = leaderDelta * (num(sizing.ratio) / 100);
-    else if (sizing.mode === 'perfill') q = num(sizing.size) / px;
-    else if (kind === 'add' && followed && ownNow && prev) q = leaderDelta * Math.max(0, Math.abs(ownNow) - (S.carry[prod.id] || 0)) / Math.abs(prev);   // in proportion to what we actually hold, less a reduction still owed
-    else { const orderQty = g.orderQty && g.orderQty > leaderDelta ? g.orderQty : leaderDelta; const k = num(sizing.size) / (orderQty * px); book[prod.id] = { k, openedAt: Date.now() }; q = leaderDelta * k; }
+    const sz = sizeOrder(sizing, { kind, leaderDelta, px, followed, ownNow, prev, orderQty: g.orderQty, owed: S.carry[prod.id] || 0 });
+    let q = sz.q; if (sz.k != null) book[prod.id] = { k: sz.k, openedAt: Date.now() };
     if (kind === 'add' && !followed && ownNow) { note('skip', `${prod.displayTicker} add: we hold a position here that is not a copy of ${name}`); return; }
     const side = next > 0 ? 0 : 1;
     // the size limits cut the order to what they allow (a leader scaling in beyond the cap is followed up to it);
     // everything else (paused, stopped, stale data, denied market, another leader's market, no equity) skips it
     const room = roomFor(prod); let why = `${name} ${kind}`;
-    if (q * px > room) {
-      const mkt = S.own[prod.id] ? S.own[prod.id].notional : 0;
-      const minUsd = Math.max(num(prod.minQuantity) * px, risk.minOrderUsd || 0);
-      if (room < minUsd) { note('skip', `${prod.displayTicker} ${kind}: ${allowed(prod, q * px, l.sid) || 'at the size limit'} (${mkt.toFixed(0)} USD held)`, { leader: name }); return; }
-      note('leader', `${prod.displayTicker} ${kind}: ${(q * px).toFixed(0)} USD cut to ${room.toFixed(0)} USD by the size limits`, { leader: name });
-      q = room / px; why += ' (cut to the size limit)';
-    }
+    const fit = fitToRoom(q, px, room, Math.max(num(prod.minQuantity) * px, risk.minOrderUsd || 0));
+    if (fit.skip) { const mkt = S.own[prod.id] ? S.own[prod.id].notional : 0; note('skip', `${prod.displayTicker} ${kind}: ${allowed(prod, q * px, l.sid) || 'at the size limit'} (${mkt.toFixed(0)} USD held)`, { leader: name }); return; }
+    if (fit.cut) { note('leader', `${prod.displayTicker} ${kind}: ${(q * px).toFixed(0)} USD cut to ${room.toFixed(0)} USD by the size limits`, { leader: name }); q = fit.q; why += ' (cut to the size limit)'; }
     const no = allowed(prod, q * px, l.sid);
     if (no) { note('skip', `${prod.displayTicker} ${kind}: ${no}`, { leader: name }); return; }
     const r = await place(Object.assign({ prod, side, qty: q, why, leader: name }, ctxL, { kind: kind === 'reverse' ? 'open' : kind }));

@@ -71,6 +71,41 @@
   const dayKey = (ms) => Math.floor(ms / DAY) * DAY;
   const weekKey = (ms) => Math.floor((ms - 4 * DAY) / (7 * DAY)) * 7 * DAY + 4 * DAY;   // Monday 00:00 UTC
 
+  /** A prediction's result from one side (the bettor's unless asMaker): {label, tone, title}. "Unclaimed" is shown only
+   *  where that side has something to collect (its win, or a void's refund) and still holds the tokens (held: the share
+   *  not sold on the secondary market): a loss is simply lost, whether or not the winner has claimed. */
+  P.resultFor = (n, asMaker, held = 1) => {
+    if (!n.decided) return { label: 'open', tone: 'accent' };
+    const won = asMaker ? n.lost : n.won; const mineToClaim = n.unclaimed && held > 1e-6;
+    if (n.nd) return { label: mineToClaim ? 'void · refund unclaimed' : 'void', tone: 'amber' };
+    if (won) return { label: mineToClaim ? 'won · unclaimed' : 'won', tone: 'green' };
+    return { label: 'lost', tone: 'red', title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : null };
+  };
+
+  /**
+   * A wallet's headline figures from its own loaded predictions (all of them: the page uses the snapshot aggregate when
+   * they are not) and its history: exchange stats when live (P.account), else rebuilt from claims (P.historyFromPredictions).
+   * Checked against the exchange: its history books PnL at the verdict (claimed or not) and already follows secondary-
+   * market trades, while its won / lost counts move only at the claim. So live the PnL is the exchange's as it stands; the
+   * claim-based fallback adds the decided-but-unclaimed results and the ledger's adjustment. Either way the record adds the
+   * unclaimed predictions, and a won prediction whose tokens were sold is not this wallet's to claim.
+   */
+  P.bettorFigures = function ({ mine, hist, isMaker, live, ledger }) {
+    const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
+    const heldOf = (n) => { const bp = ledger && ledger.byPrediction[n.id]; return bp ? bp.held : 1; };
+    const s = P.bettorSummary(mine).stats || {};
+    const unclaimed = mine.filter((n) => n.unclaimed);
+    const uWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
+    const uPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
+    return {
+      pnl: live ? totals.pnl : totals.pnl + uPnl + (ledger ? ledger.adj : 0),
+      won: totals.won + uWon.length, lost: totals.lost + unclaimed.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
+      open: Math.max(0, totals.pending - unclaimed.length),
+      unclaimedWon: uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: U.sum(uWon, (n) => n.pool * heldOf(n)),
+      roi: s.roi, avgOdds: s.avgOdds, avgLegs: s.avgLegs,
+    };
+  };
+
   /** When a prediction was decided: the API keeps no decision time, so its last question's end (or the bet itself). */
   P.decidedAt = (n) => Math.max(U.num(n.t), ...(n.picks || []).map((k) => U.num(k.endTime) || 0));
 
