@@ -47,7 +47,7 @@
   };
 
   // a value longer than a tile is wide ("$1,000,060.00") shrinks a step instead of being cut with an ellipsis
-  UI.stat = (k, v, sub, cls) => h('div.stat', h('div.k', k), h('div.v', { class: (cls || '') + (String(typeof v === 'string' ? v : (v && v.textContent) || '').length > 12 ? ' long' : '') }, v), sub ? h('div.sub', sub) : null);
+  UI.stat = (k, v, sub, cls) => { const len = String(typeof v === 'string' ? v : (v && v.textContent) || '').length; return h('div.stat', h('div.k', k), h('div.v', { class: (cls || '') + (len > 14 ? ' xlong' : len > 12 ? ' long' : ''), title: len > 12 ? String(typeof v === 'string' ? v : v.textContent) : null }, v), sub ? h('div.sub', sub) : null); };
   UI.metric = (k, v, s, cls) => h('div.metric', h('div.k', k), h('div.v', { class: cls || '' }, v), s ? h('div.s', s) : null);
   UI.card = (title, body, extra) => h('div.card.tight', h('div.card-head', h('h2', title), extra || null), body);
   UI.loading = (text) => h('div.empty', h('span.loading', h('span.spinner'), text || 'Loading…'));

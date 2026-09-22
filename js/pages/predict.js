@@ -715,7 +715,8 @@
     U.replace(el, h('div.stack',
       h('div.row.wrap', isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
-      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', cPnl)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily volume'), h('div.chart-box.sm', cVol))),
+      // offline, the curves are rebuilt from the loaded predictions (PnL booked when claimed): say so when those are not all of them
+      h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions · booked when claimed`) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),
       UI.card('Open positions', openWrap, h('span.dim.small', posRows.length < F.open ? `newest ${posRows.length} of ${U.fmtNum(F.open, 0)}` : String(posRows.length))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
