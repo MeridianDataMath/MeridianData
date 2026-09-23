@@ -123,6 +123,17 @@ test('re-dated fixtures and Polymarket\'s own "postponed" read as postponed, wit
   assert.equal(R.state({ end: Date.parse('2026-09-24T04:30:00Z') }, rsl, now).code, 'trading');
 });
 
+test('Polymarket\'s feed codes: POST = postponed, CAN = cancelled (resolves 50-50, a loss for the bettor on Meridian)', async () => {
+  assert.equal(R.feedStatus('POST'), 'postponed'); assert.equal(R.feedStatus('CAN'), 'cancelled'); assert.equal(R.feedStatus('Canceled'), 'cancelled');
+  assert.equal(R.feedStatus('NS'), null); assert.equal(R.feedStatus('VFT'), null); assert.equal(R.feedStatus('3/3'), null);
+  // WTA Monterrey, Aug 26: the match was never played; before Polymarket resolved it 50-50 the question read "cancelled"
+  const id = '0xwta';
+  market(id, { question: 'Monterrey Open: Nikola Bartunkova vs Anastasia Potapova', outcomes: '["Nikola Bartunkova", "Anastasia Potapova"]', sportsMarketType: 'moneyline', gameStartTime: '2026-08-26 03:30:00+00', slug: 'wta-bartunk-potapov-2026-08-26', events: [{ slug: 'wta-bartunk-potapov-2026-08-26', period: 'CAN', score: '0-0' }] });
+  await R.load([id], { deep: false });
+  const s = R.state({ end: Date.parse('2026-09-10T03:59:00Z') }, id, Date.parse('2026-08-26T12:00:00Z'));
+  assert.equal(s.code, 'postponed'); assert.equal(s.chip[0], 'cancelled'); assert.match(s.sub, /50-50, which Meridian settles as a loss for the bettor/);
+});
+
 test('the played check: median odds before vs after the start', () => {
   const g = Date.parse('2026-09-20T05:00:00Z');
   assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.375, [0.38, 0.605, 0.9995, 0.9955, 0.9955]), g).moved, true, 'went to 99 %');

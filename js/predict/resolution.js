@@ -80,7 +80,8 @@
   R.oddsText = (m) => (m && m.prices.length ? m.outcomes.map((o, i) => o + ' ' + (Number.isFinite(m.prices[i]) ? pct(m.prices[i]) : '—')).join(' · ') : '');
   /** What Polymarket's game feed says in the event's `period`: 'postponed', 'cancelled' or null (NS, a live period, or
    *  nothing: the feeds of some leagues, NPB and CPBL among them, stay on NS whatever happens). */
-  R.feedStatus = (period) => { const p = String(period || '').toLowerCase(); return /^(post|ppd)/.test(p) ? 'postponed' : /^(canc|abd|aband)/.test(p) ? 'cancelled' : null; };
+  // seen: "POST" (La Liga Levante–Athletic, re-dated), "CAN" (WTA Monterrey Bartunkova–Potapova, never played: 50-50)
+  R.feedStatus = (period) => { const p = String(period || '').toLowerCase(); return /^(post|ppd)/.test(p) ? 'postponed' : /^(can|abd|aband)/.test(p) ? 'cancelled' : null; };
 
   // ---------------------------------------------------------------- odds around a game (Polymarket CLOB)
   // A game that is played moves its odds: the winner trades at 99 % within hours of the final whistle (NPB Rakuten–

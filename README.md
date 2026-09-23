@@ -192,7 +192,10 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       make-up game is played. If it is cancelled with no make-up game, the market resolves 50-50,
       which Meridian settles as a loss for the bettor. The site shows *postponed* in three cases:
       1. Polymarket's game feed marks it postponed (event `period` `POST`). Example: La Liga
-         Levante–Athletic, Sep 16, moved to Oct 21.
+         Levante–Athletic, Sep 16, moved to Oct 21. `CAN` marks a cancelled match and reads
+         *cancelled*. Example: WTA Monterrey Bartunkova–Potapova on Aug 26. Polymarket resolved it
+         50-50, Meridian's resolver recorded it non-decisive, and all three combos on it settled
+         COUNTERPARTY_WINS, although their other two legs had won.
       2. The fixture was re-dated past both the day in the market's slug and Meridian's cutoff.
          Example: MLS Seattle–Real Salt Lake, *postponed from Apr 12 · now Sep 24*.
       3. Some leagues' feeds never change: NPB and CPBL stay on `NS` whatever happens, and the
