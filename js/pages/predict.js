@@ -320,8 +320,9 @@
       const ps = R.predictionState(n.picks.map((k) => [k.id, k.yes]));
       return ps.code === 'won' ? UI.chip('won · awaiting payout', 'green') : ps.code === 'lost' ? UI.chip('lost · awaiting settlement', 'red') : UI.chip('open', 'accent');
     };
-    const render = () => U.replace(body,
-      h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } }, R.chip(view, id), h('span.dim.small', R.state(view, id).main || ''), h('span.grow'), h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`)),
+    const render = () => { const st = R.state(view, id); U.replace(body,
+      h('div.row.wrap', { style: { gap: '8px', marginBottom: st.sub ? '2px' : '10px' } }, R.chip(view, id), h('span.small', st.main || ''), h('span.grow'), h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`)),
+      st.sub ? h('div.xs.dim', { style: { marginBottom: '10px' } }, st.sub) : null,
       h('div.card.tight', UI.table({ cols: [
         { key: 'b', label: 'Bettor', render: (n) => bettorLink(n.predictor) },
         { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
@@ -332,9 +333,10 @@
         { key: 'm', label: 'Maker', render: (n) => bettorLink(n.counterparty, 3) },
         { key: 'r', label: 'State', render: predState },
       ], rows: preds, empty: 'No predictions' })),
-      h('div.footer-note', { style: { textAlign: 'left' } }, 'A combo pays only if every leg resolves in the bettor\x27s favour; one leg resolved against it loses the whole stake even while the others are still open. The bold leg is this question.'));
+      h('div.footer-note', { style: { textAlign: 'left' } }, 'A combo pays only if every leg resolves in the bettor\x27s favour; one leg resolved against it loses the whole stake even while the others are still open. The bold leg is this question.')); };
     render();
-    if (legIds.length) R.load(legIds, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && document.body.contains(body)) render(); }).catch(() => {});
+    const open = () => !ctx.signal.aborted && document.body.contains(body);
+    if (legIds.length) R.load(legIds, { signal: ctx.signal, deep: false }).then(() => { if (!open()) return; render(); return R.load(legIds, { signal: ctx.signal, deep: true }); }).then(() => { if (open()) render(); }).catch(() => {});
     return modal;
   }
   let resLoading = 0;   // > 0 while Polymarket / oracle data for the visible rows is on its way (header shows a spinner)
@@ -356,7 +358,7 @@
   }
   const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
   /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
-  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, overdue: 4, resolved: 5, paused: 6, unknown: 7, trading: 8, settled: 9 };
+  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, noresult: 4, resolved: 5, paused: 6, postponed: 7, unknown: 8, trading: 9, settled: 10 };
   const byStage = (rows) => U.sortBy(rows, (c) => { const st = R.state(qView(c), qId(c)); return (st.code === 'resolved' && st.stuck ? -1 : (STAGE_RANK[st.code] || 0)) * 1e13 + (st.stuck ? (st.at || 0) : (qView(c).end || 0)); });
   const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
 
@@ -468,7 +470,7 @@
         U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('unresolved on Meridian', 'amber'),
           h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian has not settled the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}.${why} (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
       };
-      let renderSeq = 0, endedPreloaded = false;
+      let renderSeq = 0, endedPreloaded = false; const tracked = new Set();
       if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});
       function render(keepTracking) {
         let rows = all.filter(alive); const t = Date.now();
@@ -491,7 +493,9 @@
           { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
         ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`);
-        if (!keepTracking) { const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
+        // rows that move onto the page once their state is known (the Ended tab re-sorts by stage) need their oracle and
+        // price checks too, not only the ones visible on the first render
+        if (!keepTracking || slice.some((q) => !tracked.has(qId(q)))) { slice.forEach((q) => tracked.add(qId(q))); const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
       U.replace(body, controls, backlog, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: open interest now, open predictions, and questions settled in the last 30 days, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '.' + ' Searching every question on the exchange needs live API access (the Predict API only allows Meridian\'s own origins).'), resFootnote());
       render();

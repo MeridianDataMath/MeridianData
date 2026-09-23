@@ -9,9 +9,10 @@ const MD = load(['js/util.js', 'js/api.js', 'js/predict/api.js', 'js/predict/ana
 const R = MD.predict.res;
 const DAY = 86400000;
 
-// Gamma records served by a stubbed fetch, keyed by condition id
-const GAMMA = {};
+// Gamma records served by a stubbed fetch, keyed by condition id; CLOB price histories keyed by token id
+const GAMMA = {}, PRICES = {};
 globalThis.fetch = async (url) => {
+  if (/prices-history/.test(url)) { const tok = /market=([^&]+)/.exec(url)[1]; return { ok: true, json: async () => ({ history: PRICES[tok] || [] }) }; }
   const ids = Array.from(String(url).matchAll(/condition_ids=([^&]+)/g)).map((x) => x[1]);
   const closedPass = /closed=true/.test(url);
   return { ok: true, json: async () => ids.map((id) => GAMMA[id]).filter((m) => m && !!m.closed === closedPass) };
@@ -47,16 +48,89 @@ test('GTA VI by September 30: listed as ending Sep 1, still trading → open unt
 
 test('a game long past its scheduled start with nothing proposed is flagged, not "market ended 67d ago"', async () => {
   const id = '0xrakuten';
-  market(id, { question: 'Rakuten Monkeys vs. TSG Hawks', outcomes: '["Rakuten Monkeys", "TSG Hawks"]', gameStartTime: '2026-07-10 10:35:00+00', endDate: '2026-07-17T10:35:00Z' });
+  market(id, { question: 'Rakuten Monkeys vs. TSG Hawks', outcomes: '["Rakuten Monkeys", "TSG Hawks"]', sportsMarketType: 'moneyline', gameStartTime: '2026-07-10 10:35:00+00', endDate: '2026-07-17T10:35:00Z' });
   await R.load([id], { deep: false });
   const q = { end: Date.parse('2026-07-10T13:35:00Z'), settled: false };
   assert.equal(R.state(q, id, Date.parse('2026-07-09T00:00:00Z')).code, 'trading', 'before the game');
   const during = R.state(q, id, Date.parse('2026-07-10T12:00:00Z'));
   assert.equal(during.code, 'awaiting'); assert.match(during.main, /^Game started/);
   const late = R.state(q, id, Date.parse('2026-09-23T00:00:00Z'));
-  assert.equal(late.code, 'overdue');
+  assert.equal(late.code, 'noresult', 'without price history it is not called postponed');
   assert.equal(late.chip[0], 'no result · 74d');
-  assert.match(late.sub, /postponed/);
+  assert.match(late.sub, /postponed game stays open/);
+});
+
+// hourly prices of the first outcome: `pre` until the start, then `post` values in turn
+const series = (gameAt, pre, post) => {
+  const out = []; const g = Date.parse(gameAt) / 1000;
+  for (let i = 12; i >= 0; i--) out.push({ t: g - i * 3600, p: pre });
+  post.forEach((p, i) => out.push({ t: g + (i + 1) * 3600, p }));
+  return out;
+};
+
+test('NPB Rakuten–SoftBank, Sep 21: rained out, still listed on its date, odds never moved → postponed', async () => {
+  const id = '0xnpb';
+  market(id, { question: 'Tohoku Rakuten Golden Eagles vs. Fukuoka SoftBank Hawks', outcomes: '["Tohoku Rakuten Golden Eagles", "Fukuoka SoftBank Hawks"]', outcomePrices: '["0.27", "0.73"]', bestBid: '0.02', bestAsk: '0.52',
+    sportsMarketType: 'moneyline', gameStartTime: '2026-09-21 04:00:00+00', endDate: '2026-09-28T04:00:00Z', slug: 'npb-toh-fuk-2026-09-21', clobTokenIds: '["tokNpb", "tokNpb2"]',
+    events: [{ slug: 'npb-toh-fuk-2026-09-21', period: 'NS', resolutionSource: 'https://npb.jp/' }] });
+  // what the CLOB actually served: 40.5 % before the start, 24–52 % on a thin book over the next two and a half days
+  PRICES.tokNpb = series('2026-09-21T04:00:00Z', 0.405, [0.41, 0.39, 0.4, 0.41, 0.395, 0.315, 0.41, 0.415, 0.41, 0.385, 0.38, 0.38, 0.24, 0.395, 0.425, 0.515, 0.51, 0.475, 0.505, 0.465, 0.315, 0.295, 0.28, 0.405, 0.38, 0.37, 0.395, 0.405, 0.46, 0.285, 0.27, 0.27]);
+  const q = { end: Date.parse('2026-09-21T07:00:00Z'), settled: false, pub: true };
+  await R.load([id], { deep: true, now: Date.parse('2026-09-23T20:00:00Z') });
+  const early = R.state(q, id, Date.parse('2026-09-21T09:00:00Z'));
+  assert.equal(early.code, 'awaiting', 'five hours in: just waiting');
+  const s = R.state(q, id, Date.parse('2026-09-23T20:00:00Z'));
+  assert.equal(s.code, 'postponed'); assert.equal(s.chip[0], 'postponed');
+  assert.match(s.main, /^Postponed · not played on Sep 21$/);
+  assert.match(s.sub, /odds never left their pre-game level \(41% before, 40% since\)/);
+  assert.match(s.sub, /50-50, which Meridian settles as a loss for the bettor/);
+  assert.equal(s.m.source, 'https://npb.jp/');
+  assert.equal(R.oddsText(s.m), 'Tohoku Rakuten Golden Eagles 27% · Fukuoka SoftBank Hawks 73%');
+});
+
+test('a played game: the odds go to 99 % → the leader is shown, and odds that moved without a winner → "no result"', async () => {
+  const played = '0xplayed', abandoned = '0xcricket';
+  market(played, { outcomes: '["Tohoku Rakuten Golden Eagles", "Fukuoka SoftBank Hawks"]', outcomePrices: '["0.998", "0.002"]', sportsMarketType: 'moneyline', gameStartTime: '2026-09-20 05:00:00+00', clobTokenIds: '["tokPlayed", "x"]' });
+  market(abandoned, { outcomes: '["Nigeria", "Sierra Leone"]', outcomePrices: '["0.685", "0.315"]', sportsMarketType: 'moneyline', gameStartTime: '2026-09-23 09:00:00+00', clobTokenIds: '["tokCricket", "x"]', slug: 'crint-nga-sle-2026-09-23' });
+  PRICES.tokCricket = series('2026-09-23T09:00:00Z', 0.905, [0.915, 0.735, 0.7, 0.615, 0.58, 0.555, 0.6, 0.605, 0.59, 0.58, 0.745, 0.635]);
+  const now = Date.parse('2026-09-23T21:30:00Z');
+  await R.load([played, abandoned], { deep: true, now });
+  const p = R.state({ end: Date.parse('2026-09-20T08:00:00Z') }, played, now);
+  assert.equal(p.code, 'awaiting'); assert.match(p.main, /^Game started .+ · Polymarket prices Tohoku Rakuten Golden Eagles at 99\.8%$/);
+  const c = R.state({ end: Date.parse('2026-09-23T17:07:00Z') }, abandoned, now);
+  assert.equal(c.code, 'noresult'); assert.equal(c.chip[0], 'no result · 12h');
+  assert.match(c.sub, /the odds moved after the start, but no winner is priced in \(Nigeria 69% · Sierra Leone 32%\)/);
+});
+
+test('re-dated fixtures and Polymarket\'s own "postponed" read as postponed, with the new date', async () => {
+  const rsl = '0xrsl', levante = '0xlev';
+  market(rsl, { question: 'Will Real Salt Lake win on 2026-04-12?', sportsMarketType: 'moneyline', gameStartTime: '2026-09-24 01:30:00+00', endDate: '2026-09-24T01:30:00Z', slug: 'mls-sea-rsl-2026-04-12-rsl',
+    events: [{ slug: 'mls-sea-rsl-2026-04-12', eventDate: '2026-09-23' }] });
+  market(levante, { question: 'Will Athletic Club win on 2026-09-16?', sportsMarketType: 'moneyline', gameStartTime: '2026-10-21 18:00:00+00', endDate: '2026-10-21T18:00:00Z', slug: 'lal-lev-bil-2026-09-16-bil',
+    events: [{ slug: 'lal-lev-bil-2026-09-16', period: 'POST', resolutionSource: 'javascript:alert(1)' }] });
+  await R.load([rsl, levante], { deep: false });
+  const now = Date.parse('2026-09-23T20:00:00Z');
+  const a = R.state({ end: Date.parse('2026-04-12T23:59:00Z') }, rsl, now);
+  assert.equal(a.code, 'postponed'); assert.match(a.main, /^Postponed from Apr 12 · now Sep 2[34], /);
+  assert.equal(a.orig, Date.UTC(2026, 3, 12, 12));
+  const b = R.state({ end: Date.parse('2026-09-16T22:30:00Z') }, levante, now);
+  assert.equal(b.code, 'postponed'); assert.equal(b.feed, 'postponed'); assert.match(b.main, /^Postponed from Sep 16 · now Oct 21, /);
+  assert.equal(b.m.source, null, 'only http(s) sources become links');
+  // the make-up game itself, once under way
+  const later = R.state({ end: Date.parse('2026-04-12T23:59:00Z') }, rsl, Date.parse('2026-09-24T02:30:00Z'));
+  assert.equal(later.code, 'awaiting'); assert.match(later.main, /^Make-up game started .* \(postponed from Apr 12\)$/);
+  // a fixture that is simply later than its listing day but matches Meridian's cutoff is not a postponement
+  assert.equal(R.state({ end: Date.parse('2026-09-24T04:30:00Z') }, rsl, now).code, 'trading');
+});
+
+test('the played check: median odds before vs after the start', () => {
+  const g = Date.parse('2026-09-20T05:00:00Z');
+  assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.375, [0.38, 0.605, 0.9995, 0.9955, 0.9955]), g).moved, true, 'went to 99 %');
+  assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.375, [0.38, 0.5, 0.5, 0.5, 0.5]), g).moved, true, 'a tie: 50-50');
+  assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.47, [0.55, 0.3, 0.62, 0.5, 0.5, 0.5]), g).moved, true, 'a tie from even odds still swung during the game');
+  assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.47, [0.46, 0.48, 0.47, 0.5, 0.45, 0.47]), g).moved, false, 'flat: not played');
+  assert.equal(R.playedCheck(series('2026-09-20T05:00:00Z', 0.375, [0.38, 0.37]), g), null, 'too little trading to tell');
+  assert.equal(R.playedCheck([], g), null);
 });
 
 test('an unlisted question resolved on Polymarket but never relayed to Meridian says why it is stuck', async () => {

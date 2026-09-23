@@ -187,14 +187,33 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       The rules go by the question, so a still-trading market whose title states a later deadline
       ("by / before / through / until <Month> <Day>") runs to 11:59 PM ET that day
       (`R.titleDeadline`); the ⓘ panel shows both dates.
-    - *Postponed games keep their original listing.* A sports market's end date is a placeholder
-      (for CPBL and NPB, the scheduled start + 7 days). If a game is postponed, the rules keep the
-      market open until the make-up game is played, and Polymarket often leaves the original date in
-      place. The CPBL game Rakuten–TSG on Jul 10 was called off for a typhoon and made up on Sep 22,
-      but Polymarket still lists it on Jul 10. A game `R.OVERDUE_DAYS` (4) past its start with no
-      proposal therefore reads *no result · Nd* rather than "market ended". Only Polymarket's
-      whitelisted proposers (339 addresses on the managed oracle) can propose, and stale listings
-      like this one have waited weeks for one.
+    - *Postponed games.* A sports market's end date is a placeholder (for CPBL and NPB, the
+      scheduled start + 7 days). If a game is postponed, the rules keep the market open until the
+      make-up game is played. If it is cancelled with no make-up game, the market resolves 50-50,
+      which Meridian settles as a loss for the bettor. The site shows *postponed* in three cases:
+      1. Polymarket's game feed marks it postponed (event `period` `POST`). Example: La Liga
+         Levante–Athletic, Sep 16, moved to Oct 21.
+      2. The fixture was re-dated past both the day in the market's slug and Meridian's cutoff.
+         Example: MLS Seattle–Real Salt Lake, *postponed from Apr 12 · now Sep 24*.
+      3. Some leagues' feeds never change: NPB and CPBL stay on `NS` whatever happens, and the
+         original date stays listed. For these, a sports game `R.NO_RESULT_HOURS` (12) past its start
+         with no result and no proposal gets its odds checked (`R.playedCheck`: hourly prices from
+         Polymarket's CLOB `prices-history`, CORS `*`).
+         - A played game moves its odds: the winner reaches 99 % within hours, and a tie goes to
+           50-50.
+         - Odds that stay at the pre-game level mean the game was not played. Example: NPB
+           Rakuten–SoftBank on Sep 21 (NPB: 中止, rained out) was 41 % before the start and a 38 %
+           median over the next 2½ days, reading *Postponed · not played on Sep 21*. The Sep 20
+           game went from 38 % to 99.95 % in three hours.
+         - Odds that moved without producing a winner read *no result · Nd* (an abandoned or
+           unfinished game resolves 50-50).
+
+      Weather markets also carry a `gameStartTime`, so this applies only to sports markets
+      (`sportsMarketType`). The ⓘ panel shows the evidence, the current Polymarket odds and the
+      league's official source for the make-up date. The CPBL game Rakuten–TSG on Jul 10 (typhoon,
+      made up Sep 22) is still listed on Jul 10. Only Polymarket's whitelisted proposers (339
+      addresses on the managed oracle) can propose, and stale listings like this one have waited
+      weeks for one.
     - *Unlisted questions are never relayed to Meridian.* Meridian learns an outcome only when
       someone calls `requestResolution(conditionId)` on the Polygon reader
       `0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98`, which pays a LayerZero fee of about 3 POL. That
