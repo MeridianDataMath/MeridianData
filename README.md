@@ -236,9 +236,16 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   * *Decided vs settled* – a prediction is **decided** when every leg has resolved on Meridian and
     the verdict is recorded (`pickConfig.resolved` / `result`); it is **settled** only when the
     winner claims, which most do late or never (roughly 1,000 of 1,300 "unsettled" predictions are
-    decided). Results, win rates, PnL and the ex-post vig therefore count from the verdict; the
-    Overview shows *Unclaimed winnings* (won, not claimed) and bettor pages an *Unclaimed winnings*
-    tile. A result chip reads from the side of the page it is on (the maker's on a maker's page)
+    decided). Results, win rates, PnL and the ex-post vig therefore count from the verdict, so
+    claiming changes none of them. As of 2026-09-23 that is 1,102 decided predictions left
+    unclaimed: 389 bettor wins and 713 maker wins. The Overview mentions the count only in its
+    footnote. A bettor page shows an *Unclaimed winnings* tile (money that bettor can collect). A
+    maker page doesn't, because makers leave hundreds uncollected. Offline, a wallet page's
+    *Cumulative PnL* chart is drawn from the verdicts too (`curveFromPredictions`). The old
+    claim-based chart ended at +$508 for maker 0xdd9b…, whose PnL is +$1,500. When the file holds
+    only the newest predictions, the chart's window ends at the all-time figure.
+    `P.decidedAt` is capped at the claim and at now: a combo lost on its first leg is decided
+    while a later leg is still open. A result chip reads from the side of the page it is on (the maker's on a maker's page)
     and says *unclaimed* only where that side has something to collect: a decided loss is simply
     *lost*, whether or not the winner has claimed. Checked against the exchange: an account's
     `statsHistory` books PnL at the verdict (its cumulative PnL equals the sum of every decided

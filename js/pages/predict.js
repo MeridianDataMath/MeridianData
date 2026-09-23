@@ -111,30 +111,17 @@
     await withSnapshot(body, ctx, async (snap) => {
       const a = snap.agg; const T = a.totals;
       const tiles = h('div.stats',
-        UI.stat('Predictions', U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided · ${U.fmtNum(T.settled, 0)} claimed` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
+        UI.stat('Predictions', U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
         UI.stat('Wagered', usd(T.wagered, { compact: true }), 'bettor stakes'),
         UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
         UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${T.makers} market makers`),
         UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of decided predictions'),
         UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'decided, claimed or not · incl. positions sold on the secondary market', U.pnlClass(T.bettorPnl)),
-        T.unclaimedWon ? h('a', { href: '#/predict/questions?status=settled', style: { display: 'contents' } }, UI.stat('Unclaimed winnings', U.fmtNum(T.unclaimedWon, 0), `won predictions not yet claimed · ${usd(T.unclaimedWonPayout, { compact: true })} of payouts · ${U.fmtNum(T.unclaimedLost, 0)} lost ones unclaimed by makers`, 'pos')) : null,
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), 'odds vs Polymarket price at bet time'));
-      // settlement backlog: ended questions resolved on the source market a week or more ago and still unsettled
-      (async () => {
-        try {
-          const now = Date.now();
-          const ended = (snap.questionsWithOi || []).filter((q) => !q.settled && q.end && q.end < now && (q.oi > 0 || q.b > 0));
-          if (!ended.length) return;
-          await R.load(Array.from(new Set(ended.flatMap((q) => [q.id].concat(R.legIds(q))))), { signal: ctx.signal, deep: false });
-          if (ctx.signal.aborted) return;
-          // fully won predictions (every leg resolved for the bettor) waiting STUCK_DAYS+ for their payout
-          const preds = new Map(); let oldest = 0;
-          for (const q of ended) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
-          if (!preds.size) return;
-          tiles.appendChild(h('a', { href: '#/predict/questions?status=ended', style: { display: 'contents' } }, UI.stat('Unresolved on Meridian', String(preds.size), `won prediction${preds.size > 1 ? 's' : ''} whose legs Polymarket resolved ${R.STUCK_DAYS}+ days ago, still unresolved on Meridian · oldest ${oldest}d · ${usd(Array.from(preds.values()).reduce((a, x) => a + x, 0))} of stakes`, 'neg')));
-        } catch (e) { if (!isAbort(e)) console.warn('backlog tile', e); }
-      })();
+      // Claiming is only the cash step: every figure here counts a prediction at its verdict, so unclaimed wins (makers
+      // leave hundreds uncollected) change none of them. They get a line under the tiles, not tiles of their own; the
+      // questions stuck on Meridian's side live on the Questions page (Ended · unsettled).
       const cWager = h('canvas'), cCount = h('canvas');
       const tapeBody = h('div.feed.pause-hover');
       const tapeCard = h('div.card.tight', h('div.card-head', h('h2', 'Live predictions'), h('span.dim.small', 'newest first · refreshes every 20 s'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), tapeBody);
@@ -183,7 +170,7 @@
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,
-        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL counts every decided prediction, claimed or not.'));
+        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Every figure counts a prediction at its verdict, claimed or not' + (T.unclaimed ? ` (${U.fmtNum(T.unclaimed, 0)} are not claimed yet, ${U.fmtNum(T.unclaimedLost || 0, 0)} of them maker wins)` : '') + ': claiming only moves the cash.'));
       const col = C.colors();
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
       C.timeSeries(cCount, { points: a.daily.map((d) => ({ x: d.t, y: d.n })), type: 'bar', color: col.blue, label: 'Predictions', yFmt: (v) => U.fmtNum(v, 0), tipFmt: (v) => U.fmtNum(v, 0) });
@@ -701,14 +688,27 @@
       UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
       UI.stat('Volume', usd(agg && !m.live ? agg.wagered : m.totalVolume, { compact: true }), 'all time'),   // a snapshot file holds only the newest predictions; the aggregate has them all
       // a decided loss is a loss whether or not the winner has claimed: only this side's own wins waiting to be collected are called out
-      UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, [F.open ? U.fmtNum(F.open, 0) + ' open' : null, F.unclaimedWon ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · ') || null),
+      // (a maker's uncollected wins are its own business and change none of these figures: not called out)
+      UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, [F.open ? U.fmtNum(F.open, 0) + ' open' : null, F.unclaimedWon && !isMaker ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · ') || null),
       UI.stat('Win rate', F.won + F.lost ? U.fmtPct((F.won / (F.won + F.lost)) * 100, { dp: 0 }) : '—', 'of decided predictions'),
       UI.stat('ROI', F.roi == null ? '—' : U.fmtPct(F.roi, { sign: true, dp: 0 }), F.roiNote, U.pnlClass(F.roi)),
       UI.stat('Avg odds', pct(F.avgOdds, 0), F.avgLegs ? 'avg ' + U.fmtNum(F.avgLegs, 1) + ' legs' : null),
       m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
       UI.stat('Open', U.fmtNum(F.open, 0), 'predictions, not yet decided'),
-      F.unclaimedWon ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`, 'pos') : null);
+      F.unclaimedWon && !isMaker ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`, 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
+    // Cumulative PnL. Live: the exchange's own daily history, booked at the verdict. Offline that history is rebuilt from
+    // claims, which lags every wallet that leaves wins uncollected (a market maker's chart ended $800 away from its
+    // headline), so the curve comes from the verdicts like the headline; when the file holds only the newest
+    // predictions, that window ends at the all-time figure. A wallet on both sides keeps the claim-based history.
+    const firstAct = hist.findIndex((x) => x.total || x.volume);
+    const h2 = firstAct >= 0 ? hist.slice(Math.max(0, firstAct - 1)) : hist;
+    let pnlPts = h2.map((x) => ({ x: x.t, y: x.cumPnl })), anchored = false, fromVerdicts = false;
+    if (!m.live && !(asBettor.length && asMaker.length)) {
+      const c = MD.cards.make({ U, P }).curveFromPredictions(norms, m.trades || [], addr);
+      if (c && c.length >= 2) { anchored = !!(m.truncated && agg); const shift = anchored ? F.pnl - c[c.length - 1][1] : 0; pnlPts = c.map(([s, v]) => ({ x: s * 1000, y: Math.round((v + shift) * 100) / 100 })); fromVerdicts = true; }
+    }
+    const pnlNote = !m.live && m.truncated ? `newest ${mine.length} predictions · ` + (anchored ? 'ends at the all-time PnL' : fromVerdicts ? 'at their verdicts' : 'booked when claimed') : null;
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: false, question: k.q });
     const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id
@@ -767,16 +767,15 @@
     U.replace(el, h('div.stack',
       h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
-      // offline, the curves are rebuilt from the loaded predictions (PnL booked when claimed): say so when those are not all of them
-      h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions · booked when claimed`) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),
+      // offline, the curves are rebuilt from the loaded predictions: say so when those are not all of them
+      h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),
       UI.card('Open positions', openWrap, h('span.dim.small', posRows.length < F.open ? `newest ${posRows.length} of ${U.fmtNum(F.open, 0)}` : String(posRows.length))),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
     const col = C.colors();
-    const firstAct = hist.findIndex((x) => x.total || x.volume);
-    const h2 = firstAct >= 0 ? hist.slice(Math.max(0, firstAct - 1)) : hist;
-    C.timeSeries(cPnl, { points: h2.map((x) => ({ x: x.t, y: x.cumPnl })), color: (last && last.cumPnl >= 0) ? col.green : col.red, label: 'PnL' });
+    const endPnl = pnlPts.length ? pnlPts[pnlPts.length - 1].y : 0;
+    C.timeSeries(cPnl, { points: pnlPts, color: endPnl >= 0 ? col.green : col.red, label: 'PnL' });
     C.timeSeries(cVol, { points: h2.map((x) => ({ x: x.t, y: x.volume })), type: 'bar', color: col.accent, label: 'Volume' });
   };
 })();

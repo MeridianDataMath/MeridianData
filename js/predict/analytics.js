@@ -109,7 +109,8 @@
   };
 
   /** When a prediction was decided: the API keeps no decision time, so its last question's end (or the bet itself). */
-  P.decidedAt = (n) => Math.max(U.num(n.t), ...(n.picks || []).map((k) => U.num(k.endTime) || 0));
+  // never later than its claim or than now: a combo lost on its first leg is decided while a later leg (months out) is open
+  P.decidedAt = (n) => Math.min(Math.max(U.num(n.t), ...(n.picks || []).map((k) => U.num(k.endTime) || 0)), n.settledAt || Infinity, Date.now());
 
   /**
    * One wallet's secondary-market ledger over the pick configurations it traded. Position tokens belong to a pick
