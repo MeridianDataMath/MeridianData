@@ -28,6 +28,17 @@ test('drawdown and PnL ignore deposits and withdrawals', () => {
   near(assert, st.ddUsd, 150, 1e-9, 'drawdown in USD = trading losses since the peak');
   near(assert, st.deposits, 500, 1e-9); near(assert, st.withdrawals, 400, 1e-9);
   near(assert, st.roi, (-150 / (1000 + 500)) * 100, 1e-9, 'ROI on starting equity + deposits');
+  // time-weighted: −100 on 1,000 (−10 %), then −50 on 1,400 (−3.57 %) compound to 13.21 %
+  near(assert, st.ddPct, (1 - 0.9 * (1 - 50 / 1400)) * 100, 1e-9, 'drawdown % compounds the returns on the capital at the time');
+});
+
+test('losing a little and then withdrawing the rest is a small drawdown, not 100 %', () => {
+  const row = (t, pnl, dep, wd, bal) => ({ t, pnl, deposit: dep, withdrawal: wd, balance: bal, upnl: 0, equity: bal, fee: 0, funding: 0, volume: 0 });
+  // 0xf92a…: deposited 184, lost 30.59, withdrew everything
+  const series = [row(T0, 0, 184, 0, 184), row(T0 + D, -30.59, 0, 0, 153.41), row(T0 + 2 * D, 0, 0, 153.41, 0)];
+  const st = AN.intervalStats(series, T0, null, D);
+  near(assert, st.ddPct, (30.59 / 184) * 100, 1e-9);
+  near(assert, st.ddUsd, 30.59, 1e-9);
 });
 
 test('book slippage walks the book from the mid; an order the book cannot absorb has no price', () => {

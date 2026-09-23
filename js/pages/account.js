@@ -358,7 +358,7 @@
       const type = !level && !cumulative ? 'bar' : 'line';
       const label = METRICS.find((m) => m.v === metric).label + (level ? '' : cumulative ? ' (cumulative)' : '');
       cumBox.querySelector('input').disabled = level;
-      C.timeSeries(chartCanvas, { points: pts, color, type, label, zero: true, xMin: rows.length ? Math.min(rows[0].t, start) : undefined, xMax: Date.now(), beginAtZero: metric === 'volume' || metric === 'fees' });
+      C.timeSeries(chartCanvas, { points: pts, color, type, label, zero: true, signColors: metric === 'pnl' || metric === 'funding', xMin: rows.length ? Math.min(rows[0].t, start) : undefined, xMax: Date.now(), beginAtZero: metric === 'volume' || metric === 'fees' });
       const rl = RANGES.find((r) => r.v === range).label;
       U.replace(tiles,
         UI.stat('PnL (' + rl + ')', U.fmtUsd(stats.pnl, { sign: true }), stats.roi != null ? 'ROI ' + U.fmtPct(stats.roi, { sign: true, dp: 1 }) : null, U.pnlClass(stats.pnl)),
@@ -458,9 +458,11 @@
       const tick = prod.tickSize;
       const a = Array.from(asks.entries()).filter(([, q]) => q > 0).sort((x, y) => x[0] - y[0]).slice(0, 12);
       const b = Array.from(bids.entries()).filter(([, q]) => q > 0).sort((x, y) => y[0] - x[0]).slice(0, 12);
-      let ca = 0, cb = 0; const rowsA = a.map(([p, q]) => (ca += q, { p, q, c: ca })); const rowsB = b.map(([p, q]) => (cb += q, { p, q, c: cb }));
+      // Total = cumulative USD value of the levels from the touch out to this one (each at its own price); a running
+      // size × this level's price turned a dust bid far from the touch into a few dollars
+      let ca = 0, cb = 0; const rowsA = a.map(([p, q]) => (ca += q * p, { p, q, c: ca })); const rowsB = b.map(([p, q]) => (cb += q * p, { p, q, c: cb }));
       const max = Math.max(ca, cb, 1e-9);
-      const lvl = (r, cls) => h('div.lvl', { class: cls }, h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q)), h('span', U.fmtUsd(r.c * r.p, { compact: true })));
+      const lvl = (r, cls) => h('div.lvl', { class: cls }, h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q)), h('span', U.fmtUsd(r.c, { compact: true })));
       const m = marks[curMarket];
       const bestA = a.length ? a[0][0] : null, bestB = b.length ? b[0][0] : null;
       const spread = bestA && bestB ? ((bestA - bestB) / ((bestA + bestB) / 2)) * 100 : null;
@@ -551,7 +553,7 @@
     });
     U.replace(el, h('div.stack', grid, h('div.row', { style: { marginTop: '-8px' } }, h('span.grow'), MD.defsLink()),
       h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2))),
-      h('div.grid.cols-2', UI.card('By market', perMarket), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
+      h('div.grid.cols-2.wl', UI.card('By market', perMarket), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
       positions.truncated ? h('div.notice', 'Only the most recent 2,000 positions were analysed.') : null));
     const start = AN.startFor('all', sa.createdAt);
     const rows = series.filter((b) => b.t >= start);
@@ -559,8 +561,9 @@
     for (const b of rows) { const v = b.pnl + (b.upnl - prevUp); prevUp = b.upnl; acc += v; cum.push({ x: b.t, y: acc }); daily.push({ x: b.t, y: v }); }
     const col = C.colors();
     C.timeSeries(c1, { points: cum, color: acc >= 0 ? col.green : col.red, label: 'PnL', xMax: Date.now() });
-    C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, label: 'PnL', xMax: Date.now() });
-    C.bars(c3, ps.byMarket.map((r) => r.ticker), ps.byMarket.map((r) => r.pnl), { horizontal: true });
+    C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, signColors: true, label: 'PnL', xMax: Date.now() });
+    const closedMk = ps.byMarket.filter((r) => r.closed > 0);   // a market with only an open position has no closed result to show
+    C.bars(c3, closedMk.map((r) => r.ticker), closedMk.map((r) => r.pnl), { horizontal: true });
   }
 
   // =====================================================================
@@ -588,7 +591,7 @@
       const share = total && U.num(total.totalPoints) > 0 ? (U.num(s.totalPoints) / U.num(total.totalPoints)) * 100 : null;
       const epochs = h('div.chart-box.sm'); const cv = h('canvas'); epochs.appendChild(cv);
       cards.push(h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', 'Season ' + s.season), UI.chip('Tier ' + (s.tier != null ? s.tier : '—'), 'accent'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(s.updatedAt))),
-        h('div.stats', UI.stat('Rank', s.rank != null ? '#' + s.rank : '—', s.previousRank != null ? 'was #' + s.previousRank : null), UI.stat('Total points', U.fmtNum(s.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(s.referralPoints, 0)), UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null)),
+        h('div.stats', UI.stat('Rank', s.rank ? '#' + s.rank : '—', s.previousRank > 0 && s.previousRank !== s.rank ? 'was #' + s.previousRank : null), UI.stat('Total points', U.fmtNum(s.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(s.referralPoints, 0)), UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null)),
         h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs));
       // epoch history (probe epochs until two consecutive empties)
       (async () => {

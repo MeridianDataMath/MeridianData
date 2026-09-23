@@ -141,6 +141,7 @@
       if (a >= 1e9) return s + '$' + fmtN(a / 1e9, 2) + 'B';
       if (a >= 1e6) return s + '$' + fmtN(a / 1e6, 2) + 'M';
       if (a >= 1e4) return s + '$' + fmtN(a / 1e3, 1) + 'K';
+      if (a === 0 && opts.dp == null) return '$0';   // "$5,994 / $0", and an empty market's OI reads "$0", not "$0.00"
       return s + '$' + fmtN(a, opts.dp ?? (a >= 1000 ? 0 : 2));   // a compact column reads "$9,160" beside "$10.2K", not "$9,159.76"
     }
     const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';

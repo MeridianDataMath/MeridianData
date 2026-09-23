@@ -4,7 +4,7 @@
   MD.router.pages.home = {
     async mount(root, route, ctx) {
       const err = h('div.err');
-      const input = h('input', { type: 'text', placeholder: 'Search by wallet address or subaccount ID', autocomplete: 'off', spellcheck: false });
+      const input = h('input', { type: 'text', placeholder: window.innerWidth <= 480 ? 'Wallet address or subaccount ID' : 'Search by wallet address or subaccount ID', autocomplete: 'off', spellcheck: false });
       const form = h('form', { onsubmit: async (e) => { e.preventDefault(); err.textContent = ''; const r = await MD.search(input.value); if (r && r.error) err.textContent = r.error; } }, input, h('button', { type: 'submit', title: 'Search' }, U.icon('search')));
       const strip = h('div.strip');
       const foot = h('div.foot');
@@ -42,7 +42,7 @@
             h('span.addr', U.shortAddr(r.account)), U.pnlEl(r.stats.all.pnl),
             // a big account's small percentage reads "+0.3%", not "+0%"
             r.stats.all.roi != null ? h('span.tag', U.fmtPct(r.stats.all.roi, { sign: true, dp: Math.abs(r.stats.all.roi) < 10 ? 1 : 0 }) + ' ROI') : null,
-            h('span.tag', r.style !== '—' ? r.style : 'all-time'));
+            r.style && r.style !== '—' ? h('span.tag', r.style) : null);
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           strip.appendChild(track);

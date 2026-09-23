@@ -274,7 +274,10 @@
       const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null };
       const implied = list.reduce((a, n) => a + n.odds, 0) / k, hit = list.filter((n) => n.won).length / k;
       const stake = list.reduce((a, n) => a + n.stake, 0), pnl = list.reduce((a, n) => a + n.pnl, 0);
-      return { n: k, implied, hit, ci: 1.96 * Math.sqrt(hit * (1 - hit) / k), gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+      // Wilson half-width: the plain normal interval collapses to ±0 at a 0 % or 100 % hit rate, which a one-bet
+      // bucket reaches trivially; Wilson stays honest about how little a handful of bets can say
+      const z = 1.96, ci = (z * Math.sqrt((hit * (1 - hit)) / k + (z * z) / (4 * k * k))) / (1 + (z * z) / k);
+      return { n: k, implied, hit, ci, gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
     };
     const realized = {
       overall: realizedOf(settledBets),

@@ -70,22 +70,25 @@
     const upnlEnd = live && live.upnl != null ? live.upnl : last ? last.upnl : 0;
     const pnl = realized + (upnlEnd - upnlStart);
     // Drawdown on a flow-adjusted curve (deposits/withdrawals removed → trading losses only).
-    // ddUsd = loss since the high-water mark; ddPct = that loss relative to the equity the account
-    // would have without it (real equity + loss), so capital added after the peak is respected.
+    // ddUsd = loss since the high-water mark, in dollars.
     const curve = [{ t: start, v: eqStart, eq: eqStart }];
     let acc = eqStart, pu = upnlStart;
     for (const b of inRange) { acc += b.pnl + (b.upnl - pu); pu = b.upnl; curve.push({ t: b.t, v: acc, eq: b.equity }); }
     if (live && live.upnl != null && live.equity != null) curve.push({ t: Date.now(), v: acc + (live.upnl - pu), eq: live.equity });
-    let peak = -Infinity, ddUsd = 0, ddPct = 0;
-    for (const p of curve) {
-      if (p.v > peak) peak = p.v;
-      const d = peak - p.v;
-      if (d > 0.005) {
-        if (d > ddUsd) ddUsd = d;
-        const base = p.eq + d;
-        if (base > 0) { const pct = (d / base) * 100; if (pct > ddPct) ddPct = pct; }
-      }
-    }
+    let peak = -Infinity, ddUsd = 0;
+    for (const p of curve) { if (p.v > peak) peak = p.v; const d = peak - p.v; if (d > 0.005 && d > ddUsd) ddUsd = d; }
+    // ddPct on a time-weighted return index: each bucket's gain on the capital it had (equity at its start plus that
+    // bucket's deposits), compounded, so money moving in or out changes neither the index nor the drawdown. The old
+    // base (equity at the trough + the loss) went to zero when an account lost a little and then withdrew the rest,
+    // which read as a 100 % drawdown.
+    let idx = 1, idxPeak = 1, ddPct = 0, capEq = eqStart, capUp = upnlStart;
+    const step = (gain, deposit, eqAfter) => {
+      const base = capEq + (deposit || 0);
+      if (base > 1) { idx *= Math.max(0, 1 + gain / base); if (idx > idxPeak) idxPeak = idx; const dd = (1 - idx / idxPeak) * 100; if (dd > ddPct) ddPct = dd; }
+      capEq = eqAfter;
+    };
+    for (const b of inRange) { step(b.pnl + (b.upnl - capUp), b.deposit, b.equity); capUp = b.upnl; }
+    if (live && live.upnl != null && live.equity != null) step(live.upnl - capUp, 0, live.equity);
     // returns per bucket (PnL-based, on prior equity)
     const rets = [];
     let prevEq = eqStart, prevUp = upnlStart;

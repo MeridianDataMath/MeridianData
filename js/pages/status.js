@@ -12,7 +12,7 @@
     const age = Date.now() - builtAt;
     return age > UI.STALE_MS ? ['stale', 'red'] : age > LATE_MS ? ['late', 'amber'] : ['fresh', 'green'];
   };
-  const kv = (pairs) => h('div.kv', pairs.filter(Boolean).map(([k, v, cls]) => [h('span.k', k), h('span.v', { class: cls || '' }, v)]));
+  const kv = (pairs) => h('div.kv.wrap-v', pairs.filter(Boolean).map(([k, v, cls]) => [h('span.k', k), h('span.v', { class: cls || '' }, v)]));
   const when = (t) => (t ? `${U.fmtAgo(t)} · ${U.fmtDateTime(t)}` : '—');
 
   MD.router.pages.status = {
@@ -54,7 +54,7 @@
           // a publish from before the status file existed: read the snapshot's own header (the 1 MB the Predict pages load anyway)
           if (!s && MD.predict && MD.predict.loadSnapshot) {
             U.replace(predict, UI.loading('No status file yet: reading the Predict snapshot itself…'));
-            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, bettors: p.agg && p.agg.bettors.length, makers: p.agg && p.agg.makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
+            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && p.agg.makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
           }
           if (ctx.signal.aborted) return;
           const [state, cls] = s && s.error ? ['failed', 'red'] : ageState(s && s.builtAt);
@@ -63,7 +63,7 @@
               ['Built', when(s.builtAt)],
               ['Builder', s.source === 'pc' ? 'the site owner\'s PC' : s.source === 'github-actions' ? 'GitHub Actions' : s.source || '—'],
               s.error ? ['Error', s.error, 'neg'] : null,
-              s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : ''), s.apiTotal && s.predictions < s.apiTotal - 50 ? 'neg' : ''] : null,
+              s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : '') + (s.preLaunch ? ` · ${s.preLaunch} launch-day test predictions left out` : ''), s.apiTotal && s.predictions < s.apiTotal - (s.preLaunch || 0) - 50 ? 'neg' : ''] : null,
               s.bettors != null ? ['Bettors · makers', `${U.fmtNum(s.bettors, 0)} · ${U.fmtNum(s.makers || 0, 0)}`] : null,
               s.questions != null ? ['Questions listed', U.fmtNum(s.questions, 0)] : null,
               s.vigCoverage != null ? ['Priced at bet time', `${U.fmtNum(s.vigCoverage, 0)}` + (s.predictions ? ` of ${U.fmtNum(s.predictions, 0)}` : '')] : null,   // predictions with the source market's price at the moment of the bet (the vig needs it)

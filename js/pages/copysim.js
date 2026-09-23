@@ -136,9 +136,9 @@
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
             { key: 's', label: 'Side', render: (r) => U.sideEl(r.long, true) },
             { key: 'h', label: 'Held', num: true, render: (r) => h('span', U.fmtDuration(r.hold), r.open ? UI.chip('open', 'blue') : r.liq ? UI.chip('LIQ', 'red') : null) },
-            { key: 'ls', label: 'Leader size', num: true, render: (r) => usd0(r.L.entryNotional) },
+            { key: 'ls', label: 'Leader size', num: true, title: 'Everything the leader put into the position: the opening order plus every add, at its fill prices', render: (r) => usd0(r.L.entryNotional) },
             { key: 'ln', label: 'Leader net', num: true, render: (r) => h('span', U.pnlEl(r.L.net, { dp: 2 }), bpsEl(r.leaderBps)) },
-            { key: 'cs', label: 'Copier size', num: true, render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
+            { key: 'cs', label: 'Copier size', num: true, title: 'Everything the copier would have put in: the opening order plus every add. The maximum per position limits what is held at once, so a position trimmed and added to again can total more than it', render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
             { key: 'cn', label: 'Copier net', num: true, render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
             { key: 'dr', label: 'Drift', num: true, title: 'what the price move between the leader\'s fills and the copier\'s cost', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(-r.C.driftCost, { sign: true, dp: 2 }))) },
             { key: 'sl', label: 'Slippage', num: true, render: (r) => (r.C.slipCost ? U.fmtUsd(r.C.slipCost, { dp: 2 }) : h('span.dim', '—')) },
@@ -161,7 +161,7 @@
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
             (candleStats && candleStats.noCandle ? `${U.fmtNum(candleStats.noCandle, 0)} of ${U.fmtNum(candleStats.fills, 0)} delayed fills had no candle and were priced at the leader's fill (no drift).` : ''))) : null));
         U.replace(results, tiles, h('div.grid.cols-2', chartCard, sensCard), UI.card('Positions', wrap, h('span.dim.small', `${T.n} since ${st.since}, newest first`)), notes);
-        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: (v) => U.fmtUsd(v, { compact: true }), tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
+        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
       }
 
       // ---- paper copy: the same copier, live, in a virtual account kept in this browser

@@ -146,6 +146,8 @@ async function buildPredict() {
   // sanity probe first so a blocked runner fails loudly with the real reason
   const probe = await P.predictionsCount();
   console.log(`  predict: API reachable, ${probe} predictions in total`);
+  // the API also counts launch-day test predictions (no questions attached) that it files before LAUNCH_SEC; they are left out
+  let preLaunch = 0; try { preLaunch = await P.predictionsCount({ createdAt: { lte: P.LAUNCH_SEC - 1 } }); } catch (e) { console.warn('predict: pre-launch count failed', e.message); }
   let lastLog = 0;
   const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : 0;   // testing: a page per window only
   const raw = await P.predictionsWindowed({
@@ -211,10 +213,10 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n), { k: n.picks.map((k) => [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, k.id, k.priceAtBet == null ? null : Math.round(k.priceAtBet * 1e4) / 1e4, n.picks.length > 1 ? k.event || null : null]) })) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
-  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = {};
   for (const n of norms) { (byWallet[n.predictor] || (byWallet[n.predictor] = [])).push(n); (byWallet[n.counterparty] || (byWallet[n.counterparty] = [])).push(n); }

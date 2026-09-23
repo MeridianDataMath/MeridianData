@@ -183,7 +183,7 @@
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,
-        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL is realized on settled predictions only.'));
+        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the source market\'s probability for the same picks; positive means the bettor paid above fair. Bettor PnL counts every decided prediction, claimed or not.'));
       const col = C.colors();
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered' });
       C.timeSeries(cCount, { points: a.daily.map((d) => ({ x: d.t, y: d.n })), type: 'bar', color: col.blue, label: 'Predictions', yFmt: (v) => U.fmtNum(v, 0), tipFmt: (v) => U.fmtNum(v, 0) });
@@ -195,7 +195,7 @@
       if (!live && tapeHead) tapeHead.textContent = 'as of the snapshot · ' + offlineNote;
       // the whole row opens the bettor; the maker keeps its own link on the right
       const tapeRow = (n, flash) => h('div.it.click', { class: flash ? 'flash' : '', title: 'Open this bettor', onclick: () => { location.hash = bettorUrl(n.predictor).slice(1); } },
-        h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + ' legs') : null),
+        h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.yes), h('span.grow.ellipsis', { title: n.q, style: { minWidth: '120px' } }, n.q, n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null),
         h('span.num', usd(n.stake)), h('span.num.dim', '@ ' + pct(n.odds, 1)), h('span.num', mult(n.odds ? 1 / n.odds : null)), h('span.dim.xs', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: 'Market maker ' + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n));
       const renderTape = (fresh) => U.replaceLive(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
@@ -222,7 +222,7 @@
           const outcome = (r) => { const v = r.side === 'C' ? r.vC : r.vP; return v == null ? (r.side ? UI.chip('open', 'accent') : h('span.dim', '—')) : v >= 0.999 ? UI.chip('won', 'green') : v <= 1e-9 ? UI.chip('lost', 'red') : UI.chip('void', 'amber'); };
           U.replace(secBody, UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.t)) },
-            { key: 'q', label: 'Prediction', render: (r) => (r.q ? h('div', { style: { whiteSpace: 'normal', maxWidth: '340px', lineHeight: '1.3' } }, r.q, r.legs > 1 ? h('span.dim.xs', ' +' + (r.legs - 1) + ' legs') : null) : h('span.dim', '—')) },
+            { key: 'q', label: 'Prediction', render: (r) => (r.q ? h('div', { style: { whiteSpace: 'normal', maxWidth: '340px', lineHeight: '1.3' } }, r.q, r.legs > 1 ? h('span.dim.xs', ' +' + (r.legs - 1) + (r.legs === 2 ? ' leg' : ' legs')) : null) : h('span.dim', '—')) },
             { key: 's', label: 'Seller', render: (r) => bettorLink(r.seller) },
             { key: 'b', label: 'Buyer', render: (r) => bettorLink(r.buyer) },
             { key: 'tk', label: 'Face value', num: true, title: 'Position tokens pay 1 USDe each if the prediction wins', render: (r) => usd(r.tokens) },
@@ -280,7 +280,7 @@
           UI.pager({ page: st.page, pageSize: PAGE, total, onPage: (p) => { st.page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         U.replace(summary, `${total} bettors · ${snapNote(snap)}`);
       }
-      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts settled predictions only: a win pays the maker\'s collateral, a loss costs the stake. Open stakes are excluded.'));
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts every decided prediction, claimed or not: a win earns the maker\'s collateral, a loss costs the stake, and a position sold on the secondary market counts at its sale. Open stakes are excluded.'));
       render();
     });
   }
@@ -306,10 +306,12 @@
     if (!file) { U.replace(body, h('div.empty', 'No prediction detail for this question in the snapshot yet (it is written by the next snapshot run).')); return; }
     const preds = file.predictions.map(P.unslim);
     const legIds = Array.from(new Set(preds.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
+    // each leg's own state, also on decided predictions: a combo lost on one leg still has legs that went the bettor's
+    // way or are open (stamping every leg with the prediction's result made an open question read "lost")
     const legState = (k, n) => {
-      if (n.decided) return h('span.dim.xs', n.won ? 'won' : n.nd ? 'void' : 'lost');
       if (!k.id) return h('span.dim.xs', '—');
       const st = R.state({ end: k.endTime, settled: false, question: k.q }, k.id);
+      if (n.decided && !st.m) return h('span.dim.xs', '—');   // source market not loaded (yet)
       if (st.code === 'resolved') { const y = R.resolvedYes(st.m); const forBettor = y === true || y === false ? y === !!k.yes : y === 'void' ? false : null; return h('span.xs', { class: forBettor === true ? 'pos' : forBettor === false ? 'neg' : 'dim' }, forBettor === true ? 'resolved for' : y === 'void' ? 'resolved 50/50 (a loss on Meridian)' : forBettor === false ? 'resolved against' : 'resolved · ' + (st.outcome || 'unclear')); }
       return h('span.xs.dim', st.chip ? st.chip[0] : st.code);
     };
@@ -504,13 +506,14 @@
     MD.setTopbar(h('span.title', 'Predict · Market makers'));
     await withSnapshot(body, ctx, (snap) => {
       const a = snap.agg; const T = a.totals; const cv = h('canvas');
+      const makerPnl = U.sum(a.makers, (m) => m.pnl || 0);   // the rows below; bettors' net differs by what secondary-market traders took
       const tbl = UI.table({ cols: [
         { key: 'a', label: 'Market maker', render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 6), U.copyBtn(r.address)) },
         { key: 'n', label: 'Predictions taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
         { key: 's', label: 'Share of flow', num: true, render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 1 }) },
         { key: 'c', label: 'Collateral committed', num: true, title: 'Sum of collateral put up against bettors', render: (r) => usd(r.wagered, { compact: true }) },
         { key: 'o', label: 'Open exposure', num: true, render: (r) => usd(r.openWagered, { compact: true }) },
-        { key: 'p', label: 'Maker PnL', num: true, title: 'Settled: + bettor stake on wins, − own collateral on losses', render: (r) => pnlEl(r.pnl) },
+        { key: 'p', label: 'Maker PnL', num: true, title: 'Decided predictions, claimed or not: + the bettor\'s stake on wins, − own collateral on losses, plus secondary-market trades', render: (r) => pnlEl(r.pnl) },
         { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
         { key: 'v', label: 'Avg vig captured', num: true, title: 'Bettor odds minus the Polymarket price at the moment of the bet', render: (r) => vigCell(r.avgVig) },
         { key: 'ao', label: 'Avg bettor odds', num: true, render: (r) => pct(r.avgOdds, 0) },
@@ -519,7 +522,7 @@
       ], rows: a.makers, onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds. The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
-        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(-T.bettorPnl, { sign: true }), 'decided predictions, claimed or not', U.pnlClass(-T.bettorPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
+        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toOthers) >= 1 ? ' · ' + usd(a.secondary.toOthers, { sign: true, compact: true }) + ' went to secondary-market traders' : ''), U.pnlClass(makerPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
         h('div.card.tight', tbl),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Maker PnL'), h('div.chart-box.sm', cv)));
       C.bars(cv, a.makers.map((m) => U.shortAddr(m.address)), a.makers.map((m) => m.pnl), { horizontal: true });
@@ -569,7 +572,7 @@
           h('ul.muted', { style: { margin: 0, paddingLeft: '18px', maxWidth: '900px' } },
             li('Two prices.', `The quoted cost (top of the page) is how far your odds sit from Polymarket's price at that moment, about ${pp(v.overall.avg)} on a typical bet. The realized cost (bottom) is what decided bets have actually returned, claimed or not: ${roiTxt(o.roi)} of stakes across every bettor so far. The second one is what a balance feels.`),
             bad.length || good.length ? li('Where the money goes.', bad.length ? `Bets at ${list(bad, bucketLabel)} odds have returned ${list(bad, (x) => roiTxt(x.roi))} of stakes: long shots pay out far less often than their odds say. ` : '', good.length ? `Bets at ${list(good, bucketLabel)} odds have returned ${list(good, (x) => roiTxt(x.roi))}.` : '') : null,
-            types.length ? li('Bet type.', pos.length ? `${U.capitalize(list(pos, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} ${pos.length > 1 ? 'have' : 'has'} been net positive for bettors so far` : '', pos.length && neg.length ? '; ' : '', neg.length ? `${pos.length ? '' : ''}${pos.length ? list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')') : U.capitalize(list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} ${pos.length ? 'net negative' : (neg.length > 1 ? 'have' : 'has') + ' been net negative for bettors so far'}` : '', '. Adding a leg from another event is where the maker\'s margin compounds; legs on the same event are priced with their correlation.') : null,
+            types.length ? li('Bet type.', pos.length ? `${U.capitalize(list(pos, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} have been net positive for bettors so far` : '', pos.length && neg.length ? '; ' : '', neg.length ? `${pos.length ? '' : ''}${pos.length ? list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')') : U.capitalize(list(neg, ([k, x]) => k + ' (' + roiTxt(x.roi) + ')'))} ${pos.length ? 'net negative' : 'have been net negative for bettors so far'}` : '', '. Adding a leg from another event is where the maker\'s margin compounds; legs on the same event are priced with their correlation.') : null,
             li('Read it right.', 'Look at Bettor ROI, not the hit-rate gap: a one-point shortfall at 3% odds is a third of the stake, at 60% it is nothing. A gap inside the ± could be luck. Results count from the exchange\x27s verdict, so unclaimed wins and losses are in. These are past results across all bettors, not a forecast and not advice; small buckets swing.')));
       };
       const realizedSection = (r) => {
@@ -712,7 +715,7 @@
     let hpage = 1; const histWrap = h('div');
     const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ cols: [
       { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
-      { key: 'q', label: 'Prediction', render: (n) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, n.picks.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', k.q)), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + ' more legs') : null) },
+      { key: 'q', label: 'Prediction', render: (n) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, n.picks.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', k.q)), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + (n.legs === 4 ? ' more leg' : ' more legs')) : null) },
       { key: 'c', label: 'Category', render: (n) => n.cat },
       { key: 's', label: isMaker ? 'Bettor stake' : 'Stake', num: true, render: (n) => usd(n.stake) },
       { key: 'o', label: 'Odds', num: true, render: (n) => h('span', pct(n.odds, 1), h('span.dim.xs', ' ' + mult(n.multiple))) },
@@ -729,7 +732,7 @@
     const tokValue = (t) => (t.side === 'P' ? t.vP : t.vC);
     const renderSec = () => { const slice = L.trades.slice((spage - 1) * PAGE, spage * PAGE); U.replace(secWrap, UI.table({ cols: [
       { key: 't', label: 'When', render: (t) => h('span.dim', U.fmtDateTimeS(t.t)) },
-      { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + ' legs') : null) },
+      { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + (t.legs === 2 ? ' leg' : ' legs')) : null) },
       { key: 'k', label: 'Trade', render: (t) => h('span', t.seller === addr ? UI.chip('sold', 'amber') : UI.chip('bought', 'blue'), h('span.dim.xs', t.seller === addr ? ' to ' : ' from '), bettorLink(t.seller === addr ? t.buyer : t.seller, 3)) },
       { key: 'n', label: 'Tokens', num: true, title: 'A token pays $1 if its side wins', render: (t) => U.fmtNum(t.tokens, 2) },
       { key: 'x', label: 'Price', num: true, title: 'Paid per token, i.e. per $1 of payout', render: (t) => (t.tokens ? U.fmtNum((t.paid / t.tokens) * 100, 1) + '¢' : '—') },

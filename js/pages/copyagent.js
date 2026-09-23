@@ -210,7 +210,7 @@
         U.replace(histWrap, tiles, h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('By leader', leadersTbl), chartCard), UI.card('Positions', posTbl, h('span.dim.small', `${H.rows.length} from the agent's orders, newest first` + (last.dry ? ' · dry run: fills are virtual' : ''))),
           h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. Net is realized PnL less fees plus funding; funding and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".'));
         const ser = Object.entries(H.series).map(([sid, pts], i) => ({ points: pts, color: palette[i % palette.length], label: who((last.leaders || []).find((l) => l.sid === sid) || null) }));
-        if (ser.length) C.timeSeries(canvas, { series: ser, yFmt: (v) => U.fmtUsd(v, { compact: true }), tipFmt: (v) => U.fmtUsd(v, { dp: 2, sign: true }) });
+        if (ser.length) C.timeSeries(canvas, { series: ser, yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 2, sign: true }) });
       }
       const renderDash = () => {
         if (!last) {
@@ -271,7 +271,7 @@
             { key: 'm', label: 'What', render: (r) => h('span.small', r.msg) },
           ], rows: (S.events || []).slice(0, 30), empty: 'Nothing yet' })));
       };
-      const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Keep it running (a terminal, a scheduled task, a service). It logs to agent/logs/ and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
+      const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Keep it running (a terminal, a scheduled task, a service). It writes its logs to a logs folder next to the script and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
       const dashCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Dashboard'), UI.chip('local', 'blue'), h('span.grow'), h('span.dim.small', 'polls the agent every 3 s')), dash);
       const histCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Copy history'), UI.chip('attribution', 'accent'), h('span.grow'), h('span.dim.small', 'per leader · your slippage against their fills')), histWrap);
       U.replace(body, hero, step1, step2, step3, step4, dashCard, histCard,

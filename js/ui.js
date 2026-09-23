@@ -83,7 +83,36 @@
   UI.fitTabs = fitTabs;
   window.addEventListener('resize', fitTabs);
   document.addEventListener('scroll', (e) => { if (e.target && e.target.classList && e.target.classList.contains('tabs')) fitTabs(); }, true);
-  new MutationObserver(() => { clearTimeout(fitTabs._t); fitTabs._t = setTimeout(fitTabs, 50); }).observe(document.documentElement, { childList: true, subtree: true });
+  /** Stat tiles fill their rows evenly: auto-fit put nine tiles seven to a row with two alone underneath; the same number
+   *  of rows with the tiles spread over them (5 + 4) reads as one block. Phones keep their two columns (CSS). */
+  const TILE_MIN = 150, TILE_GAP = 12;
+  const balanceOne = (el) => {
+    const n = el.children.length;
+    if (window.innerWidth <= 720 || !n) { el.style.gridTemplateColumns = ''; return; }
+    const max = Math.max(1, Math.floor((el.clientWidth + TILE_GAP) / (TILE_MIN + TILE_GAP)));
+    const cols = Math.ceil(n / Math.ceil(n / max));
+    const v = 'repeat(' + cols + ', minmax(0, 1fr))'; if (el.style.gridTemplateColumns !== v) el.style.gridTemplateColumns = v;
+  };
+  // each grid is watched for its own width (window resizes, the sidebar collapsing, a card changing size)
+  const tileRO = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((es) => { for (const e of es) { balanceOne(e.target); fitValues(e.target); } }) : null;
+  const watched = new WeakSet();
+  /** A tile value wider than its tile steps down a size (long, then xlong) instead of ending in "…": the character-count
+   *  guess in UI.stat does not know how narrow a tile is (two to a row inside a card on a phone). */
+  const fitValues = (root) => {
+    for (const v of (root || document).querySelectorAll('.stat .v')) {
+      if (v.scrollWidth <= v.clientWidth + 1) continue;
+      if (!v.classList.contains('long') && !v.classList.contains('xlong')) { v.classList.add('long'); if (v.scrollWidth <= v.clientWidth + 1) continue; }
+      v.classList.remove('long'); v.classList.add('xlong');
+    }
+  };
+  UI.fitValues = fitValues;
+  const balanceStats = () => { for (const el of document.querySelectorAll('.stats:not(.three)')) { if (tileRO && !watched.has(el)) { watched.add(el); tileRO.observe(el); } balanceOne(el); } fitValues(); };
+  window.addEventListener('resize', () => { clearTimeout(fitValues._t); fitValues._t = setTimeout(() => fitValues(), 80); });
+  UI.balanceStats = balanceStats;
+  new MutationObserver(() => {
+    clearTimeout(fitTabs._t); fitTabs._t = setTimeout(fitTabs, 50);
+    clearTimeout(balanceStats._m); balanceStats._m = setTimeout(balanceStats, 50);
+  }).observe(document.documentElement, { childList: true, subtree: true });
 
   /** Inline warning when a published snapshot is older than it should be (the publishers run every 30 minutes). */
   UI.STALE_MS = 2 * 3600000;

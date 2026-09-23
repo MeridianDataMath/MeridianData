@@ -438,7 +438,10 @@ leaderboard and left out of the home ticker and the copy-trading leaders.
 * **Equity** = Σ margin balances (all pools are USD-equivalent tokens) + net unrealized PnL
   (unrealized − unsettled funding − unsettled position fees).
 * **ROI** = PnL ÷ (equity at the start of the interval + deposits during it).
-* **Max drawdown** = largest peak-to-trough decline of the equity curve in the interval.
+* **Max drawdown** = largest peak-to-trough decline in the interval, as a percentage of a time-weighted
+  return index (each bucket's gain on the capital it started with, plus that bucket's deposits, compounded), so
+  deposits and withdrawals change nothing: losing $30 of $184 and then withdrawing the rest is a 16.6 % drawdown,
+  not 100 %. The dollar figure is the loss since the high-water mark of the flow-adjusted PnL curve.
 * **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized; shown only with
   at least 10 buckets (so never for the 7-day interval)
   (daily buckets for 7d/30d/all, hourly for 24h).
