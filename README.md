@@ -60,12 +60,26 @@ math: the Predict secondary-market ledger with the cases checked against the exc
 `@pure-end` in `agent/copy-agent.mjs`, loaded on their own since the agent needs ethers and a
 key), account analytics and the copyability caps (`analytics`), formatting and routing (`util`).
 
+**Equity curve flex.** The **Flex** button on an account page and **Equity curve flex** on a
+bettor page open the account's or wallet's PnL card: headline PnL and ROI, the equity curve,
+win rate, drawdown, volume or record. It comes in 24 hours / 7 days / 30 days / all time for perps
+(all time for Predict), optionally with the dollar amounts hidden (the return leads, no $ anywhere),
+and can be downloaded as a 2400×1260 PNG, copied, sent to the phone's share sheet, or posted on X.
+It is drawn in the browser from the page's own figures (`js/flex.js` rasterises the SVG from
+`js/cards.js` on a canvas, with the Geist fonts embedded), so nothing is uploaded and it works for
+any account, not only those in the snapshot. The perps figures are the Overview tab's for the
+period; a Predict wallet's curve is the exchange's own history when the API is reachable, otherwise
+its predictions counted the snapshot's way (decided at the verdict, traded positions through the
+token ledger), so it ends at the headline figure; a wallet whose predictions are not all loaded gets
+the card without a curve rather than a partial one.
+
 **Share links with preview cards.** Link unfurlers (Discord, X, Telegram, Slack…) never see the
 part of a URL after `#`, where the site's routes live, so a pasted `#/account?…` link showed only
 the site's generic preview. The deploy workflow therefore runs `scripts/build-cards.mjs` after
 assembling `dist/`: for every perps account on the leaderboard and every Predict bettor and
 market maker in the snapshot it renders a 1200×630 PNG card (headline PnL and ROI, the all-time
-PnL line, record / win rate / volume and the like; artwork in `scripts/cards.mjs`, rendered with
+PnL line, record / win rate / volume and the like; artwork in `js/cards.js`, the same card as
+Equity curve flex, loaded by `scripts/cards.mjs`; rendered with
 `@resvg/resvg-js` and the Geist TrueType fonts in `scripts/fonts/`, SIL OFL) to
 `cards/a|p/<address>.png`, plus a small page `a/<address>.html` / `p/<address>.html` that carries
 the Open Graph and Twitter tags and sends people on to the page itself. Served at

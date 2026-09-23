@@ -678,6 +678,21 @@
     } else {
       F = Object.assign(P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L }), { pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''), roiNote: 'on decided stakes', fromSnap: false });
     }
+    // Equity curve flex (js/flex.js): all time, from the exchange's own history when live, else from the predictions the
+    // way the snapshot counts them (decided at the verdict, traded positions through the token ledger); a wallet whose
+    // predictions are not all loaded gets its card without the curve rather than a partial one
+    const openFlex = () => {
+      const K = MD.cards.make({ U, P });
+      MD.flex.open({ address: addr, what: 'wallet', periods: [{ v: 'all', label: 'All time' }], period: 'all', shareUrl: MD.api.shareUrl('p', addr), build: async () => {
+        const act = hist.findIndex((x) => x.total || x.pnl);
+        const curve = m.live ? (act >= 0 ? hist.slice(Math.max(0, act - 1)).map((x) => [Math.round(x.t / 1000), Math.round(x.cumPnl * 100) / 100]) : null) : !m.truncated ? K.curveFromPredictions(norms, m.trades || [], addr) : null;
+        const cats = {}; for (const n of mine) cats[n.cat] = (cats[n.cat] || 0) + 1;
+        const topCat = agg ? agg.topCat : Object.keys(cats).sort((x, y) => cats[y] - cats[x])[0];
+        const decided = (F.won || 0) + (F.lost || 0);
+        const row = { address: addr, pnl: F.pnl, roi: F.roi, won: F.won, lost: F.lost, winRate: decided ? (F.won / decided) * 100 : null, wagered: agg && !m.live ? agg.wagered : m.totalVolume, n: agg ? agg.n : mine.length, avgOdds: F.avgOdds, open: F.open, topCat, first: agg ? agg.first : mine.length ? Math.min(...mine.map((n) => n.t)) : null };
+        return K.walletInput(row, curve && curve.length >= 2 ? curve : null, isMaker);
+      } });
+    };
     const tiles = h('div.stats',
       UI.stat(isMaker ? 'Maker PnL' : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
       UI.stat('Volume', usd(agg && !m.live ? agg.wagered : m.totalVolume, { compact: true }), 'all time'),   // a snapshot file holds only the newest predictions; the aggregate has them all
@@ -746,7 +761,7 @@
     const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
     const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
     U.replace(el, h('div.stack',
-      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       // offline, the curves are rebuilt from the loaded predictions (PnL booked when claimed): say so when those are not all of them
       h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions · booked when claimed`) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),

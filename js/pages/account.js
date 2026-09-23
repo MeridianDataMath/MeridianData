@@ -4,6 +4,38 @@
 
   const TABS = [['overview', 'Overview'], ['live', 'Live'], ['performance', 'Performance'], ['rewards', 'Rewards'], ['predict', 'Predict']];
   const RANGES = [{ v: '24h', label: '24h' }, { v: '7d', label: '7d' }, { v: '30d', label: '30d' }, { v: 'all', label: 'All time' }];
+
+  // Equity curve flex (js/flex.js): the account's card for a period, from the same series and figures as the Overview tab
+  const FLEX_PERIODS = [{ v: '24h', label: '24 hours' }, { v: '7d', label: '7 days' }, { v: '30d', label: '30 days' }, { v: 'all', label: 'All time' }];
+  const BUCKET = { '24h': U.HOUR, '7d': 2 * U.HOUR, '30d': 8 * U.HOUR };   // AN.resFor's resolutions
+  function openFlex(addr, sa, ref) {
+    const sid = sa.id; const K = MD.cards.make({ U, P: MD.predict }); let posP = null;
+    MD.flex.open({
+      address: addr, what: 'account', periods: FLEX_PERIODS, period: 'all', shareUrl: A.shareUrl('a', addr),
+      build: async (p) => {
+        const start = AN.startFor(p, sa.createdAt);
+        posP = posP || A.positions(sid, { maxPages: 10, ttl: 60000 });
+        const [series, balances, open, positions] = await Promise.all([AN.loadSeries(sid, { start, resolution: AN.resFor(p), ttl: 60000 }), A.balances(sid), A.openPositions(sid), posP]);
+        const pids = Array.from(new Set(open.map((x) => x.productId)));
+        const prices = pids.length ? await A.marketPrices(pids) : {};
+        const acct = AN.accountState({ balances, positions: open, ref, prices });
+        const is = AN.intervalStats(series, start, { upnl: acct.upnl, equity: acct.equity }, BUCKET[p] || U.DAY);
+        const base = is.curve.length ? is.curve[0].v : 0;
+        const curve = is.curve.map((c) => [Math.round(c.t / 1000), Math.round((c.v - base) * 100) / 100]);
+        // positions of the period: those still open or updated since its start (a close is the last update)
+        const ps = AN.positionStats(p === 'all' ? positions : positions.filter((x) => U.num(x.size) !== 0 || U.num(x.updatedAt) >= start), ref);
+        const wr = ps.winRate == null ? '—' : U.fmtPct(ps.winRate, { dp: 0 }), dd = is.ddPct ? U.fmtPct(is.ddPct, { dp: 1 }) : '—';
+        const style = ps.style && ps.style !== '—' ? ps.style : null;
+        return {
+          kind: 'perps', address: addr, period: FLEX_PERIODS.find((x) => x.v === p).label, pnl: is.pnl, roi: is.roi, curve: curve.length >= 2 ? curve : null,
+          periodRange: curve.length >= 2 ? K.range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : null,
+          stats: [['Win rate', wr], ['Max drawdown', dd], ['Volume', U.fmtUsd(is.volume, { compact: true })], ['Positions', U.fmtNum(ps.count, 0)]],
+          statsHidden: [['Win rate', wr], ['Max drawdown', dd], ['Positions', U.fmtNum(ps.count, 0)], ['Style', style || '—']],
+          footRight: (style ? style + ' trader · ' : '') + 'since ' + K.date(sa.createdAt),
+        };
+      },
+    });
+  }
   const METRICS = [{ v: 'pnl', label: 'PnL' }, { v: 'volume', label: 'Volume' }, { v: 'balance', label: 'Balance' }, { v: 'equity', label: 'Equity' }, { v: 'funding', label: 'Funding' }, { v: 'fees', label: 'Fees' }];
 
   const child = (ctx) => { const ac = new AbortController(); const c = { signal: ac.signal, cleanup: [], onCleanup(f) { this.cleanup.push(f); }, abort() { ac.abort(); this.cleanup.forEach((f) => { try { f(); } catch (_) {} }); this.cleanup = []; } }; ctx.onCleanup(() => c.abort()); ctx.signal.addEventListener('abort', () => ac.abort()); return c; };
@@ -127,6 +159,7 @@
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
         h('button.btn.sm.ghost.explorer', { title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'),
+        h('button.btn.sm.ghost.explorer', { title: 'Equity curve flex: this account\'s PnL card, to download, copy or post', onclick: () => openFlex(addr, sa, ref) }, U.icon('trophy'), 'Flex'),
         h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt)));
       // phones: the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
       const headSlot = h('div.acct-head-slot');

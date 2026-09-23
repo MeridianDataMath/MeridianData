@@ -261,6 +261,13 @@ a.defs { display: inline-flex; align-items: center; gap: 5px; color: var(--text-
 a.defs:hover { color: var(--accent); text-decoration: none; }
 a.defs svg { width: 13px; height: 13px; }
 .modal.wide { width: min(1180px, 100%); }
+/* Equity curve flex: the card preview keeps its 1200 × 630 shape while it loads */
+.flex-modal { max-width: 960px; margin: 0 auto; }
+.flex-frame { position: relative; aspect-ratio: 1200 / 630; background: #070708; border-radius: 12px; }
+.flex-frame img { transition: opacity .15s; }
+.flex-frame img:not([src]) { visibility: hidden; }
+.flex-frame.busy img { opacity: .45; }
+.flex-status { min-height: 18px; }
 .rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
 .res-cell { line-height: 1.25; white-space: normal; min-width: 210px; max-width: 340px; }
 .res-cell .res-info { padding: 2px; margin-top: -2px; color: var(--text-3); }

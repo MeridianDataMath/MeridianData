@@ -19,11 +19,22 @@ test('an account card: headline in the account\'s colour, its curve, no stray va
     stats: { all: { pnl: 2044.19, roi: 34.1, ddPct: 19.38 } }, curve: [[1789689600, 0], [1789776000, 38.4], [1789862400, 1600], [1790121600, 2044.19]] };
   const svg = K.accountSvg(row); clean(svg);
   assert.match(svg, />\+\$2,044\.19</); assert.match(svg, /#34d487/, 'green for a gain');
-  assert.match(svg, /0x7c75…34de/); assert.match(svg, /since Sep 18, 2026 · Swing trader/);
+  assert.match(svg, /0x7c75…34de/); assert.match(svg, /Swing trader · since Sep 18, 2026/); assert.match(svg, />Equity curve · All time</);
   assert.match(svg, /<path d="M[^"]+" fill="none" stroke="#34d487"/, 'the PnL line');
   const loss = K.accountSvg(Object.assign({}, row, { stats: { all: { pnl: -2300.87, roi: -0.2, ddPct: 0.17 } }, curve: null }));
-  clean(loss); assert.match(loss, />-\$2,300\.87</); assert.match(loss, /#ef454a/); assert.match(loss, /Closed positions/, 'no curve: a panel of other figures');
+  clean(loss); assert.match(loss, />-\$2,300\.87</); assert.match(loss, /#ef454a/); assert.match(loss, /Not enough history for a curve yet/, 'no curve: said so');
   const t = K.accountText(row); assert.match(t.title, /^0x7c75…34de on Meridian: \+\$2,044\.19 all-time PnL$/);
+});
+
+test('with dollar amounts hidden the card leads with the return and shows no dollar figure', () => {
+  const row = { account: A1, createdAt: Date.UTC(2026, 8, 18), equity: 8038.39, volumeAll: 122036.09, winRate: 100, style: 'Swing', positionsCount: 2,
+    stats: { all: { pnl: 2044.19, roi: 34.1, ddPct: 19.38 } }, curve: [[1789689600, 0], [1789862400, 1600], [1790121600, 2044.19]] };
+  const svg = K.flexSvg(Object.assign(K.accountInput(row), { hideAmounts: true })); clean(svg);
+  assert.match(svg, />\+34%</, 'the return is the headline'); assert.match(svg, />RETURN · ALL TIME</);
+  assert.doesNotMatch(svg, /\$/, 'no dollar amount anywhere');
+  assert.match(svg, />Sep 18 – Sep 23, 2026</, 'the period instead of the ROI pill');
+  const loss = K.flexSvg(Object.assign({}, K.accountInput(Object.assign({}, row, { stats: { all: { pnl: -50, roi: -5.2 } } })), { hideAmounts: true }));
+  assert.match(loss, />-5\.2%</); assert.match(loss, /#ef454a/);
 });
 
 test('big figures switch to compact and shrink to fit', () => {
@@ -45,7 +56,7 @@ test('a wallet\'s curve adds its decided results in time and ends at its PnL; a 
   const maker = K.walletCurve(file, MAKER); assert.equal(maker[maker.length - 1][1], -(30 - 5), 'the maker\'s side is the mirror');
   assert.equal(K.walletCurve(Object.assign({}, file, { truncated: true }), ME), null);
   const svg = K.walletSvg({ address: ME, n: 3, won: 1, lost: 1, pnl: 25, roi: 166.7, wagered: 18, winRate: 50, avgOdds: 0.3, first: T, topCat: 'Sports' }, file, false); clean(svg);
-  assert.match(svg, /PREDICT BETTOR/); assert.match(svg, />1W \/ 1L</); assert.match(svg, /Mostly Sports/);
+  assert.match(svg, /BETTOR · MERIDIAN PREDICT/); assert.match(svg, />1W \/ 1L</); assert.match(svg, /Mostly Sports/);
 });
 
 test('the share page carries the card for unfurlers and sends people on to the page', () => {
