@@ -112,6 +112,17 @@
     return { pnl, realized, fees, funding, volume, deposits, withdrawals, upnlStart, upnlEnd, eqStart, ddUsd, ddPct, sharpe, roi, buckets: inRange.length, curve };
   };
 
+  /** A flow-adjusted cumulative PnL curve (intervalStats' `curve`) as at most `max` [unix seconds, USD] pairs from 0,
+   *  evenly thinned with the last point kept: small enough to ship in the leaderboard snapshot. */
+  AN.compactCurve = (curve, max = 60) => {
+    if (!curve || curve.length < 2) return null;
+    const base = curve[0].v; const n = curve.length; const out = [];
+    const step = Math.max(1, (n - 1) / (max - 1));
+    for (let f = 0; f < n - 1; f += step) { const p = curve[Math.round(f)]; out.push([Math.round(p.t / 1000), Math.round((p.v - base) * 100) / 100]); }
+    const last = curve[n - 1]; out.push([Math.round(last.t / 1000), Math.round((last.v - base) * 100) / 100]);
+    return out;
+  };
+
   AN.styleFromDuration = (ms) => (ms == null ? '—' : ms < U.HOUR ? 'Scalper' : ms < U.DAY ? 'Intraday' : ms < 7 * U.DAY ? 'Swing' : 'Long-term');
 
   /** Position-level stats. Closed positions are those with size 0 and some decrease. */
@@ -228,7 +239,10 @@
     row.winRate = ps.winRate; row.positionsCount = ps.count; row.style = ps.style; row.closedCount = ps.closed.length; row.liquidated = ps.liquidated;
     const live = { upnl: acct.upnl, equity: acct.equity };
     const pick = (s) => ({ pnl: s.pnl, volume: s.volume, roi: s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, funding: s.funding });
-    for (const iv of ['7d', '30d', 'all']) row.stats[iv] = pick(AN.intervalStats(daily, AN.startFor(iv, sa.createdAt), live, U.DAY));
+    for (const iv of ['7d', '30d']) row.stats[iv] = pick(AN.intervalStats(daily, AN.startFor(iv, sa.createdAt), live, U.DAY));
+    const all = AN.intervalStats(daily, AN.startFor('all', sa.createdAt), live, U.DAY);
+    row.stats.all = pick(all);
+    row.curve = AN.compactCurve(all.curve);   // the all-time PnL line for the account's link preview card
     row.stats['24h'] = pick(AN.intervalStats(hourly, Date.now() - U.DAY, live, U.HOUR));
     if (copyCtx) {
       // fills and the price drift after them only for accounts with a track record worth copying (the candle cache is shared)

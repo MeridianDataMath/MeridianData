@@ -606,7 +606,7 @@
   // =====================================================================
   async function mountBettorPage(body, route, ctx) {
     const addr = String(route.params.address || '').toLowerCase();
-    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
+    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('button.btn.sm.ghost', { title: 'Copy a share link: Discord, X, Telegram and the like show this wallet\'s card with its result', onclick: () => { U.copyText(MD.api.shareUrl('p', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
     // phones: the header goes into the page (the topbar cannot fit it); same arrangement as the perps account page
     const headSlot = h('div.acct-head-slot'); if (body.parentElement) body.parentElement.prepend(headSlot); else body.prepend(headSlot);
     const narrow = window.matchMedia('(max-width: 720px)');

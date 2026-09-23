@@ -8,6 +8,10 @@
   A.TV = 'https://tradingview.meridian.xyz';
   A.WS_URL = 'wss://ws.meridian.xyz/v1/stream';
   A.MAX_LIMIT = 200;
+  A.SITE_URL = 'https://meridian.thedatahub.xyz';
+  /** Share link with a preview card: /a/<address> (perps account) or /p/<address> (Predict wallet). The pages behind them
+   *  are written at deploy time (scripts/build-cards.mjs) and send visitors on to the account; unfurlers read the card. */
+  A.shareUrl = (kind, address) => A.SITE_URL + '/' + kind + '/' + String(address || '').toLowerCase();
   A.APP_URL = 'https://app.meridian.xyz/?ref=BJ9Y51H9XB1L'; // every link to the Meridian app carries the site owner's referral code
 
   // ---------- fetch with cache / in-flight dedupe ----------

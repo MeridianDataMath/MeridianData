@@ -9,6 +9,12 @@ agent/state.json
 agent/logs/
 agent/node_modules/
 agent/package-lock.json
+# build-time tooling (package.json at the root: the card renderer)
+node_modules/
+# the card builder writes these into dist/ at deploy time; a local run (--dist .) may leave them here
+/cards/
+/a/
+/p/
 # OS / editor noise
 Thumbs.db
 .DS_Store

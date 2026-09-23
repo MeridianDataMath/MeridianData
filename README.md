@@ -60,6 +60,27 @@ math: the Predict secondary-market ledger with the cases checked against the exc
 `@pure-end` in `agent/copy-agent.mjs`, loaded on their own since the agent needs ethers and a
 key), account analytics and the copyability caps (`analytics`), formatting and routing (`util`).
 
+**Share links with preview cards.** Link unfurlers (Discord, X, Telegram, Slack…) never see the
+part of a URL after `#`, where the site's routes live, so a pasted `#/account?…` link showed only
+the site's generic preview. The deploy workflow therefore runs `scripts/build-cards.mjs` after
+assembling `dist/`: for every perps account on the leaderboard and every Predict bettor and
+market maker in the snapshot it renders a 1200×630 PNG card (headline PnL and ROI, the all-time
+PnL line, record / win rate / volume and the like; artwork in `scripts/cards.mjs`, rendered with
+`@resvg/resvg-js` and the Geist TrueType fonts in `scripts/fonts/`, SIL OFL) to
+`cards/a|p/<address>.png`, plus a small page `a/<address>.html` / `p/<address>.html` that carries
+the Open Graph and Twitter tags and sends people on to the page itself. Served at
+`https://meridian.thedatahub.xyz/a/<address>` and `/p/<address>` (wrangler's auto-trailing-slash
+drops the `.html`); the Share buttons on account and bettor pages copy these links. A wallet
+without a page yet, or an address in mixed case, falls through to `index.html`, whose first
+script sends `/a/…` and `/p/…` paths on to the hash route. `cards/site.png` is the card of the
+home page and of every other link. Rendering is deterministic and each image URL carries
+`?v=<hash of the card>`, so an unchanged card is not uploaded again and an unfurler that cached
+an old one fetches the new one. The leaderboard rows carry a compact all-time PnL curve
+(`row.curve`, at most 60 points) for the account cards. The step is `continue-on-error`: if it
+fails, the site deploys without cards and share links fall back to the site card. Locally:
+`npm ci`, then `node scripts/build-cards.mjs --dist <folder with data/>` (`--only <address>` for
+one card).
+
 The perps build has a time budget (`--budget` seconds, 9 minutes by default: an account takes
 about two seconds, an active one with fills and candles more, and the job has 15 minutes in all);
 accounts not reached are left out and the snapshot is marked partial (`skipped`) rather than the

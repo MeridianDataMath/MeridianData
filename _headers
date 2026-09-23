@@ -8,3 +8,11 @@
   Cache-Control: no-cache
 /index.html
   Cache-Control: no-cache
+# link-preview cards and the share pages behind /a/<address> and /p/<address> (rebuilt with every deploy; an image URL
+# carries ?v=<hash of the card> so an unfurler that cached an old one fetches the new one)
+/cards/*
+  Cache-Control: public, max-age=1800
+/a/*
+  Cache-Control: public, max-age=300
+/p/*
+  Cache-Control: public, max-age=300

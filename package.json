@@ -1,0 +1,9 @@
+{
+  "name": "meridiandatahub",
+  "private": true,
+  "description": "Build-time tooling only: the site itself is plain HTML + JS with no dependencies. @resvg/resvg-js renders the link-preview cards (scripts/build-cards.mjs) in the deploy workflow.",
+  "engines": { "node": ">=22" },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2"
+  }
+}

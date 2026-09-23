@@ -34,6 +34,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+          cache: npm   # the card renderer (package-lock.json at the root)
 
       # the money math (Predict ledger and figures, copy sizing, the agent's decisions, analytics, formatting): no network,
       # under a second; a failure stops the job here, so nothing is deployed
@@ -61,6 +62,15 @@ jobs:
           mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/config.example.json dist/agent/
           [ -d data ] && cp -r data dist/ || true
           echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"
+
+      # link previews: a card image per perps account and Predict wallet plus the small pages behind /a/<address> and
+      # /p/<address> that carry them (Discord, X and co. never see the site's #/ routes). A failure leaves the site as it
+      # was: the share links then fall back to the home page's card.
+      - name: Link preview cards (dist/cards, dist/a, dist/p)
+        run: |
+          npm ci --no-audit --no-fund
+          node scripts/build-cards.mjs --dist dist
+        continue-on-error: true
 
       - name: Choose target
         id: mode

@@ -126,7 +126,7 @@
         h('span.subsel', 'sub:', subSel),
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
-        h('button.btn.sm.ghost.explorer', { title: 'Copy a link to this page', onclick: () => { U.copyText(location.href); U.toast('Link copied'); } }, U.icon('copy'), 'Share'),
+        h('button.btn.sm.ghost.explorer', { title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'),
         h('span.dim.small.nowrap.since', 'since ' + U.fmtDate(sa.createdAt)));
       // phones: the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
       const headSlot = h('div.acct-head-slot');
