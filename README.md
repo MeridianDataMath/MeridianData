@@ -146,6 +146,36 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     leg of the combo with its own state, since a combo pays only if all legs resolve for the bettor.
     An ended question none of whose open predictions can still win (each has a leg resolved against
     its bettor) is left out. The snapshot carries `questions/<conditionId>.json` per question for this.
+    Three cases that looked stuck and are not what they seem (investigated 2026-09-23):
+    - *Polymarket's end date can be wrong.* "Another GTA VI trailer released by September 30?" was
+      listed with the Aug 31 market's end date (Sep 1), and Meridian copied it as its betting cutoff.
+      The rules go by the question, so a still-trading market whose title states a later deadline
+      ("by / before / through / until <Month> <Day>") runs to 11:59 PM ET that day
+      (`R.titleDeadline`); the ⓘ panel shows both dates.
+    - *Postponed games keep their original listing.* A sports market's end date is a placeholder
+      (for CPBL and NPB, the scheduled start + 7 days). If a game is postponed, the rules keep the
+      market open until the make-up game is played, and Polymarket often leaves the original date in
+      place. The CPBL game Rakuten–TSG on Jul 10 was called off for a typhoon and made up on Sep 22,
+      but Polymarket still lists it on Jul 10. A game `R.OVERDUE_DAYS` (4) past its start with no
+      proposal therefore reads *no result · Nd* rather than "market ended". Only Polymarket's
+      whitelisted proposers (339 addresses on the managed oracle) can propose, and stale listings
+      like this one have waited weeks for one.
+    - *Unlisted questions are never relayed to Meridian.* Meridian learns an outcome only when
+      someone calls `requestResolution(conditionId)` on the Polygon reader
+      `0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98`, which pays a LayerZero fee of about 3 POL. That
+      reader reads Polymarket's ConditionalTokens payout and sends it to the resolver
+      `0xe42847ee…0475` on Robinhood Chain (4663). Meridian's bot wallet
+      `0xe32b714fc552aeab6ac9144d70f2a61b26bebef2` sends these for listed questions, typically within
+      minutes of Polymarket resolving. Its query (Sapience's `polymarket-keeper`) selects
+      `public: true` and open interest above zero, so unlisted questions (`isPublic: false`) are
+      skipped. Such questions still reach combos, and they then stay unsettled forever, together with
+      every prediction on them. As of 2026-09-23 that is 1,011 bet-on questions and 26 blocked
+      predictions ($1,587 locked): 5 predictions are owed to bettors, and 21 are losses the maker
+      cannot collect. Anyone can send the relay, for example with a wallet on Polygon. Two unlisted legs
+      unblocked that way on Sep 3 were claimed within hours. The snapshot now carries `pub` per
+      question, so the Ended tab names this cause.
+    - On Meridian a leg that resolves 50/50 does not refund: the prediction settles as
+      COUNTERPARTY_WINS, so the tracker counts such a leg as lost.
   * *Decided vs settled* – a prediction is **decided** when every leg has resolved on Meridian and
     the verdict is recorded (`pickConfig.resolved` / `result`); it is **settled** only when the
     winner claims, which most do late or never (roughly 1,000 of 1,300 "unsettled" predictions are
@@ -161,7 +191,7 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     file); beyond that (every market maker, heavy bettors) the record, win rate, ROI, open count and
     unclaimed winnings come from the snapshot's aggregate for the wallet, which covers all of them.
     *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
-    not resolved although Polymarket has; those are listed first on the Ended tab. The tax center
+    not resolved although Polymarket has (unlisted questions, see above); those are listed first on the Ended tab. The tax center
     stays on a cash basis (claimed).
   * *Secondary market* – a position can be sold before the verdict. Position tokens belong to a
     pick configuration and a side (every prediction on the same picks shares them, so one trade

@@ -23,16 +23,41 @@
   const jsonArr = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : null; } catch (e) { return null; } };
   const ts = (s) => { if (!s) return null; const t = Date.parse(typeof s === 'string' ? s.replace(' ', 'T').replace(/\+00$/, 'Z') : s); return Number.isFinite(t) ? t : null; };
 
+  // ---------------------------------------------------------------- dates
+  const DAY = 86400000;
+  const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  /** Hours US Eastern time is behind UTC at instant t: daylight time from the 2nd Sunday of March to the 1st Sunday of November. */
+  const etOffset = (t) => {
+    const y = new Date(t).getUTCFullYear(); const sunday = (mo, n) => 1 + ((7 - new Date(Date.UTC(y, mo, 1)).getUTCDay()) % 7) + (n - 1) * 7;
+    return t >= Date.UTC(y, 2, sunday(2, 2), 7) && t < Date.UTC(y, 10, sunday(10, 1), 6) ? 4 : 5;
+  };
+  /** The deadline a question states in its title ("… by September 30?", "… through Oct 5, 2026"): 11:59 PM ET that day,
+   *  or null. `near` (ms) picks the year when the title has none. */
+  R.titleDeadline = (text, near) => {
+    const mm = /\b(?:by|before|through|thru|until)\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(\d{4}))?/i.exec(text || '');
+    if (!mm) return null;
+    const mo = MONTHS.indexOf(mm[1].toLowerCase()); const d = Number(mm[2]); if (mo < 0 || d < 1 || d > 31) return null;
+    let y = mm[3] ? Number(mm[3]) : new Date(near || Date.now()).getUTCFullYear();
+    let t = Date.UTC(y, mo, d, 23, 59); if (!mm[3] && near && t < near - 180 * DAY) t = Date.UTC(++y, mo, d, 23, 59);
+    return t + etOffset(t) * 3600000;
+  };
+
   // ---------------------------------------------------------------- Polymarket (Gamma)
   const markets = new Map();  // conditionId → { at, m | null }
   const compact = (m) => {
     const ev = m.events && m.events[0]; const evSlug = ev && ev.slug;
     const outcomes = jsonArr(m.outcomes) || ['Yes', 'No'];
     const prices = (jsonArr(m.outcomePrices) || []).map(Number);
+    // Polymarket's listed end date is sometimes earlier than the deadline in the question itself (a copied date:
+    // "Another GTA VI trailer released by September 30?" was listed as ending Sep 1, like the Aug 31 market beside it).
+    // The rules go by the question, so an open market keeps running to the stated deadline; listedEnd keeps the listing.
+    let endAt = ts(m.endDate), listedEnd = null;
+    const dl = m.closed ? null : R.titleDeadline(m.question, endAt);
+    if (dl && endAt && dl - endAt > DAY && dl - endAt < 400 * DAY) { listedEnd = endAt; endAt = dl; }
     return {
       id: lc(m.conditionId), slug: m.slug, question: m.question,
       url: 'https://polymarket.com/event/' + (evSlug || m.slug) + (evSlug && evSlug !== m.slug ? '/' + m.slug : ''),
-      endAt: ts(m.endDate), startAt: ts(m.startDate), gameAt: ts(m.gameStartTime), closed: !!m.closed, closedAt: ts(m.closedTime), acceptingOrders: !!m.acceptingOrders,
+      endAt, listedEnd, startAt: ts(m.startDate), gameAt: ts(m.gameStartTime), closed: !!m.closed, closedAt: ts(m.closedTime), acceptingOrders: !!m.acceptingOrders,
       uma: String(m.umaResolutionStatus || '').toLowerCase(), umaHistory: jsonArr(m.umaResolutionStatuses) || [], resolvedAt: ts(m.umaEndDate),
       adapter: m.resolvedBy || null, questionId: m.questionID || null, negRisk: !!m.negRisk,
       outcomes, prices, rules: m.description || '', liveness: Number(m.customLiveness) || R.LIVENESS, bond: Number(m.umaBond) || null, updatedAt: ts(m.updatedAt),
@@ -149,14 +174,17 @@
   /** Which side of a Meridian question the source market resolved to: true = YES (Polymarket's first outcome, the one
    *  Meridian's YES mirrors), false = NO, 'void' = 50/50, null = not resolved or unknown. */
   R.STUCK_DAYS = 7;   // resolved on the source market this long ago and still unsettled on Meridian = settlement backlog
+  R.OVERDUE_DAYS = 4; // a game this long past its scheduled start with no outcome proposed: almost always a postponement
   R.resolvedYes = (m) => { if (!m || !m.prices || !m.prices.length) return null; const i = m.prices.findIndex((p) => p >= 0.99); if (i === 0) return true; if (i === 1) return false; if (m.prices.every((p) => Math.abs(p - 0.5) < 0.01)) return 'void'; return null; };
-  /** A pick the source market has already resolved against (the question not yet settled on Meridian): the bettor's
-   *  stake is gone, only the settlement is pending. */
-  R.pickLost = (pick, id) => { if (!id || pick.settled) return false; const { m } = R.get(id); if (!m || !(m.closed || m.uma === 'resolved')) return false; const y = R.resolvedYes(m); return y === true || y === false ? y !== !!pick.yes : false; };
+  // Meridian's escrow has no refund outcome: a leg that resolves 50/50 (non-decisive) settles the prediction as
+  // COUNTERPARTY_WINS, exactly like a leg resolved against the bettor (seen on every such prediction, single legs included).
+  /** A pick the source market has already resolved against the bettor, 50/50 included (the question not yet settled on
+   *  Meridian): the stake is gone, only the settlement is pending. */
+  R.pickLost = (pick, id) => { if (!id || pick.settled) return false; const { m } = R.get(id); if (!m || !(m.closed || m.uma === 'resolved')) return false; const y = R.resolvedYes(m); return y === 'void' ? true : y === true || y === false ? y !== !!pick.yes : false; };
   /** State of one open prediction from its legs [[conditionId, yes], ...] and the source markets loaded so far:
-   *  lost = a leg resolved against the bettor (the combo is gone whatever the other legs do); won = every leg resolved
-   *  in the bettor's favour (a payout is owed, only the settlement is pending, resolvedAt = the last leg's resolution);
-   *  otherwise pending (a leg still open, or not loaded). */
+   *  lost = a leg resolved against the bettor or 50/50 (the combo is gone whatever the other legs do); won = every leg
+   *  resolved in the bettor's favour (a payout is owed, only the settlement is pending, resolvedAt = the last leg's
+   *  resolution); otherwise pending (a leg still open, or not loaded). */
   R.predictionState = (legs) => {
     let won = true, at = 0, unknown = false;
     for (const [id, yes] of legs) {
@@ -164,7 +192,8 @@
       if (!m || !(m.closed || m.uma === 'resolved')) { won = false; if (!m) unknown = true; continue; }
       const y = R.resolvedYes(m);
       if (y === true || y === false) { if (y !== !!yes) return { code: 'lost' }; at = Math.max(at, m.resolvedAt || m.closedAt || 0); }
-      else won = false;   // void or unclear: no payout claim yet
+      else if (y === 'void') return { code: 'lost', void: true };
+      else won = false;   // unclear outcome: no payout claim yet
     }
     return won && legs.length ? { code: 'won', at } : { code: 'pending', unknown };
   };
@@ -191,7 +220,7 @@
     const { m, o } = R.get(id);
     const cd = (t) => (t > now ? 'in ' + U.fmtCountdown(t - now) : U.fmtAgo(t));
     const live = (s) => (s === 1 ? '1 s' : s < 3600 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(s % 3600 ? 1 : 0) + ' h');
-    if (q.settled) return { code: 'settled', chip: q.nd ? ['void', 'amber'] : q.yes ? ['YES', 'green'] : ['NO', 'red'], main: 'Settled on Meridian', sub: m && m.resolvedAt ? 'Polymarket resolved ' + U.fmtDateTime(m.resolvedAt) : null, m, o };
+    if (q.settled) return { code: 'settled', chip: q.nd ? ['50/50', 'amber'] : q.yes ? ['YES', 'green'] : ['NO', 'red'], main: 'Settled on Meridian', sub: m && m.resolvedAt ? 'Polymarket resolved ' + U.fmtDateTime(m.resolvedAt) : null, m, o };
     if (!m) return { code: 'unknown', chip: ['open', 'accent'], main: q.end ? (q.end > now ? 'Ends ' + cd(q.end) : 'Ended ' + cd(q.end)) : 'No end time', sub: m === null ? 'no Polymarket record for this question' : null, m, o };
     // Meridian often stops taking predictions well before the market itself ends; that is what people mistake for "resolution"
     const cutoff = q.end && m.endAt && m.endAt - q.end > 3600000 ? (q.end > now ? 'Meridian bets close ' + U.fmtDateTime(q.end) : 'Meridian bets closed ' + U.fmtDate(q.end)) : null;
@@ -203,7 +232,10 @@
       const stuckD = at ? Math.floor((now - at) / 86400000) : 0;
       const owed = q.op ? R.owed(q, now) : null;
       const stuck = owed ? owed.stuck > 0 : stuckD >= R.STUCK_DAYS;
-      return { code: 'resolved', stuck, stuckD: owed && owed.stuck ? owed.oldestD : stuckD, owed, chip: stuck ? ['resolved · stuck ' + (owed && owed.stuck ? owed.oldestD : stuckD) + 'd', 'amber'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''), sub: stuck ? (owed ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' (' + U.fmtUsd(owed.stake) + ') waiting for settlement' : 'on Polymarket ' + stuckD + ' days ago · still not settled on Meridian') : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting payout' : 'on Polymarket · not settled on Meridian yet', at, outcome: out, m, o };
+      // Meridian learns an outcome only when a relay transaction on Polygon sends it over LayerZero; its settlement bot
+      // sends them for listed questions, not for unlisted ones (isPublic false), which therefore never settle by themselves
+      const why = stuck && q.pub === false ? ' · unlisted question: Meridian\'s settlement bot does not relay these from Polygon' : '';
+      return { code: 'resolved', stuck, unlisted: q.pub === false, stuckD: owed && owed.stuck ? owed.oldestD : stuckD, owed, chip: stuck ? ['resolved · stuck ' + (owed && owed.stuck ? owed.oldestD : stuckD) + 'd', 'amber'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''), sub: (stuck ? (owed ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' (' + U.fmtUsd(owed.stake) + ') waiting for settlement' : 'on Polymarket ' + stuckD + ' days ago · still not settled on Meridian') : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting payout' : 'on Polymarket · not settled on Meridian yet') + why, at, outcome: out, m, o };
     }
     if (o && o.paused) return { code: 'paused', chip: ['paused', 'amber'], main: 'Resolution paused by Polymarket', sub: 'under review · no timeline', m, o };
     if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };
@@ -215,12 +247,24 @@
     if (o && o.reset) return { code: 'disputed', chip: ['disputed', 'red'], main: 'First proposal disputed', sub: 'waiting for a new proposal · then another ' + live(liveness) + ' challenge window', m, o };
     if (/disput|challeng/.test(m.uma)) return { code: 'disputed', chip: ['disputed', 'red'], main: 'Proposal disputed', sub: 'UMA dispute process · typically 2–6 days', m, o };
     if (/propos/.test(m.uma)) return { code: 'proposed', chip: ['proposed', 'accent'], main: 'Outcome proposed on UMA' + (m.updatedAt ? ' ~' + cd(m.updatedAt) : ''), sub: 'challenge window ≈ ' + live(liveness) + '; exact times not available for this market type', at: m.updatedAt ? m.updatedAt + liveness * 1000 : null, m, o };
-    // sports markets carry the fixture time; a postponed game keeps its old endDate but moves gameStartTime forward
-    const game = m.gameAt && m.gameAt > (m.endAt || 0) ? m.gameAt : null; const end = game || m.endAt;
-    if ((end && end < now) || !m.acceptingOrders) return { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: (game ? 'Game started ' : 'Market ended ') + (end ? cd(end) : ''), sub: 'nobody has proposed an outcome yet · $' + U.fmtNum(bond, 0) + ' bond, then a ' + live(liveness) + ' challenge window', at: end, m, o };
-    if (game) return { code: 'trading', chip: ['open', 'accent'], main: 'Game starts ' + U.fmtDateTime(game) + ' (' + cd(game) + ')', sub: (m.endAt < now ? 'rescheduled · ' : '') + 'resolves after the final result' + (cutoff ? ' · ' + cutoff : ''), at: game, m, o };
+    const proposal = '$' + U.fmtNum(bond, 0) + ' bond, then a ' + live(liveness) + ' challenge window';
+    // sports markets carry the fixture time: the listed end date is only a placeholder (for many leagues start + 7 days),
+    // and a re-dated game moves gameStartTime forward. A game long past its start with nothing proposed was almost
+    // always postponed: the rules keep the market open until the make-up game has been played, and Polymarket often
+    // leaves the listing on the original date (CPBL Rakuten–TSG, Jul 10: typhoon, made up Sep 22, still listed Jul 10).
+    const game = m.gameAt;
+    if (game && game > now) return { code: 'trading', chip: ['open', 'accent'], main: 'Game starts ' + U.fmtDateTime(game) + ' (' + cd(game) + ')', sub: (m.endAt && m.endAt < now ? 'rescheduled · ' : '') + 'resolves after the final result' + (cutoff ? ' · ' + cutoff : ''), at: game, m, o };
+    if (game) {
+      const d = Math.floor((now - game) / DAY);
+      if (d >= R.OVERDUE_DAYS) return { code: 'overdue', chip: ['no result · ' + d + 'd', 'amber'], main: 'Game scheduled ' + U.fmtDate(game) + ' · no outcome proposed since', sub: 'usually a postponed game: the rules keep the market open until the make-up game has been played, and Polymarket may still list the original date', at: game, m, o };
+      return { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: 'Game started ' + cd(game), sub: 'the outcome is proposed once the final result is in · ' + proposal, at: game, m, o };
+    }
+    // a market whose listed end date was earlier than the question's own deadline runs to that deadline (compact())
+    const listed = m.listedEnd ? 'Polymarket lists ' + U.fmtDate(m.listedEnd) + ' as its end date, earlier than the deadline in the question' : null;
+    if (m.endAt && m.endAt < now) return { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: 'Market ended ' + cd(m.endAt), sub: 'nobody has proposed an outcome yet · ' + proposal, at: m.endAt, m, o };
+    if (!m.acceptingOrders) return { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: 'Trading halted on Polymarket', sub: 'nobody has proposed an outcome yet · ' + proposal, at: m.endAt, m, o };
     if (!m.endAt) return { code: 'trading', chip: ['open', 'accent'], main: 'No end date on Polymarket', sub: cutoff || 'resolves when the outcome is known · see rules', m, o };
-    return { code: 'trading', chip: ['open', 'accent'], main: 'Resolves after ' + U.fmtDateTime(m.endAt) + ' (' + cd(m.endAt) + ')', sub: cutoff || 'earlier if the outcome is known before then · see rules', at: m.endAt, m, o };
+    return { code: 'trading', chip: ['open', 'accent'], main: 'Resolves after ' + U.fmtDateTime(m.endAt) + ' (' + cd(m.endAt) + ')', sub: [cutoff, listed].filter(Boolean).join(' · ') || 'earlier if the outcome is known before then · see rules', at: m.endAt, m, o };
   };
 
   // ---------------------------------------------------------------- rendering
@@ -236,7 +280,7 @@
     const s = R.state(q, id);
     return h('div.res-line', MD.ui.chip(s.chip[0], s.chip[1]), ' ', h('span.small', { class: s.code === 'unknown' ? 'dim' : '' }, s.main));
   };
-  R.explainer = () => 'How a question resolves: Polymarket markets settle through UMA\'s optimistic oracle. After the event, anyone can propose the outcome with a $' + R.BOND_USD + ' bond; a challenge window follows (2 h by default, shorter for sports and crypto markets). An undisputed proposal resolves the market. A dispute forces a second proposal; a second dispute goes to a UMA token-holder vote (2–6 days). Meridian settles the question once Polymarket has resolved it.';
+  R.explainer = () => 'How a question resolves: Polymarket markets settle through UMA\'s optimistic oracle. After the event, one of Polymarket\'s approved proposers proposes the outcome with a $' + R.BOND_USD + ' bond; a challenge window follows (2 h by default, shorter for sports and crypto markets). An undisputed proposal resolves the market. A dispute forces a second proposal; a second dispute goes to a UMA token-holder vote (2–6 days). Meridian settles the question once the result has been relayed from Polygon, usually within minutes of Polymarket resolving; its settlement bot skips unlisted questions, which then stay unsettled. On Meridian a leg that resolves 50/50 counts as a loss for the bettor.';
 
   R.openDetails = function (q, id, opts = {}) {
     const s = R.state(q, id); const m = s.m, o = s.o; const UI = MD.ui;
@@ -244,9 +288,10 @@
     const short = (a) => h('a', { href: R.POLYGONSCAN + a, target: '_blank', rel: 'noopener', title: a }, U.shortAddr(a, 6));
     row('Status', h('div', UI.chip(s.chip[0], s.chip[1]), ' ', s.main, s.sub ? h('div.xs.dim', s.sub) : null));
     if (m) {
-      row('Polymarket market ends', m.endAt ? U.fmtDateTime(m.endAt) + (m.endAt > Date.now() ? ' · in ' + U.fmtCountdown(m.endAt - Date.now()) : ' · ' + U.fmtAgo(m.endAt)) : '—');
+      row('Polymarket market ends', m.endAt ? U.fmtDateTime(m.endAt) + (m.endAt > Date.now() ? ' · in ' + U.fmtCountdown(m.endAt - Date.now()) : ' · ' + U.fmtAgo(m.endAt)) + (m.listedEnd ? ' · the deadline in the question; Polymarket lists ' + U.fmtDateTime(m.listedEnd) + ', which is earlier' : '') : '—');
       if (m.gameAt) row('Fixture', U.fmtDateTime(m.gameAt) + (m.gameAt > Date.now() ? ' · in ' + U.fmtCountdown(m.gameAt - Date.now()) : ' · ' + U.fmtAgo(m.gameAt)) + (m.gameAt > (m.endAt || 0) + 3600000 ? ' · rescheduled after the listed end' : ''));
       row('Meridian betting cutoff', q.end ? U.fmtDateTime(q.end) + (m.endAt && m.endAt - q.end > 3600000 ? ' · ' + U.fmtDuration(m.endAt - q.end) + ' before the market ends' : '') : '—');
+      if (q.pub === false) row('Listed on Meridian', 'no — an unlisted question. Meridian\'s settlement bot does not relay results for unlisted questions from Polygon, so once Polymarket resolves it, it stays unsettled on Meridian until someone sends the relay transaction');
       row('Trading on Polymarket', m.closed ? 'closed' : m.acceptingOrders ? 'open' : 'halted (pending resolution)');
       if (o) {
         row('Oracle request', 'opened ' + U.fmtDateTime(o.requestTs * 1000) + (o.reset ? ' · reset after a dispute' : ''));

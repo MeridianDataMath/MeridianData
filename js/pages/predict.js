@@ -292,8 +292,8 @@
   const STATUS_OPTS = [{ v: 'open', label: 'Open' }, { v: 'ended', label: 'Ended · unsettled', title: 'Past their end time on Meridian but not settled yet — where is each one in the resolution pipeline?' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }];
   /** Meridian's view of a question as the resolution tracker wants it (live API row or snapshot row). */
   const qView = (c) => (c.conditionId
-    ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, question: c.question }
-    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, question: c.q, op: c.op });   // op: open predictions with their legs (snapshot rows)
+    ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic, question: c.question }
+    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, pub: c.pub, question: c.q, op: c.op });   // op: open predictions with their legs (snapshot rows); pub false = unlisted
   const qId = (c) => c.conditionId || c.id;
   /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
    *  at what odds, and where each leg stands, so a "won" leg can be read together with the rest of the combo. */
@@ -310,7 +310,7 @@
       if (n.decided) return h('span.dim.xs', n.won ? 'won' : n.nd ? 'void' : 'lost');
       if (!k.id) return h('span.dim.xs', '—');
       const st = R.state({ end: k.endTime, settled: false, question: k.q }, k.id);
-      if (st.code === 'resolved') { const y = R.resolvedYes(st.m); const forBettor = y === true || y === false ? y === !!k.yes : null; return h('span.xs', { class: forBettor === true ? 'pos' : forBettor === false ? 'neg' : 'dim' }, forBettor === true ? 'resolved for' : forBettor === false ? 'resolved against' : 'resolved · ' + (st.outcome || 'unclear')); }
+      if (st.code === 'resolved') { const y = R.resolvedYes(st.m); const forBettor = y === true || y === false ? y === !!k.yes : y === 'void' ? false : null; return h('span.xs', { class: forBettor === true ? 'pos' : forBettor === false ? 'neg' : 'dim' }, forBettor === true ? 'resolved for' : y === 'void' ? 'resolved 50/50 (a loss on Meridian)' : forBettor === false ? 'resolved against' : 'resolved · ' + (st.outcome || 'unclear')); }
       return h('span.xs.dim', st.chip ? st.chip[0] : st.code);
     };
     const predState = (n) => {
@@ -354,7 +354,7 @@
   }
   const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
   /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
-  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, resolved: 5, paused: 6, unknown: 7, trading: 8, settled: 9 };
+  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, overdue: 4, resolved: 5, paused: 6, unknown: 7, trading: 8, settled: 9 };
   const byStage = (rows) => U.sortBy(rows, (c) => { const st = R.state(qView(c), qId(c)); return (st.code === 'resolved' && st.stuck ? -1 : (STAGE_RANK[st.code] || 0)) * 1e13 + (st.stuck ? (st.at || 0) : (qView(c).end || 0)); });
   const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
 
@@ -459,8 +459,12 @@
         const preds = new Map(); let oldest = 0;
         for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
         const waiting = Array.from(preds.values()).reduce((a, x) => a + x, 0);
+        // why: Meridian learns a result only when a relay transaction on Polygon sends it over LayerZero; the settlement
+        // bot sends one for every listed question and skips unlisted ones (isPublic false)
+        const unlisted = stuck.filter((q) => q.pub === false).length;
+        const why = !unlisted ? '' : ` ${unlisted === stuck.length ? (stuck.length > 1 ? 'All of these questions are' : 'The question is') : unlisted + ' of these questions are'} unlisted on Meridian. Meridian learns a result only when a relay transaction on Polygon sends it over, and its settlement bot does not send one for unlisted questions. A single relay per question (by Meridian or anyone, about 3 POL in fees) would make the payout claimable.`;
         U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('unresolved on Meridian', 'amber'),
-          h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian's own resolver has not resolved the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}. (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
+          h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian has not settled the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}.${why} (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
       };
       let renderSeq = 0, endedPreloaded = false;
       if (endedIds.length) R.load(endedIds, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; endedPreloaded = true; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});

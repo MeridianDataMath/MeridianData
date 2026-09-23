@@ -182,7 +182,7 @@ async function buildPredict() {
     }
   }
   const r2 = (x) => Math.round(x * 100) / 100;
-  const rowOf = (k) => ({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, src: null });
+  const rowOf = (k) => ({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, pub: k.pub, src: null });
   // plus the questions behind open predictions (a leg can be stuck in resolution) …
   const seenQ = new Set(withOi.map((q) => q.id));
   for (const n of norms) {

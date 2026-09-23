@@ -55,10 +55,12 @@
   P.clearCache = () => cache.clear();
 
   // ---------- field sets ----------
+  // isPublic: listed on Meridian. Unlisted questions can still end up in combos, but Meridian's settlement bot does not
+  // relay their results from Polygon, so they stay unsettled (see P.res).
   P.F = {
-    condition: 'conditionId question shortName endTime settled resolvedToYes nonDecisive estimatedPrice category { name slug } tags',
-    conditionFull: 'conditionId question shortName endTime createdAt settled resolvedToYes nonDecisive estimatedPrice openInterest similarMarketVolume24h similarMarketVolume7d tags category { name slug } conditionGroup { groupId externalEventId } similarMarket { image markets }',
-    prediction: 'predictionId chainId predictor counterparty predictorCollateral counterpartyCollateral predictorToken counterpartyToken settled result createdAt settledAt createTxHash pickConfig { pickConfigId endsAt resolved result picks { conditionId predictedOutcome condition { conditionId question shortName endTime settled resolvedToYes nonDecisive estimatedPrice category { name slug } tags } } }',
+    condition: 'conditionId question shortName endTime settled resolvedToYes nonDecisive estimatedPrice isPublic category { name slug } tags',
+    conditionFull: 'conditionId question shortName endTime createdAt settled resolvedToYes nonDecisive estimatedPrice isPublic openInterest similarMarketVolume24h similarMarketVolume7d tags category { name slug } conditionGroup { groupId externalEventId } similarMarket { image markets }',
+    prediction: 'predictionId chainId predictor counterparty predictorCollateral counterpartyCollateral predictorToken counterpartyToken settled result createdAt settledAt createTxHash pickConfig { pickConfigId endsAt resolved result picks { conditionId predictedOutcome condition { conditionId question shortName endTime settled resolvedToYes nonDecisive estimatedPrice isPublic category { name slug } tags } } }',
     position: 'id chainId createdAt holder side balance token userCollateral totalPayout prediction { predictionId } pickConfig { pickConfigId endsAt resolved result totalPredictorCollateral totalCounterpartyCollateral picks { conditionId predictedOutcome condition { question shortName endTime settled resolvedToYes estimatedPrice category { name } } } }',
     trade: 'id chainId token seller buyer tokenAmount price collateral txHash blockNumber executedAt',
     stats: 'timestamp realizedPnl cumulativePnl volume predictionsTotal predictionsWon predictionsLost predictionsPending predictionsNonDecisive deployedCollateral claimableCollateral',

@@ -12,7 +12,7 @@
       const c = k.condition || {};
       const ep = c.estimatedPrice == null ? null : Number(c.estimatedPrice);
       const yes = String(k.predictedOutcome).toUpperCase() === 'YES';
-      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), event: k.event || null, settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, cat: (c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
+      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), event: k.event || null, settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, cat:(c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
     });
     let fair = null;
     if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
@@ -26,7 +26,9 @@
     const verdict = settled ? p.result : pc.resolved ? pc.result : null;
     const decided = settled || (!!pc.resolved && !!verdict);
     const won = decided && verdict === 'PREDICTOR_WINS';
-    const nd = decided && verdict === 'NON_DECISIVE';               // void: stake returned, nobody wins
+    // NON_DECISIVE exists in the API's enum, but Meridian's escrow settles a 50/50 leg as COUNTERPARTY_WINS (a loss for
+    // the bettor) and no prediction has ever carried this result; kept as "void, stake returned" in case it ever appears
+    const nd = decided && verdict === 'NON_DECISIVE';
     const n = {
       id: p.predictionId, t: P.ms(p.createdAt), settledAt: p.settledAt ? P.ms(p.settledAt) : null,
       predictor: String(p.predictor || '').toLowerCase(), counterparty: String(p.counterparty || '').toLowerCase(),
@@ -329,6 +331,6 @@
     return rows;
   };
   /** Compact question row for the snapshot's question explorer. */
-  P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
+  P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
   P.compactTrade = (x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: String(x.seller || '').toLowerCase(), buyer: String(x.buyer || '').toLowerCase(), tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash, token: String(x.token || '').toLowerCase() }; };
 })();
