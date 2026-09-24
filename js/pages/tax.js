@@ -63,6 +63,13 @@
    *  of every decided prediction, claimed or not), so they serve only for the collateral figures of right now. */
   async function renderPredict(card, addr, start, end, fname, money, pnlEl) {
     const P = MD.predict;
+    // the Meridian app places predictions from a smart account the address owns (its Predict wallet), not from the
+    // address itself: everything below is that wallet's
+    const pw = await P.wallets.predictAddress(addr);
+    const perpsAddr = addr; addr = pw.address;
+    const walletLink = (w) => h('a.addr', { href: '#/predict/bettor?address=' + w, title: w }, U.shortAddr(w, 4));
+    const via = pw.error ? h('span.small', { style: { color: 'var(--amber)' } }, 'Could not look up the Predict wallet of this address (the Robinhood Chain RPC did not answer): these are only the predictions placed from the address itself. Reload to try again · ')
+      : pw.via ? h('span.dim.small', 'Predict wallet ', walletLink(pw.via), ' (the smart account of ', U.shortAddr(perpsAddr, 4), ')', pw.also ? h('span', { style: { color: 'var(--amber)' } }, ' · the address itself has predictions of its own too, not in these figures: ', walletLink(pw.also)) : null, ' · ') : null;
     const live = await P.live();
     let history, snapNorms = null, builtAt = null, lastAll = null, truncated = false, trades = [];
     if (live) {
@@ -71,7 +78,7 @@
       snapNorms = raw.map(P.norm).filter((n) => n.predictor === addr); truncated = !!raw.truncated; trades = (tf && tf.trades) || [];
     } else {
       const f = await P.snapshotFile('bettors/' + addr + '.json');
-      if (!f) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', 'No Meridian Predict activity for this wallet (as of the last snapshot).')); return null; }
+      if (!f) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), via), h('div.empty', 'No Meridian Predict activity for this wallet (as of the last snapshot).')); return null; }
       snapNorms = f.predictions.map(P.unslim).filter((n) => n.predictor === addr); builtAt = f.builtAt; truncated = !!f.truncated; trades = f.trades || [];
     }
     // Secondary market (P.ledger, checked against the exchange for every trading wallet): a prediction whose tokens were
@@ -91,7 +98,7 @@
     const sales = L.events.filter((e) => e.kind !== 'verdict' && e.t >= start && e.t < end);
     const rows = history.filter((x) => x.t >= start && x.t < end);
     const T = rows.reduce((a, x) => { a.pnl += x.pnl; a.pnlC += money.fx(x.pnl, x.t); a.volume += x.volume; a.won += x.won; a.lost += x.lost; a.nd += x.nonDecisive; a.total += x.total; return a; }, { pnl: 0, pnlC: 0, volume: 0, won: 0, lost: 0, nd: 0, total: 0 });
-    if (!T.total && !T.volume && !T.pnl && !(lastAll && (lastAll.claimable || lastAll.deployed))) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent')), h('div.empty', 'No Meridian Predict activity for this wallet in the period.')); return null; }
+    if (!T.total && !T.volume && !T.pnl && !(lastAll && (lastAll.claimable || lastAll.deployed))) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), via), h('div.empty', 'No Meridian Predict activity for this wallet in the period.')); return null; }
     // decided but unclaimed: the verdict is in, no cash has moved. Decided when its last question ended (the API keeps no
     // decision timestamp), so the tail lands in the right year
     const decidedAt = (n) => Math.max(n.t, ...n.picks.map((k) => U.num(k.endTime) || 0));
@@ -135,7 +142,7 @@
       download(fname('predict-secondary-trades'), toCsv([['Time (UTC)', (t) => isoTime(t.t)], ['Trade', (t) => (t.seller === addr ? 'sold' : 'bought')], ['Prediction', (t) => (t.q || '') + (t.legs > 1 ? ` (+${t.legs - 1} legs)` : '')], ['Counterparty', (t) => (t.seller === addr ? t.buyer : t.seller)], ['Tokens (1 USDe each if the side wins)', (t) => n6(t.tokens)], ['Price per token', (t) => (t.tokens ? n6(t.paid / t.tokens) : '')], ['Amount USD', (t) => n6(t.paid)], ['Cost basis USD (sales)', (t) => { const e = t.seller === addr ? saleOf.get(t) : null; return e ? n6(e.cost) : ''; }], ['Realized PnL USD (sales)', (t) => { const r = realized(t); return r == null ? '' : n6(r); }], ...money.csvCol((t) => realized(t) || 0, (t) => t.t, 'Realized PnL'), ['Tx', (t) => t.tx || '']], list));
     };
     U.replace(card,
-      h('div.row', { style: { marginBottom: '10px' } }, h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), h('span.dim.small', (live ? 'from the wallet\'s predictions (collateral now from the exchange\'s account stats)' : 'from the wallet\'s predictions in the published snapshot') + ' · USDe')),
+      h('div.row.wrap', { style: { marginBottom: '10px' } }, h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), via, h('span.dim.small', (live ? 'from the wallet\'s predictions (collateral now from the exchange\'s account stats)' : 'from the wallet\'s predictions in the published snapshot') + ' · USDe')),
       truncated ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '10px' } }, `Only the newest ${U.fmtNum(snapNorms.length, 0)} predictions of this wallet could be read${live ? '' : ' from the snapshot'}; settlements of older ones are missing from the figures below.`) : null,
       tiles,
       h('div', { style: { margin: '14px 0' } }, h('div.card.tight', tbl)),

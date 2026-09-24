@@ -37,9 +37,19 @@
     if (U.isAddress(v)) {
       let subs;
       try { subs = await A.subaccountsOf(v); } catch (e) { return { error: 'Lookup failed: ' + e.message }; }
-      if (!subs.length) return { error: 'No Meridian subaccounts found for this address' };
-      MD.router.navigate('/account', { address: v.toLowerCase(), sub: subs[0].id });
-      return { ok: true };
+      if (subs.length) { MD.router.navigate('/account', { address: v.toLowerCase(), sub: subs[0].id }); return { ok: true }; }
+      // no perps account: a Predict wallet (the smart account the Meridian app places predictions from) opens its
+      // owner's Predict tab when the owner trades perps, else its bettor page; an owner without perps its Predict wallet
+      const W = MD.predict.wallets;
+      const r = await W.predictAddress(v);
+      if (r.error) {
+        // the wallet lookup failed: the address may still have predictions of its own
+        if (await W.hasActivity(v).catch(() => false)) { MD.router.navigate('/predict/bettor', { address: v.toLowerCase() }); return { ok: true }; }
+        return { error: 'No perps account for this address, and its Predict wallet could not be looked up (Robinhood Chain RPC): try again' };
+      }
+      if (r.owner && r.owner !== v.toLowerCase()) { const os = await A.subaccountsOf(r.owner).catch(() => []); if (os.length) { MD.router.navigate('/account', { address: r.owner, sub: os[0].id, tab: 'predict' }); return { ok: true }; } }
+      if (r.active !== false) { MD.router.navigate('/predict/bettor', { address: r.address }); return { ok: true }; }
+      return { error: 'No Meridian perps account or Predict activity found for this address' };
     }
     if (U.isUuid(v)) {
       try { const sa = await A.subaccount(v); MD.router.navigate('/account', { address: sa.account, sub: sa.id }); return { ok: true }; }
@@ -57,6 +67,7 @@
     ['Sharpe', 'Mean ÷ standard deviation of per-bucket returns (PnL over the previous bucket\'s equity), annualized. Hourly buckets for 24h, daily for 30d and all-time. Shown only with at least 10 buckets, since fewer make it noise; the 7-day interval therefore has none, and young accounts none until day 10.'],
     ['Win rate', 'Closed positions with a positive net result (realized − fees − funding) ÷ closed positions. On Predict: won ÷ (won + lost) over decided predictions. Meridian has no refund outcome: a leg that resolves 50/50 settles the prediction as a loss for the bettor.'],
     ['Decided vs settled (Predict)', 'A prediction is decided once every leg has resolved on Meridian and the verdict is recorded (pickConfig.resolved). It is settled only when the winner claims, which many never do promptly, so results, win rates and PnL count from the verdict; "unclaimed" is money the winner has not collected yet. "Unresolved on Meridian" is the small set of questions Meridian\x27s own resolver has not resolved although Polymarket has.'],
+    ['Predict wallet', 'The Meridian app does not place predictions from the address a trader signs in with (the one that owns the perps account) but from a smart account it controls: a ZeroDev Kernel account on Robinhood Chain whose address follows from its owner. An account page\'s Predict tab, the tax center and the search use that wallet; a bettor page links back to its owner. Market makers and a few wallets that bet directly have no such account and show their own address.'],
     ['Profit factor', 'Gross profit of winning closed positions ÷ gross loss of losing ones. Above 1 means the wins outweigh the losses.'],
     ['Expectancy', 'Average net result per closed position.'],
     ['Trading style', 'Average holding time of closed positions: Scalper < 1 h, Intraday < 1 day, Swing < 7 days, otherwise Long-term.'],

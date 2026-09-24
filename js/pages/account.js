@@ -140,8 +140,20 @@
       if (!subs.length) {
         const predictLine = h('div.small', { style: { marginTop: '8px' } });
         U.replace(page, h('div.card', h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No Meridian perps subaccounts are registered for ', h('span.addr', addr), '.'), h('div.small', 'Perps accounts appear here once the wallet has deposited on ', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), '. ', h('a', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, 'View on explorer')), predictLine)));
-        // a wallet can be a Predict bettor without ever touching perps: point at its bettor page when the snapshot knows it
-        MD.predict.snapshotFile('bettors/' + addr.toLowerCase() + '.json', { signal: ctx.signal }).then((f) => { if (f && f.predictions && f.predictions.length) U.replace(predictLine, 'It does have Meridian Predict activity: ', h('a.btn.sm', { href: '#/predict/bettor?address=' + addr.toLowerCase(), style: { marginLeft: '4px' } }, U.icon('target'), `${f.total || f.predictions.length} prediction${(f.total || f.predictions.length) > 1 ? 's' : ''} · open the bettor page`)); }).catch(() => {});
+        // Predict has wallets of its own: this address may be one (a smart account; its owner holds the perps account),
+        // or own one with predictions, or bet directly
+        (async () => {
+          const W = MD.predict.wallets; const a = addr.toLowerCase();
+          const r = await W.resolve(a).catch(() => ({ owner: null, wallet: null, isWallet: false }));
+          if (ctx.signal.aborted) return;
+          const btn = (w) => h('a.btn.sm', { href: '#/predict/bettor?address=' + w, style: { marginLeft: '4px' } }, U.icon('target'), 'Open the bettor page');
+          if (r.isWallet) { U.replace(predictLine, 'This is a Meridian Predict wallet: the smart account the Meridian app places predictions from, owned by ', h('a.addr', { href: U.accountUrl(r.owner, null, 'predict'), title: r.owner }, U.shortAddr(r.owner, 6)), ' (its perps account, if it has one, is under that address).', btn(a)); return; }
+          for (const w of [r.wallet, a].filter(Boolean)) {
+            if (!(await W.hasActivity(w, { signal: ctx.signal }).catch(() => false)) || ctx.signal.aborted) continue;
+            U.replace(predictLine, w === a ? 'It does have Meridian Predict activity.' : h('span', 'It has Meridian Predict activity through its Predict wallet ', h('span.addr', { title: w }, U.shortAddr(w, 6)), '.'), btn(w));
+            return;
+          }
+        })().catch(() => {});
         return;
       }
       const sa = subs.find((s) => s.id === subParam) || subs[0];
@@ -602,10 +614,21 @@
   // =====================================================================
   // Predict (same view as #/predict/bettor, inline)
   // =====================================================================
+  // Predictions are not placed from the perps address: the Meridian app places them through a smart account the
+  // address owns (its Predict wallet, js/predict/wallets.js), so the tab shows that wallet.
   async function mountPredict(el, st, cx) {
-    const wrap = h('div');
-    U.replace(el, h('div.stack', h('div.row', h('span.dim.small', 'Meridian Predict activity of this wallet'), h('span.grow'), h('a.btn.sm.ghost', { href: '#/predict/bettor?address=' + encodeURIComponent(st.addr) }, U.icon('external'), 'Open in Predict section')), wrap));
-    await MD.predict.renderBettor(wrap, st.addr, cx);
+    const wrap = h('div', UI.loading('Finding this account\'s Predict wallet…'));
+    const who = h('span.dim.small');
+    const openBtn = h('a.btn.sm.ghost', { href: '#/predict/bettor?address=' + encodeURIComponent(st.addr) }, U.icon('external'), 'Open in Predict section');
+    U.replace(el, h('div.stack', h('div.row.wrap', { style: { gap: '6px' } }, who, h('span.grow'), openBtn), wrap));
+    const r = await MD.predict.wallets.predictAddress(st.addr, { signal: cx.signal });
+    if (cx.signal.aborted) return;
+    openBtn.href = '#/predict/bettor?address=' + encodeURIComponent(r.address);
+    if (r.error) U.replace(who, h('span.small', { style: { color: 'var(--amber)' } }, 'Could not look up this account\'s Predict wallet (the Robinhood Chain RPC did not answer): showing predictions placed from the address itself.'));
+    else if (r.via) U.replace(who, 'Predict wallet ', h('a.addr', { href: '#/predict/bettor?address=' + r.via, title: r.via }, U.shortAddr(r.via, 6)), U.copyBtn(r.via), ' · the smart account this address controls; the Meridian app places its predictions from it',
+      r.also ? h('span', { style: { color: 'var(--amber)' } }, ' · the address itself has predictions of its own too: ', h('a.addr', { href: '#/predict/bettor?address=' + r.also, title: r.also }, U.shortAddr(r.also, 4))) : null);
+    else U.replace(who, 'Meridian Predict activity of this address');
+    await MD.predict.renderBettor(wrap, r.address, cx, { embedded: true });
   }
 
   // =====================================================================

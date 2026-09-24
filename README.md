@@ -257,6 +257,26 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
     not resolved although Polymarket has (unlisted questions, see above); those are listed first on the Ended tab. The tax center
     stays on a cash basis (claimed).
+  * *Predict wallets* – the Meridian app does not place predictions from the address a trader
+    signs in with. That address owns the perps subaccounts. Predictions come from a ZeroDev Kernel
+    v3.1 smart account it controls on Robinhood Chain: an ERC-1967 proxy to
+    `0xbac849bb…4b4d`, with the ECDSA validator `0x845adb2c…ce57` holding the owner. Its address
+    follows from the owner as `KernelFactory(0xaac5d424…e419).getAddress(initialize(0x01‖validator,
+    no hook, owner, "", []), 0)`.
+    - The ECDSA validator's `ecdsaValidatorStorage(account)` returns the owner. Each account writes
+      that record itself, so an owner counts only when the account sits at that owner's own derived
+      address. The public RPC allows browser calls (CORS `*`) but answers bursts with 429.
+    - Verified 2026-09-25 against every wallet that ever predicted: 712 of 718 are such accounts,
+      and all 712 derive exactly from their owner. The other six are the market makers and four
+      wallets that bet directly.
+    - Of the 27 perps owners, none had a prediction under their own address, and 17 have them under
+      their Predict wallet. Example: owner `0x1111…1111` → Predict wallet `0x4824…ccac`.
+    - `js/predict/wallets.js` (`P.wallets`) batches the calls, retries 429s and keeps the answers in
+      localStorage. A missing owner is kept for a day only.
+    - These use it: the account page's Predict tab, the tax center's Predict section, the account
+      page for an address without perps, the bettor page (a Perps link and a "Predict wallet of"
+      line to the owner; an owner address moves to its Predict wallet) and the global search (a
+      Predict wallet opens its owner's Predict tab).
   * *Secondary market* – a position can be sold before the verdict. Position tokens belong to a
     pick configuration and a side (every prediction on the same picks shares them, so one trade
     can move many predictions' tokens); a token pays 1 USDe if its side wins. The snapshot builder

@@ -597,7 +597,10 @@
   // =====================================================================
   async function mountBettorPage(body, route, ctx) {
     const addr = String(route.params.address || '').toLowerCase();
-    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps'), h('button.btn.sm.ghost', { title: 'Copy a share link: Discord, X, Telegram and the like show this wallet\'s card with its result', onclick: () => { U.copyText(MD.api.shareUrl('p', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
+    // a Predict wallet is a smart account; the perps account belongs to its owner (js/predict/wallets.js)
+    const perpsBtn = h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Perps account' }, U.icon('account'), 'Perps');
+    if (U.isAddress(addr)) P.wallets.ownerOf(addr).then((o) => { if (o) { perpsBtn.href = U.accountUrl(o); perpsBtn.title = 'Perps account of the owner ' + o; } }).catch(() => {});
+    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), perpsBtn, h('button.btn.sm.ghost', { title: 'Copy a share link: Discord, X, Telegram and the like show this wallet\'s card with its result', onclick: () => { U.copyText(MD.api.shareUrl('p', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
     // phones: the header goes into the page (the topbar cannot fit it); same arrangement as the perps account page
     const headSlot = h('div.acct-head-slot'); if (body.parentElement) body.parentElement.prepend(headSlot); else body.prepend(headSlot);
     const narrow = window.matchMedia('(max-width: 720px)');
@@ -632,14 +635,26 @@
     return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt, trades: f.trades || [] };
   }
   P.loadBettor = loadBettor;
-  P.renderBettor = async function (el, addr, ctx) {
+  /** opts.embedded: inside the perps account's Predict tab, which has already resolved the Predict wallet. */
+  P.renderBettor = async function (el, addr, ctx, opts = {}) {
     U.replace(el, loadingCard('Loading bettor history…'));
     UI.progress.start();
     let m;
     try { m = await loadBettor(addr, ctx); } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
     UI.progress.done();
     if (ctx.signal.aborted) return;
-    if (!m) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address (as of the last snapshot).'))); return; }
+    // nothing under this address: when it is a trader's own wallet, its predictions are in its Predict wallet (the
+    // smart account the Meridian app places them from), so the stand-alone page moves there
+    const noActivity = async (text) => {
+      U.replace(el, h('div.card', h('div.empty', text)));
+      if (opts.embedded) return;
+      const r = await P.wallets.predictAddress(addr, { signal: ctx.signal }).catch(() => null);
+      // only where there is something to see: an address with no activity anywhere may itself be a Predict wallet nobody
+      // has deployed yet, and naming a "wallet" derived from it would be false
+      if (ctx.signal.aborted || !r || !r.via || !r.active || r.address === addr) return;
+      U.toast(U.shortAddr(addr, 4) + ' places its predictions from its Predict wallet ' + U.shortAddr(r.via, 4)); location.replace('#/predict/bettor?address=' + r.via);
+    };
+    if (!m) { noActivity('No Meridian Predict activity for this address (as of the last snapshot).'); return; }
     const { norms, hist } = m;
     const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
     const isMaker = asMaker.length > asBettor.length;
@@ -648,7 +663,7 @@
     const L = P.ledger(norms, m.trades || [], addr);
     const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? bp.held : 1; };
     const posRows = m.posRows.filter((r) => !r.id || heldOf(r) > 1e-6);
-    if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) { U.replace(el, h('div.card', h('div.empty', 'No Meridian Predict activity for this address.'))); return; }
+    if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) { noActivity('No Meridian Predict activity for this address.'); return; }
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
     // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
@@ -764,8 +779,11 @@
     const sum = P.bettorSummary(mine.map((n) => { const bp = L.byPrediction[n.id]; return bp && n.decided ? Object.assign({}, n, { pnl: isMaker ? -bp.pnl : bp.pnl }) : n; }));
     const catTbl = UI.table({ cols: [{ key: 'c', label: 'Category', render: (r) => r.cat }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'w', label: 'Wagered', num: true, render: (r) => usd(r.wagered, { compact: true }) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.categories, empty: '—' });
     const comboTbl = UI.table({ cols: [{ key: 'l', label: 'Legs', render: (r) => (r.legs === 1 ? 'Single' : r.legs + '-leg') }, { key: 'n', label: 'Predictions', num: true, render: (r) => String(r.n) }, { key: 'o', label: 'Avg odds', num: true, render: (r) => pct(r.avgOdds, 0) }, { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) }, { key: 'p', label: 'PnL', num: true, render: (r) => pnlEl(isMaker ? -r.pnl : r.pnl) }], rows: sum.combos, empty: '—' });
+    // whose Predict wallet this is: the owner signs in to Meridian with it and holds the perps account (if any)
+    const ownerEl = h('span.small');
+    if (!opts.embedded) P.wallets.ownerOf(addr).then((o) => { if (o && !ctx.signal.aborted) U.replace(ownerEl, h('span.dim', 'Predict wallet of '), h('a.addr', { href: U.accountUrl(o, null, 'predict'), title: 'Owner ' + o + ' · its perps account' }, U.shortAddr(o, 4)), U.copyBtn(o)); }).catch(() => {});
     U.replace(el, h('div.stack',
-      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip('market maker', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? `${U.fmtNum(agg.n, 0)} predictions · the tables show the newest ${mine.length}; the figures above cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${mine.length} predictions · figures from Meridian's own account history` : `${mine.length} predictions · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       // offline, the curves are rebuilt from the loaded predictions: say so when those are not all of them
       h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume'), h('span.grow'), !m.live && m.truncated ? h('span.dim.xs', `newest ${mine.length} predictions`) : null), h('div.chart-box.sm', cVol))),
