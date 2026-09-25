@@ -710,7 +710,9 @@
       UI.stat('Avg odds', pct(F.avgOdds, 0), F.avgLegs ? 'avg ' + U.fmtNum(F.avgLegs, 1) + ' legs' : null),
       m.balance == null ? UI.stat('Open stake', usd(U.sum(posRows, (r) => r.stake)), 'in open predictions') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
       UI.stat('Open', U.fmtNum(F.open, 0), 'predictions, not yet decided'),
-      F.unclaimedWon && !isMaker ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`, 'pos') : null);
+      // winnings are collected in the Meridian app (its Predict portfolio claims them all at once)
+      F.unclaimedWon && !isMaker ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), h('span', `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
+        h('div', { style: { marginTop: '8px' } }, h('a.btn.sm', { href: P.CLAIM_URL, target: '_blank', rel: 'noopener', title: 'Opens the Predict portfolio in the Meridian app, where the wallet\'s owner claims every payout at once' }, U.icon('external'), 'Claim on Meridian'))), 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
     // Cumulative PnL. Live: the exchange's own daily history, booked at the verdict. Offline that history is rebuilt from
     // claims, which lags every wallet that leaves wins uncollected (a market maker's chart ended $800 away from its

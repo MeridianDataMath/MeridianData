@@ -9,6 +9,7 @@
   P.PAGE = 25;                        // hard cap of the API
   P.LAUNCH_SEC = 1782691200;          // 2026-06-29 00:00 UTC, day before the first prediction
   P.APP_URL = 'https://app.meridian.xyz/predict?ref=BJ9Y51H9XB1L';
+  P.CLAIM_URL = 'https://app.meridian.xyz/portfolio/prediction-stats?ref=BJ9Y51H9XB1L';   // the app's Predict portfolio: "Claimable Payout" and its claim button
 
   /** 18-decimal amount → USDe. The API serialises these as strings when large and as JSON numbers when they fit
    *  (e.g. 6916996047430642 = 0.0069 USDe), so numbers are wei too. Only for wei fields, never for USD decimals. */
