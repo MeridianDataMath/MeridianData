@@ -570,7 +570,8 @@
         if (!r || !r.overall.n) return null;
         const o = r.overall; const cr = h('canvas');
         const buckets = r.byOddsBucket.filter((b) => b.n >= 30);
-        const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different events', ...r.combosOnly }, { k: 'Combos · same event', ...r.combosSameEvent }, r.combosUnknown.n ? { k: 'Combos · event unknown', ...r.combosUnknown } : null].filter(Boolean);
+        // combos with a leg whose Polymarket event is unknown (a handful at most) stay in the overall figures, not as a row
+        const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different events', ...r.combosOnly }, { k: 'Combos · same event', ...r.combosSameEvent }];
         const node = h('div.stack', { style: { marginTop: '8px' } },
           h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Quote-implied vs realized'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'The other way to measure the edge, needing no source price at all: on decided bets (the exchange\x27s verdict is in, claimed or not), the odds the bettors locked are the win probability they paid for; compare that with how often they actually won. Outcomes carry the real correlation between legs and any skill the bettors have, so this is the maker\'s realized edge rather than a quoted one. It costs waiting for the verdict and some luck: the ± is a 95% interval on the hit rate, and a gap inside it may be chance.'), h('p.muted.small', { style: { margin: 0 } }, 'Money matters more than counts here: a bet at 3% odds that hits 2% of the time loses a third of its stakes on average, while the same one-point gap at 60% odds is nothing. Bettor ROI is net result ÷ stake and is the number to read; the maker\'s take is its mirror image.')),
           h('div.stats', UI.stat('Decided bets', U.fmtNum(o.n, 0), U.fmtUsd(o.stake, { compact: true }) + ' staked · claimed or not'), UI.stat('Implied win rate', U.fmtPct(o.implied * 100, { dp: 1 }), 'avg locked odds'), UI.stat('Realized win rate', U.fmtPct(o.hit * 100, { dp: 1 }), '± ' + U.fmtNum(o.ci * 100, 1) + ' pp (95%)'), UI.stat('Bettor ROI', U.fmtPct(o.roi * 100, { sign: true, dp: 1 }), 'net result ÷ stake', U.pnlClass(o.roi)), UI.stat('Maker take', U.fmtPct(-o.roi * 100, { sign: true, dp: 1 }), 'of stakes, realized', U.pnlClass(-o.roi))),
@@ -619,7 +620,7 @@
         P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
         P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal }).catch(() => null),   // the wallet's secondary-market trades, tied to their predictions by the snapshot builder
       ]);
-      const norms = raw.map(P.norm).filter((n) => n.predictor === addr || n.counterparty === addr);
+      const norms = raw.map(P.norm).filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n));   // a bet against itself moves no money
       // decided-but-unclaimed positions are not open; a position whose tokens were all sold is not this wallet's any more
       const undecided = (openPos.nodes || []).filter((p) => !(p.pickConfig && p.pickConfig.resolved) && P.usd(p.balance) > 1e-9);
       const posRows = undecided.map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null })); let fair = null; if (picks.length && picks.every((k) => k.ep != null)) { fair = 1; for (const k of picks) fair *= k.yes ? k.ep : 1 - k.ep; } return { side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
@@ -627,7 +628,7 @@
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
-    const norms = f.predictions.map(P.unslim);
+    const norms = f.predictions.map(P.unslim).filter((n) => !P.selfMatch(n));
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
     const open = mine.filter((n) => !n.decided);

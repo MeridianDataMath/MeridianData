@@ -69,3 +69,14 @@ test('the aggregate mirrors bettors and makers without a secondary market', () =
   assert.equal(a.totals.decided, 2); assert.equal(a.totals.unclaimed, 1); assert.equal(a.totals.open, 1);
   assert.equal(a.secondary, null);
 });
+
+test('a self-match is no bet: left out, so its wallet is no "market maker" (0xf069…: $0.50 against itself at launch)', () => {
+  const self = P.norm({ predictionId: 's', predictor: ME, counterparty: ME, predictorCollateral: wei(0.5), counterpartyCollateral: wei(0.5), settled: false, result: null,
+    createdAt: new Date(T0).toISOString(), settledAt: null, pickConfig: { pickConfigId: 'pc-s', resolved: true, result: 'PREDICTOR_WINS', picks: [{ conditionId: 'cs', predictedOutcome: 'YES', condition: { question: 'Q', endTime: Math.floor(T0 / 1000) } }] } });
+  assert.equal(P.selfMatch(self), true); assert.equal(P.selfMatch(pred('x', 1, 1, null, false)), false);
+  const a = P.aggregate([pred('a', 5, 10, 'PREDICTOR_WINS', true), self]);
+  assert.deepEqual(a.makers.map((m) => m.address), [MAKER], 'only the real maker');
+  assert.equal(a.totals.n, 1); assert.equal(a.totals.selfMatched, 1);
+  near(assert, a.totals.bettorPnl, 10, 1e-9, 'the self-match adds nothing');
+  assert.equal(a.bettors.find((b) => b.address === ME).n, 1);
+});

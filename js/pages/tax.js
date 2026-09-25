@@ -75,11 +75,11 @@
     if (live) {
       const [acct, raw, tf] = await Promise.all([P.account(addr, { interval: 'DAY', fromSec: Math.floor(start / 1000) - 86400, toSec: Math.floor(end / 1000), ttl: 60000 }), P.predictionsOf(addr, { maxPages: 40 }), P.snapshotFile('bettors/' + addr + '.json').catch(() => null)]);
       lastAll = acct.history.length ? acct.history[acct.history.length - 1] : null;
-      snapNorms = raw.map(P.norm).filter((n) => n.predictor === addr); truncated = !!raw.truncated; trades = (tf && tf.trades) || [];
+      snapNorms = raw.map(P.norm).filter((n) => n.predictor === addr && !P.selfMatch(n));   // a bet against itself moves no money truncated = !!raw.truncated; trades = (tf && tf.trades) || [];
     } else {
       const f = await P.snapshotFile('bettors/' + addr + '.json');
       if (!f) { U.replace(card, h('div.row', h('h2', 'Meridian Predict'), UI.chip('prediction markets', 'accent'), h('span.grow'), via), h('div.empty', 'No Meridian Predict activity for this wallet (as of the last snapshot).')); return null; }
-      snapNorms = f.predictions.map(P.unslim).filter((n) => n.predictor === addr); builtAt = f.builtAt; truncated = !!f.truncated; trades = f.trades || [];
+      snapNorms = f.predictions.map(P.unslim).filter((n) => n.predictor === addr && !P.selfMatch(n)); builtAt = f.builtAt; truncated = !!f.truncated; trades = f.trades || [];
     }
     // Secondary market (P.ledger, checked against the exchange for every trading wallet): a prediction whose tokens were
     // traded is booked through the ledger instead of on its own settlement. A sale is a disposal on its own date (its

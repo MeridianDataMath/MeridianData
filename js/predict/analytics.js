@@ -201,8 +201,14 @@
     return { events, pnl, replaced, adj: pnl - replaced, byPrediction, open, trades: mine.slice().sort((a, b) => b.t - a.t) };
   };
 
-  /** Aggregate normalised predictions. Returns plain JSON. trades: the secondary market (see P.ledger), optional. */
+  /** A prediction a wallet made against itself. */
+  P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
+  /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional. */
   P.aggregate = function (norms, { tapeSize = 100, trades = null } = {}) {
+    // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
+    // making; counted in its figures it made its wallet a "market maker" with one prediction
+    const selfMatched = norms.filter(P.selfMatch).length;
+    if (selfMatched) norms = norms.filter((n) => !P.selfMatch(n));
     const bettors = {}, makers = {}, cats = {}, combos = {}, daily = {}, weeks = {};
     const acc = (m, k, init) => m[k] || (m[k] = init());
     // decided = verdict in (claimed or not); settled = claimed; unclaimed = decided, not claimed (unclaimedWon / unclaimedPayout: money this side can collect)
@@ -291,7 +297,7 @@
     };
     vig.realized = realized;
     return {
-      totals: Object.assign(totals, { bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null }),
+      totals: Object.assign(totals, { selfMatched, bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null }),
       bettors: rowsOf(bettors, 'address').sort((a, b) => b.pnl - a.pnl),
       makers: rowsOf(makers, 'address').sort((a, b) => b.n - a.n),
       categories: Object.values(cats).map((c) => ({ cat: c.cat, n: c.n, wagered: c.wagered, settled: c.settled, won: c.won, winRate: c.settled ? (c.won / c.settled) * 100 : null, pnl: c.pnl, avgVig: avg(c.vig) })).sort((a, b) => b.wagered - a.wagered),
