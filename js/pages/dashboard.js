@@ -253,6 +253,17 @@
       ctx.onCleanup(A.ws.onStatus((s) => { status.className = 'status-dot ' + (s === 'open' ? 'ok' : s === 'connecting' ? 'warn' : 'bad'); statusTxt.textContent = s === 'open' ? 'live' : s; }));
 
       // ---- liquidations ----
+      // the API's cause (LiquidationCause) in plain words: what took the pool's equity below its maintenance margin
+      const CAUSES = {
+        MarkChanged: ['Price move', 'The mark price moved against the position (a long fell, a short rose) and its unrealized loss took the pool\'s equity below the maintenance margin.'],
+        Funding: ['Funding', 'A funding payment took the pool\'s equity below the maintenance margin.'],
+        PositionFee: ['Position fee', 'An mPerp position fee took the pool\'s equity below the maintenance margin; it can happen while the market is closed and the price is frozen.'],
+      };
+      const causeEl = (r) => {
+        const c = CAUSES[r.cause]; if (!c) return UI.chip(r.cause || '—', 'red');
+        const charge = r.cause === 'Funding' && U.num(r.fundingChargeUsd) ? ` Funding charged: ${U.fmtUsd(r.fundingChargeUsd)}.` : '';
+        return h('span', { title: c[1] + charge + ` (API cause: ${r.cause})` }, UI.chip(c[0], 'red'));
+      };
       async function loadLiq() {
         try {
           const rows = await A.liquidations(20, ctx);
@@ -264,7 +275,7 @@
               { key: 'side', label: 'Side', render: (r) => U.sideEl(r.positionSide, true) },
               { key: 'cost', label: 'Cost', num: true, render: (r) => U.fmtUsd(r.cost) },
               { key: 'px', label: 'Liq. price', num: true, render: (r) => U.fmtPrice(r.liquidationPrice, ref.byId[r.productId] && ref.byId[r.productId].tickSize) },
-              { key: 'cause', label: 'Cause', render: (r) => UI.chip(r.cause || '—', 'red') },
+              { key: 'cause', label: 'Cause', title: 'What took the account below its maintenance margin: a price move, a funding payment or an mPerp position fee', render: causeEl },
             ], rows, empty: 'No liquidations recorded',
           }));
         } catch (e) { if (e.name !== 'AbortError') U.replace(liqBody, UI.error(e)); }
