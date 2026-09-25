@@ -273,6 +273,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       their Predict wallet. Example: owner `0x1111…1111` → Predict wallet `0x4824…ccac`.
     - `js/predict/wallets.js` (`P.wallets`) batches the calls, retries 429s and keeps the answers in
       localStorage. A missing owner is kept for a day only.
+    - The account Overview has a one-line summary above the account card: net PnL, predictions,
+      record, open and unclaimed. It shows the same figures as the Predict tab (both use
+      `P.walletHeadline`) and links to that tab. Accounts without Predict activity show nothing.
     - These use it: the account page's Predict tab, the tax center's Predict section, the account
       page for an address without perps, the bettor page (a Perps link and a "Predict wallet of"
       line to the owner; an owner address moves to its Predict wallet) and the global search (a

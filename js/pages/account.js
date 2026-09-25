@@ -195,6 +195,7 @@
         const fn = { overview: mountOverview, live: mountLive, performance: mountPerformance, rewards: mountRewards, predict: mountPredict }[v];
         fn(tabBody, state, tabCtx).catch((e) => { if (!isAbort(e)) { console.error(e); U.replace(tabBody, UI.error(e, () => show(v))); } });
       }
+      state.showTab = show;   // lets a tab switch to another one without reloading the page
       show(tab);
     },
   };
@@ -224,8 +225,11 @@
     let refreshSec = U.num(U.storage.get('md.refresh', 30)); let refreshT = null; let lastLoad = 0;
     const updLbl = h('span.dim.small');
     const refreshSeg = UI.seg(REFRESH, refreshSec, (v) => { refreshSec = v; U.storage.set('md.refresh', v); schedule(); }, 'sm');
-    const refreshRow = h('div.row', { style: { justifyContent: 'flex-end' } }, updLbl, h('span.dim.small', 'Auto-refresh'), refreshSeg);
+    const glance = h('div.row.wrap', { style: { gap: '6px', alignItems: 'center' } });   // Predict at a glance (predictGlance)
+    // the refresh controls stay together on the right, also when a narrow screen wraps them under the Predict line
+    const refreshRow = h('div.row.wrap', { style: { gap: '8px' } }, glance, h('div.row', { style: { gap: '8px', marginLeft: 'auto' } }, updLbl, h('span.dim.small', 'Auto-refresh'), refreshSeg));
     U.replace(el, h('div.stack', refreshRow, h('div.overview', stateCard, chartCard), tablesCard));
+    predictGlance(glance, st, cx).catch((e) => { if (!isAbort(e)) console.warn('predict glance', e); });
     function schedule() {
       clearTimeout(refreshT);
       if (!refreshSec) return;
@@ -609,6 +613,26 @@
     C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, signColors: true, label: 'PnL', xMax: Date.now() });
     const closedMk = ps.byMarket.filter((r) => r.closed > 0);   // a market with only an open position has no closed result to show
     C.bars(c3, closedMk.map((r) => r.ticker), closedMk.map((r) => r.pnl), { horizontal: true });
+  }
+
+  /** One line on the Overview: the account's Predict result, the same figures as its Predict tab, loaded after the page.
+   *  Nothing when the account has no Predict activity or its Predict wallet cannot be looked up. */
+  async function predictGlance(slot, st, cx) {
+    const P = MD.predict;
+    const r = await P.wallets.predictAddress(st.addr, { signal: cx.signal });
+    if (cx.signal.aborted || r.error || r.active === false) return;
+    const x = await P.walletHeadline(r.address, cx);
+    if (cx.signal.aborted || !x) return;
+    const F = x.F; const n = x.agg ? x.agg.n : x.mine.length;
+    const sep = () => h('span.dim.small', '·');
+    const dp = (v) => (Math.abs(U.num(v)) >= 100 ? { dp: 0 } : {});   // as on the Predict tab: whole dollars from $100
+    const toTab = h('a.small', { href: U.accountUrl(st.addr, st.sa.id, 'predict'), title: 'Open the Predict tab', onclick: (e) => { if (st.showTab) { e.preventDefault(); st.showTab('predict'); } } }, 'Predict tab →');
+    U.replace(slot, UI.chip('Predict', 'accent'),
+      h('span.small', h('span.dim', x.isMaker ? 'Maker PnL ' : 'Net PnL '), U.pnlEl(F.pnl, dp(F.pnl))), sep(),
+      h('span.small', `${U.fmtNum(n, 0)} prediction${n === 1 ? '' : 's'} · ${U.fmtNum(F.won || 0, 0)}W / ${U.fmtNum(F.lost || 0, 0)}L` + (F.open ? ` · ${U.fmtNum(F.open, 0)} open` : '')),
+      F.unclaimedWon && !x.isMaker ? [sep(), h('span.small.pos', `${U.fmtUsd(F.unclaimedPayout, dp(F.unclaimedPayout))} to claim`)] : null,
+      sep(), toTab);
+    slot.title = 'Meridian Predict, from ' + (r.via ? 'this account\'s Predict wallet ' + r.via + ' (the smart account the Meridian app places its predictions from)' : r.address);
   }
 
   // =====================================================================

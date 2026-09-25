@@ -635,6 +635,34 @@
     return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt, trades: f.trades || [] };
   }
   P.loadBettor = loadBettor;
+  /** A wallet's role, token ledger and headline figures, exactly as its bettor page shows them, from loadBettor's model;
+   *  null when there is nothing under the address. { asBettor, asMaker, isMaker, mine, L, agg, F } */
+  async function headline(addr, m, signal) {
+    const { norms, hist } = m;
+    const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
+    const isMaker = asMaker.length > asBettor.length;
+    const mine = isMaker ? asMaker : asBettor;
+    // the secondary market: PnL follows the position tokens, so a sold prediction's result is no longer (all) this wallet's
+    const L = P.ledger(norms, m.trades || [], addr);
+    if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) return null;
+    // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
+    // predictions, so the decided-but-unclaimed ones come from the predictions loaded here, which is exact while they are
+    // all loaded (up to 300 live, 600 in a snapshot file). A larger account (every market maker, heavy bettors) would
+    // count only the unclaimed ones inside that window, so its figures come from the published snapshot's aggregate for
+    // this wallet instead, which covers every prediction as of its build.
+    const agg = m.truncated ? await (async () => { try { const snap = await P.loadSnapshot({ signal }); if (!snap || !snap.remote || !snap.agg) return null; const row = (isMaker ? snap.agg.makers : snap.agg.bettors).find((r) => r.address === addr); return row ? Object.assign({ at: snap.builtAt }, row) : null; } catch (e) { return null; } })() : null;
+    // Checked against the exchange: its account history books PnL at the verdict (its cumulative PnL equals the sum of
+    // every decided prediction's result, claimed or not), while its won / lost counts move only when a prediction is
+    // claimed. So live, the PnL is the exchange's as it stands and only the counts need the unclaimed ones added; the
+    // snapshot fallback rebuilds its history from claims, so there the unclaimed results are added to the PnL too.
+    const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
+    const F = agg
+      ? { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: agg.unclaimedWon, unclaimedPayout: agg.unclaimedPayout, roi: agg.roi, roiNote: 'on decided stakes · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true }
+      : Object.assign(P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L }), { pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''), roiNote: 'on decided stakes', fromSnap: false });
+    return { asBettor, asMaker, isMaker, mine, L, agg, F };
+  }
+  /** Headline figures of a wallet for a summary elsewhere (the perps account's Overview): { m, isMaker, mine, L, F } or null. */
+  P.walletHeadline = async (addr, ctx) => { const m = await loadBettor(addr, ctx); if (!m) return null; const x = await headline(addr, m, ctx.signal); return x ? Object.assign({ m }, x) : null; };
   /** opts.embedded: inside the perps account's Predict tab, which has already resolved the Predict wallet. */
   P.renderBettor = async function (el, addr, ctx, opts = {}) {
     U.replace(el, loadingCard('Loading bettor history…'));
@@ -655,35 +683,15 @@
       U.toast(U.shortAddr(addr, 4) + ' places its predictions from its Predict wallet ' + U.shortAddr(r.via, 4)); location.replace('#/predict/bettor?address=' + r.via);
     };
     if (!m) { noActivity('No Meridian Predict activity for this address (as of the last snapshot).'); return; }
+    const x = await headline(addr, m, ctx.signal);
+    if (ctx.signal.aborted) return;
+    if (!x) { noActivity('No Meridian Predict activity for this address.'); return; }
     const { norms, hist } = m;
-    const asBettor = norms.filter((n) => n.predictor === addr), asMaker = norms.filter((n) => n.counterparty === addr);
-    const isMaker = asMaker.length > asBettor.length;
-    const mine = isMaker ? asMaker : asBettor;
-    // the secondary market: PnL follows the position tokens, so a sold prediction's result is no longer (all) this wallet's
-    const L = P.ledger(norms, m.trades || [], addr);
+    const { asBettor, asMaker, isMaker, mine, L, agg, F } = x;
     const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? bp.held : 1; };
     const posRows = m.posRows.filter((r) => !r.id || heldOf(r) > 1e-6);
-    if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) { noActivity('No Meridian Predict activity for this address.'); return; }
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
-    // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
-    // predictions, so the decided-but-unclaimed ones come from the predictions loaded here, which is exact while they are
-    // all loaded (up to 300 live, 600 in a snapshot file). A larger account (every market maker, heavy bettors) would
-    // count only the unclaimed ones inside that window, so its figures come from the published snapshot's aggregate for
-    // this wallet instead, which covers every prediction as of its build.
-    let F;
-    const agg = m.truncated ? await (async () => { try { const snap = await P.loadSnapshot({ signal: ctx.signal }); if (!snap || !snap.remote || !snap.agg) return null; const row = (isMaker ? snap.agg.makers : snap.agg.bettors).find((r) => r.address === addr); return row ? Object.assign({ at: snap.builtAt }, row) : null; } catch (e) { return null; } })() : null;
-    if (ctx.signal.aborted) return;
-    // Checked against the exchange: its account history books PnL at the verdict (its cumulative PnL equals the sum of
-    // every decided prediction's result, claimed or not), while its won / lost counts move only when a prediction is
-    // claimed. So live, the PnL is the exchange's as it stands and only the counts need the unclaimed ones added; the
-    // snapshot fallback rebuilds its history from claims, so there the unclaimed results are added to the PnL too.
-    const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
-    if (agg) {
-      F = { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: agg.unclaimedWon, unclaimedPayout: agg.unclaimedPayout, roi: agg.roi, roiNote: 'on decided stakes · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true };
-    } else {
-      F = Object.assign(P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L }), { pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''), roiNote: 'on decided stakes', fromSnap: false });
-    }
     // Equity curve flex (js/flex.js): all time, from the exchange's own history when live, else from the predictions the
     // way the snapshot counts them (decided at the verdict, traded positions through the token ledger); a wallet whose
     // predictions are not all loaded gets its card without the curve rather than a partial one
