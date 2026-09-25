@@ -61,3 +61,77 @@ test('paper copy follows the same cap and ends flat', () => {
   near(assert, st.closed[0].entryNotional, 10000, 1e-6, 'capped at five times the size');
   assert.equal(PP.apply(st, { id: 'f0', t: 0, pid: 'p', ticker: 'P', side: 'BUY', qty: 1, px }, { px, live: true, at: 0 }), null, 'a fill already mirrored is ignored');
 });
+
+// The report of 2026-09-25: following 0x7c75… at 19:23 while its ETH long (30.738, opened 12:30) was open; its two closing
+// sells at 19:35 were mirrored as a new $2,000 short, closed "at mark" a day later for −$13.
+const ETH = 'eth', settings = { mode: 'fixed', size: 2000, ratio: 0.1, delay: 30, slipBps: 0, feeRate: {} };
+const sell = (id, qty, t, px = 2676.1) => ({ id, t, pid: ETH, ticker: 'ETH-USD', side: 'SELL', qty, px, orderQty: 30.738 });
+const buy = (id, qty, t, px = 2636.5, orderQty = qty) => ({ id, t, pid: ETH, ticker: 'ETH-USD', side: 'BUY', qty, px, orderQty });
+
+test('a position the leader held when following started is not the copy\'s: closing it opens nothing', () => {
+  const st = PP.start('sid', '0x', settings, PP.leaderBook([{ productId: ETH, side: 0, size: '30.738' }]));
+  assert.deepEqual(st.pre, { [ETH]: 30.738 });
+  PP.apply(st, sell('s1', 16.8105, 1), { px: 2675.56, live: false, at: 31 });
+  near(assert, st.pre[ETH], 13.9275, 1e-9, 'the cut comes off the untracked part');
+  PP.apply(st, sell('s2', 13.9275, 2), { px: 2675.56, live: false, at: 32 });
+  assert.deepEqual(Object.keys(st.open), [], 'no phantom short');
+  assert.equal(st.pre[ETH], undefined); assert.equal(st.log.length, 0); assert.equal(st.totals.realized, 0);
+  // the leader flat, the copy flat: lining up changes nothing
+  assert.deepEqual(PP.reconcile(st, {}, () => 2691.25, 99), []);
+});
+
+test('a cut of a position partly held before following cuts the copy by the same share', () => {
+  const st = PP.start('sid', '0x', settings, { [ETH]: 10 });
+  PP.apply(st, buy('b1', 10, 1, 2000), { px: 2000, live: true, at: 1 });   // the leader adds 10: the copy opens $2,000
+  near(assert, st.open[ETH].qty, 1, 1e-9);
+  PP.apply(st, sell('s1', 5, 2, 2100), { px: 2100, live: true, at: 2 });   // 5 of 20 = a quarter
+  near(assert, st.open[ETH].qty, 0.75, 1e-9); near(assert, st.open[ETH].leaderQty, 7.5, 1e-9); near(assert, st.pre[ETH], 7.5, 1e-9);
+  PP.apply(st, sell('s2', 15, 3, 2100), { px: 2100, live: true, at: 3 });   // the rest
+  assert.deepEqual(Object.keys(st.open), []); assert.equal(st.pre[ETH], undefined);
+  near(assert, st.totals.realized, 100 - st.totals.fees, 1e-6, 'bought 1 at 2000, sold at 2100');
+  // a sell past zero opens a short with what goes past it
+  PP.apply(st, sell('s3', 4, 4, 2100), { px: 2100, live: true, at: 4 });
+  assert.equal(st.open[ETH].side, -1);
+});
+
+test('the leader\'s whole trade mirrored from the start ends with its profit, whatever order the history returns', async () => {
+  const st = PP.start('sid', '0x', settings, {});
+  const ref = { byId: { [ETH]: { displayTicker: 'ETH-USD' } } };
+  const f = (id, side, filled, price, createdAt) => ({ id, orderId: side + 'o', productId: ETH, side, filled: String(filled), price: String(price), createdAt });
+  const fills = [f('c2', 1, 13.9275, 2676.1, 5000), f('o1', 0, 17.0742, 2636.5, 1000), f('c1', 1, 16.8105, 2676.1, 4900), f('o2', 0, 13.6638, 2636.5, 1038)];
+  st.startedAt = 0;
+  await PP.applyFills(st, fills, ref, async (x) => ({ px: Number(x.price), live: false, at: x.createdAt }));
+  assert.deepEqual(Object.keys(st.open), []); assert.ok(st.totals.realized > 25, 'about +1.5 % of $2,000');
+  assert.equal(st.fillT, 5000);
+  assert.equal((await PP.applyFills(st, fills, ref, async (x) => ({ px: 1, live: false, at: 0 }))).length, 0, 'applied once');
+});
+
+test('a reversal opens the new side sized on the part of the order that opened it', () => {
+  const st = PP.start('sid', '0x', settings, {}, 1);
+  PP.apply(st, { id: 'b', oid: 'o1', t: 1, pid: ETH, ticker: 'ETH-USD', side: 'BUY', qty: 10, px: 2000, orderQty: 10 }, { px: 2000, live: true, at: 1 });
+  // one sell order of 40: 10 close the long, 30 open a short, which is the copy's $2,000
+  PP.apply(st, { id: 's', oid: 'o2', t: 2, pid: ETH, ticker: 'ETH-USD', side: 'SELL', qty: 40, px: 2000, orderQty: 40 }, { px: 2000, live: true, at: 2 });
+  assert.equal(st.open[ETH].side, -1);
+  near(assert, Math.abs(st.open[ETH].qty) * 2000, 2000, 1e-6, 'sized on 30, not on 40');
+  assert.equal(st.startedAt, 1, 'the start can be given on the exchange\'s clock');
+});
+
+test('needsReconcile lists only the markets where the copy\'s record of the leader is off', () => {
+  const st = PP.start('sid', '0x', settings, { a: 5 });
+  PP.apply(st, { id: 'b', t: 1, pid: 'b', ticker: 'B', side: 'BUY', qty: 2, px: 100, orderQty: 2 }, { px: 100, live: true, at: 1 });
+  assert.deepEqual(PP.needsReconcile(st, { a: 5, b: 2 }), []);
+  assert.deepEqual(PP.needsReconcile(st, { a: 5, b: 3, c: 1 }).sort(), ['b', 'c']);
+  assert.deepEqual(PP.needsReconcile(st, {}).sort(), ['a', 'b']);
+});
+
+test('reconcile: flat leader closes the copy, a smaller leader position cuts it, a larger one is the leader\'s own', () => {
+  const st = PP.start('sid', '0x', settings, {});
+  PP.apply(st, buy('b1', 10, 1, 2000), { px: 2000, live: true, at: 1 });
+  PP.reconcile(st, { [ETH]: 15 }, () => 2000, 2);
+  near(assert, st.pre[ETH], 5, 1e-9, 'the leader added 5 the history did not show: not the copy\'s');
+  PP.reconcile(st, { [ETH]: 7.5 }, () => 2000, 3);
+  near(assert, st.open[ETH].qty, 0.5, 1e-9, 'half the leader\'s position gone: half the copy'); near(assert, st.pre[ETH], 2.5, 1e-9);
+  assert.deepEqual(PP.reconcile(st, { [ETH]: 7.5 }, () => null, 4), [], 'no price: left alone');
+  const rows = PP.reconcile(st, {}, () => 2100, 5);
+  assert.equal(rows.length, 1); assert.ok(rows[0].why); assert.deepEqual(Object.keys(st.open), []);
+});

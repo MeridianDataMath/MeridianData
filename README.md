@@ -407,19 +407,41 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   <style>` runs the engine on a synthetic leader and checks the arithmetic against the style's
   known parameters (the leader's cash flows are conserved exactly).
 * **Paper copy** (the card under the simulator) – the same copier, live: a virtual account in
-  the browser's localStorage (`js/copy/paper.js`, `md.paper.<sid>`) mirrors each of the leader's
-  fills from the `OrderFill` stream `delay` seconds later at the mark price of that moment
-  (`Ticker` stream), so the delay cost is measured on the real tape; a fill that crosses zero is
-  split like the simulator's; a fixed-size copy is sized on the leader's whole order (looked up
-  by order id) rather than on its first piece and capped per position like the simulator's;
-  fees and slippage as set, funding accrued hourly
-  from each market's current rate while a tab follows. It follows while a tab with the page is
-  open; on return, the fills that happened meanwhile are caught up from the leader's public
-  fills at candle prices (marked "caught up" in the log, their delay cost counted as modelled),
-  and a virtual position whose market the leader has left without a fill in the history (a
-  liquidation, a deleveraging) is closed at the mark and marked "closed at mark". Realized, unrealized at
-  the live mark, delay cost (measured / modelled), fees and slippage, funding, open virtual
-  positions and the mirrored-fill log. Stop & discard removes the account.
+  the browser's localStorage (`js/copy/paper.js`, `md.paper.<sid>`, version 3).
+  - **Source of truth:** the exchange's fill history (`/v1/order/fill`). An `OrderFill` stream
+    message only schedules a sync `delay` seconds after the fill. Each fill is applied once,
+    under its own id, with the leader's real quantity.
+  - **Pricing:** a fill applied on time is priced at the live mark of that moment (`Ticker`
+    stream, or the market price when the stream is quiet), so the delay cost is measured on the
+    real tape. Fills found later (the tab was closed, the stream dropped; a 2-minute poll looks
+    too) are priced at candle closes and marked "caught up". Catch-up resumes from the newest
+    fill applied, not from the last visit.
+  - **Sizing:** a fixed-size copy is sized on the leader's whole order (looked up by order id):
+    what filled once the order is done, else what was asked. It is not sized on the first piece,
+    and a reversal's new side is sized on the part of the order that opened it. It is capped per
+    position like the simulator's. Fees and slippage are as set; funding accrues hourly from
+    each market's current rate while a tab follows, counted once however many tabs are open.
+  - **Timing:** times are the exchange's clock (`/v1/time`), not the browser's. The history is
+    read oldest first, so a page cap never drops the fills a later sync would need.
+  - **Positions held before following:** following starts from the leader's open positions at
+    that moment (`pre`). The copy does not hold them, so the leader cutting or closing one later
+    is not a new position. A fill cuts the copy by the same share as the leader's whole position
+    (the copied part plus `pre`), and only what goes past zero opens the other side.
+    - The bug this fixed (reported 2026-09-25): following 0x7c75… while its ETH long was open,
+      its closing sells became a $2,000 short that was later closed "at mark" for −$13.
+  - **Reconciling:** after each sync the copy is lined up with the leader's actual open
+    positions (`P.reconcile`), but not in a market with fills still to come or a leader fill in
+    the last minute.
+    - Leader flat, or on the other side: the copy is closed "at mark".
+    - Leader smaller than its fills say: the copy is cut by the same share.
+    - Leader larger: the extra is counted as the leader's own.
+  - **Two tabs:** the newer copy of the account wins (a write counter plus the `storage` event).
+  - **Rebuild:** recomputes the account from the fills since it started, at candle prices, from
+    the leader's positions at that moment (rebuilt from its position records and fills).
+    Accounts kept by an earlier version get a note offering it.
+  - **The card:** realized, unrealized at the live mark, delay cost (measured / modelled), fees
+    and slippage, funding, open virtual positions and the mirrored-fill log. Stop & discard
+    removes the account.
 * **Leader alerts** (the bell on any leader row, breakdown or simulator; the card on the Copy
   trading page) – follow up to 15 subaccounts and be told when one opens, adds to, reduces,
   closes or reverses a position, or is liquidated. `js/copy/alerts.js` subscribes to each

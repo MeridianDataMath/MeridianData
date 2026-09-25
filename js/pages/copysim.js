@@ -165,53 +165,175 @@
       }
 
       // ---- paper copy: the same copier, live, in a virtual account kept in this browser
+      // The exchange's fill history is the record (js/copy/paper.js): a live fill message only says when to look, so every
+      // fill is applied once, under its own id, with the leader's real quantity, and after each sync the copy is lined up
+      // with the leader's actual positions. A position the leader already held when following started is not the copy's:
+      // cutting or closing it later is not a new position. Times are the exchange's (clockOffset), not this machine's.
       const PP = MD.paper;
       const paperCard = h('div.card'); body.appendChild(paperCard);
-      let paper = PP.load(sid); const live = {}; let unsubs = []; let fundingTimer = null; let pending = 0;
+      let paper = PP.load(sid); const live = {}, liveT = {}; let unsubs = []; let fundingTimer = null;
+      let syncTimer = null, syncAt = 0, syncing = null, syncAgain = false, pending = 0, rebuilding = false;
+      const announced = new Map();   // fill id → { t, tries }: fills the stream announced, looked for again until the history has them
+      const recentFill = {};         // productId → the newest leader fill the stream announced there
+      let clockOffset = 0; const serverNow = () => Date.now() + clockOffset;
+      async function syncClock() { try { const t0 = Date.now(); const r = await A.serverTime({ signal: ctx.signal }); const t1 = Date.now(); if (r && U.num(r.time)) clockOffset = U.num(r.time) - (t0 + t1) / 2; } catch (e) { if (isAbort(e)) throw e; } }
       const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode !== 'ratio' ? st.size : AN.COPY_SIZE) : st.slip, feeRate }; };
+      // detach: the stream and the timers of following; stopAll also drops a sync waiting for a fill's delay
       const detach = () => { for (const u of unsubs) { try { u(); } catch (_) {} } unsubs = []; if (fundingTimer) clearInterval(fundingTimer); fundingTimer = null; };
-      ctx.onCleanup(detach);
-      const markOf = (pid) => (live[pid] != null ? live[pid] : marks[pid]);
-      const marksNow = () => { const m = {}; for (const p of ref.active) { const v = markOf(p.id); if (v) m[p.id] = v; } return m; };
-      async function catchUp() {
-        // fills that happened while no tab was following: priced from candles, like the simulator
-        const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: paper.lastSeen - 1000 }, { maxPages: 5, signal: ctx.signal });
-        const priceAt = S.priceAtFactory(candles, ref); let n = 0;
-        const orderQty = {}; for (const f of fills) orderQty[f.orderId] = (orderQty[f.orderId] || 0) + U.num(f.filled);   // an order's whole size, for fixed-size copies
-        for (const f of fills.slice().sort((a, b) => (U.num(a.createdAt) - U.num(b.createdAt)) || (String(a.id) < String(b.id) ? -1 : 1))) {
-          if (paper.seen[f.id] || U.num(f.createdAt) < paper.startedAt) continue;
-          const prod = ref.byId[f.productId]; if (!prod) continue;
-          const px = await priceAt(f.productId, U.num(f.createdAt), U.num(f.price), paper.settings.delay);
-          if (PP.apply(paper, { id: f.id, t: U.num(f.createdAt), pid: f.productId, ticker: prod.displayTicker, side: U.sideName(f.side), qty: U.num(f.filled), px: U.num(f.price), orderQty: orderQty[f.orderId] }, { px, live: false, at: U.num(f.createdAt) + paper.settings.delay * 1000 })) n++;
+      const stopAll = () => { detach(); clearTimeout(syncTimer); syncTimer = null; syncAt = 0; };
+      ctx.onCleanup(stopAll);
+      const markOf = (pid) => (live[pid] != null && Date.now() - (liveT[pid] || 0) < 15000 ? live[pid] : null);   // the stream's mark while it is fresh
+      const marksNow = () => { const m = {}; for (const p of ref.active) { const v = markOf(p.id) || marks[p.id]; if (v) m[p.id] = v; } return m; };
+      /** Prices to act on now: the stream's while fresh, else the exchange's market price; nothing when neither answers. */
+      async function freshMarks(pids) {
+        const out = {}; const ask = pids.filter((pid) => { const m = markOf(pid); if (m) out[pid] = m; return !m; });
+        if (ask.length) { try { const pm = await A.marketPrices(ask, { signal: ctx.signal, ttl: 3000 }); for (const pid of ask) { const x = pm[pid]; const v = x && (U.num(x.oraclePrice) || U.num(x.markPrice)); if (v) out[pid] = v; } } catch (e) { if (isAbort(e)) throw e; } }
+        return out;
+      }
+      /** An order's size for a fixed-size copy: what filled once it is done, else what was asked (a working order, not cached). */
+      async function orderQty(id) {
+        try { const o = await A.order(id, { signal: ctx.signal, ttl: 0 }); if (!o) return null; const done = /^(FILLED|CANCELED|CANCELLED|EXPIRED|REJECTED)$/i.test(String(o.status || '')); return (done ? U.num(o.filled) : U.num(o.quantity)) || null; }
+        catch (e) { if (isAbort(e)) throw e; return null; }
+      }
+      // another tab of this page may be following too: the newer copy of the same account wins (paper.rev counts writes)
+      const sameAcct = (a, b) => a && b && a.startedAt === b.startedAt;
+      const savePaper = (acct = paper) => { if (!acct || paper !== acct) return false; const cur = PP.load(sid); if (sameAcct(cur, acct) && (cur.rev || 0) > (acct.rev || 0)) { paper = cur; return false; } PP.save(acct); return true; };
+      const onStorage = (e) => { if (e.key !== PP.key(sid)) return; const cur = PP.load(sid); if (!cur) { stopAll(); paper = null; renderPaper(); return; } if (!paper || !sameAcct(cur, paper) || (cur.rev || 0) > (paper.rev || 0)) { paper = cur; if (!unsubs.length) attach(); renderPaper(); } };
+      window.addEventListener('storage', onStorage); ctx.onCleanup(() => window.removeEventListener('storage', onStorage));
+      /** Apply the leader's fills from the history that are due (their delay has passed), then line the copy up with the
+       *  leader's positions. On time (within 20 s of when the copier would act) a fill is priced at the live mark, measured;
+       *  found later, at the candle price of that moment. Returns the number of rows written. */
+      function sync() { if (syncing || rebuilding) { syncAgain = true; return syncing || Promise.resolve(0); } syncing = doSync().finally(() => { syncing = null; if (syncAgain && !rebuilding) { syncAgain = false; scheduleSync(0); } }); return syncing; }
+      /** Sync in `ms`, unless one is already due sooner. */
+      function scheduleSync(ms) {
+        const at = Date.now() + Math.max(0, ms);
+        if (syncTimer && syncAt <= at) return;
+        clearTimeout(syncTimer); syncAt = at;
+        syncTimer = setTimeout(() => { syncTimer = null; syncAt = 0; sync().then((n) => { if (n) renderPaper(); }).catch((e) => { if (!isAbort(e)) console.warn('paper sync', e); }); }, Math.max(0, ms));
+      }
+      async function doSync() {
+        const acct = paper; if (!acct) return 0;
+        const delayMs = acct.settings.delay * 1000;
+        // the leader's positions first: any fill after this snapshot is in the history read next, so a market with one is
+        // left out of the lining up (a fill between the two reads must not look like a change without a fill)
+        const snapAt = serverNow();
+        let book = null; try { book = PP.leaderBook(await A.openPositions(sid, { signal: ctx.signal })); } catch (e) { if (isAbort(e)) throw e; }
+        // from the newest fill applied (an account kept by an earlier version of this page: from its last visit); oldest
+        // first, so when the page cap cuts the list it cuts the newest, which the next sync picks up
+        const from = (acct.fillT != null ? acct.fillT : (acct.v || 0) >= 3 ? acct.startedAt : acct.lastSeen) - 1000;
+        const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: from, order: 'asc' }, { maxPages: 10, signal: ctx.signal });
+        if (paper !== acct) { syncAgain = true; return 0; }   // the account changed meanwhile (another tab, a rebuild, a discard)
+        const now = serverNow(); const due = [], later = [];
+        for (const f of fills) { if (acct.seen[f.id]) continue; (U.num(f.createdAt) + delayMs <= now + 500 ? due : later).push(f); }
+        const oq = {}; if (acct.settings.mode === 'fixed') for (const f of due) if (oq[f.orderId] == null) oq[f.orderId] = await orderQty(f.orderId);
+        const priceAt = S.priceAtFactory(AN.candleCache({ signal: ctx.signal }), ref);   // a fresh cache: one read earlier may end before these fills
+        if (paper !== acct) { syncAgain = true; return 0; }
+        const rows = await PP.applyFills(acct, due, ref, async (f) => {
+          const t = U.num(f.createdAt), dueAt = t + delayMs;
+          if (serverNow() - dueAt < 20000) { const px = (await freshMarks([f.productId]))[f.productId]; if (px) return { px, live: true, at: Math.max(serverNow(), dueAt) }; }
+          return { px: await priceAt(f.productId, t, U.num(f.price), acct.settings.delay), live: false, at: dueAt };
+        }, oq);
+        if (paper !== acct) { syncAgain = true; return 0; }
+        if (acct.fillT == null) acct.fillT = from;   // an account from an earlier version: from here on, by fill time
+        pending = later.length;
+        if (later.length) scheduleSync(Math.min(...later.map((f) => U.num(f.createdAt))) + delayMs - serverNow() + 300);
+        // fills the stream announced that the history does not show yet: look again shortly, a few times
+        for (const [id, a] of announced) { if (acct.seen[id]) { announced.delete(id); continue; } if (a.t + delayMs > serverNow()) continue; if (++a.tries > 5) announced.delete(id); else scheduleSync(3000); }
+        if (fills.truncated) { scheduleSync(0); acct.lastSeen = Date.now(); savePaper(acct); return rows.length; }   // not caught up yet: no lining up
+        if (book) {
+          const skip = new Set(later.map((f) => f.productId));
+          for (const f of fills) if (U.num(f.createdAt) > snapAt - 2000) skip.add(f.productId);
+          for (const [pid, t] of Object.entries(recentFill)) if (t > snapAt - 60000) skip.add(pid);
+          for (const a of announced.values()) skip.add(a.pid);
+          const act = PP.needsReconcile(acct, book).filter((pid) => !skip.has(pid));
+          if (act.length) {
+            const px = await freshMarks(act);
+            if (paper !== acct) { syncAgain = true; return 0; }
+            rows.push(...PP.reconcile(acct, book, (pid) => (act.includes(pid) ? px[pid] || null : null), serverNow()));
+          }
         }
-        // a virtual position whose market the leader has left without a fill in the history (a liquidation, an ADL) is closed at the mark
-        try {
-          const openNow = await A.openPositions(sid, { signal: ctx.signal }); const has = new Set(openNow.map((p) => p.productId));
-          for (const pid of Object.keys(paper.open)) if (!has.has(pid)) { const mk = markOf(pid); if (mk) { PP.closeAt(paper, pid, mk, Date.now(), 'the leader is flat here without a fill in the history (liquidation or deleveraging)'); n++; } }
-        } catch (e) { if (isAbort(e)) throw e; }
-        paper.lastSeen = Date.now(); PP.save(paper); return n;
+        acct.lastSeen = Date.now(); savePaper(acct); return rows.length;
+      }
+      /** Recompute the account from the exchange's fills since it started, at candle prices, from the leader's positions at
+       *  that moment. Mends an account an earlier version of this page kept wrong (a leader's sell of a position opened
+       *  before following, mirrored as a new short). Funding carries over only for positions open in both. */
+      async function rebuild() {
+        const old = paper; const t0 = old.startedAt;
+        // the leader's positions when following started: recorded then (pre0), or for an older account rebuilt from each
+        // position's own fills up to that moment (a position's fills split a reversal between the two positions)
+        let pre = old.pre0;
+        if (!pre) {
+          pre = {};
+          const positions = await A.positions(sid, { maxPages: 5, signal: ctx.signal });
+          for (const p of positions) {
+            if (U.num(p.createdAt) >= t0 || (U.num(p.size) === 0 && U.num(p.updatedAt) < t0)) continue;
+            const fs = await A.positionFills(p.id, { signal: ctx.signal });
+            const q = U.sum(fs.filter((f) => U.num(f.createdAt) < t0), (f) => (U.sideName(f.side) === 'BUY' ? 1 : -1) * U.num(f.filled));
+            if (Math.abs(q) > 1e-9) pre[p.productId] = (pre[p.productId] || 0) + q;
+          }
+        }
+        const fresh = PP.fresh(old, pre);
+        const snapAt = serverNow();
+        const book = PP.leaderBook(await A.openPositions(sid, { signal: ctx.signal }));
+        // every fill since the start, oldest first, page by page until the history is exhausted
+        const fills = []; let after = t0 - 1000;
+        for (let round = 0; ; round++) {
+          const part = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: after, order: 'asc' }, { maxPages: 20, signal: ctx.signal });
+          fills.push(...part);
+          if (!part.truncated || !part.length) break;
+          if (round >= 24) throw new Error('the leader has too many fills since then to rebuild here');
+          after = U.num(part[part.length - 1].createdAt) - 1;   // a millisecond of overlap: the ids keep each fill once
+        }
+        const oq = {}; if (fresh.settings.mode === 'fixed') for (const f of fills) if (oq[f.orderId] == null && U.num(f.createdAt) >= t0) oq[f.orderId] = await orderQty(f.orderId);
+        const priceAt = S.priceAtFactory(AN.candleCache({ signal: ctx.signal }), ref);
+        await PP.applyFills(fresh, fills, ref, async (f) => ({ px: await priceAt(f.productId, U.num(f.createdAt), U.num(f.price), fresh.settings.delay), live: false, at: U.num(f.createdAt) + fresh.settings.delay * 1000 }), oq);
+        const skip = new Set(fills.filter((f) => U.num(f.createdAt) > snapAt - 2000).map((f) => f.productId));
+        const act = PP.needsReconcile(fresh, book).filter((pid) => !skip.has(pid));
+        if (act.length) { const px = await freshMarks(act); PP.reconcile(fresh, book, (pid) => (act.includes(pid) ? px[pid] || null : null), serverNow()); }
+        // funding accrued while a tab followed: kept for the positions open in both, in proportion to their size
+        for (const [pid, pos] of Object.entries(fresh.open)) { const o = old.open[pid]; if (!o || Math.sign(o.qty) !== Math.sign(pos.qty) || !o.qty) continue; const f = o.funding * Math.min(1, Math.abs(pos.qty) / Math.abs(o.qty)); pos.funding += f; fresh.totals.funding += f; }
+        if (paper !== old || !sameAcct(PP.load(sid), old)) return null;   // stopped or replaced meanwhile: leave it be
+        fresh.rev = Math.max(fresh.rev || 0, (PP.load(sid) || {}).rev || 0); fresh.fundingAt = Date.now(); fresh.lastSeen = Date.now();
+        paper = fresh; PP.save(paper);
+        return fills.filter((f) => U.num(f.createdAt) >= t0).length;
       }
       function attach() {
         detach();
-        for (const p of ref.active) unsubs.push(A.ws.subscribe('Ticker', p.ticker, (m) => { const d = m.data || {}; const prod = ref.byTicker[d.s]; if (prod && U.num(d.markPx)) live[prod.id] = U.num(d.markPx); }));
+        if (paper && !paper.fundingAt) paper.fundingAt = Date.now();
+        for (const p of ref.active) unsubs.push(A.ws.subscribe('Ticker', p.ticker, (m) => { const d = m.data || {}; const prod = ref.byTicker[d.s]; if (prod && U.num(d.markPx)) { live[prod.id] = U.num(d.markPx); liveT[prod.id] = Date.now(); } }));
         unsubs.push(A.ws.subscribe('OrderFill', sid, (m) => {
           const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [];
+          let first = null;
           for (const it of items) {
             const prod = ref.byTicker[it.s]; if (!prod || !paper) continue;
-            const fill = { id: it.id, t: U.num(it.t || d.t) || Date.now(), pid: prod.id, ticker: prod.displayTicker, side: U.sideName(it.sd), qty: U.num(it.sz), px: U.num(it.px) };
-            pending++; renderPaper();
-            // the whole order's size, so a fixed-size copy is sized on the order and not on its first piece
-            const orderP = paper.settings.mode === 'fixed' && it.oid ? A.order(it.oid, { signal: ctx.signal }).then((o) => U.num(o && o.quantity) || null).catch(() => null) : Promise.resolve(null);
-            // act `delay` seconds later at the mark of that moment: the wait is measured on the real tape
-            setTimeout(async () => { pending--; if (!paper || ctx.signal.aborted) return; fill.orderQty = await orderP; const px = markOf(prod.id) || fill.px; PP.apply(paper, fill, { px, live: true, at: Date.now() }); paper.lastSeen = Date.now(); PP.save(paper); renderPaper(); }, paper.settings.delay * 1000);
+            const t = U.num(it.t || d.t) || serverNow(); recentFill[prod.id] = Math.max(recentFill[prod.id] || 0, t);
+            if (it.id && !paper.seen[it.id]) { announced.set(it.id, { t, tries: 0, pid: prod.id }); pending++; }
+            first = first == null ? t : Math.min(first, t);
           }
+          // act `delay` seconds after the fill, at the mark of that moment: the wait is measured on the real tape
+          if (first != null && paper) { renderPaper(); scheduleSync(first + paper.settings.delay * 1000 - serverNow() + 300); }
         }));
-        fundingTimer = setInterval(() => { if (!paper) return; PP.accrueFunding(paper, ref, marksNow(), 1 / 60); PP.save(paper); renderPaper(); }, 60000);
+        // funding while a tab follows, for the time since the account's last accrual (another tab's included), at most two
+        // minutes at a time: a laptop asleep follows nothing
+        fundingTimer = setInterval(() => {
+          if (!paper || rebuilding) return;
+          const cur = PP.load(sid); if (sameAcct(cur, paper) && (cur.rev || 0) > (paper.rev || 0)) paper = cur;
+          const now = Date.now(); const hours = Math.min(120000, Math.max(0, now - (paper.fundingAt || now))) / 3600000;
+          if (hours > 0) PP.accrueFunding(paper, ref, marksNow(), hours);
+          paper.fundingAt = now; savePaper(); renderPaper();
+        }, 60000);
+        // a fill whose message the stream lost (a reconnect, a sleeping laptop) is found by the next look at the history
+        const poll = setInterval(() => { if (paper && !document.hidden) scheduleSync(0); }, 120000);
         const tick = setInterval(() => { if (paper && Object.keys(paper.open).length && !document.hidden) renderPaper(); }, 10000);   // unrealized follows the mark
-        unsubs.push(() => clearInterval(tick));
+        unsubs.push(() => clearInterval(tick), () => clearInterval(poll));
       }
       async function startPaper() {
-        paper = PP.start(sid, sa.account, paperSettings()); attach(); renderPaper();
+        // the leader's positions right now are not the copy's: record them, so cutting them later is not a new position.
+        // Without them following cannot start safely.
+        let book;
+        try { await syncClock(); book = PP.leaderBook(await A.openPositions(sid, { signal: ctx.signal })); }
+        catch (e) { if (isAbort(e)) return; U.toast('Could not read the leader\'s open positions, so following did not start: ' + (e.message || e)); return; }
+        paper = PP.start(sid, sa.account, paperSettings(), book, serverNow()); attach(); renderPaper();
       }
       function renderPaper() {
         if (!paper) {
@@ -247,14 +369,28 @@
           { key: 'f', label: 'Fee', num: true, render: (r) => U.fmtUsd(r.fee, { dp: 2 }) },
           { key: 'k', label: '', render: (r) => h('span', r.why ? UI.chip('closed at mark', 'amber') : r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null, r.why ? h('span.dim.xs', { title: r.why }, ' ⓘ') : null) },
         ], rows: paper.log.slice(0, 30), empty: 'No fills mirrored yet' });
+        const rebuildBtn = h('button.btn.sm.ghost', { title: 'Recompute this account from the exchange\'s fills since it started, at candle prices, from the leader\'s positions at that moment', onclick: async () => {
+          if (rebuilding || !confirm('Recompute this paper account from the exchange\'s fills since ' + U.fmtDateTime(paper.startedAt) + '? Fills mirrored live are recomputed at candle prices, and funding is kept only for positions still open.')) return;
+          rebuilding = true; renderPaper();
+          try { const n = await rebuild(); if (n != null) U.toast(`Rebuilt from ${n} fill${n === 1 ? '' : 's'} of the leader`); } catch (e) { if (!isAbort(e)) U.toast('Rebuild failed: ' + (e.message || e)); }
+          finally { rebuilding = false; }
+          renderPaper(); if (paper) scheduleSync(0);
+        } }, rebuilding ? [h('span.spinner.sm'), ' Rebuilding…'] : [U.icon('refresh'), 'Rebuild']);
+        rebuildBtn.disabled = rebuilding;
+        // an account kept by an earlier version of this page could have mirrored a leader's sell of a position opened
+        // before following as a new short (and closed it at the mark later): offer to recompute it
+        const oldNote = (paper.v || 0) < PP.V ? h('div.small', { style: { color: 'var(--amber)', margin: '0 0 10px' } }, 'This paper account was kept by an earlier version of this page, which mirrored the leader cutting or closing a position it already held when you started following as a new position of yours. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); rebuildBtn.click(); } }, 'Rebuild it'), ' from the exchange\'s fills to correct that.') : null;
         U.replace(paperCard,
           h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
-            h('button.btn.sm.ghost', { onclick: () => { if (confirm('Stop following and discard this paper account?')) { detach(); PP.clear(sid); paper = null; renderPaper(); } } }, 'Stop & discard')),
+            rebuildBtn,
+            h('button.btn.sm.ghost', { disabled: rebuilding, onclick: () => { if (confirm('Stop following and discard this paper account?')) { stopAll(); PP.clear(sid); paper = null; announced.clear(); pending = 0; renderPaper(); } } }, 'Stop & discard')),
+          oldNote,
           tiles,
           h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('Open virtual positions', openTbl), UI.card('Mirrored fills', logTbl, h('span.dim.small', 'newest first'))),
           h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account only proves what following would have done from here on; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.'));
       }
-      if (paper) { renderPaper(); try { const n = await catchUp(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } attach(); renderPaper(); }
+      // the exchange's clock and the stream first, then the catch-up: a fill during the catch-up is announced, not lost
+      if (paper) { renderPaper(); try { await syncClock(); attach(); const n = await sync(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } renderPaper(); }
       else renderPaper();
       await run();
     },
