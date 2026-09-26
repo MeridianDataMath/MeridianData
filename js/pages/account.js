@@ -350,7 +350,7 @@
           fetchPage: (cursor, n) => A.transfersPage(sid, cursor, n, cx), empty: 'No transfers yet',
           cols: [
             { key: 'type', label: 'Type', render: (r) => UI.chip(r.type, r.type === 'DEPOSIT' ? 'green' : r.type === 'WITHDRAW' ? 'red' : 'blue') },
-            { key: 'token', label: 'Token', render: (r) => r.type === 'CONVERT' ? h('span', r.tokenName, h('span.dim', ' → '), r.toTokenName) : r.tokenName },
+            { key: 'token', label: 'Token', render: (r) => r.type === 'CONVERT' ? h('span', String(r.tokenName || ''), h('span.dim', ' → '), r.toTokenName) : r.tokenName },   // as text: an object in h()'s second place would be read as attributes
             { key: 'amt', label: 'Amount', num: true, render: (r) => U.fmtNum(r.amount, 2) },
             { key: 'fee', label: 'Fee', num: true, render: (r) => U.fmtNum(r.fee, 2) },
             { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'COMPLETED' ? 'green' : r.status === 'REJECTED' ? 'red' : 'amber') },

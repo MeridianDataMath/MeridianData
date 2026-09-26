@@ -1,9 +1,12 @@
 {
   "name": "meridiandatahub",
   "private": true,
-  "description": "Build-time tooling only: the site itself is plain HTML + JS with no dependencies. @resvg/resvg-js renders the link-preview cards (scripts/build-cards.mjs) in the deploy workflow.",
-  "engines": { "node": ">=22" },
+  "description": "Build-time tooling only: the site itself is plain HTML + JS with no dependencies. @resvg/resvg-js renders the link-preview cards (scripts/build-cards.mjs) and wrangler deploys the site, both in the deploy workflow and both pinned here with their whole dependency tree (package-lock.json).",
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
-    "@resvg/resvg-js": "2.6.2"
+    "@resvg/resvg-js": "2.6.2",
+    "wrangler": "4.141.0"
   }
 }

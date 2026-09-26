@@ -44,29 +44,32 @@
 
   // ---------------------------------------------------------------- Polymarket (Gamma)
   const markets = new Map();  // conditionId → { at, m | null }
+  // Gamma is untyped JSON: every field that is shown or built into a request is read as the text it should be, so an
+  // object where a string belongs (outcomes inside the JSON-in-a-string included) cannot reach the page as one
+  const txt = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
   const compact = (m) => {
-    const ev = m.events && m.events[0]; const evSlug = ev && ev.slug;
-    const outcomes = jsonArr(m.outcomes) || ['Yes', 'No'];
+    const ev = m.events && m.events[0]; const evSlug = txt(ev && ev.slug);
+    const outcomes = (jsonArr(m.outcomes) || ['Yes', 'No']).map(txt);
     const prices = (jsonArr(m.outcomePrices) || []).map(Number);
     // Polymarket's listed end date is sometimes earlier than the deadline in the question itself (a copied date:
     // "Another GTA VI trailer released by September 30?" was listed as ending Sep 1, like the Aug 31 market beside it).
     // The rules go by the question, so an open market keeps running to the stated deadline; listedEnd keeps the listing.
     let endAt = ts(m.endDate), listedEnd = null;
-    const dl = m.closed ? null : R.titleDeadline(m.question, endAt);
+    const dl = m.closed ? null : R.titleDeadline(txt(m.question), endAt);
     if (dl && endAt && dl - endAt > DAY && dl - endAt < 400 * DAY) { listedEnd = endAt; endAt = dl; }
     // a game's slug keeps the date it was first listed for ("mls-sea-rsl-2026-04-12") when the fixture is re-dated
-    const sd = /(\d{4})-(\d{2})-(\d{2})/.exec(evSlug || m.slug || '');
+    const slug = txt(m.slug); const sd = /(\d{4})-(\d{2})-(\d{2})/.exec(evSlug || slug);
     const source = String((ev && ev.resolutionSource) || m.resolutionSource || '');
     return {
-      id: lc(m.conditionId), slug: m.slug, question: m.question,
-      url: 'https://polymarket.com/event/' + (evSlug || m.slug) + (evSlug && evSlug !== m.slug ? '/' + m.slug : ''),
+      id: lc(m.conditionId), slug, question: txt(m.question),
+      url: 'https://polymarket.com/event/' + (evSlug || slug) + (evSlug && evSlug !== slug ? '/' + slug : ''),
       endAt, listedEnd, startAt: ts(m.startDate), gameAt: ts(m.gameStartTime), closed: !!m.closed, closedAt: ts(m.closedTime), acceptingOrders: !!m.acceptingOrders,
       // sports only: weather markets carry a gameStartTime too (the day being measured)
       sport: !!(m.sportsMarketType || (ev && ev.gameId)), listedDay: sd ? Date.UTC(+sd[1], +sd[2] - 1, +sd[3], 12) : null, period: ev && ev.period ? String(ev.period) : null,
       source: /^https?:\/\//i.test(source) ? source : null, tokens: jsonArr(m.clobTokenIds) || [],
-      uma: String(m.umaResolutionStatus || '').toLowerCase(), umaHistory: jsonArr(m.umaResolutionStatuses) || [], resolvedAt: ts(m.umaEndDate),
-      adapter: m.resolvedBy || null, questionId: m.questionID || null, negRisk: !!m.negRisk,
-      outcomes, prices, rules: m.description || '', liveness: Number(m.customLiveness) || R.LIVENESS, bond: Number(m.umaBond) || null, updatedAt: ts(m.updatedAt),
+      uma: String(m.umaResolutionStatus || '').toLowerCase(), umaHistory: (jsonArr(m.umaResolutionStatuses) || []).map(txt), resolvedAt: ts(m.umaEndDate),
+      adapter: txt(m.resolvedBy) || null, questionId: txt(m.questionID) || null, negRisk: !!m.negRisk,
+      outcomes, prices, rules: txt(m.description), liveness: Number(m.customLiveness) || R.LIVENESS, bond: Number(m.umaBond) || null, updatedAt: ts(m.updatedAt),
     };
   };
   /** The outcome Polymarket resolved to, from the settled token prices. */

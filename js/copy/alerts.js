@@ -86,7 +86,8 @@
     });
     const unLiq = A.ws.subscribe('SubaccountLiquidation', sid, (m) => {
       const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [d];
-      for (const it of items) { const prod = it.s ? ref.byTicker[it.s] : null; emit({ sid, kind: 'liq', ticker: prod ? prod.displayTicker : (it.s || ''), pid: prod ? prod.id : null, qty: U.num(it.sz), px: U.num(it.px), t: Date.now(), notional: U.num(it.sz) * U.num(it.px) }); if (prod) pos[sid][prod.id] = 0; }
+      // an unknown market's name is kept as text only: the history is stored and rendered on every visit
+      for (const it of items) { const prod = it.s ? ref.byTicker[it.s] : null; emit({ sid, kind: 'liq', ticker: prod ? prod.displayTicker : (typeof it.s === 'string' ? it.s : ''), pid: prod ? prod.id : null, qty: U.num(it.sz), px: U.num(it.px), t: Date.now(), notional: U.num(it.sz) * U.num(it.px) }); if (prod) pos[sid][prod.id] = 0; }
     });
     const un = () => { unFill(); unLiq(); };
     if (pendingUn.has(sid) || !subs.has(sid)) { pendingUn.delete(sid); un(); subs.delete(sid); return; }   // unfollowed meanwhile
@@ -136,14 +137,43 @@
     if (s.ntfy && s.ntfy.topic) AL.push(a, url).then(() => { if (s.ntfy.lastError) { s.ntfy.lastError = null; AL.save(); } }).catch((e) => { s.ntfy.lastError = { t: Date.now(), msg: e.message }; AL.save(); });
   }
 
+  // ---- ntfy: a topic is readable and writable by anyone who knows its name, so the name is the only secret
+  /** Why a topic is easy to guess, or null: short, or words with at most a short number at the end ("meridian-alerts-1").
+   *  (The separator is required between words: an optional one would let the pattern backtrack exponentially.) */
+  AL.topicWarning = (t) => {
+    t = String(t || '');
+    if (!t) return null;
+    if (t.length < 16) return 'a short topic name is easy to guess';
+    if (/^[a-z]+(?:[-_.][a-z]+)*[-_.]?[0-9]{0,4}$/i.test(t)) return 'a topic made of words is easy to guess';
+    return null;
+  };
+  /** A fresh topic nobody can guess: 'md-' + 24 characters from 32 that cannot be misread (120 random bits), lower case
+   *  so it can be typed into the ntfy app on a phone. */
+  AL.newTopic = () => {
+    const ABC = 'abcdefghijkmnpqrstuvwxyz23456789';
+    for (;;) {
+      const t = 'md-' + Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => ABC[b & 31]).join('');
+      if (!AL.topicWarning(t)) return t;   // the rare draw with no digit before its tail would read as words
+    }
+  };
+  /** https:// anywhere; plain http:// only to this machine (a local ntfy), where nothing crosses a network in the clear. */
+  AL.serverOk = (server) => {
+    let u; try { u = new URL(server); } catch (_) { return false; }
+    return u.protocol === 'https:' || (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1'));
+  };
   /** Publish one alert to ntfy (CORS-enabled; the topic is the only secret). */
   AL.push = async (a, url) => {
     const s = AL.state(); const server = (s.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '');
+    if (!AL.serverOk(server)) throw new Error('the ntfy server must be an https:// address (plain http only on localhost)');
     const r = await fetch(server + '/' + encodeURIComponent(s.ntfy.topic), { method: 'POST', body: a.msg, headers: { Title: a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], Tags: a.kind === 'liq' ? 'rotating_light' : a.kind === 'open' || a.kind === 'add' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend', Priority: a.kind === 'liq' ? '4' : '3', Click: url || location.href } });
     if (!r.ok) throw new Error('ntfy ' + r.status);
     return true;
   };
-  AL.test = async () => { const s = AL.state(); if (!s.ntfy.topic) throw new Error('No topic set'); return AL.push({ kind: 'open', msg: 'MeridianDataHub leader alerts are set up on this device.', name: '' }, location.origin + location.pathname + '#/copytrade'); };
+  AL.test = async () => {
+    const s = AL.state(); if (!s.ntfy.topic) throw new Error('No topic set');
+    const weak = AL.topicWarning(s.ntfy.topic);   // the one message sure to be read on the phone, so the warning rides along
+    return AL.push({ kind: 'open', msg: 'MeridianDataHub leader alerts are set up on this device.' + (weak ? ' Careful: ' + weak + '. Anyone who knows the topic can read these alerts and post fake ones; switch to a long random one.' : ''), name: '' }, location.origin + location.pathname + '#/copytrade');
+  };
   AL.askPermission = async () => { if (!('Notification' in window)) return 'unsupported'; if (Notification.permission === 'granted') return 'granted'; try { return await Notification.requestPermission(); } catch (_) { return Notification.permission; } };
   AL.clearHistory = () => { AL.state().history = []; AL.save(); };
 })();

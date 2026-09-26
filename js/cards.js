@@ -231,7 +231,9 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
     };
 
     // ---------------------------------------------------------------- the page behind a share link
-    /** kind 'a' (perps account) or 'p' (Predict wallet); target = the site route people are sent to. */
+    /** kind 'a' (perps account) or 'p' (Predict wallet); target = the site route people are sent to. People are sent on by
+     *  a refresh, which unfurlers ignore; the page carries no inline script or style, since the site's Content-Security-
+     *  Policy (_headers) allows only index.html's one inline script, and its look comes from the site's stylesheet. */
     const sharePage = ({ kind, address, title, description, image, target }) => {
       if (!isAddr(address)) throw new Error('bad address ' + address);
       const url = `${site}/${kind}/${address}`; const img = `${site}/${image}`;
@@ -260,10 +262,10 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
 <meta name="twitter:image:alt" content="${esc(title)}">
 <meta name="theme-color" content="#23d4bc">
 <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
-<script>location.replace(${JSON.stringify(target)});</script>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#09090a;color:#a1a1a8;font:15px/1.5 system-ui,sans-serif}a{color:#23d4bc}</style>
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/share.js" defer></script>
 </head>
-<body><p>Opening <a href="${esc(target)}">${esc(title)}</a>…</p></body>
+<body class="share"><p>Opening <a id="go" href="${esc(target)}">${esc(title)}</a>…</p></body>
 </html>
 `;
     };

@@ -7,6 +7,18 @@
   U.$ = (sel, root) => (root || document).querySelector(sel);
   U.$$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
+  /** A link or source U.h writes: relative ('page', '/x', '?q', '#/route'), blob:, http: or https:. Anything else
+   *  (javascript:, data:, vbscript:, …) is refused. Tabs, newlines and leading blanks are dropped first, as the browser's
+   *  URL parser does, so "java\tscript:" is still javascript:. */
+  U.isSafeUrl = (v) => {
+    const s = String(v).replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+/, '');
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(s);
+    return !scheme || /^(https?|blob)$/i.test(scheme[1]);
+  };
+  // keys U.h never writes: markup sinks. Untyped upstream JSON can hand an object where a string belongs, and a plain
+  // object in the second argument is taken for attributes, so these must not be reachable from it at all
+  const NO_KEYS = new Set(['html', 'innerhtml', 'outerhtml', 'srcdoc']);
+  const URL_KEYS = new Set(['href', 'src', 'action', 'formaction', 'poster', 'xlink:href']);
   /** h('div.cls#id', {attr: v, onclick: fn}, children...) */
   U.h = function h(tag, attrs, ...children) {
     const m = /^([a-z0-9-]+)?((?:[.#][\w-]+)*)$/i.exec(tag) || [];
@@ -20,11 +32,12 @@
     if (attrs && typeof attrs === 'object' && !(attrs instanceof Node) && !Array.isArray(attrs)) {
       for (const [k, v] of Object.entries(attrs)) {
         if (v == null || v === false) continue;
+        const lk = k.toLowerCase();
+        if (NO_KEYS.has(lk) || (URL_KEYS.has(lk) && !U.isSafeUrl(v))) continue;
         if (k === 'class' || k === 'className') el.className += (el.className ? ' ' : '') + v;
         else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
         else if (k === 'dataset') Object.assign(el.dataset, v);
-        else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
-        else if (k === 'html') el.innerHTML = v;
+        else if (lk.startsWith('on')) { if (typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v); }   // a string would become an inline handler
         else if (k in el && k !== 'list' && k !== 'form') { try { el[k] = v; } catch (_) { el.setAttribute(k, v); } }
         else el.setAttribute(k, v === true ? '' : v);
       }
@@ -41,6 +54,9 @@
     }
     return el;
   };
+  /** A value passed on as h()'s second argument: a Node, an array or nothing stays as it is, anything else becomes text,
+   *  so a stray object from an API is printed rather than read as attributes. */
+  U.kid = (v) => (v == null || v === false || v instanceof Node || Array.isArray(v) ? v : String(v));
   U.clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); return el; };
   /** Replace children, keeping the scroll position of the container and of any scrollers inside it (tables scrolled
    *  sideways on a phone, feeds scrolled down): live pages re-render on every tick and must not snap back. */
@@ -230,6 +246,16 @@
       for (let i = 0; i < h.length; i += 2) { const c = parseInt(h.substr(i, 2), 16); if (!c) break; out += String.fromCharCode(c); }
       return out || hex;
     } catch (_) { return hex; }
+  };
+  /** One CSV field. Excel and Sheets run a text field that starts like a formula (= + - @, tab, CR) when the file is
+   *  opened, and question titles, categories and tickers come from the exchange, so such text gets a leading apostrophe;
+   *  a number, negative ones included, is written as it is. */
+  const CSV_NUM = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+  U.csvCell = (v) => {
+    if (v == null) return '';
+    let s = String(v);
+    if (/^[=+\-@\t\r]/.test(s) && !CSV_NUM.test(s)) s = "'" + s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   U.sideName = (s) => (String(s) === '0' || s === 'BUY' ? 'BUY' : 'SELL');
   U.sideEl = (s, long) => { const buy = String(s) === '0' || s === 'BUY' || s === 'LONG' || s === true; const t = long ? (buy ? 'LONG' : 'SHORT') : (buy ? 'BUY' : 'SELL'); return U.h('span', { class: 'bold ' + (buy ? 'pos' : 'neg') }, t); };

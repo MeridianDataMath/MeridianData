@@ -45,7 +45,7 @@
   }
 
   // ---------- CSV ----------
-  const cell = (v) => { if (v == null) return ''; const s = String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const cell = U.csvCell;   // quotes, and defuses text that a spreadsheet would run as a formula
   const toCsv = (cols, rows) => [cols.map((c) => cell(c[0])).join(',')].concat(rows.map((r) => cols.map((c) => cell(c[1](r))).join(','))).join('\r\n');
   const download = (name, text) => {
     const blob = new Blob(['﻿' + text], { type: 'text/csv;charset=utf-8' });
@@ -54,7 +54,7 @@
     setTimeout(() => URL.revokeObjectURL(url), 3000);
     U.toast('Downloaded ' + name);
   };
-  const busyFn = (btn, fn) => async () => { btn.disabled = true; const old = btn.innerHTML; btn.innerHTML = ''; U.append(btn, [h('span.spinner'), ' Preparing…']); try { await fn(); } catch (e) { if (!isAbort(e)) U.toast('Export failed: ' + e.message); } btn.disabled = false; btn.innerHTML = old; };
+  const busyFn = (btn, fn) => async () => { btn.disabled = true; const old = Array.from(btn.childNodes); U.replace(btn, h('span.spinner'), ' Preparing…'); try { await fn(); } catch (e) { if (!isAbort(e)) U.toast('Export failed: ' + e.message); } btn.disabled = false; U.replace(btn, old); };
   const exBtn = (label, sub, fn, async) => { const b = h('button.btn', {}, U.icon('download'), label); b.addEventListener('click', async ? busyFn(b, fn) : fn); return h('div.metric', h('div', b), h('div.s', { style: { marginTop: '6px' } }, sub)); };
 
   /** Meridian Predict section: cash basis (booked when a prediction is settled, i.e. claimed), with the decided-but-

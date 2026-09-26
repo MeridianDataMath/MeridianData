@@ -8,10 +8,11 @@
   "scripts": {
     "keygen": "node copy-agent.mjs keygen",
     "link": "node copy-agent.mjs link",
+    "dry": "node copy-agent.mjs run --dry",
     "start": "node copy-agent.mjs run",
     "status": "node copy-agent.mjs status"
   },
   "dependencies": {
-    "ethers": "^6.13.0"
+    "ethers": "6.17.0"
   }
 }

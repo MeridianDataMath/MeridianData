@@ -2,7 +2,10 @@
 // The PNG rendering itself (resvg) is left to the deploy workflow; these check what goes into it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { load } from './_load.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { load, root } from './_load.mjs';
 import { makeCards, esc } from '../scripts/cards.mjs';
 
 const MD = load(['js/util.js', 'js/api.js', 'js/predict/api.js', 'js/predict/analytics.js']);
@@ -65,8 +68,27 @@ test('the share page carries the card for unfurlers and sends people on to the p
   assert.match(html, /<meta name="twitter:card" content="summary_large_image">/);
   assert.match(html, /<meta property="og:url" content="https:\/\/example\.test\/a\/0x7c7565ad321ad3df118738fb16ea3bfd416334de">/);
   assert.match(html, /content="Tom &amp; &quot;Jerry&quot;"/, 'attributes escaped');
-  assert.match(html, /location\.replace\("\/#\/account\?address=0x7c75[0-9a-f]+&sub=s1"\)/);
+  assert.match(html, /<a id="go" href="\/#\/account\?address=0x7c75[0-9a-f]+&amp;sub=s1">/, 'the target, for js/share.js');
+  assert.match(html, /<script src="\/js\/share\.js" defer><\/script>/);
+  assert.doesNotMatch(html, /http-equiv="refresh"/, 'no meta refresh: Facebook\'s crawler would follow it to the home page\'s card');
+  assert.doesNotMatch(html, /<script>|<script [^>]*>[^<]|<style|\sstyle=|\son[a-z]+=/i, 'no inline code: the site\'s CSP would block it');
   assert.throws(() => K.sharePage({ kind: 'a', address: 'x"><script>', title: 't', description: 'd', image: 'i', target: '/' }));
+});
+
+test('the CSP in _headers allows index.html\'s inline script by its hash, and nothing else inline', () => {
+  const lines = fs.readFileSync(path.join(root, '_headers'), 'utf8').split(/\r?\n/);
+  const block = lines.slice(lines.indexOf('/*') + 1); const end = block.findIndex((l) => /^\S/.test(l) && !l.startsWith('#'));
+  const csp = block.slice(0, end < 0 ? undefined : end).map((l) => /^\s+Content-Security-Policy:\s*(.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
+  assert.equal(csp.length, 1, 'one policy for /*');
+  const dir = Object.fromEntries(csp[0].split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]));
+  const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const inline = [...index.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => `'sha256-${crypto.createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
+  assert.equal(inline.length, 1);
+  assert.deepEqual(dir['script-src'], ["'self'", ...inline], 'script-src carries the hash of the inline script as it is now');
+  assert.deepEqual(dir['style-src'], ["'self'"]);
+  assert.doesNotMatch(csp[0], /unsafe-inline|unsafe-eval/);
+  assert.doesNotMatch(index, /\sstyle=|\son[a-z]+=/i, 'no inline style or handler in index.html');
+  assert.deepEqual(dir['object-src'], ["'none'"]); assert.deepEqual(dir['base-uri'], ["'none'"]);
 });
 
 test('the site card counts accounts and Predict activity', () => {

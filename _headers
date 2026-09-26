@@ -1,9 +1,17 @@
 # Cloudflare Pages headers (ignored by GitHub Pages)
+# Content-Security-Policy: scripts only from the site itself, plus index.html's one inline script (the /a/ and /p/ redirect)
+# by its hash: recompute the sha256 whenever that script changes (tests/cards.test.mjs checks the two agree). The share
+# pages under /a/ and /p/ need no inline code (js/share.js and css/app.css). connect-src lists every host the site
+# calls, and also 'https:' because the phone-push (ntfy) server is the visitor's own choice: without it a self-hosted ntfy
+# stops working. http://127.0.0.1 and http://localhost are the copy agent's control port and a local ntfy. Start-
+# MeridianData.ps1 sends this same block, so a violation shows up on the local copy first. Keep one policy for /*: a
+# second rule matching the same paths would be enforced as well.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   X-Frame-Options: SAMEORIGIN
   Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-nh+hPNF7nz05qfPxxsblaJQVyBXEAo+HLiMmJEh6G6s='; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.meridian.xyz https://archive.meridian.xyz https://tradingview.meridian.xyz wss://ws.meridian.xyz https://api.predict.meridian.xyz https://gamma-api.polymarket.com https://clob.polymarket.com https://polygon-bor-rpc.publicnode.com https://1rpc.io https://rpc.mainnet.chain.robinhood.com https://api.frankfurter.dev https://ntfy.sh https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
 /data/*
   Cache-Control: no-cache
 /index.html

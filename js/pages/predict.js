@@ -21,7 +21,10 @@
   const qCell = (q, legs, yes) => h('div', { style: { lineHeight: '1.25', maxWidth: '420px', whiteSpace: 'normal' } }, h('div.ellipsis', { title: q }, q), legs > 1 ? h('div.xs.dim', legs + '-leg combo') : null);
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same Polymarket event: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
   const probBar = (p) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : 'source market: ' + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
-  const sourceLink = (c) => { const m = c.similarMarket && c.similarMarket.markets && c.similarMarket.markets[0]; return m ? h('a.btn.sm.ghost', { href: m, target: '_blank', rel: 'noopener', title: m }, U.icon('external'), /polymarket/i.test(m) ? 'Polymarket' : 'Source') : null; };
+  // a question's source market is a link the API hands over: only a web address becomes a button
+  const webUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
+  const srcBtn = (u) => h('a.btn.sm.ghost', { href: u, target: '_blank', rel: 'noopener', title: u }, U.icon('external'), /polymarket/i.test(u) ? 'Polymarket' : 'Source');
+  const sourceLink = (c) => { const m = webUrl(c.similarMarket && c.similarMarket.markets && c.similarMarket.markets[0]); return m ? srcBtn(m) : null; };
 
   // ---------- snapshot: the newest of data/predict.json (Pages) and the "snapshots" branch (pushed from a PC),
   //            else a recent-window build in the browser ----------
@@ -377,7 +380,7 @@
     function renderRows() {
       if (st.status === 'ended') rows = byStage(rows);
       U.replace(wrap, UI.table({ cols: [
-        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.question), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.question)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
         { key: 'c', label: 'Category', render: (c) => (c.category ? c.category.name : '—') },
         { key: 'p', label: 'Probability', num: true, title: 'Implied probability from the source market', render: (c) => probBar(c.estimatedPrice) },
         { key: 'oi', label: 'Meridian OI', num: true, render: (c) => { const v = P.usd(c.openInterest); return v ? usd(v, { compact: true }) : h('span.dim', '—'); } },
@@ -470,14 +473,14 @@
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE);
         U.replace(wrap, UI.table({ sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
-          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', c.q), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
           { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, sortVal: 1, render: (c) => probBar(c.ep) },
           { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes ever placed on this question · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, `${c.n} prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`) : null) },
           { key: 'oi', label: 'Meridian OI', num: true, sortVal: 1, title: 'Collateral escrowed on Meridian right now · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'normal', maxWidth: '200px', marginLeft: 'auto' } }, betsNote(c)) : null) },
           { key: 'v7', label: 'Source vol 7d', num: true, sortVal: 1, title: 'Volume on the mirrored Polymarket market, last 7 days', render: (c) => (c.v7 ? usd(c.v7, { compact: true }) : h('span.dim', '—')) },
           ...resCols(slice),
-          { key: 'l', label: '', render: (c) => (c.src ? h('a.btn.sm.ghost', { href: c.src, target: '_blank', rel: 'noopener', title: c.src }, U.icon('external'), /polymarket/i.test(c.src) ? 'Polymarket' : 'Source') : '') },
+          { key: 'l', label: '', render: (c) => (webUrl(c.src) ? srcBtn(c.src) : '') },
         ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`);
         // rows that move onto the page once their state is known (the Ended tab re-sorts by stage) need their oracle and

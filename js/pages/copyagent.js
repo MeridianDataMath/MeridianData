@@ -5,11 +5,18 @@
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';
   const KEY = 'md.agent.v1';   // page state kept in this browser: config draft, status port, token
-  const DEF = () => ({ port: 8790, token: '', cfg: { owner: '', subaccountId: '', leaders: [], sizing: { mode: 'fixed', size: 200, ratio: 10 }, execution: { type: 'IOC', slippageBps: 15, groupMs: 1200, onLeaderFlat: 'close', onLeaderLiquidation: 'close' }, risk: { maxNotionalPerMarket: 1000, maxOpenPositions: 5, maxLeverage: 3, dailyLossStop: 100, drawdownStopPct: 15, minOrderUsd: 10, markets: { deny: [] }, onTrip: 'reduceOnly' }, ntfy: { server: 'https://ntfy.sh', topic: '' } } });
-  const load = () => { const s = U.storage.get(KEY, null); const d = DEF(); if (!s) return d; return Object.assign(d, s, { cfg: Object.assign(d.cfg, s.cfg || {}, { sizing: Object.assign(d.cfg.sizing, (s.cfg || {}).sizing || {}), execution: Object.assign(d.cfg.execution, (s.cfg || {}).execution || {}), risk: Object.assign(d.cfg.risk, (s.cfg || {}).risk || {}), ntfy: Object.assign(d.cfg.ntfy, (s.cfg || {}).ntfy || {}) }) }); };
+  // the agent's control token: random, since it is all that stands between any local web page and pause / resume / close all
+  const newToken = () => { const b = new Uint8Array(24); crypto.getRandomValues(b); return btoa(String.fromCharCode.apply(null, b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+  const DEF = () => ({ port: 8790, token: newToken(), cfg: { owner: '', subaccountId: '', leaders: [], sizing: { mode: 'fixed', size: 200, ratio: 10 }, execution: { type: 'IOC', slippageBps: 15, groupMs: 1200, maxFillAgeMs: 15000, onLeaderFlat: 'close', onLeaderLiquidation: 'close' }, risk: { maxOrderUsd: 1000, maxPositionUsd: 5000, maxNotionalPerMarket: 1000, maxOpenPositions: 5, maxLeverage: 3, maxPriceDeviationPct: 3, dailyLossStop: 100, drawdownStopPct: 15, minOrderUsd: 10, markets: { deny: [] }, onTrip: 'reduceOnly' }, ntfy: { server: 'https://ntfy.sh', topic: '' } } });
+  const load = () => {
+    const s = U.storage.get(KEY, null); const d = DEF();
+    const st = !s ? d : Object.assign(d, s, { cfg: Object.assign(d.cfg, s.cfg || {}, { sizing: Object.assign(d.cfg.sizing, (s.cfg || {}).sizing || {}), execution: Object.assign(d.cfg.execution, (s.cfg || {}).execution || {}), risk: Object.assign(d.cfg.risk, (s.cfg || {}).risk || {}), ntfy: Object.assign(d.cfg.ntfy, (s.cfg || {}).ntfy || {}) }) });
+    if (String(st.token || '').length < 16) st.token = newToken();   // an old empty or short one: the agent no longer starts with it
+    return st;
+  };
   const usd0 = (v) => U.fmtUsd(v, { dp: 0 });
   const code = (text) => h('pre.code', h('code', text));
-  const files = ['copy-agent.mjs', 'package.json', 'config.example.json'];
+  const files = ['copy-agent.mjs', 'package.json', 'package-lock.json', 'config.example.json'];
 
   /**
    * Copy history from the agent's order records: our own positions rebuilt from the fills the exchange reported for the
@@ -47,7 +54,10 @@
   MD.copyagentPage = {
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Copy agent'));
-      const st = load(); const save = () => U.storage.set(KEY, st);
+      const st = load(); const save = () => U.storage.set(KEY, st); save();   // a token made just now must be the one next time too
+      // the agent's local port: every request carries the token, /status included
+      const agentUrl = (p) => `http://127.0.0.1:${U.num(st.port) || 8790}/${p}`; const agentHdr = () => ({ 'x-agent-token': st.token || '' });
+      const agentSigner = async () => { try { const r = await fetch(agentUrl('status'), { headers: agentHdr(), signal: AbortSignal.timeout(2000) }); if (!r.ok) return { refused: r.status }; return { signer: (await r.json()).signer }; } catch (_) { return null; } };
       const body = h('div.stack');
       U.replace(root, h('div.page', h('div.stack', h('div.row.wrap', { style: { gap: '8px' } }, h('a.btn.sm.ghost', { href: '#/copytrade' }, '← Leaders'), h('span.dim.small', 'the copy agent runs on your own machine; this page sets it up and watches it')), body)));
 
@@ -55,11 +65,11 @@
       const hero = h('div.card.ct-hero',
         h('div.row', { style: { marginBottom: '8px' } }, UI.chip('non-custodial', 'accent'), h('span.dim.small', 'linked signer · your machine · orders only, never withdrawals')),
         h('h1', 'Copy leaders into your own account'),
-        h('p', 'A small program on your computer follows the leaders you choose and mirrors their positions into your Meridian subaccount, sized and limited the way you set here. It trades with a Meridian linked signer: a key made on your machine that can submit and cancel orders and can never withdraw. Your wallet signs the link once, on this page; the site holds nothing.'),
+        h('p', 'A small program on your computer follows the leaders you choose and mirrors their positions into your Meridian subaccount, sized and limited the way you set here. It trades with a Meridian linked signer: a key made on your machine that can submit and cancel orders and can never withdraw (orders alone can still lose the account\'s margin, so only ever link a key you made yourself). Your wallet signs the link once, on this page; the site holds nothing.'),
         h('p', 'Before running it with money: replay the leaders in the simulator, paper-copy them for a while, then run the agent with --dry (every order goes to the exchange\'s margin check, nothing is placed) and watch it here. Copying is not a promise of the leader\'s result: see "Edge left" on every leader.'),
         h('details', { style: { marginTop: '6px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'What the agent does and does not do'), h('ul.small.muted', { style: { margin: '6px 0 0 18px', padding: 0, lineHeight: '1.6' } },
-          h('li', 'It mirrors position changes it sees on the leader\'s fill stream, sized by your rule; it reads its own fills back from the exchange after every order rather than assuming them, and re-reads the leaders every five minutes and on every hint, so a close or a reduction missed over a disconnect is caught up. An opening missed over a disconnect is not chased.'),
-          h('li', 'It never places an order without a live mark price, never sends a market order unless you choose to (limit IOC with a slippage cap is the default), never chases an unfilled remainder, never opens a position in a market another followed leader already occupies, and never trades while its view of your own account is more than two minutes old.'),
+          h('li', 'It mirrors position changes it sees on the leader\'s fill stream, sized by your rule; it reads its own fills back from the exchange after every order rather than assuming them, and re-reads the leaders every five minutes and on every hint, so a close or a reduction missed over a disconnect is caught up. An opening missed over a disconnect, heard of late, or filled far from the mark is listed as not copied and never chased.'),
+          h('li', 'It sizes every order and checks every limit at the exchange\'s mark, not at the leader\'s price, with a hard ceiling per order and per position in every sizing mode. It never places an order without a live mark price, never sends a market order unless you choose to (limit IOC with a slippage cap is the default), never chases an unfilled remainder, never opens a position in a market another followed leader already occupies, and never trades while its view of your own account is more than two minutes old.'),
           h('li', 'Stops: today\'s loss and the drawdown from the peak, both with deposits and withdrawals taken out so a transfer cannot trip or mask them. A stop blocks new and larger positions (or closes everything, by config) until you resume.'),
           h('li', 'What it cannot protect you from: the leader being wrong; a partial fill leaving you smaller than intended (later reductions scale to what you actually hold); the exchange rejecting a close because it would breach a limit; your machine, network or the exchange going down while positions are open (they stay open; the next start adopts them). The dashboard shows every order with what the exchange reported.'))));
 
@@ -67,8 +77,8 @@
       const step1 = UI.card('1 · Install and make a key', h('div', { style: { padding: '12px 16px' } },
         h('p.small.muted', { style: { margin: '0 0 8px' } }, 'Needs Node.js 22 or newer. Put these files in a folder of their own:'),
         h('div.row.wrap', { style: { gap: '6px', marginBottom: '8px' } }, files.map((f) => h('a.btn.sm', { href: 'agent/' + f, download: f }, f))),
-        code('npm install\nnode copy-agent.mjs keygen'),
-        h('p.small.dim', { style: { margin: '8px 0 0' } }, 'keygen writes signer.key next to the script and prints the signer address. The key can only ever place and cancel orders once linked; keep the file private anyway.')));
+        code('npm ci --ignore-scripts\nnode copy-agent.mjs keygen'),
+        h('p.small.dim', { style: { margin: '8px 0 0' } }, 'npm ci installs exactly the versions package-lock.json pins, checked against their hashes, and --ignore-scripts runs none of their install scripts. keygen writes signer.key next to the script, readable by your user account only, and prints the signer address. Once linked the key can only place and cancel orders, but that is enough to lose the account\'s margin: keep the folder in your own user profile, not on a shared drive.')));
 
       // ---- step 2: link the signer with the wallet
       const linkIn = h('textarea.input', { rows: 4, placeholder: 'Paste the contents of link-request.json here (node copy-agent.mjs link writes it after config.json exists)', spellcheck: false, style: { width: '100%', fontFamily: 'var(--mono)', fontSize: '11.5px' } });
@@ -96,13 +106,32 @@
           ], rows }) : h('div.small.dim', 'none yet'));
         } catch (e) { if (!isAbort(e)) U.replace(signersOut, h('div.small.neg', 'Could not list signers: ' + e.message)); }
       };
+      /** The pasted request, or what makes it wrong for the account set up in step 3, in words */
+      const readLink = () => {
+        let req; try { req = JSON.parse(linkIn.value.trim()); } catch (_) { return { err: 'That is not the JSON the agent printed.' }; }
+        const d = req && req.data; if (!d || !req.signerSignature) return { err: 'The request needs "data" and "signerSignature".' };
+        if (!U.isAddress(d.signer) || !U.isAddress(d.sender)) return { err: 'The request has no valid signer or owner address.' };
+        if (Date.now() / 1000 - U.num(d.signedAt) > 3300) return { err: 'This request is older than an hour: run "node copy-agent.mjs link" again.' };
+        if (U.isAddress(st.cfg.owner) && d.sender.toLowerCase() !== st.cfg.owner.toLowerCase()) return { err: `This request is for the wallet ${d.sender}, not the one in step 3 (${st.cfg.owner}).` };
+        if (U.isUuid(st.cfg.subaccountId) && d.subaccountId !== st.cfg.subaccountId) return { err: `This request is for subaccount ${d.subaccountId}, not the one in step 3 (${st.cfg.subaccountId}).` };
+        return { req, d };
+      };
+      // what the wallet is about to authorise, shown as soon as it is pasted and before anything is signed
+      const linkWho = h('div.small', { style: { marginTop: '8px' } });
+      linkIn.addEventListener('input', () => {
+        const r = readLink(); if (!linkIn.value.trim()) { U.replace(linkWho); return; }
+        U.replace(linkWho, r.err ? h('span.neg', r.err) : h('div', h('div', 'Signer this would let trade: ', h('b.mono', r.d.signer)), h('div.dim', `on subaccount ${U.decodeBytes32(r.d.subaccount)} (${r.d.subaccountId}) of ${r.d.sender}. It must be the address "node copy-agent.mjs link" printed on your machine.`)));
+      });
       const linkBtn = h('button.btn.primary.sm', { onclick: async () => {
-        let req; try { req = JSON.parse(linkIn.value.trim()); } catch (_) { U.replace(linkOut, h('span.neg', 'That is not the JSON the agent printed.')); return; }
-        if (!req.data || !req.signerSignature) { U.replace(linkOut, h('span.neg', 'The request needs "data" and "signerSignature".')); return; }
-        if (Date.now() / 1000 - U.num(req.data.signedAt) > 3300) { U.replace(linkOut, h('span.neg', 'This request is older than an hour: run "node copy-agent.mjs link" again.')); return; }
+        const lr = readLink(); if (lr.err) { U.replace(linkOut, h('span.neg', lr.err)); return; }
+        const { req, d } = lr;
+        // the running agent's own signer, when it answers: a request for any other key is refused outright
+        const ag = await agentSigner();
+        if (ag && ag.signer && ag.signer.toLowerCase() !== d.signer.toLowerCase()) { U.replace(linkOut, h('span.neg', `Refused: this request would let ${d.signer} trade, but the agent running on this machine signs with ${ag.signer}. Link only the key your own agent printed; a request from anyone else hands them your account.`)); return; }
+        const seen = ag && ag.signer ? 'It is the signer of the agent running on this machine.' : `No agent ${ag ? 'accepted this page\'s token' : 'answers'} on this machine, so the page cannot compare: check it against the address "node copy-agent.mjs link" printed.`;
+        if (!confirm(`Your wallet is about to let this key trade on your account:\n\nsigner: ${d.signer}\nsubaccount: ${U.decodeBytes32(d.subaccount)}\nowner: ${d.sender}\n\n${seen}\n\nIt can never withdraw, but its orders alone can lose the account's margin. Continue?`)) return;
         try {
           U.replace(linkOut, h('span.dim', 'Asking the wallet to sign…'));
-          const d = req.data;
           const signature = await walletSign('LinkSigner', { sender: d.sender, signer: d.signer, subaccount: d.subaccount, nonce: d.nonce, signedAt: d.signedAt }, d.sender);
           const r = await fetch(A.BASE + '/v1/linked-signer/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: d, signature, signerSignature: req.signerSignature }) });
           const j = await r.json().catch(() => ({}));
@@ -112,13 +141,20 @@
         } catch (e) { U.replace(linkOut, h('span.neg', 'Link failed: ' + (e.message || e))); }
       } }, 'Sign with wallet and link');
       const step2 = UI.card('2 · Link the signer with your wallet', h('div', { style: { padding: '12px 16px' } },
-        h('p.small.muted', { style: { margin: '0 0 8px' } }, 'Fill config.json first (step 3 writes it), then run ', h('code', 'node copy-agent.mjs link'), '. It prints a request the signer has already signed; paste it here and your wallet co-signs it. The exchange then lists the key as a linked signer of your subaccount: orders only, no withdrawals, revocable here at any time.'),
-        linkIn, h('div.row', { style: { marginTop: '8px', gap: '8px' } }, linkBtn, h('span.dim.small', 'EIP-712 · signed in your wallet, sent straight to api.meridian.xyz')), linkOut, signersOut));
+        h('p.small.muted', { style: { margin: '0 0 8px' } }, 'Fill config.json first (step 3 writes it), then run ', h('code', 'node copy-agent.mjs link'), '. It prints a request the signer has already signed; paste it here and your wallet co-signs it. The exchange then lists the key as a linked signer of your subaccount: orders only, no withdrawals, revocable here at any time. The page shows the signer before your wallet signs and refuses one that is not your running agent\'s; never paste a link request someone else gave you.'),
+        linkIn, linkWho, h('div.row', { style: { marginTop: '8px', gap: '8px' } }, linkBtn, h('span.dim.small', 'EIP-712 · signed in your wallet, sent straight to api.meridian.xyz')), linkOut, signersOut));
 
       // ---- step 3: the config
       const c = st.cfg;
       const inp = (obj, key, attrs) => h('input.input.sm', Object.assign({ value: obj[key] == null ? '' : obj[key], oninput: (e) => { obj[key] = attrs && attrs.type === 'number' ? U.num(e.target.value) : e.target.value.trim(); save(); renderJson(); } }, attrs || {}));
       const sel = (obj, key, opts) => h('select.input.sm', { onchange: (e) => { obj[key] = e.target.value; save(); renderJson(); } }, opts.map(([v, label]) => h('option', { value: v, selected: obj[key] === v }, label)));
+      // the ntfy topic is the only secret (anyone who knows it reads the pushes): say so when it is easy to guess, and
+      // when the server is not https (the agent refuses a plain-http one except on localhost)
+      const ntfyWarn = h('span.small.neg');
+      const ntfyCheck = () => { const w = MD.alerts.topicWarning(c.ntfy.topic); const bad = c.ntfy.server && !MD.alerts.serverOk(c.ntfy.server); U.replace(ntfyWarn, [w ? w + ': Generate one instead' : null, bad ? 'the server must be https://' : null].filter(Boolean).join(' · ')); };
+      const ntfyTopic = inp(c.ntfy, 'topic', { placeholder: 'topic', style: { width: '200px' } }); ntfyTopic.addEventListener('input', ntfyCheck);
+      const ntfyServer = inp(c.ntfy, 'server', { placeholder: 'https://ntfy.sh', style: { width: '160px' } }); ntfyServer.addEventListener('input', ntfyCheck);
+      ntfyCheck();
       const fld = (label, el, hint) => h('div', { style: { marginBottom: '8px' } }, h('div.field-lbl', label), el, hint ? h('div.dim.xs', { style: { marginTop: '2px' } }, hint) : null);
       const leadersWrap = h('div');
       const renderLeaders = () => U.replace(leadersWrap, h('div.row.wrap', { style: { gap: '6px' } }, c.leaders.map((l) => h('span.chip', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)), h('button', { style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' }, onclick: () => { c.leaders = c.leaders.filter((x) => x.sid !== l.sid); save(); renderLeaders(); renderJson(); } }, U.icon('x')))),
@@ -128,10 +164,16 @@
       const addrIn = h('input.input.sm', { placeholder: 'or a wallet address (0x…) to add', style: { width: '320px' }, spellcheck: false });
       const addBtn = h('button.btn.sm', { onclick: async () => { const v = addrIn.value.trim().toLowerCase(); if (!U.isAddress(v)) { U.toast('Enter a 0x address'); return; } try { const subs = await A.subaccountsOf(v); if (!subs.length) { U.toast('No Meridian subaccount for that address'); return; } for (const s of subs) if (!c.leaders.some((x) => x.sid === s.id)) c.leaders.push({ sid: s.id, address: v, name: U.decodeBytes32(s.name) }); addrIn.value = ''; save(); renderLeaders(); renderJson(); } catch (e) { U.toast(e.message); } } }, 'Add');
       const jsonOut = h('pre.code', { style: { maxHeight: '260px', overflow: 'auto' } });
-      const buildCfg = () => ({ owner: c.owner, subaccountId: c.subaccountId, keyFile: 'signer.key', leaders: c.leaders, sizing: { mode: c.sizing.mode, size: U.num(c.sizing.size), ratio: U.num(c.sizing.ratio) }, execution: { type: c.execution.type, slippageBps: U.num(c.execution.slippageBps), groupMs: U.num(c.execution.groupMs) || 1200, onLeaderFlat: c.execution.onLeaderFlat, onLeaderLiquidation: c.execution.onLeaderLiquidation }, risk: { maxNotionalPerMarket: U.num(c.risk.maxNotionalPerMarket), maxOpenPositions: U.num(c.risk.maxOpenPositions), maxLeverage: U.num(c.risk.maxLeverage), dailyLossStop: U.num(c.risk.dailyLossStop), drawdownStopPct: U.num(c.risk.drawdownStopPct), minOrderUsd: U.num(c.risk.minOrderUsd), markets: { deny: (c.risk.markets.deny || []).filter(Boolean) }, onTrip: c.risk.onTrip }, status: { port: U.num(st.port) || 8790, token: st.token || '' }, ntfy: { server: c.ntfy.server || 'https://ntfy.sh', topic: c.ntfy.topic || '' } });
+      // a hard limit left empty (or at 0) is written as its default, never as "no limit" (the agent would refuse a 0 there)
+      const D = DEF().cfg; const orDef = (v, d) => (U.num(v) > 0 ? U.num(v) : d);
+      const buildCfg = () => ({ owner: c.owner, subaccountId: c.subaccountId, keyFile: 'signer.key', leaders: c.leaders, sizing: { mode: c.sizing.mode, size: U.num(c.sizing.size), ratio: U.num(c.sizing.ratio) }, execution: { type: c.execution.type, slippageBps: U.num(c.execution.slippageBps), groupMs: U.num(c.execution.groupMs) || 1200, maxFillAgeMs: orDef(c.execution.maxFillAgeMs, D.execution.maxFillAgeMs), onLeaderFlat: c.execution.onLeaderFlat, onLeaderLiquidation: c.execution.onLeaderLiquidation }, risk: { maxOrderUsd: orDef(c.risk.maxOrderUsd, D.risk.maxOrderUsd), maxPositionUsd: orDef(c.risk.maxPositionUsd, D.risk.maxPositionUsd), maxNotionalPerMarket: U.num(c.risk.maxNotionalPerMarket), maxOpenPositions: U.num(c.risk.maxOpenPositions), maxLeverage: U.num(c.risk.maxLeverage), maxPriceDeviationPct: Math.min(50, orDef(c.risk.maxPriceDeviationPct, D.risk.maxPriceDeviationPct)), dailyLossStop: U.num(c.risk.dailyLossStop), drawdownStopPct: U.num(c.risk.drawdownStopPct), minOrderUsd: U.num(c.risk.minOrderUsd), markets: { deny: (c.risk.markets.deny || []).filter(Boolean) }, onTrip: c.risk.onTrip }, status: { port: U.num(st.port) || 8790, token: st.token }, ntfy: { server: c.ntfy.server || 'https://ntfy.sh', topic: c.ntfy.topic || '' } });
       const renderJson = () => { jsonOut.textContent = JSON.stringify(buildCfg(), null, 2); };
       const denyIn = h('input.input.sm', { value: (c.risk.markets.deny || []).join(', '), placeholder: 'e.g. HYPE-USD, XAG-USD', style: { width: '260px' }, oninput: (e) => { c.risk.markets.deny = e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean); save(); renderJson(); } });
-      const tokenIn = h('input.input.sm', { value: st.token, placeholder: 'any secret word', style: { width: '200px' }, oninput: (e) => { st.token = e.target.value.trim(); save(); renderJson(); } });
+      const tokenHint = h('span.xs');
+      const tokenCheck = () => U.replace(tokenHint, st.token.length < 16 ? h('span.neg', '16 characters or more: the agent refuses a shorter one') : null);
+      const tokenIn = h('input.input.sm', { value: st.token, spellcheck: false, style: { width: '260px', fontFamily: 'var(--mono)' }, oninput: (e) => { st.token = e.target.value.trim(); save(); renderJson(); tokenCheck(); } });
+      const tokenNew = h('button.btn.sm.ghost', { title: 'Make a new random token (then download config.json again and restart the agent)', onclick: () => { st.token = newToken(); tokenIn.value = st.token; save(); renderJson(); tokenCheck(); U.toast('New token: download config.json again and restart the agent'); } }, 'New');
+      const ageIn = h('input.input.sm', { type: 'number', min: 1, step: 1, value: U.num(c.execution.maxFillAgeMs) / 1000 || 15, style: { width: '70px' }, oninput: (e) => { c.execution.maxFillAgeMs = Math.round(U.num(e.target.value) * 1000); save(); renderJson(); } });
       const useWallet = h('button.btn.sm', { onclick: async () => { try { if (!window.ethereum) throw new Error('no wallet in this browser'); const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' }); c.owner = from.toLowerCase(); const subs = await A.subaccountsOf(c.owner); if (subs.length) c.subaccountId = subs[0].id; save(); renderJson(); U.toast(subs.length ? 'Owner and subaccount filled from the wallet' : 'Owner filled; no Meridian subaccount found for it'); ownerIn.value = c.owner; subIn.value = c.subaccountId; listSigners(); } catch (e) { U.toast(e.message || String(e)); } } }, 'Use my wallet');
       const ownerIn = inp(c, 'owner', { placeholder: '0x… your wallet', style: { width: '380px' }, spellcheck: false });
       const subIn = inp(c, 'subaccountId', { placeholder: 'subaccount UUID (the account page shows it)', style: { width: '320px' }, spellcheck: false, onchange: () => listSigners() });
@@ -142,30 +184,36 @@
             fld('Your account', h('div.row.wrap', { style: { gap: '6px' } }, ownerIn, subIn, useWallet)),
             fld('Leaders to copy', h('div', leadersWrap, h('div.row', { style: { gap: '6px', marginTop: '6px' } }, addrIn, addBtn))),
             fld('Sizing', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.sizing, 'mode', [['fixed', 'Fixed $ per position (the leader\'s opening order)'], ['perfill', 'Fixed $ per fill'], ['ratio', '% of the leader\'s quantity']]), inp(c.sizing, 'size', { type: 'number', min: 10, step: 10, style: { width: '110px' } }), h('span.dim.small', 'USD ·'), inp(c.sizing, 'ratio', { type: 'number', min: 0.1, step: 1, style: { width: '80px' } }), h('span.dim.small', '% (ratio mode)')), 'the same three modes as the simulator; a fixed size is set from the leader\'s whole opening order, not its first fill. Adds follow in proportion only up to the USD max per market below (a leader who opens small and scales in would otherwise make a position any multiple of the size); left at 0, the agent uses five times the size'),
-            fld('Execution', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.execution, 'type', [['IOC', 'Limit IOC at mark ± slippage cap'], ['MARKET', 'Market order']]), inp(c.execution, 'slippageBps', { type: 'number', min: 1, step: 1, style: { width: '80px' } }), h('span.dim.small', 'bps cap'), sel(c.execution, 'onLeaderFlat', [['close', 'Leader flat without a fill → close'], ['hold', 'Leader flat without a fill → hold']]), sel(c.execution, 'onLeaderLiquidation', [['close', 'Leader liquidated → close'], ['hold', 'Leader liquidated → hold']])), 'an IOC order fills up to the cap and cancels the rest; what did not fill is logged and not chased')),
+            fld('Execution', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.execution, 'type', [['IOC', 'Limit IOC at mark ± slippage cap'], ['MARKET', 'Market order']]), inp(c.execution, 'slippageBps', { type: 'number', min: 1, step: 1, style: { width: '80px' } }), h('span.dim.small', 'bps cap'), sel(c.execution, 'onLeaderFlat', [['close', 'Leader flat without a fill → close'], ['hold', 'Leader flat without a fill → hold']]), sel(c.execution, 'onLeaderLiquidation', [['close', 'Leader liquidated → close'], ['hold', 'Leader liquidated → hold']]), h('span.row', { style: { gap: '4px' } }, ageIn, h('span.dim.small', 's max age of a leader fill'))), 'an IOC order fills up to the cap and cancels the rest; what did not fill is logged and not chased. A leader fill that reaches the agent later than the max age (a reconnect, a long queue) is listed as missed on the dashboard, not copied')),
           h('div',
             fld('Risk limits', h('div.row.wrap', { style: { gap: '6px 12px' } },
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxOrderUsd', { type: 'number', min: 10, step: 100, style: { width: '90px' } }), h('span.dim.small', 'USD max per order')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxPositionUsd', { type: 'number', min: 10, step: 100, style: { width: '90px' } }), h('span.dim.small', 'USD max per position')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxNotionalPerMarket', { type: 'number', min: 0, step: 100, style: { width: '100px' } }), h('span.dim.small', 'USD max per market')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxPriceDeviationPct', { type: 'number', min: 0.5, max: 50, step: 0.5, style: { width: '70px' } }), h('span.dim.small', '% max leader price off the mark')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxOpenPositions', { type: 'number', min: 1, step: 1, style: { width: '70px' } }), h('span.dim.small', 'open positions max')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxLeverage', { type: 'number', min: 1, step: 0.5, style: { width: '70px' } }), h('span.dim.small', '× max leverage on equity')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'dailyLossStop', { type: 'number', min: 0, step: 10, style: { width: '90px' } }), h('span.dim.small', 'USD daily loss stop')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'drawdownStopPct', { type: 'number', min: 0, step: 1, style: { width: '70px' } }), h('span.dim.small', '% drawdown stop')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'minOrderUsd', { type: 'number', min: 0, step: 5, style: { width: '70px' } }), h('span.dim.small', 'USD min order')),
-              h('span.row', { style: { gap: '4px' } }, sel(c.risk, 'onTrip', [['reduceOnly', 'On a stop: reduce-only'], ['closeAll', 'On a stop: close everything']]))), 'a tripped stop blocks new and larger positions until you resume from the dashboard; reductions and closes still follow the leader'),
+              h('span.row', { style: { gap: '4px' } }, sel(c.risk, 'onTrip', [['reduceOnly', 'On a stop: reduce-only'], ['closeAll', 'On a stop: close everything']]))), 'the USD max per order and per position are hard ceilings in every sizing mode, ratio included (left empty they take the default, never "no limit"); sizes and limits are counted at the exchange\'s mark, and a leader fill further off it than the % set (a stub quote on a thin book) is not copied. A tripped stop blocks new and larger positions until you resume from the dashboard; reductions and closes still follow the leader'),
             fld('Markets not to copy', denyIn),
-            fld('Dashboard', h('div.row.wrap', { style: { gap: '6px' } }, h('span.dim.small', 'port'), inp(st, 'port', { type: 'number', min: 1024, step: 1, style: { width: '80px' } }), h('span.dim.small', 'token'), tokenIn), 'the agent answers this page on 127.0.0.1 only; the token guards pause / resume / close all'),
-            fld('Phone push (ntfy)', h('div.row.wrap', { style: { gap: '6px' } }, inp(c.ntfy, 'topic', { placeholder: 'topic', style: { width: '200px' } }), inp(c.ntfy, 'server', { placeholder: 'https://ntfy.sh', style: { width: '160px' } })), 'rejected orders, risk stops and leader liquidations'))),
+            fld('Dashboard', h('div.row.wrap', { style: { gap: '6px' } }, h('span.dim.small', 'port'), inp(st, 'port', { type: 'number', min: 1024, step: 1, style: { width: '80px' } }), h('span.dim.small', 'token'), tokenIn, tokenNew, tokenHint), 'made at random here and written into config.json: the agent answers on 127.0.0.1 only, and only with this token, which guards the dashboard, pause / resume and close all. If you run the agent with a config of your own and an empty token, it makes one in control.token next to the script: paste that here'),
+            fld('Phone push (ntfy)', h('div.row.wrap', { style: { gap: '6px' } }, ntfyTopic, h('button.btn.sm', { title: 'Fill in a long random topic nobody can guess; subscribe to the same name in the ntfy app', onclick: () => { ntfyTopic.value = MD.alerts.newTopic(); ntfyTopic.dispatchEvent(new Event('input')); } }, 'Generate'), ntfyServer, ntfyWarn), 'rejected orders, risk stops and leader liquidations; the topic is the only secret (anyone who knows it reads these), and the server must be https:// (plain http only on localhost)'))),
         h('div.row', { style: { gap: '8px', margin: '8px 0' } }, dl, h('span.dim.small', 'or copy the JSON into config.json next to the script')),
         jsonOut));
-      renderJson();
+      renderJson(); tokenCheck();
 
       // ---- step 4 + dashboard
       const dash = h('div'); const histWrap = h('div');
-      let timer = null, last = null, lastErr = null, ownPositions = null, ownPosAt = 0;
-      const post = async (p) => { try { const r = await fetch(`http://127.0.0.1:${U.num(st.port) || 8790}/${p}`, { method: 'POST', headers: { 'x-agent-token': st.token || '' } }); if (!r.ok) throw new Error(r.status === 401 ? 'wrong token' : 'HTTP ' + r.status); U.toast(p + ' sent'); poll(); } catch (e) { U.toast(`${p} failed: ${e.message}`); } };
+      let timer = null, last = null, lastErr = null, refused = null, ownPositions = null, ownPosAt = 0;
+      const post = async (p) => { try { const r = await fetch(agentUrl(p), { method: 'POST', headers: agentHdr() }); if (!r.ok) throw new Error(r.status === 401 ? 'wrong token' : 'HTTP ' + r.status); U.toast(p + ' sent'); poll(); } catch (e) { U.toast(`${p} failed: ${e.message}`); } };
       const poll = async () => {
-        try { const r = await fetch(`http://127.0.0.1:${U.num(st.port) || 8790}/status`, { signal: ctx.signal }); last = await r.json(); lastErr = null; }
-        catch (e) { if (isAbort(e)) return; last = null; lastErr = e.message; }
+        try {
+          const r = await fetch(agentUrl('status'), { signal: ctx.signal, headers: agentHdr() });
+          // it answered but will not show itself: the token (or this page's origin) is not one it accepts
+          if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; }
+        } catch (e) { if (isAbort(e)) return; last = null; lastErr = e.message; refused = null; }
         renderDash();
         // the copy account's position records (funding, liquidations) for the history, refreshed every minute
         if (last && last.subaccountId && !last.dry && Date.now() - ownPosAt > 60000) { ownPosAt = Date.now(); try { ownPositions = await A.positions(last.subaccountId, { maxPages: 3, signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; } }
@@ -214,7 +262,9 @@
       }
       const renderDash = () => {
         if (!last) {
-          U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No agent answering on 127.0.0.1:' + (U.num(st.port) || 8790) + (lastErr ? ' (' + lastErr + ')' : '')), code('node copy-agent.mjs run'), h('div.dim.small', { style: { marginTop: '8px' } }, 'The dashboard connects to the agent on your own machine; nothing about it leaves your browser.')));
+          const where = '127.0.0.1:' + (U.num(st.port) || 8790);
+          if (refused) { U.replace(dash, h('div.empty', h('div', { style: { color: 'var(--amber)' } }, refused === 401 ? `The agent on ${where} refused this page's token. Put the token it runs with into the token field in step 3: status.token in its config.json, or control.token next to the script if it made one.` : `The agent on ${where} refused this page: it answers the site and the local dev server only.`))); return; }
+          U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No agent answering on ' + where + (lastErr ? ' (' + lastErr + ')' : '')), code('node copy-agent.mjs run --dry'), h('div.dim.small', { style: { marginTop: '8px' } }, 'The dashboard connects to the agent on your own machine; nothing about it leaves your browser.')));
           return;
         }
         const S = last; const ref = MD._agentRef;
@@ -224,8 +274,8 @@
         const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : '—');
         U.replace(dash,
           h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } },
-            UI.chip(S.paused ? 'paused' : S.tripped ? 'risk stop' : 'running', S.paused ? 'amber' : S.tripped ? 'red' : 'green'), S.dry ? UI.chip('DRY RUN · nothing is placed', 'amber') : null, UI.chip('socket ' + S.ws, S.ws === 'open' ? 'green' : 'amber'),
-            h('span.dim.small', `up ${U.fmtDuration(S.uptime)} · signer ${U.shortAddr(S.signer, 4)} · ${(S.leaders || []).length} leader(s) · ${S.orders ? S.orders.length : 0} orders · ${S.errors || 0} errors`), h('span.grow'),
+            UI.chip(S.paused ? 'paused' : S.tripped ? 'risk stop' : 'running', S.paused ? 'amber' : S.tripped ? 'red' : 'green'), S.dry ? UI.chip('DRY RUN · nothing is placed', 'amber') : UI.chip('LIVE · real orders', 'red'), UI.chip('socket ' + S.ws + (S.reconnects ? ' · ' + S.reconnects + ' reconnect' + (S.reconnects > 1 ? 's' : '') : ''), S.ws === 'open' ? 'green' : 'amber'),
+            h('span.dim.small', `up ${U.fmtDuration(S.uptime)} · signer ${U.shortAddr(S.signer, 4)} · ${(S.leaders || []).length} leader(s) · ${S.orders ? S.orders.length : 0} orders · ${S.errors || 0} errors` + (S.risk && S.risk.maxOrderUsd ? ` · at most ${usd0(S.risk.maxOrderUsd)} per order, ${usd0(S.risk.maxPositionUsd)} per position` : '')), h('span.grow'),
             S.paused || S.tripped ? h('button.btn.sm.primary', { onclick: () => post('resume') }, 'Resume') : h('button.btn.sm', { onclick: () => post('pause') }, 'Pause'),
             h('button.btn.sm.ghost', { onclick: () => post('resync'), title: 'Read the leaders\' positions again now and mirror anything the socket missed' }, 'Resync'),
             h('button.btn.sm.ghost', { onclick: () => { if (confirm('Close every open position of the copy account at market?')) post('close-all'); } }, 'Close all')),
@@ -255,6 +305,13 @@
               { key: 'q', label: 'Their size', num: true, render: (r) => U.fmtQty(Math.abs(r.q)) },
               { key: 'mine', label: 'Mine', num: true, render: (r) => (r.mine && r.owner ? U.fmtQty(Math.abs(r.mine.size)) : h('span.dim', r.mine ? 'held from another leader' : 'not mirrored')) },
             ], rows: lpRows, empty: 'The leaders hold nothing right now' }))),
+          S.missed && S.missed.length ? UI.card('Not copied', UI.table({ cols: [
+            { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.at) : U.fmtAgo(r.at)) },
+            { key: 'l', label: 'Leader', render: (r) => r.leader },
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
+            { key: 'k', label: 'Leader\'s order', render: (r) => h('span', U.sideEl(r.q > 0, true), h('span.dim.small', ` ${r.kind} ${U.fmtQty(Math.abs(r.q))}`)) },
+            { key: 'w', label: 'Why', render: (r) => h('span.dim.small', r.why) },
+          ], rows: S.missed.slice(0, 20) }), h('span.dim.small', 'leader openings and adds that came too late, at a price too far from the mark, or only showed on a re-read after a gap in the socket: never chased')) : null,
           UI.card('Orders', UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
             { key: 'l', label: 'Leader', render: (r) => r.leader || h('span.dim', '—') },
@@ -271,7 +328,7 @@
             { key: 'm', label: 'What', render: (r) => h('span.small', r.msg) },
           ], rows: (S.events || []).slice(0, 30), empty: 'Nothing yet' })));
       };
-      const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Keep it running (a terminal, a scheduled task, a service). It writes its logs to a logs folder next to the script and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
+      const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run --dry    # first: every order goes to the margin check, nothing is placed\nnode copy-agent.mjs run          # then live: real orders'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Through npm: npm run dry, or npm start -- --dry (the "--" hands the flag to the agent; without it npm keeps the flag for itself). The agent stops at any argument it does not know, so a mistyped --dry never starts it live, and its first line says DRY RUN or LIVE. Keep it running (a terminal, a scheduled task, a service). It writes its logs to a logs folder next to the script and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
       const dashCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Dashboard'), UI.chip('local', 'blue'), h('span.grow'), h('span.dim.small', 'polls the agent every 3 s')), dash);
       const histCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Copy history'), UI.chip('attribution', 'accent'), h('span.grow'), h('span.dim.small', 'per leader · your slippage against their fills')), histWrap);
       U.replace(body, hero, step1, step2, step3, step4, dashCard, histCard,

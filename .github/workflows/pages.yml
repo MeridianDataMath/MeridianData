@@ -1,8 +1,12 @@
-# Builds the perps snapshot, adds the Predict snapshot pushed from a PC, and deploys the site.
-#   • With the CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID secrets set → Cloudflare Worker with static assets
-#     (project "meridiandatahub", see wrangler.jsonc; works from a private repo).
-#   • Without them → GitHub Pages (public repos only; Settings → Pages → Source: GitHub Actions).
+# Builds the perps snapshot, adds the Predict snapshot pushed from a PC, and deploys the site to the Cloudflare Worker
+# with static assets (project "meridiandatahub", see wrangler.jsonc; works from a private repo). Needs the repository
+# secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID: without them the run fails instead of deploying anywhere else.
 # Runs on every push to main, every 30 minutes, and on demand.
+#
+# The Cloudflare token reaches the deploy step only, never the tests, the builders, npm or git. Third-party actions are
+# pinned to commits (a moved tag cannot swap in other code) and wrangler to one version. To update an action:
+# `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>*'` (an annotated tag's commit is the ^{} line),
+# read the changes, then replace the SHA and the version comment.
 name: Snapshot & deploy
 
 on:
@@ -14,24 +18,35 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: deploy
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash   # spelled out, bash runs with -o pipefail (the unnamed default does not): a failure anywhere in a pipe fails the step
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # No `environment:` block on purpose: environments are unavailable on private repos on the Free plan.
-    env:
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      # only whether the secrets exist reaches this step, not their values
+      - name: Cloudflare secrets are set
+        env:
+          HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_CF" != true ]; then
+            echo "::error::Add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID: the site deploys to Cloudflare only."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false   # no GitHub token left in .git/config for the steps below
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5.0.0
         with:
           node-version: '24'
           cache: npm   # the card renderer (package-lock.json at the root)
@@ -45,54 +60,54 @@ jobs:
         run: node scripts/build-snapshot.mjs --perps
         continue-on-error: true   # an API hiccup must not take the site down; visitors fall back to a browser build
 
-      - name: Add the Predict snapshot published from a PC (branch "snapshots" → data/)
+      # The Predict snapshot published from a PC (scripts/Update-PredictSnapshot.ps1). Required: the Predict pages cannot
+      # query the API from the site's origin, so a run without it fails here and the live deploy keeps the last one.
+      - name: Check out the Predict snapshot (branch "snapshots")
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          ref: snapshots
+          path: .snapshots
+          persist-credentials: false
+
+      - name: Add the Predict snapshot (data/predict.json, bettors/, questions/)
         run: |
+          # Only regular files named as the PC publishes them. A link would publish whatever it points at (the runner's
+          # environment, say), any other file would be served from the site's origin, and leaderboard.json is built above.
           mkdir -p data
-          if git fetch --depth 1 origin snapshots 2>/dev/null; then
-            git archive FETCH_HEAD | tar -x -C data && echo "snapshot copied: $(ls data | wc -l) entries, $(ls data/bettors 2>/dev/null | wc -l) wallet files"
-          else
-            echo "no snapshots branch yet"
-          fi
-        continue-on-error: true
+          (cd .snapshots && find . -regextype posix-extended -type f \
+            -regex '\./(predict\.json|predict-status\.json|bettors/0x[0-9a-f]{40}\.json|questions/0x[0-9a-fA-F]{64}\.json)' \
+            -print0 | xargs -0 -r cp --parents -t ../data)
+          node -e "const j = JSON.parse(require('fs').readFileSync('data/predict.json', 'utf8')); if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }"
+          echo "snapshot copied: $(find data -path 'data/bettors/*' -type f | wc -l) wallet files, $(find data -path 'data/questions/*' -type f | wc -l) question files"
 
       - name: Assemble the site (dist/)
         run: |
           mkdir -p dist
-          cp -r index.html css js vendor assets _headers .nojekyll dist/
-          mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/config.example.json dist/agent/
-          [ -d data ] && cp -r data dist/ || true
+          cp -r index.html css js vendor assets _headers dist/
+          mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/package-lock.json agent/config.example.json dist/agent/
+          cp -r data dist/
           echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"
 
+      # the build tools, exactly as the root package-lock.json pins them (every package with its integrity hash): the card
+      # renderer and wrangler. Installed where no secret is in the environment and without install scripts (resvg ships
+      # prebuilt binaries; an assets-only deploy needs neither esbuild's nor workerd's), so the deploy action finds this
+      # wrangler and skips its own `npm i`, which would run with the token set. Required: without it nothing deploys.
+      # To update wrangler: bump it in package.json, `npm install --package-lock-only --ignore-scripts`, and change
+      # wranglerVersion below to match.
+      - name: Install the build tools (package-lock.json)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       # link previews: a card image per perps account and Predict wallet plus the small pages behind /a/<address> and
-      # /p/<address> that carry them (Discord, X and co. never see the site's #/ routes). A failure leaves the site as it
-      # was: the share links then fall back to the home page's card.
+      # /p/<address> that carry them (Discord, X and co. never see the site's #/ routes). A failure deploys the site
+      # without them: until a later run builds them again, those links fall back to index.html and the home page's card.
       - name: Link preview cards (dist/cards, dist/a, dist/p)
-        run: |
-          npm ci --no-audit --no-fund
-          node scripts/build-cards.mjs --dist dist
+        run: node scripts/build-cards.mjs --dist dist
         continue-on-error: true
 
-      - name: Choose target
-        id: mode
-        run: echo "cf=$([ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
-      # ---- Cloudflare Worker with static assets (private repo friendly) ----
       - name: Deploy to Cloudflare
-        if: steps.mode.outputs.cf == 'true'
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4'   # the action defaults to wrangler 3, which cannot deploy an assets-only Worker
+          wranglerVersion: '4.141.0'   # the one package-lock.json installs above (the action's default, wrangler 3, cannot deploy an assets-only Worker)
           command: deploy
-
-      # ---- GitHub Pages (public repo) ----
-      - uses: actions/configure-pages@v5
-        if: steps.mode.outputs.cf != 'true'
-      - uses: actions/upload-pages-artifact@v3
-        if: steps.mode.outputs.cf != 'true'
-        with:
-          path: dist
-      - id: deployment
-        if: steps.mode.outputs.cf != 'true'
-        uses: actions/deploy-pages@v4

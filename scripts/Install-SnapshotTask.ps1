@@ -12,6 +12,9 @@
 
 .NOTES
     Runs as the current user, only while logged on (the cached GitHub credential lives in the user profile).
+    The task runs this checkout's code as it is and never pulls (see Update-PredictSnapshot.ps1): after a change
+    lands on GitHub, read it and git pull by hand. Whoever can write to the repo folder or to node.exe can run code
+    as you through the task, so keep both writable by you only.
 #>
 param([ValidateRange(5, 720)][int]$IntervalMinutes = 30, [switch]$Uninstall)
 $ErrorActionPreference = 'Stop'

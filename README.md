@@ -20,7 +20,10 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 
 * **Double-click `Start-MeridianData.cmd`** — starts a tiny local web server on
   <http://localhost:8787/> and opens the browser. `Ctrl+C` in the window stops it.
-  (`Start-MeridianData.ps1 -Port 9000 -NoBrowser` for options.)
+  (`Start-MeridianData.ps1 -Port 9000 -NoBrowser` for options.) It serves only the site's own
+  files (an allowlist: never `.git`, logs, scripts or anything in `agent/` beyond the four published
+  files), answers only this machine, and sends the same headers as production, the
+  Content-Security-Policy included, so a violation shows up locally first.
 * Or just open `index.html` directly in a browser — it works from `file://` too.
 * Or copy the folder to any static host (GitHub Pages, Cloudflare Pages, S3, nginx…).
   There is nothing to configure; routing is hash-based (`#/leaderboard`).
@@ -44,11 +47,28 @@ assembles `dist/` and deploys it:
   zone `thedatahub.xyz`, registered through Cloudflare Registrar; Cloudflare issues and renews the
   certificate itself. Turn on *Always Use HTTPS* under the zone's SSL/TLS → Edge Certificates.
   Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
-* **GitHub Pages** (public repos only): without those secrets the same workflow deploys to
-  `https://<user>.github.io/<repo>/` (Settings → Pages → Source: GitHub Actions, once).
+* Without those secrets the run fails rather than deploying anywhere else (the GitHub Pages
+  fallback is gone: it only worked for public repos).
+
+How the workflow keeps the Cloudflare token safe:
+- Only the deploy step receives the token. The tests, builders, npm and git never do.
+- Third-party actions are pinned to commit SHAs.
+- The build tools (the card renderer and wrangler 4.141.0) install from the root
+  `package-lock.json` with `npm ci --ignore-scripts`, every package with its integrity hash.
+- Nothing is checked out with stored credentials.
+- From the `snapshots` branch, only regular JSON files in the published layout are copied.
+- A missing or empty Predict snapshot fails the run, so the previous deploy stays live.
 
 The Predict snapshot is produced on a PC (see the Predict section below) whichever host is used.
-`_headers` sets cache and security headers on Cloudflare Pages and is ignored elsewhere.
+`_headers` sets cache and security headers on Cloudflare, including a Content-Security-Policy:
+- Scripts may come only from the site itself, plus `index.html`'s one inline script, allowed by its
+  sha256. Recompute the hash when that script changes; `tests/cards.test.mjs` fails when they
+  disagree.
+- `connect-src` lists the APIs the site calls, plus `https:` for a self-hosted ntfy server.
+- The share pages under `/a/` and `/p/` redirect through `js/share.js`. They avoid a meta refresh,
+  because Facebook's crawler would follow it to the home page's card.
+- User-supplied links (`href`/`src`) must be relative or http(s). `U.h` never writes raw HTML, and
+  it turns objects in a text position into plain text.
 
 **Tests.** `node --test "tests/*.test.mjs"` (Node 22+, no dependencies, no network, well under a
 second) runs before anything else in the workflow; a failure stops the job, so nothing is
@@ -321,8 +341,17 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   `scripts/Update-PredictSnapshot.ps1` runs on a normal PC (portable Node in `../tools/node`
   or any `node` on PATH), pulls every prediction since launch paced under the API's 200
   requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
-  (`predict.json` + one slim file per wallet in `bettors/`). `scripts/Install-SnapshotTask.ps1`
-  schedules that every 30 minutes. The deploy workflow copies the branch into `data/` on each
+  (`predict.json` + one slim file per wallet in `bettors/` and per question in `questions/`).
+  `scripts/Install-SnapshotTask.ps1` schedules that every 30 minutes.
+  - **Local code only:** the task runs this checkout's code as it is and never pulls. Review what
+    changed on GitHub and `git pull` by hand.
+  - **Checked before the force-push:** the snapshot must parse, hold at least 98% of the
+    predictions the API counts, and not fall more than 5% below the published one. Otherwise it
+    logs "snapshot not published". `-Force` publishes a real drop once.
+  - **Safe file names:** addresses and condition ids from the API become file names only when they
+    are well-formed hex.
+  - **Complete history only:** an incomplete history (a time window hitting its page cap) writes
+    no snapshot. The deploy workflow copies the branch into `data/` on each
   run, which is where the site reads it from; after each push the PC script triggers that
   workflow (`workflow_dispatch`, with the GitHub credential git pushed with), so the site
   carries a new snapshot a few minutes after it is built instead of waiting for the workflow's
@@ -453,7 +482,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   are configurable.
   Delivery: a toast on the site, a browser notification (permission asked on the page), and
   optionally an ntfy push to a phone (topic and server on the page, "Send a test"; the tab
-  POSTs to the topic, which is the only secret). Alerts flow while a tab of the site is open in
+  POSTs to the topic, which is the only secret: *Generate* fills in a random one, a guessable
+  name is pointed out, and the server must be https, with plain http only on localhost). Alerts flow while a tab of the site is open in
   that browser; one tab is elected listener through a localStorage heartbeat so several tabs
   never double-send, the others mirror the log. History (last 200) is kept in localStorage.
 * **Copy agent** (`#/copytrade/agent`, `agent/copy-agent.mjs`) – the copying itself, as a program
@@ -487,8 +517,30 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected orders,
   risk stops and leader liquidations. The page builds `config.json` from the followed leaders
   and the limits, lists and revokes signers, and shows the dashboard. The deploy publishes only
-  `copy-agent.mjs`, `package.json` and `config.example.json`; keys, configs, link requests and
-  logs are gitignored.
+  `copy-agent.mjs`, `package.json`, `package-lock.json` and `config.example.json`. Keys, configs,
+  link requests, state and logs are gitignored: everything in `agent/` except those four files.
+  Hardening of the key-holding process:
+  - **Pinned dependency.** ethers is pinned to 6.17.0 with its lockfile; install with
+    `npm ci --ignore-scripts`.
+  - **Key permissions.** `keygen` restricts `signer.key` to the current user (icacls on Windows,
+    0600 elsewhere), and `run` warns if a key is still readable by others.
+  - **Status port.** It needs its token on every request, `/status` included. The token comes from
+    the page (random) or is generated into `control.token`; one shorter than 16 characters stops
+    the agent. The port also checks the Host header (against DNS rebinding) and exact origins.
+  - **Hard ceilings in every sizing mode.** Defaults are `maxOrderUsd` 1000 and `maxPositionUsd`
+    5000; the start log warns when `sizing.size` is above the per-order ceiling. Sizes and limits
+    are counted at the exchange's mark. A leader fill more than `maxPriceDeviationPct` (3%) off
+    the mark, or older than `maxFillAgeMs` (15 s), opens nothing. Closes and reductions still
+    follow.
+  - **Strict arguments.** A typo exits. `--dry`, `--dry-run`, `COPY_AGENT_DRY=1` or
+    `npm run dry` / `npm start -- --dry` select the dry run, and the mode is printed
+    unmistakably.
+  - **Fails closed.** A damaged `state.json` stops the agent rather than clearing a tripped risk
+    stop.
+  - **Clock.** The clock offset is measured again periodically and after a time rejection.
+  - **ntfy.** A plain-http ntfy server other than localhost is refused.
+  - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
+    differs from the running agent's.
   Facts the agent relies on, each checked against the exchange rather than assumed: a position's
   `size` is signed (long > 0) and its `fundingAccruedUsd` is positive when *paid* (the SDK's
   docstring says the opposite; the archive ledger, which reconciles to the cent, settles it:
@@ -589,7 +641,7 @@ js/copy/sim.js          copy simulator engine: fills → position episodes → a
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy
 agent/copy-agent.mjs    the copy agent (runs on the user's machine): keygen, link, run [--dry], status
-agent/package.json      its one dependency (ethers); config.example.json documents every setting
+agent/package.json      its one dependency (ethers 6.17.0, pinned with package-lock.json); config.example.json documents every setting
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client

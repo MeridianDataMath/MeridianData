@@ -118,10 +118,11 @@
     toSec = toSec || Math.floor(Date.now() / 1000);
     const span = Math.max(1, toSec - fromSec); const w = Math.ceil(span / windows);
     const ranges = []; for (let s = fromSec; s <= toSec; s += w) ranges.push([s, Math.min(toSec, s + w - 1)]);
-    const seen = new Map(); let done = 0; let fetched = 0;
+    const seen = new Map(); let done = 0; let fetched = 0; let truncated = false;
     const tasks = ranges.map(([a, b]) => async () => {
       const rows = await P.predictionsAll({ filter: Object.assign({}, baseFilter || {}, { createdAt: { gte: a, lte: b } }), maxPages: maxPagesPerWindow, signal, onPage: (n, total) => { if (onProgress) onProgress(fetched + n, null); } });
       for (const r of rows) seen.set(r.predictionId, r);
+      if (rows.truncated) truncated = true;   // a window hit its page cap: the list is incomplete
       fetched += rows.length; done++;
       if (onProgress) onProgress(seen.size, ranges.length - done);
     });
@@ -129,7 +130,9 @@
     if (signal && signal.aborted) throw new (typeof DOMException !== 'undefined' ? DOMException : Error)('Aborted', 'AbortError');
     const failed = results.filter((r) => !r.ok);
     if (failed.length) { const e = failed[0].error; throw new GqlError(`${failed.length}/${ranges.length} windows failed: ${e && e.message}`, e && e.code); }
-    return Array.from(seen.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
+    const out = Array.from(seen.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
+    out.truncated = truncated;
+    return out;
   };
   P.predictionsCount = async (filter, o) => (await P.gql('query C($filter: PredictionFilter) { predictions(first: 0, filter: $filter) { totalCount } }', { filter: filter || null }, { ttl: 30000, signal: o && o.signal })).predictions.totalCount;
   P.tape = (first, o) => P.predictionsPage({ first: first || 25, signal: o && o.signal, ttl: (o && o.ttl) || 0 }).then((pg) => pg.nodes);

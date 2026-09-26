@@ -2,6 +2,7 @@
 (function () {
   const MD = window.MD; const U = MD.util; const h = U.h;
   const UI = (MD.ui = {});
+  // a caller's value that lands in h()'s second argument goes through U.kid: an object from an API would be read as attributes
 
   /**
    * table({cols:[{key,label,num,render(row),sortVal(row),title}], rows, empty, sort:{key,desc}, onSort(key), onRow(row), rowClass(row)})
@@ -47,12 +48,12 @@
   };
 
   // a value longer than a tile is wide ("$1,000,060.00") shrinks a step instead of being cut with an ellipsis
-  UI.stat = (k, v, sub, cls) => { const len = String(typeof v === 'string' ? v : (v && v.textContent) || '').length; return h('div.stat', h('div.k', k), h('div.v', { class: (cls || '') + (len > 14 ? ' xlong' : len > 12 ? ' long' : ''), title: len > 12 ? String(typeof v === 'string' ? v : v.textContent) : null }, v), sub ? h('div.sub', sub) : null); };
-  UI.metric = (k, v, s, cls) => h('div.metric', h('div.k', k), h('div.v', { class: cls || '' }, v), s ? h('div.s', s) : null);
-  UI.card = (title, body, extra) => h('div.card.tight', h('div.card-head', h('h2', title), extra || null), body);
+  UI.stat = (k, v, sub, cls) => { v = U.kid(v); const len = String(typeof v === 'string' ? v : (v && v.textContent) || '').length; return h('div.stat', h('div.k', U.kid(k)), h('div.v', { class: (cls || '') + (len > 14 ? ' xlong' : len > 12 ? ' long' : ''), title: len > 12 ? String(typeof v === 'string' ? v : v.textContent) : null }, v), sub ? h('div.sub', U.kid(sub)) : null); };
+  UI.metric = (k, v, s, cls) => h('div.metric', h('div.k', U.kid(k)), h('div.v', { class: cls || '' }, v), s ? h('div.s', U.kid(s)) : null);
+  UI.card = (title, body, extra) => h('div.card.tight', h('div.card-head', h('h2', U.kid(title)), extra || null), body);
   UI.loading = (text) => h('div.empty', h('span.loading', h('span.spinner'), text || 'Loading…'));
   UI.error = (err, retry) => h('div.error', h('div', String((err && err.message) || err || 'Error')), retry ? h('div', { style: { marginTop: '8px' } }, h('button.btn.sm', { onclick: retry }, 'Retry')) : null);
-  UI.empty = (text) => h('div.empty', text);
+  UI.empty = (text) => h('div.empty', U.kid(text));
 
   /** segmented control: seg([{v,label}], value, onChange) → el with .set(v) */
   UI.seg = function (options, value, onChange, cls) {
@@ -124,7 +125,7 @@
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
     const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } },
-      h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', title), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', body)));
+      h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', U.kid(body))));
     document.body.appendChild(bg); document.addEventListener('keydown', onKey);
     return { close, el: bg };
   };
@@ -136,7 +137,7 @@
     return b;
   };
 
-  UI.marketCell = (ticker, sub) => h('div.mkt-row', h('div.tick', ticker), sub ? h('div.sub', sub) : null);
+  UI.marketCell = (ticker, sub) => h('div.mkt-row', h('div.tick', U.kid(ticker)), sub ? h('div.sub', U.kid(sub)) : null);
   UI.chip = (text, cls) => h('span.chip', { class: cls || '' }, text);
   UI.pct = (v, opts) => (v == null || !Number.isFinite(v) ? h('span.dim', '—') : h('span', { class: 'num ' + U.pnlClass(v) }, U.fmtPct(v, Object.assign({ sign: true, dp: 1 }, opts))));
   UI.usd = (v, opts) => h('span.num', U.fmtUsd(v, opts));
