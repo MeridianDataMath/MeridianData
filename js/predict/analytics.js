@@ -65,8 +65,12 @@
     return n;
   };
 
-  /** Compact row for the tape / snapshot. */
-  P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, decided: n.decided, unclaimed: n.unclaimed, nd: n.nd, won: n.won, pnl: r4(n.pnl) });
+  /** Compact row for the tape: the fields the Overview's tape has always read, plus every leg (k, as in P.slim, with its
+   *  question id), the transaction, the claim time and the traded pick configuration, so a row can be opened (P.full). */
+  P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, decided: n.decided, unclaimed: n.unclaimed, nd: n.nd, won: n.won, pnl: r4(n.pnl),
+    k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, pc: n.pcTraded ? n.pc : undefined });
+  /** A big win: the bettor won and the payout (stake included) is above this many dollars (the Overview lists them). */
+  P.BIG_WIN = 500;
   const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -194,7 +198,9 @@
       for (const n of b.own) {
         if (n.decided) replaced += (n.predictor === addr ? n.pnl : 0) + (n.counterparty === addr ? -n.pnl : 0);
         const side = n.predictor === addr ? 'P' : 'C'; const sidePool = side === 'P' ? ownPoolP : ownPoolC;
-        byPrediction[n.id] = { pnl: ownPool > 0 ? pcPnl * (n.pool / ownPool) : 0, held: sidePool > 0 ? Math.max(0, Math.min(1, (side === 'P' ? heldP : heldC) / sidePool)) : 0, decided: b.vP != null };
+        // under a thousandth of a token left is rounding (the files keep stake and collateral to 4 decimals), not a holding
+        const heldTok = side === 'P' ? heldP : heldC;
+        byPrediction[n.id] = { pnl: ownPool > 0 ? pcPnl * (n.pool / ownPool) : 0, held: sidePool > 0 && heldTok >= 1e-3 ? Math.max(0, Math.min(1, heldTok / sidePool)) : 0, decided: b.vP != null };
       }
     }
     events.sort((a, b) => a.t - b.t);
@@ -203,8 +209,10 @@
 
   /** A prediction a wallet made against itself. */
   P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
-  /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional. */
-  P.aggregate = function (norms, { tapeSize = 100, trades = null } = {}) {
+  /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
+   *  tape (the newest tapeSize) and bigWins (every win paying more than P.BIG_WIN, latest verdict first) are slim records
+   *  with every leg's question id, so a page can show and open each one. */
+  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true } = {}) {
     // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
     // making; counted in its figures it made its wallet a "market maker" with one prediction
     const selfMatched = norms.filter(P.selfMatch).length;
@@ -243,13 +251,15 @@
     // per-prediction one for those pick configurations. The adjustment goes to the wallet's bettor row, or its maker row
     // when it only makes markets; a wallet in neither (a buyer who never bet) is counted apart.
     let secondary = null;
+    const ledgerOf = Object.create(null);   // wallet → its ledger's byPrediction (the wallets that traded)
     if (trades && trades.length) {
       const tradedPc = new Set(trades.map((t) => t.pc).filter(Boolean));
       const byW = {}; for (const n of norms) if (n.pc && tradedPc.has(n.pc)) { (byW[n.predictor] || (byW[n.predictor] = [])).push(n); if (n.counterparty !== n.predictor) (byW[n.counterparty] || (byW[n.counterparty] = [])).push(n); }
       const wallets = new Set(); for (const t of trades) if (t.pc) { wallets.add(t.seller); wallets.add(t.buyer); }
       secondary = { trades: trades.length, mapped: trades.filter((t) => t.pc).length, volume: U.sum(trades, (t) => t.paid), toBettors: 0, toMakers: 0, toOthers: 0 };
       for (const w of wallets) {
-        const L = P.ledger(byW[w] || [], trades, w); if (Math.abs(L.adj) < 1e-9 && !Object.keys(L.byPrediction).length) continue;
+        const L = P.ledger(byW[w] || [], trades, w); ledgerOf[w] = L.byPrediction;
+        if (Math.abs(L.adj) < 1e-9 && !Object.keys(L.byPrediction).length) continue;
         const b = bettors[w], m = makers[w];
         const row = b && (!m || b.n >= m.n) ? b : m;
         if (row) { row.pnl += L.adj; row.secondary = (row.secondary || 0) + L.adj; if (row === b) { totals.bettorPnl += L.adj; secondary.toBettors += L.adj; } else secondary.toMakers += L.adj; }
@@ -305,26 +315,49 @@
       daily: Object.values(daily).sort((a, b) => a.t - b.t).map((d) => ({ t: d.t, n: d.n, wagered: d.wagered, bettors: d.bettors.size, settledPnl: d.settledPnl, settledN: d.settledN })),
       vig,
       secondary,
-      tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map(P.compact),
+      tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
+      bigWins: bigWins ? norms.filter((n) => n.won && n.pool > P.BIG_WIN).sort((a, b) => (b.decidedAt || P.decidedAt(b)) - (a.decidedAt || P.decidedAt(a))).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
     };
+    // a bettor who sold its position tokens before the verdict does not collect the payout: its share still held (h) and
+    // its own result on the prediction, the sale included (lp), from its ledger
+    function sold(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? { h: r4(bp.held), lp: r4(bp.pnl) } : null; }
   };
 
   /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */
-  P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0 }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
+  P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0, bigWins: false }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
 
   /** Slim record for the per-wallet snapshot files (≈400 bytes); P.unslim restores everything P.norm produces. */
-  // Open predictions keep the leg's conditionId (6th element) so the resolution tracker can look the market up; settled ones don't need it.
-  // leg = [question, yes, sourcePriceNow, endTime, category, conditionId (open predictions only), priceAtBet, polymarket event]
-  P.slim = (n) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, k: n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, !n.settled && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }) });
+  // Open predictions keep the leg's conditionId (6th element) so the resolution tracker can look the market up; settled
+  // ones don't need it, except where o.ids asks for every leg's (question files, the Overview's tape and big wins).
+  // Meridian's result for a settled question (9th element) says which legs won or lost a decided prediction.
+  // leg = [question, yes, sourcePriceNow, endTime, category, conditionId, priceAtBet, polymarket event, result (1 YES, 0 NO, 2 50/50)]
+  const legResult = (k) => (k.settled ? (k.nonDecisive ? 2 : k.resolvedToYes ? 1 : 0) : null);
+  function slimLegs(n, ids) { return n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, (ids || !n.settled) && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null, legResult(k)]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }); }
+  P.slim = (n, o) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, da: n.decidedAt || undefined, k: slimLegs(n, !!(o && o.ids)) });
   P.unslim = function (s) {
     if (s.picks) return s;                               // already a full record
     const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
-    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id, pb, ev]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: pb == null ? null : pb, event: ev || null, settled: false, resolvedToYes: null, nonDecisive: false, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
+    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id, pb, ev, res]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: pb == null ? null : pb, event: ev || null, settled: res != null, resolvedToYes: res === 1 ? true : res === 0 ? false : null, nonDecisive: res === 2, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
     let fair = null; if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
     const odds = pool > 0 ? stake / pool : null; const settled = !!s.st; const decided = settled || s.dv != null;
     const won = settled ? s.r === 'PREDICTOR_WINS' : s.dv === 1; const nd = settled ? s.r === 'NON_DECISIVE' : s.dv === 2;
-    const n = { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, fairNow: fair, vigNow: odds != null && fair != null ? odds - fair : null, fairAtBet: null, vig: null, vigPct: null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, decided, unclaimed: decided && !settled, result: settled ? (s.r || null) : decided ? (won ? 'PREDICTOR_WINS' : nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, won, lost: decided && !won && !nd, nd, pnl: decided && !nd ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null, pc: s.pc || null };
+    const n = { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, fairNow: fair, vigNow: odds != null && fair != null ? odds - fair : null, fairAtBet: null, vig: null, vigPct: null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, decided, unclaimed: decided && !settled, result: settled ? (s.r || null) : decided ? (won ? 'PREDICTOR_WINS' : nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, won, lost: decided && !won && !nd, nd, pnl: decided && !nd ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null, pc: s.pc || null, pcTraded: !!s.pc,   // a file keeps pc only where its tokens were traded
+      // big wins and tape rows: when it was decided (from the source markets' resolution), and for a bettor who traded its
+      // position tokens the share it still held at the verdict and its own result, the sale included (P.aggregate)
+      decidedAt: s.da || null, held: s.h == null ? null : s.h, tradedPnl: s.lp == null ? null : s.lp };
     return P.applyAtBet(n, picks.map((k) => k.priceAtBet));
+  };
+  /** Any stored prediction row as a full record: a full record as it is, a slim one (big wins, wallet and question
+   *  files) unslimmed, a tape row (P.compact) through the slim form. A tape row from before rows kept every leg has the
+   *  first one only: marked partial, with its real leg count, so a page can complete it from the bettor's file. */
+  P.full = function (x) {
+    if (x.picks) return x;
+    if (x.p) return P.unslim(x);
+    const decided = !!x.decided, settled = !!x.settled;
+    const n = P.unslim({ id: x.id, t: x.t, sa: x.sa, p: x.predictor, c: x.counterparty, s: x.stake, cp: x.cp, st: settled ? 1 : 0, pc: x.pc, dv: decided && !settled ? (x.won ? 1 : x.nd ? 2 : 0) : undefined,
+      r: settled ? (x.won ? 'PREDICTOR_WINS' : x.nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, tx: x.tx, cat: x.cat, h: x.h, lp: x.lp, k: x.k || [[x.q || '', x.yes ? 1 : 0]] });
+    if (!x.k) Object.assign(n, { legs: x.legs || 1, combo: (x.legs || 1) > 1, partial: true });
+    return n;
   };
 
   /** Daily account history reconstructed from a wallet's own predictions (used when the API is not reachable). */

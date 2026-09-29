@@ -80,12 +80,22 @@
   U.replaceLive = (el, ...children) => {
     const sel = document.getSelection ? document.getSelection() : null;
     const selecting = sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);
-    // tapes (class pause-hover) hold still while the pointer is over them, so a row cannot slide away under a click;
-    // whatever arrived meanwhile is applied when the pointer leaves
-    const held = selecting || (pointerDown && el.matches(':hover')) || (el.classList.contains('pause-hover') && el.matches(':hover'));
+    // tapes (class pause-hover) hold still while the pointer is over them, so a row cannot slide away under a click, and
+    // while the keyboard focus is inside them (a focused row would vanish); whatever arrived meanwhile is applied when the
+    // pointer leaves or the focus moves out
+    const pauses = el.classList.contains('pause-hover');
+    // keyboard focus only (:focus-visible): a row clicked with the mouse, or given the focus back by a closing dialog,
+    // must not freeze the tape
+    const focusIn = () => { const a = document.activeElement; return a !== el && el.contains(a) && !!a.matches && a.matches(':focus-visible'); };
+    const held = selecting || (pauses && (el.matches(':hover') || focusIn())) || (pointerDown && el.matches(':hover'));
     if (held) {
       el.__pending = children;
-      if (!el.__catchUp) { el.__catchUp = true; el.addEventListener('mouseleave', () => { const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); }); }
+      if (!el.__catchUp) {
+        el.__catchUp = true;
+        const catchUp = () => { if (pauses && (el.matches(':hover') || focusIn())) return; const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); };
+        el.addEventListener('mouseleave', () => setTimeout(catchUp));
+        el.addEventListener('focusout', () => setTimeout(catchUp));   // after the focus has landed: still inside means stay
+      }
       return el;
     }
     el.__pending = null;

@@ -120,15 +120,46 @@
   UI.staleNote = (builtAt, hint) => (builtAt && Date.now() - builtAt > UI.STALE_MS
     ? h('span', { style: { color: 'var(--amber)' } }, ' · ', h('a', { href: '#/status', style: { color: 'inherit' }, title: (hint ? hint + ' · ' : '') + 'refreshed every 30 minutes normally; click for the data status page' }, 'stale'))   // the age itself is printed just before
     : null);
-  /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape */
+  /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape. Dialogs stack (a prediction opened
+   *  from a question's list): Escape closes the top one, and a page change closes them all (UI.closeModals from the
+   *  router, and after a click on a link to the page already shown). The top dialog takes the focus, everything behind
+   *  it is inert (no Tab or Enter reaches the page), and a dialog opened from the keyboard gives the focus back where it
+   *  was when it closes. */
+  const modals = [];
+  // how the last dialog was opened: only a keyboard user gets the focus back on close (a mouse user's row, focused by
+  // the click, would otherwise hold its live tape still under U.replaceLive's keyboard-focus rule)
+  let lastInput = 'pointer';
+  if (typeof document !== 'undefined') { document.addEventListener('keydown', () => { lastInput = 'keyboard'; }, true); document.addEventListener('pointerdown', () => { lastInput = 'pointer'; }, true); }
+  const syncInert = () => { const app = document.querySelector('.app'); if (app) app.inert = modals.length > 0; modals.forEach((x, i) => { x.el.inert = i < modals.length - 1; }); };
   UI.modal = function ({ title, body, wide }) {
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
-    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
-    const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } },
-      h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), h('div.modal-body', U.kid(body))));
-    document.body.appendChild(bg); document.addEventListener('keydown', onKey);
-    return { close, el: bg };
+    const onKey = (e) => { if (e.key === 'Escape' && modals[modals.length - 1] === m) close(); };
+    const back = document.activeElement, byKeyboard = lastInput === 'keyboard';
+    // a live list may have replaced the element meanwhile: its successor carries the same data-focus-key
+    const key = back && back.dataset ? back.dataset.focusKey : null;
+    const close = () => {
+      const i = modals.indexOf(m); if (i < 0) return;
+      bg.remove(); document.removeEventListener('keydown', onKey); modals.splice(i, 1); syncInert();
+      const to = !byKeyboard ? null : back && back.isConnected ? back : key && window.CSS && CSS.escape ? document.querySelector('[data-focus-key="' + CSS.escape(key) + '"]') : null;
+      if (to && typeof to.focus === 'function' && !to.closest('[inert]')) to.focus({ preventScroll: true });
+      else if (modals.length) modals[modals.length - 1].scroller.focus({ preventScroll: true });   // the dialog underneath keeps the keyboard
+    };
+    // the focus goes to the scrolling body, so the arrow keys, Page Down and Space scroll the dialog
+    const scroller = h('div.modal-body', { tabindex: -1 }, U.kid(body));
+    const dialog = h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), scroller);
+    const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } }, dialog);
+    // capture phase: links in a dialog often stop the click's propagation (a row behind them has its own action); the
+    // dialogs close once the click has gone through, and only when it navigated here (not a new tab, not prevented)
+    bg.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('a[href^="#/"]');
+      if (!a || a.target || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      setTimeout(() => { if (!e.defaultPrevented) UI.closeModals(); });
+    }, true);
+    const m = { close, el: bg, scroller };
+    modals.push(m); document.body.appendChild(bg); document.addEventListener('keydown', onKey); syncInert();
+    scroller.focus({ preventScroll: true });
+    return m;
   };
+  UI.closeModals = () => { while (modals.length) modals[modals.length - 1].close(); };
   UI.checkbox = (label, checked, onChange) => { const inp = h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked) }); return h('label.checkbox', inp, label); };
 
   UI.starBtn = function (fav, cls) {

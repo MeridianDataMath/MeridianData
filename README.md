@@ -183,6 +183,45 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
   * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
+    **Big wins** sits beside the tape (stacked when the page is narrower than about 1240 px). It
+    lists every bettor win whose payout (stake plus the maker's collateral) is above $500
+    (`P.BIG_WIN`), counted at the verdict, claimed or not.
+    - *Sorting.* Newest verdict first by default, or by payout, PnL (payout − stake) or
+      multiplier (payout ÷ stake).
+    - *Decided time.* The exchange keeps no decision time, so it is the last leg's resolution on
+      Polymarket (never after the claim).
+      - The snapshot builder looks each time up once and caches it in the price cache
+        (`resolved`), then stores it as `da` on the record.
+      - A leg's listed end can be a day late: a price question about Sep 28 is listed to end on
+        the 29th.
+    - *Sold positions.* A bettor who sold its position tokens before the verdict does not collect
+      the payout.
+      - Its row is marked *sold* (or *x% sold*), and PnL is the bettor's own result, the sale
+        included (`h` and `lp` from its token ledger).
+    - *Snapshot.* The snapshot carries the list as `agg.bigWins` (slim records with every leg's
+      question id).
+  * *Any prediction opens a dialog.* This covers the tape, big wins, a question's predictions and
+    a bettor page's history and open positions. The dialog shows:
+    - the result, stake, payout, odds, PnL and vig;
+    - the bettor and the market maker, and the placed, decided and claimed times;
+    - every leg with its result: Meridian's own once it has settled the question, before that
+      Polymarket's. Leg questions link to that question's dialog, and ⓘ opens the resolution
+      details;
+    - **Open bettor's account**.
+
+    A loss dates from the first leg that went against the bettor: its other legs may run for
+    weeks. Where the bettor sold its tokens, the dialog shows its own result and who collects.
+    Slim legs carry Meridian's result for a settled question as a 9th element (1 YES, 0 NO,
+    2 50/50).
+  * *Dialogs.*
+    - Dialogs stack, and Escape closes the top one.
+    - Any page change closes them all: a link, Back or a notification.
+    - The top dialog takes the keyboard focus, and the page behind it is inert. Focus returns
+      where it was when the dialog closes.
+    - Live tapes hold still while a row has the keyboard focus.
+  * *Snapshot compatibility.* Tape rows (`P.compact`) keep every field they always had and add
+    the legs (`k`), so a page that has not reloaded still reads a new snapshot. `P.full` turns
+    any stored row back into a full record.
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last activity; click through to a bettor page.
   * *Questions* – only the questions people have bet on through Meridian (open interest now, open
@@ -345,6 +384,10 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   `scripts/Install-SnapshotTask.ps1` schedules that every 30 minutes.
   - **Local code only:** the task runs this checkout's code as it is and never pulls. Review what
     changed on GitHub and `git pull` by hand.
+    - A snapshot-format change reaches the live site with the next run, before the new page code
+      is deployed.
+    - So a format change only adds fields: the page code that is live must still read the new
+      snapshot, and the new page code must read the old one.
   - **Checked before the force-push:** the snapshot must parse, hold at least 98% of the
     predictions the API counts, and not fall more than 5% below the published one. Otherwise it
     logs "snapshot not published". `-Force` publishes a real drop once.

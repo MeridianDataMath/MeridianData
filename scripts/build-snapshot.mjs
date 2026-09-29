@@ -2,7 +2,7 @@
 /**
  * Builds the shared snapshots the site serves to every visitor:
  *   data/leaderboard.json — perps leaderboard (every subaccount, all intervals)
- *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape)
+ *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape, big wins)
  * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
@@ -123,6 +123,51 @@ async function attachPricesAtBet(norms) {
   console.log(`  predict: price-at-bet ready for ${got}/${norms.length} predictions (${conds.length} history requests)`);
 }
 
+// ---------------------------------------------------------------- when a big win was decided
+// The exchange keeps no decision time. A won prediction was decided when its last leg resolved, which Polymarket records
+// (umaEndDate, else closedTime) and which can be a day before the leg's listed end (a price question about Sep 28 is
+// listed to end on the 29th): the listed end would date the win late, and the date would move as snapshots pass it.
+// Looked up once per question for the big wins' legs and kept in the price cache (resolved: id → {t, at}).
+const gammaTime = (s) => { const t = typeof s === 'string' ? Date.parse(s.replace(' ', 'T').replace(/\+00$/, 'Z')) : NaN; return Number.isFinite(t) ? t : null; };
+async function attachDecidedAt(norms) {
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const resolved = Object.assign(dict(), cache.resolved);
+  const now = Date.now();
+  const wins = norms.filter((n) => n.won && n.pool > P.BIG_WIN);
+  const lc = (id) => String(id || '').toLowerCase();
+  const ids = Array.from(new Set(wins.flatMap((n) => n.picks.map((k) => lc(k.id))).filter(isCond)));
+  const need = ids.filter((id) => { const r = resolved[id]; return !r || (r.t == null && now - r.at > 86400000); });   // no time yet: asked again after a day
+  // two passes like the token lookup: Gamma leaves closed markets out unless asked, and a market UMA has resolved may not
+  // be marked closed yet
+  let failed = false;
+  for (let i = 0; i < need.length && !failed; i += 40) {
+    const chunk = need.slice(i, i + 40); const seen = new Set();
+    for (const closed of [true, false]) {
+      const rest = chunk.filter((id) => !seen.has(id)); if (!rest.length) break;
+      let arr = null;
+      try { arr = await getJson(GAMMA + '?limit=' + rest.length + (closed ? '&closed=true' : '') + '&' + rest.map((id) => 'condition_ids=' + id).join('&')); }
+      catch (e) { console.warn('  predict: resolution times failed, the page dates these big wins itself for now:', e.message); failed = true; break; }
+      for (const m of Array.isArray(arr) ? arr : []) { const id = lc(m.conditionId); if (!isCond(id)) continue; const t = gammaTime(m.umaEndDate) || (m.closed ? gammaTime(m.closedTime) : null); if (t) { seen.add(id); resolved[id] = { t, at: now }; } }
+      await sleep(150);
+    }
+    if (!failed) for (const id of chunk) if (!seen.has(id)) resolved[id] = { t: null, at: now };
+  }
+  // the last leg's resolution (its listed end where Polymarket has no time), never after the claim. A win whose last leg
+  // has no time yet and a listed end still ahead is left undated (the page estimates it) rather than dated by this build,
+  // which would move it at every run
+  let dated = 0;
+  for (const n of wins) {
+    let at = n.t, unknown = false;
+    for (const k of n.picks) { const r = resolved[lc(k.id)]; const e = (r && r.t) || k.endTime || 0; if (!(r && r.t) && e > now) unknown = true; if (e > at) at = e; }
+    if (unknown && !n.settledAt) continue;
+    n.decidedAt = Math.min(at, n.settledAt || Infinity, now); dated++;
+  }
+  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.resolved = resolved; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
+  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ resolved })); }
+  console.log(`  predict: big wins dated ${dated} of ${wins.length} (${need.length} resolution times looked up, ${Object.keys(resolved).length} cached)`);
+}
+
 // ---------------------------------------------------------------- secondary market
 // Every trade (the market is small), each tied to its pick configuration and side through the predictions' position
 // tokens (predictorToken / counterpartyToken, shared by every prediction on the same picks), with the value per token
@@ -174,10 +219,11 @@ async function buildPredict() {
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
+  try { await attachDecidedAt(norms); } catch (e) { console.warn('predict: big-win decision times failed, the page estimates them:', e.message); }
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
   // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
   const trades = await buildTrades(norms);
-  const agg = P.aggregate(norms, { tapeSize: 100, trades });
+  const agg = P.aggregate(norms, { tapeSize: 25, trades });   // the Overview's tape shows 25
   if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
@@ -228,7 +274,7 @@ async function buildPredict() {
   let qfiles = 0;
   for (const q of withOi) {
     const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t);
-    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n), { k: n.picks.map((k) => [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, k.id, k.priceAtBet == null ? null : Math.round(k.priceAtBet * 1e4) / 1e4, n.picks.length > 1 ? k.event || null : null]) })) }));
+    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => P.slim(n, { ids: true })) }));
     qfiles++;
   }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };

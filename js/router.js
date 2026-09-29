@@ -46,6 +46,8 @@
     const fromHistory = viaHistory; viaHistory = false;
     // same page + same params → nothing
     if (prev && prev.path === route.path && JSON.stringify(prev.params) === JSON.stringify(route.params)) return;
+    // a dialog belongs to the page it was opened on (Back, Forward, a link or a notification leave it behind otherwise)
+    if (window.MD.ui && window.MD.ui.closeModals) window.MD.ui.closeModals();
     if (prev && curHash) scrollPos.set(curHash, R.root.scrollTop);
     curHash = location.hash || '#/';
     if (R.ctx) { try { R.ctx.abort.abort(); } catch (_) {} for (const f of R.ctx.cleanup || []) { try { f(); } catch (_) {} } }   // one failing cleanup must not leave the others (timers, socket subscriptions) running
