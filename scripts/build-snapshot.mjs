@@ -134,6 +134,9 @@ async function attachDecidedAt(norms) {
   try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
   const resolved = Object.assign(dict(), cache.resolved);
   const now = Date.now();
+  // every win paying more than P.BIG_WIN: the big wins (net PnL above it) are among them, since the payout includes the
+  // PnL; a traded position's own result is only known in P.aggregate, and one that somehow beats its payout (the page
+  // dates that itself) would be the only exception
   const wins = norms.filter((n) => n.won && n.pool > P.BIG_WIN);
   const lc = (id) => String(id || '').toLowerCase();
   const ids = Array.from(new Set(wins.flatMap((n) => n.picks.map((k) => lc(k.id))).filter(isCond)));

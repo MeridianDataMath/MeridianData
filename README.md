@@ -184,8 +184,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
     **Big wins** sits beside the tape (stacked when the page is narrower than about 1240 px). It
-    lists every bettor win whose payout (stake plus the maker's collateral) is above $500
-    (`P.BIG_WIN`), counted at the verdict, claimed or not.
+    lists every bettor win whose net PnL (payout − stake) is above $500 (`P.BIG_WIN`), counted
+    at the verdict, claimed or not. For a bettor who traded its position tokens, the net PnL is
+    its own result, sale included, so a win sold for little is not one.
     - *Sorting.* Newest verdict first by default, or by payout, PnL (payout − stake) or
       multiplier (payout ÷ stake).
     - *Decided time.* The exchange keeps no decision time, so it is the last leg's resolution on
@@ -196,8 +197,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
         the 29th.
     - *Sold positions.* A bettor who sold its position tokens before the verdict does not collect
       the payout.
-      - Its row is marked *sold* (or *x% sold*), and PnL is the bettor's own result, the sale
-        included (`h` and `lp` from its token ledger).
+      - A win it sold for less than $500 of its own result is left out. One partly sold is
+        marked *x% sold*, and its PnL is the bettor's own result, the sale included (`h` and `lp`
+        from its token ledger).
     - *Snapshot.* The snapshot carries the list as `agg.bigWins` (slim records with every leg's
       question id).
   * *Any prediction opens a dialog.* This covers the tape, big wins, a question's predictions and

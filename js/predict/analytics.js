@@ -69,7 +69,8 @@
    *  question id), the transaction, the claim time and the traded pick configuration, so a row can be opened (P.full). */
   P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, decided: n.decided, unclaimed: n.unclaimed, nd: n.nd, won: n.won, pnl: r4(n.pnl),
     k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, pc: n.pcTraded ? n.pc : undefined });
-  /** A big win: the bettor won and the payout (stake included) is above this many dollars (the Overview lists them). */
+  /** A big win: the bettor won and its net PnL (payout − stake; for a bettor who sold its tokens, its own result with the
+   *  sale) is above this many dollars (the Overview lists them). */
   P.BIG_WIN = 500;
   const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
@@ -210,7 +211,7 @@
   /** A prediction a wallet made against itself. */
   P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
   /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
-   *  tape (the newest tapeSize) and bigWins (every win paying more than P.BIG_WIN, latest verdict first) are slim records
+   *  tape (the newest tapeSize) and bigWins (every win whose net PnL is above P.BIG_WIN, latest verdict first) are slim records
    *  with every leg's question id, so a page can show and open each one. */
   P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true } = {}) {
     // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
@@ -316,11 +317,13 @@
       vig,
       secondary,
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
-      bigWins: bigWins ? norms.filter((n) => n.won && n.pool > P.BIG_WIN).sort((a, b) => (b.decidedAt || P.decidedAt(b)) - (a.decidedAt || P.decidedAt(a))).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
+      bigWins: bigWins ? norms.filter((n) => n.won && netPnl(n) > P.BIG_WIN).sort((a, b) => (b.decidedAt || P.decidedAt(b)) - (a.decidedAt || P.decidedAt(a))).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
     };
     // a bettor who sold its position tokens before the verdict does not collect the payout: its share still held (h) and
     // its own result on the prediction, the sale included (lp), from its ledger
     function sold(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? { h: r4(bp.held), lp: r4(bp.pnl) } : null; }
+    // what the bettor made on it: payout − stake, or its own result where it traded the tokens (a win sold for little is none)
+    function netPnl(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? bp.pnl : n.pnl; }
   };
 
   /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */

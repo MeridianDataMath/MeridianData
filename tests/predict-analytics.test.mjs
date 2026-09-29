@@ -49,11 +49,12 @@ test('each leg keeps Meridian\'s result, and the tape and big wins keep every le
   const old = P.slim(combo); old.k = old.k.map((a) => a.slice(0, 5));
   assert.deepEqual(P.unslim(old).picks.map((k) => k.settled), [false, false, false, false]);
 
-  // big wins: a payout (stake included) above P.BIG_WIN, latest verdict first; the tape keeps every leg
-  const big = pred('big', 25, 943, 'PREDICTOR_WINS', true, T0), later = pred('later', 400, 150, 'PREDICTOR_WINS', false, T0 + 3 * DAY);
-  const small = pred('small', 100, 399, 'PREDICTOR_WINS', true), exact = pred('exact', 250, 250, 'PREDICTOR_WINS', true), lost = pred('lost', 600, 900, 'COUNTERPARTY_WINS', true);
-  const a = P.aggregate([big, later, small, exact, lost, combo]);
-  assert.deepEqual(a.bigWins.map((s) => s.id), ['later', 'big'], 'over $500 paid out, wins only, newest verdict first');
+  // big wins: net PnL (payout − stake) above P.BIG_WIN, latest verdict first; the tape keeps every leg
+  const big = pred('big', 25, 943, 'PREDICTOR_WINS', true, T0), later = pred('later', 400, 600, 'PREDICTOR_WINS', false, T0 + 3 * DAY);
+  const bigPayout = pred('bigPayout', 900, 27.4, 'PREDICTOR_WINS', true);   // $927 paid out, $27.40 made: not a big win
+  const small = pred('small', 100, 399, 'PREDICTOR_WINS', true), exact = pred('exact', 250, 500, 'PREDICTOR_WINS', true), lost = pred('lost', 600, 900, 'COUNTERPARTY_WINS', true);
+  const a = P.aggregate([big, later, bigPayout, small, exact, lost, combo]);
+  assert.deepEqual(a.bigWins.map((s) => s.id), ['later', 'big'], 'net PnL over $500 (not the payout), wins only, newest verdict first');
   assert.equal(P.unslim(a.bigWins[1]).pool, 968);
   // the tape keeps the fields the Overview has always read (a site that has not reloaded still renders it) and adds the legs
   const row = a.tape.find((s) => s.id === 'k');
@@ -71,21 +72,27 @@ test('each leg keeps Meridian\'s result, and the tape and big wins keep every le
   assert.equal(P.aggregate([big], { bigWins: false }).bigWins, undefined, 'a bettor\'s own summary skips the list');
 });
 
-test('a big win whose bettor sold the tokens carries what it still held and its own result (0x4400…: sold $562 of winning tokens for $25)', () => {
+test('big wins go by what the bettor made: a win sold for little is none, a partly sold one keeps its own result', () => {
   const BUYER = '0x00000000000000000000000000000000000000c1';
-  const won = pred('sold', 500, 61.98, 'PREDICTOR_WINS', false), kept = pred('kept', 900, 27.4, 'PREDICTOR_WINS', true);
-  kept.decidedAt = T0 + DAY / 3;   // the builder's date from Polymarket's resolution (attachDecidedAt)
-  won.pcTraded = true;             // the builder marks predictions whose tokens a trade carries (buildTrades)
-  const trades = [{ t: T0 + 60000, seller: ME, buyer: BUYER, tokens: 561.98, paid: 25, pc: 'pc-sold', side: 'P', vP: 1, vC: 0, dAt: T0 + DAY }];
-  const a = P.aggregate([won, kept], { trades });
-  const row = JSON.parse(JSON.stringify(a.bigWins.find((s) => s.id === 'sold')));
-  assert.equal(row.h, 0); near(assert, row.lp, 25 - 500, 1e-4, 'the sale less the stake');
-  const n = P.full(row);
-  assert.equal(n.held, 0); near(assert, n.tradedPnl, -475, 1e-4); assert.equal(n.pcTraded, true);
-  assert.equal(P.resultFor(n, false, n.held).label, 'won', 'nothing left for the seller to claim');
+  // sold: $943 to win on $25, every token sold for $30 before the verdict (it made $5); part: 10% sold, the rest held
+  const sold = pred('sold', 25, 943, 'PREDICTOR_WINS', false), part = pred('part', 25, 1500, 'PREDICTOR_WINS', false), kept = pred('kept', 25, 600, 'PREDICTOR_WINS', true);
+  kept.decidedAt = T0 + DAY / 3;                    // the builder's date from Polymarket's resolution (attachDecidedAt)
+  sold.pcTraded = true; part.pcTraded = true;       // the builder marks predictions whose tokens a trade carries (buildTrades)
+  const trades = [
+    { t: T0 + 60000, seller: ME, buyer: BUYER, tokens: 968, paid: 30, pc: 'pc-sold', side: 'P', vP: 1, vC: 0, dAt: T0 + DAY },
+    { t: T0 + 60000, seller: ME, buyer: BUYER, tokens: 152.5, paid: 140, pc: 'pc-part', side: 'P', vP: 1, vC: 0, dAt: T0 + DAY },
+  ];
+  const a = P.aggregate([sold, part, kept], { trades });
+  assert.deepEqual(a.bigWins.map((s) => s.id).sort(), ['kept', 'part'], 'the full sale made $5: not a big win');
+  const p = P.full(JSON.parse(JSON.stringify(a.bigWins.find((s) => s.id === 'part'))));
+  near(assert, p.held, 0.9, 1e-4); near(assert, p.tradedPnl, (140 - 2.5) + (1372.5 - 22.5), 1e-3, 'the sale plus the 90% held at the verdict');
+  assert.equal(p.pcTraded, true);
   const k = P.full(JSON.parse(JSON.stringify(a.bigWins.find((s) => s.id === 'kept'))));
   assert.equal(k.held, null); assert.equal(k.tradedPnl, null); assert.equal(k.decidedAt, T0 + DAY / 3);
-  assert.equal(P.full(a.tape.find((s) => s.id === 'sold')).held, 0, 'the tape row too');
+  // the sold one still shows as sold wherever it appears (the tape)
+  const t = P.full(a.tape.find((s) => s.id === 'sold'));
+  assert.equal(t.held, 0); near(assert, t.tradedPnl, 30 - 25, 1e-4);
+  assert.equal(P.resultFor(t, false, t.held).label, 'won', 'nothing left for the seller to claim');
 });
 
 test('result chips: a loss is simply lost; "unclaimed" only where this side has something to collect', () => {

@@ -195,8 +195,9 @@
       const predRow = (n, list, cls, ...cells) => h('div.it.click', { class: cls || '', title: 'Details', tabindex: 0, dataset: { focusKey: list + ':' + n.id }, onclick: () => openPrediction(n, ctx), onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openPrediction(n, ctx); } }, ...cells);
       const picksCell = (n) => h('span.grow.ellipsis', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n'), style: { minWidth: '120px' } }, n.picks[0] ? n.picks[0].q : '', n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null);
 
-      // big wins: every win paying more than P.BIG_WIN, as of the snapshot (a snapshot built before the list has none)
-      const setBigWins = (s) => { if (!s || !s.agg || s.builtAt === bigAt) return false; bigAt = s.builtAt; bigWins = s.agg.bigWins ? s.agg.bigWins.map(P.full) : null; return true; };
+      // big wins: every win whose net PnL is above P.BIG_WIN, as of the snapshot (a snapshot built before the list has none)
+      // (filtered here too: a snapshot built before the list went by net PnL listed every payout above it)
+      const setBigWins = (s) => { if (!s || !s.agg || s.builtAt === bigAt) return false; bigAt = s.builtAt; bigWins = s.agg.bigWins ? s.agg.bigWins.map(P.full).filter((n) => bigPnl(n) > P.BIG_WIN) : null; return true; };
       // the figure the list is sorted by is bold, and stays when a narrow card drops the secondary ones (.opt). A bettor
       // who sold its tokens before the verdict is marked, and its PnL is its own result, the sale included.
       const bigRow = (n) => {
@@ -210,8 +211,8 @@
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        U.replace(bwNote, `payouts over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'in the last ' + snap.windowDays + ' days'}` : ''));
-        U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has paid more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
+        U.replace(bwNote, h('span', { title: 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'in the last ' + snap.windowDays + ' days'}` : '')));
+        U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
 
