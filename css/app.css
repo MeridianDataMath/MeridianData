@@ -525,8 +525,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 @container predcard (max-width: 959px) { .feed .it .opt2 { display: none; } }
 @container predcard (max-width: 719px) { .feed .it .opt { display: none; } }
 .feed .it .fix { flex: none; text-align: right; }
-.bigwins .it .stk { width: 72px; }
-.bigwins .it .pay { width: 60px; }
+.bigwins .it .stk { width: 64px; }
 .bigwins .it .mul { width: 64px; }
 .bigwins .it .pl { width: 68px; }
 .bigwins .it .on { font-weight: 700; }

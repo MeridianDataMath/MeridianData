@@ -187,8 +187,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     lists every bettor win whose net PnL (payout − stake) is above $500 (`P.BIG_WIN`), counted
     at the verdict, claimed or not. For a bettor who traded its position tokens, the net PnL is
     its own result, sale included, so a win sold for little is not one.
-    - *Sorting.* Newest verdict first by default, or by payout, PnL (payout − stake) or
-      multiplier (payout ÷ stake).
+    - *Row.* Each row shows the stake, the multiplier (payout ÷ stake) and the PnL (payout −
+      stake). The payout itself is in the prediction's dialog.
+    - *Sorting.* Newest verdict first by default, or by PnL or multiplier.
     - *Decided time.* The exchange keeps no decision time, so it is the last leg's resolution on
       Polymarket (never after the claim).
       - The snapshot builder looks each time up once and caches it in the price cache

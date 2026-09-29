@@ -132,7 +132,6 @@
       const tapeCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live predictions'), tapeNote, h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), h('div.feed-fill', tapeBody));
       const BW_SORTS = [
         { v: 'recent', label: 'Recent', title: 'Latest verdict first', val: (n) => decidedTime(n) },
-        { v: 'payout', label: 'Payout', title: 'Largest payout first (the stake included)', val: (n) => n.pool },
         { v: 'pnl', label: 'PnL', title: 'Largest profit first: payout − stake (a bettor who sold its tokens: its own result)', val: (n) => bigPnl(n) },
         { v: 'mult', label: 'Multiplier', title: 'Highest payout ÷ stake first', val: (n) => n.multiple || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
@@ -198,15 +197,17 @@
       // big wins: every win whose net PnL is above P.BIG_WIN, as of the snapshot (a snapshot built before the list has none)
       // (filtered here too: a snapshot built before the list went by net PnL listed every payout above it)
       const setBigWins = (s) => { if (!s || !s.agg || s.builtAt === bigAt) return false; bigAt = s.builtAt; bigWins = s.agg.bigWins ? s.agg.bigWins.map(P.full).filter((n) => bigPnl(n) > P.BIG_WIN) : null; return true; };
-      // the figure the list is sorted by is bold, and stays when a narrow card drops the secondary ones (.opt). A bettor
-      // who sold its tokens before the verdict is marked, and its PnL is its own result, the sale included.
+      // stake, multiplier and PnL (the payout is stake + PnL; the dialog has it); the figure the list is sorted by is bold,
+      // and a narrow card drops the stake (.opt). A bettor who sold part of its tokens before the verdict is marked, and
+      // its PnL is its own result, the sale included.
       const bigRow = (n) => {
         const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = decidedTime(n) || n.t; const pl = bigPnl(n);
         const sold = n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: n.held < 1e-6 ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, n.held < 1e-6 ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
         return predRow(n, 'big', '',
           h('span.t', { title: 'Decided ' + U.fmtDateTime(at) }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), sold,
-          h('span.num.dim.fix.stk.opt', { title: 'Stake' }, usd(n.stake) + ' →'), h('span.num.pos.fix.pay', { class: on('payout'), title: 'Payout' }, usd(n.pool)),
-          h('span.num.fix.mul', { class: on('mult'), title: 'Payout ÷ stake' }, mult(n.multiple)), h('span.num.fix.pl', { class: on('pnl', true) + ' ' + U.pnlClass(pl), title: n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
+          h('span.num.dim.fix.stk.opt', { title: 'Stake' }, usd(n.stake)),
+          h('span.num.fix.mul', { class: on('mult'), title: 'Multiplier: payout ÷ stake (the payout, ' + usd(n.pool) + ', is in the dialog)' }, mult(n.multiple)),
+          h('span.num.fix.pl', { class: on('pnl') + ' ' + U.pnlClass(pl), title: n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
       };
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
