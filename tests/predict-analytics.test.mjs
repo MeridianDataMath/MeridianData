@@ -133,13 +133,14 @@ test('a record counts bets: predictions that share a question are one bet (0xec7
   assert.equal(P.bettorSummary(norms).stats.rec, null);
 });
 
-test('record tiers are a false-discovery cut across every bettor with a record, not a fixed "1 in 10"', () => {
-  const lucks = [0.001, 0.02, 0.03, 0.08, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9];
-  const bettors = lucks.map((luck, i) => ({ address: '0x' + String(i).padStart(40, '0'), pnl: 10, roi: 5, wagered: 100, last: T0, topCat: 'Sports', rec: { n: 12, won: 7, expected: 5, luck, predictions: 12 } }));
-  const out = P.ideas([], { bettors, soldOf: () => null }, Date.now());
-  // BH at 10%: p(i) ≤ i/10 × 0.1 holds up to the third (0.03 ≤ 0.03); at 25% up to the fourth (0.08 ≤ 0.1)
-  assert.deepEqual(out.bettors.map((b) => b.tier), ['strong', 'strong', 'strong', 'good', null, null, null, null, null, null]);
-  assert.equal(out.tested, 10); assert.equal(out.byChance, 1);
+test('record tiers: strong at 1 in 50 by luck, good at 1 in 10, and the best record is good when none reaches that', () => {
+  const rows = (lucks) => lucks.map((luck, i) => ({ address: '0x' + String(i).padStart(40, '0'), pnl: 10, roi: 5, wagered: 100, last: T0, topCat: 'Sports', rec: { n: 12, won: 7, expected: 5, luck, predictions: 12 } }));
+  const out = P.ideas([], { bettors: rows([0.001, 0.02, 0.03, 0.08, 0.3, 0.9]), soldOf: () => null }, Date.now());
+  assert.deepEqual(out.bettors.map((b) => b.tier), ['strong', 'strong', 'good', 'good', null, null]);
+  assert.equal(out.tested, 6);
+  const none = P.ideas([], { bettors: rows([0.5, 0.25, 0.4]), soldOf: () => null }, Date.now());
+  assert.deepEqual(none.bettors.map((b) => [b.luck, b.tier]), [[0.25, 'good'], [0.4, null], [0.5, null]], 'the best record counts as good');
+  assert.deepEqual(P.ideas([], { bettors: [], soldOf: () => null }).bettors, []);
 });
 
 test('the record against the odds, and the ideas from winning bettors: slips that can still be placed', () => {

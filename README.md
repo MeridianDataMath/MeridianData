@@ -496,17 +496,21 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   - *Why wins, not money:* a long shot's payout is so skewed that a money-weighted z-score read
     one 49× hit among nine losses as a "5-sigma" record. Counted in wins, that bettor won 1
     where the odds implied 4.5, so it has no record at all.
-  - *Tiers across everyone tested:* ranking every bettor with a record (137 on 2026-09-30) by luck
-    turns up about a tenth of them at "1 in 10" or better by chance alone.
-    - So strong and good are Benjamini–Hochberg cuts across all of them (false discovery at most
-      10% and 25%, `P.IDEAS.strongFdr` / `goodFdr`).
-    - A record that does not survive shows its figure in a neutral chip ("luck 1 in 258").
-    - On that date none survived. The best, 17 of 24 bets won where 11.3 were implied, comes about
-      1 in 105 by luck, so luck alone gives about one such record across 137 bettors.
+  - *Tiers:*
+    - Strong at luck 1 in 50 or rarer and good at 1 in 10 (`P.IDEAS.strongLuck` / `goodLuck`).
+    - When no winning bettor reaches good, the best record counts as good, so the list always has
+      one to point at (the site owner's call, 2026-09-30).
+    - Below good, the chip shows the figure ("luck 1 in 9").
+    - These are plain thresholds: with some 140 bettors ranked by luck, luck alone gives about a
+      tenth of them a "1 in 10" record.
+    - A stricter cut across all of them (Benjamini–Hochberg) left no one on 2026-09-30. The best
+      was 17 of 24 bets won where 11.3 were implied, 1 in 105.
   - *An idea:* one of their predictions that can still be placed: undecided, every leg before its
     Meridian cutoff and unsettled, and the bettor still holding at least half its tokens. The
     same picks placed again count once, with the count (×4).
-  - *Ranking:* ideas are ranked by the bettor's record, or by closing time, or newest first.
+  - *Ranking:* newest first by default, or by the bettor's record, or by closing time.
+  - *No referral wording:* the page never mentions the referral code; every link to Meridian just
+    carries it.
   - *Each idea shows:*
     - the bettor and its record;
     - the legs and time to the first cutoff;

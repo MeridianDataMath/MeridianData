@@ -375,22 +375,18 @@
 
   /** Winning bettors and their ideas to copy (the Copy trading page, from the snapshot's predict-ideas.json). A winning
    *  bettor has at least minDecided decided bets (rec.n: predictions linked by a shared question count once), is in
-   *  profit, and has won more of them than its locked odds implied. Its tier says how clear of luck that record is:
-   *  ranking ~180 wallets by luck turns up a dozen "1 in 10" records by chance alone, so a tier is a Benjamini–Hochberg
-   *  cut across every bettor with a record, keeping the expected share of lucky ones among the strong under strongFdr
-   *  and among the good under goodFdr. */
-  P.IDEAS = { minDecided: 10, strongFdr: 0.1, goodFdr: 0.25 };
-  /** { bettors, ideas, tested, byChance }: every winning bettor, least likely by luck first, with its tier and the number
-   *  of its ideas; those ideas, the bettor's predictions that can still be placed at `now` (undecided, every leg before
-   *  its Meridian cutoff and not settled, the bettor still holding at least half its tokens), best record first, then
-   *  newest; tested = bettors with a record; byChance = how many of them luck alone would give a record of 1 in 10 or
-   *  better. agg: P.aggregate over the same norms (its bettor rows and soldOf). */
+   *  profit, and has won more of them than its locked odds implied. Its tier says how rarely luck alone gives that
+   *  record: strong at strongLuck or rarer, good at goodLuck; when no winning bettor reaches good, the best record counts
+   *  as good, so the list always has one to point at. (Plain thresholds, not a cut across every bettor tested: with some
+   *  140 bettors ranked by luck, a few of the good records are luck.) */
+  P.IDEAS = { minDecided: 10, strongLuck: 0.02, goodLuck: 0.1 };
+  /** { bettors, ideas, tested }: every winning bettor, least likely by luck first, with its tier and the number of its
+   *  ideas; those ideas, the bettor's predictions that can still be placed at `now` (undecided, every leg before its
+   *  Meridian cutoff and not settled, the bettor still holding at least half its tokens), best record first, then newest;
+   *  tested = bettors with a record. agg: P.aggregate over the same norms (its bettor rows and soldOf). */
   P.ideas = function (norms, agg, now = Date.now()) {
     const tested = agg.bettors.filter((b) => b.rec && b.rec.n >= P.IDEAS.minDecided);
-    const lucks = tested.map((b) => b.rec.luck).sort((a, b) => a - b);
-    const cut = (q) => { let c = -1; lucks.forEach((l, i) => { if (l <= ((i + 1) / lucks.length) * q) c = l; }); return c; };   // the largest luck a BH cut at q keeps
-    const strongCut = cut(P.IDEAS.strongFdr), goodCut = cut(P.IDEAS.goodFdr);
-    const tierOf = (luck) => (luck <= strongCut ? 'strong' : luck <= goodCut ? 'good' : null);
+    const tierOf = (luck) => (luck <= P.IDEAS.strongLuck ? 'strong' : luck <= P.IDEAS.goodLuck ? 'good' : null);
     const winning = tested.filter((b) => b.pnl > 0 && b.rec.won > b.rec.expected);
     const byAddr = new Map(winning.map((b) => [b.address, b]));
     const sold = (n) => (agg.soldOf ? agg.soldOf(n) : null);
@@ -409,7 +405,8 @@
     }
     const count = {}; for (const r of ideas) count[r.p] = (count[r.p] || 0) + 1;
     const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b.rec.luck), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
-    return { bettors, ideas, tested: tested.length, byChance: Math.round(tested.length * 0.1) };
+    if (bettors.length && !bettors.some((b) => b.tier)) bettors[0].tier = 'good';   // the best record, when none reaches good
+    return { bettors, ideas, tested: tested.length };
   };
 
   /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */

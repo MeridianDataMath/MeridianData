@@ -515,7 +515,7 @@
   /** The pick's probability now: Polymarket's price once loaded, else the snapshot's source price. */
   const pickProb = (k) => { const m = k.id ? R.get(k.id).m : null; const yes = m && m.prices && m.prices.length && Number.isFinite(m.prices[0]) && !m.closed ? m.prices[0] : k.ep; return yes == null ? null : k.yes ? yes : 1 - yes; };
   const gauge = (p) => h('span.gauge-wrap', { title: 'Polymarket now: the chance of this pick' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
-  const slipHowTo = () => h('div.slip-note', 'Copying opens this slip on Meridian Predict. Press ', h('b', 'Add To Slip'), ' there: its picks join whatever is already in your Meridian slip (clear that first to place exactly this one). Choose your amount and place it; Meridian\'s market makers quote fresh odds, so yours can differ from the ones locked here. Links to Meridian carry the MeridianDataHub referral code.');
+  const slipHowTo = () => h('div.slip-note', 'Copying opens this slip on Meridian Predict. Press ', h('b', 'Add To Slip'), ' there: its picks join whatever is already in your Meridian slip (clear that first to place exactly this one). Choose your amount and place it; Meridian\'s market makers quote fresh odds, so yours can differ from the ones locked here.');
   const slipBrand = () => h('span.slip-brand', 'Meridian', h('span', 'DataHub'));
 
   async function mountSlip(body, route, ctx) {
@@ -610,36 +610,35 @@
   }
   // =====================================================================
   // Ideas from winning bettors (mounted on the Copy trading page): slips that can still be placed, from bettors whose
-  // money result beats what their locked odds implied (P.IDEAS, P.ideas); each one click from Meridian with the
-  // referral code. The snapshot writes them to predict-ideas.json (a few KB, so the page does not load the Predict snapshot).
+  // record beats what their locked odds implied (P.IDEAS, P.ideas); each one click from Meridian. The snapshot writes
+  // them to predict-ideas.json (a few KB, so the page does not load the Predict snapshot).
   // =====================================================================
   /** How often luck alone gives a record this good (b.luck = P.luckOf): "1 in 40" when rare, a percentage when not. */
-  const luckText = (luck) => (luck == null ? '—' : luck < 1e-4 ? 'under 1 in 10,000' : luck < 0.2 ? '1 in ' + U.fmtNum(Math.round(1 / luck), 0) : U.fmtPct(luck * 100, { dp: 0 }));
+  const luckText = (luck) => (luck == null ? '—' : luck < 1e-4 ? 'under 1 in 10,000' : luck < 0.2 ? '1 in ' + U.fmtNum(Math.floor(1 / luck + 1e-9), 0) : U.fmtPct(luck * 100, { dp: 0 }));   // rounded down: "1 in 10" means 1 in 10 or likelier to be luck
   const luckPhrase = (luck) => (luck < 1e-4 ? 'less than once in 10,000 times' : luck < 0.2 ? `about ${luckText(luck)} times` : `about ${luckText(luck)} of the time`);
   const recordText = (b) => `${U.fmtNum(b.n, 0)} decided bets${b.predictions > b.n ? ` (${U.fmtNum(b.predictions, 0)} predictions: those that share a question count as one bet)` : ''}, ${U.fmtNum(b.won, 0)} won where the locked odds implied ${U.fmtNum(b.expected, 1)}; ${usd(b.pnl, { sign: true })}${b.roi != null ? ' (ROI ' + U.fmtPct(b.roi, { sign: true, dp: 0 }) + ')' : ''}. If every bet had exactly the chance its odds priced, a record this good would come ${luckPhrase(b.luck)} by luck alone.`;
-  // a tier only where the record survives the false-discovery cut; otherwise the figure itself, neutral: most records
-  // do not (yet), and "could be luck" on every row would say less than the number
-  const recordChip = (b) => { const [label, tone] = b.tier === 'strong' ? ['strong record', 'green'] : b.tier === 'good' ? ['good record', 'blue'] : ['luck ' + luckText(b.luck), '']; return h('span.chip', { class: tone, title: recordText(b) + (b.tier ? '' : ' Not clear of luck across every bettor with a record (see below).') }, label); };
+  // a tier where the record is rare enough by luck (P.ideas); below that the figure itself, in a neutral chip
+  const recordChip = (b) => { const [label, tone] = b.tier === 'strong' ? ['strong record', 'green'] : b.tier === 'good' ? ['good record', 'blue'] : ['luck ' + luckText(b.luck), '']; return h('span.chip', { class: tone, title: recordText(b) }, label); };
   /** The whole slip's chance on Polymarket now (legs as independent), or null while a leg has none. */
   const slipChance = (n) => { const ps = n.picks.map(pickProb); return ps.length && ps.every((p) => p != null) ? ps.reduce((a, p) => a * p, 1) : null; };
   P.ideasCard = function (ctx) {
-    const st = { view: 'slips', show: 'all', sort: 'record' };
+    const st = { view: 'slips', show: 'all', sort: 'newest' };
     const body = h('div', UI.loading('Loading ideas from winning bettors…'));
     const summary = h('span.dim.small'), controls = h('span.row.wrap', { style: { gap: '6px' } });
     const foot = h('div.footer-note', { style: { textAlign: 'left', padding: '10px 14px' } });
     const card = h('div.card.tight', { id: 'predict-ideas' }, h('div.card-head', h('h2', 'Predict ideas from winning bettors'), summary, h('span.grow'), controls), body, foot);
     const footText = (f) => [
       `Winning bettors: at least ${P.IDEAS.minDecided} decided bets, in profit, and more of them won than their locked odds implied. Predictions that share a question (the same pick placed again, combos on one match) count as one bet: the one with the largest stake, at its own odds and with its own result. Wins count, not money, so one long shot that hit does not make a record. `,
-      `The chip says how clear of luck the record is. Across ${f && f.tested ? U.fmtNum(f.tested, 0) + ' bettors with a record' : 'every bettor with a record'}, luck alone would give ${f && f.byChance ? 'up to about ' + U.fmtNum(f.byChance, 0) : 'some'} records of "1 in 10" or better, so a strong or good record is one that survives a false-discovery cut across all of them (at most ${Math.round(P.IDEAS.strongFdr * 100)}% and ${Math.round(P.IDEAS.goodFdr * 100)}% of such records expected to be luck); otherwise the chip shows the figure. Hover a chip for the numbers. `,
-      'An idea is one of their predictions that can still be placed. Copy opens it on Meridian Predict with the MeridianDataHub referral code: press Add To Slip there and choose your amount. Meridian\'s makers quote fresh odds and their margin applies to you too; across all bettors, decided bets have returned less than they staked (', h('a', { href: '#/predict/vig' }, 'Vig & edge'), '). A record is no promise.'];
+      `The chip says how rarely luck alone gives a record that good: strong at 1 in ${Math.round(1 / P.IDEAS.strongLuck)} or rarer, good at 1 in ${Math.round(1 / P.IDEAS.goodLuck)} (when no one reaches that, the best record counts as good); hover it for the numbers. `,
+      'An idea is one of their predictions that can still be placed: Copy to Meridian opens it there, press Add To Slip and choose your amount. Meridian\'s makers quote fresh odds and their margin applies to you too; across all bettors, decided bets have returned less than they staked (', h('a', { href: '#/predict/vig' }, 'Vig & edge'), '). A record is no promise.'];
     let file = null, bettors = new Map(), ideas = [], ids = [];
     // the timed redraws wait while a keyboard user is in the card or a dialog is open (a row replaced under an open dialog
     // could not take the focus back)
     const quiet = () => { const a = document.activeElement; return (!!a && card.contains(a) && a.matches(':focus-visible')) || !!document.querySelector('.modal-bg'); };
     // the controls are built once and only switched (rebuilding them dropped a keyboard user's focus on every press)
     const segView = UI.seg([{ v: 'slips', label: 'Open slips' }, { v: 'bettors', label: 'Winning bettors' }], st.view, (v) => { st.view = v; render(); }, 'sm');
-    const segShow = UI.seg([{ v: 'all', label: 'All', title: 'Every winning bettor' }, { v: 'good', label: 'Good record', title: 'Bettors whose record is good or strong: it survives the false-discovery cut across every bettor with a record' }], st.show, (v) => { st.show = v; render(); }, 'sm');
-    const segSort = UI.seg([{ v: 'record', label: 'Best record' }, { v: 'closing', label: 'Closing soon' }, { v: 'newest', label: 'Newest' }], st.sort, (v) => { st.sort = v; render(); }, 'sm');
+    const segShow = UI.seg([{ v: 'all', label: 'All', title: 'Every winning bettor' }, { v: 'good', label: 'Good record', title: 'Bettors whose record is good or strong' }], st.show, (v) => { st.show = v; render(); }, 'sm');
+    const segSort = UI.seg([{ v: 'newest', label: 'Newest' }, { v: 'record', label: 'Best record' }, { v: 'closing', label: 'Closing soon' }], st.sort, (v) => { st.sort = v; render(); }, 'sm');
     U.append(controls, [segView, segShow, segSort]);
     const render = () => {
       segShow.style.display = segSort.style.display = st.view === 'slips' ? '' : 'none';
@@ -674,11 +673,11 @@
         // against Polymarket's own chance when the bet was placed, not the locked odds (they include the maker's margin)
         { key: 'f', label: 'Chance now', num: true, title: 'Polymarket\'s chance for the whole slip now (legs taken as independent), and how far it has moved since the bettor placed it. Up: the market has come round to the pick, so a copier gets a shorter price than the bettor did (Meridian\'s makers quote near the market, plus their margin)', render: (n) => { const f = slipChance(n); if (f == null) return h('span.dim', '—'); const d = n.fairAtBet != null ? f - n.fairAtBet : null; return h('span', { title: n.sameEvent ? 'Some legs are on the same event: their real joint chance is higher than this product' : null }, (n.sameEvent ? '≈ ' : '') + pct(f, f < 0.1 ? 1 : 0), d != null && Math.abs(d) >= 0.0005 ? h('span.xs', { class: d > 0 ? 'pos' : 'neg' }, ' ' + pp(d, Math.abs(d) < 0.01 ? 1 : 0)) : null); } },
         { key: 'a', label: '', render: (n) => h('div.row', { style: { gap: '6px', flexWrap: 'nowrap' } },
-          h('a.btn.sm.primary', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Opens the slip on Meridian Predict (Add To Slip there), with the MeridianDataHub referral code' }, U.icon('external'), 'Copy to Meridian'),
+          h('a.btn.sm.primary', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Opens the slip on Meridian Predict: press Add To Slip there' }, U.icon('external'), 'Copy to Meridian'),
           h('a.btn.sm.ghost', { href: '#/predict/p/' + String(n.id).toLowerCase(), title: 'The slip page, with a link to share' }, 'Slip')) },
       ], rows, onRow: (n) => openPrediction(n, ctx) })
         : !bettors.size ? UI.empty(`No bettor meets the bar right now (at least ${P.IDEAS.minDecided} decided bets, in profit, more wins than the odds implied).`)
-        : h('div.empty', h('div', { style: { marginBottom: '10px' } }, st.show === 'good' && ideas.some(slipOpen) ? (Array.from(bettors.values()).some((b) => b.tier) ? 'No open slip from a bettor with a good record right now.' : `No bettor's record is clear of luck yet: none survives the false-discovery cut across the ${U.fmtNum(file.tested || 0, 0)} bettors with a record.`) : `No slip from a winning bettor can be placed right now. There ${bettors.size === 1 ? 'is 1 winning bettor' : 'are ' + bettors.size + ' winning bettors'}; their new slips appear here within 30 minutes of being placed.`),
+        : h('div.empty', h('div', { style: { marginBottom: '10px' } }, st.show === 'good' && ideas.some(slipOpen) ? 'No open slip from a bettor with a good record right now.' : `No slip from a winning bettor can be placed right now. There ${bettors.size === 1 ? 'is 1 winning bettor' : 'are ' + bettors.size + ' winning bettors'}; their new slips appear here within 30 minutes of being placed.`),
           h('button.btn.sm', { type: 'button', onclick: () => { st.view = 'bettors'; segView.set('bettors'); render(); } }, 'See the winning bettors')));
     };
     // Polymarket for their legs: the chance now, and legs whose market has closed (no longer copyable); R keeps markets
