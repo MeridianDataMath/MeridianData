@@ -438,7 +438,8 @@
           // an open slip can be copied: Meridian's page for it (Add To Slip), under the site's referral code
           slipOpen(n) ? h('a.btn.sm.primary', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Opens this slip on Meridian Predict: press Add To Slip there, choose your amount and place it' }, U.icon('external'), 'Copy slip to Meridian') : null,
           n.predictor && n.predictor !== opts.here ? h('a.btn.sm', { class: slipOpen(n) ? '' : 'primary', href: bettorUrl(n.predictor), title: 'Every prediction of this bettor, its PnL and open positions' }, U.icon('account'), 'Open bettor\'s account') : null,
-          P.isPredictionId(n.id) ? h('a.btn.sm.ghost', { href: '#/predict/p/' + n.id.toLowerCase(), title: 'This prediction as a slip card, with a link to share' }, U.icon('copy'), 'Slip') : null,
+          P.isPredictionId(n.id) && !n.partial ? h('button.btn.sm.ghost', { type: 'button', title: 'A link that shows this slip\'s card in Discord, X, Telegram…, and the card as an image', onclick: () => shareSlip(n) }, U.icon('share'), 'Share') : null,
+          P.isPredictionId(n.id) ? h('a.btn.sm.ghost', { href: '#/predict/p/' + n.id.toLowerCase(), title: 'This prediction on its own slip page' }, U.icon('ticket'), 'Slip page') : null,
           n.tx ? h('a.btn.sm.ghost', { href: U.explorerTx(n.tx), target: '_blank', rel: 'noopener', title: 'The transaction that placed it' }, U.icon('external'), 'Transaction') : null),
         h('div.stats', { style: { marginBottom: '14px' } },
           UI.stat('Stake', stake),
@@ -496,7 +497,6 @@
   const legClosed = (k, now) => (!!k.endTime && k.endTime <= now) || !!k.settled || !!(k.id && R.get(k.id).m && R.get(k.id).m.closed);
   /** Can the slip still be placed: undecided, with every leg still taking bets. */
   function slipOpen(n) { const now = Date.now(); return !!n && !n.decided && !n.partial && !!n.picks.length && !n.picks.some((k) => legClosed(k, now)); }
-  const slipLink = (id) => location.origin + location.pathname + '#/predict/p/' + String(id).toLowerCase();
   /** One prediction by id: the snapshot's lists in memory while they are fresh (tape, big wins), else its file
    *  slips/<first two hex digits>.json. { n, builtAt, unavailable }: n null with a file read means it is not in the
    *  snapshot; unavailable means the file could not be read (not published yet, a network error). */
@@ -543,49 +543,74 @@
     renderSlip(body, found.n, found.builtAt, ctx);
   }
 
+  /** The share dialog of a slip (js/flex.js FX.card): its card drawn here, and the /s/<id> link, which unfurls into the
+   *  same card once the deploy has made it (js/cards.js slipCardWanted). */
+  function shareSlip(n) {
+    const K = MD.cards.make({ U, P }), st = K.slipState(n), id = String(n.id).toLowerCase();
+    const combo = n.legs > 1 ? `${n.legs}-leg combo` : 'single';
+    const post = st === 'won' ? `Won ${usd(n.pnl, { sign: true })} on a ${usd(n.stake)} ${combo} on Meridian Predict (${mult(n.multiple)})`
+      : st === 'open' ? `${usd(n.stake)} to win ${usd(n.pool)} on a ${mult(n.multiple)} ${combo} on Meridian Predict`
+        : `A ${mult(n.multiple)} ${combo} on Meridian Predict`;
+    return MD.flex.card({ title: 'Share this slip', alt: K.slipText(n).title, draw: (fontCss) => K.slipSvg(n, { fontCss }), fname: `meridian-slip-${id.slice(2, 10)}.png`,
+      shareUrl: MD.api.shareUrl('s', id), card: 'cards/s/' + id + '.png', expected: K.slipCardWanted(n), postText: post });
+  }
+  P.shareSlip = shareSlip;
+
   function renderSlip(body, n, builtAt, ctx) {
     const wrap = h('div.slip-wrap');
     U.replace(body, wrap);
     const render = () => {
       const now = Date.now(), open = slipOpen(n), own = ownership(n);
       const closed = n.picks.filter((k) => legClosed(k, now)).length;
-      const state = n.decided ? (n.won ? UI.chip(own.soldAll ? 'won · sold' : 'won', 'green') : n.nd ? UI.chip('void', 'amber') : UI.chip('lost', 'red')) : UI.chip(open ? (n.legs > 1 ? 'live combo' : 'live single') : 'betting closed', open ? 'accent' : 'amber');
-      const tile = (k, v, s, cls) => h('div.slip-tile', { class: cls || '' }, h('div.k', k), h('div.v', v), s ? h('div.s', s) : null);
-      // who the payout goes to, and what the bettor made (its own result where it sold its position tokens), as in the dialog
-      const payoutNote = !n.decided ? 'USDe if it wins' : n.nd ? 'stake refunded' : !n.won ? 'to the market maker' : own.soldAll ? 'to the token buyer' : own.soldPart ? U.fmtPct(own.held * 100, { dp: 0 }) + ' to the bettor' : n.unclaimed ? 'to the bettor · not claimed yet' : 'paid to the bettor';
+      const kind = n.legs > 1 ? `${n.legs}-leg combo` : 'single';
+      const state = n.decided ? (n.won ? UI.chip(own.soldAll ? 'won · sold' : 'won · ' + kind, 'green') : n.nd ? UI.chip('void', 'amber') : UI.chip('lost · ' + kind, 'red')) : UI.chip(open ? 'live · ' + kind : 'betting closed', open ? 'accent' : 'amber');
+      // the result: what the bettor made once decided (its own, where it sold its position tokens), else what it pays
       const pnl = own.ownPnl != null ? own.ownPnl : n.pnl;
+      const sold = own.soldAll ? (n.decided ? ' · the bettor had sold its tokens: the payout goes to the buyer' : ' · the bettor has sold its tokens') : own.soldPart ? ` · the bettor ${n.decided ? 'had' : 'has'} sold ${own.soldPct} of its tokens` : '';
+      const [heroK, heroV, heroCls, heroS] = !n.decided ? ['Pays', usd(n.pool), '', `on a ${usd(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}` + sold]
+        : n.won ? [own.ownPnl != null ? 'Won · the bettor\'s PnL, incl. selling its tokens' : 'Won', usd(pnl, { sign: true }), U.pnlClass(pnl), `${usd(n.pool)} paid on a ${usd(n.stake)} stake` + (n.unclaimed && !own.soldAll ? ' · not claimed yet' : '') + sold]
+          : n.nd ? ['Void', usd(pnl, { sign: true }), '', 'the stake goes back to the bettor']
+            : ['Lost', usd(pnl, { sign: true }), U.pnlClass(pnl), `the ${usd(n.stake)} stake went to the market maker · it would have paid ${usd(n.pool)}` + sold];
       // the whole slip's chance on Polymarket now (legs as independent), against the odds this bettor locked
       const probs = n.decided ? [] : n.picks.map(pickProb);
       const fairNow = probs.length && probs.every((p) => p != null) ? probs.reduce((a, p) => a * p, 1) : null;
+      const decidedAt = decidedTime(n);
+      const cell = (k, v, title) => h('div', { title: title || null }, h('div.k', k), h('div.v', v));
       const leg = (k) => {
         const o = legOutcome(k, n); const shut = legClosed(k, now); const p = shut || n.decided ? null : pickProb(k);
         const when = k.settled ? 'settled on Meridian' : !k.endTime ? null : k.endTime <= now ? (n.decided ? 'ended ' : 'betting closed ') + U.fmtDateTime(k.endTime) : n.decided ? 'listed to end ' + U.fmtWhen(k.endTime) : shut ? 'closed on Polymarket' : 'bets close ' + U.fmtWhen(k.endTime);
-        const meta = [when, k.cat || null].filter(Boolean).join(' · ');
+        const meta = [k.fairAtBet != null ? pct(k.fairAtBet, 0) + ' at bet' : null, when, k.cat || null].filter(Boolean).join(' · ');
         return h('div.slip-leg',
-          h('div.side', sideChip(k.yes), p != null ? gauge(p) : null),
+          h('div.side', sideChip(k.yes)),
           h('div.q', h('div', k.q), meta ? h('div.meta', meta) : null),
-          o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null);
+          h('div.end', p != null ? gauge(p) : null, o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null));
       };
-      U.replace(wrap, h('div.slip',
+      const btnShare = (primary) => h('button.btn', { type: 'button', class: primary ? 'primary slip-copy' : 'slip-share', dataset: { focusKey: 'slip:share' }, title: 'A link that shows this slip\'s card in Discord, X, Telegram…, and the card as an image', onclick: () => shareSlip(n) }, U.icon('share'), primary ? 'Share this slip' : 'Share');
+      U.replace(wrap, h('div.slip', { class: 'is-' + (n.decided ? (n.won ? 'won' : n.nd ? 'void' : 'lost') : 'open') },
         h('div.slip-head', slipBrand(), h('span.grow'), state),
-        h('div.slip-tiles',
-          tile('Size', usd(n.stake), 'USDe'),
-          tile('Payout', usd(n.pool), payoutNote),
-          n.decided ? tile('PnL', usd(pnl, { sign: true }), own.ownPnl != null ? 'the bettor\'s, incl. selling its tokens' : 'the bettor\'s', pnl > 0 ? 'hi' : pnl < 0 ? 'lo' : '') : tile('Max gain', mult(n.multiple), 'payout ÷ size', 'hi')),
-        h('div.slip-sub', h('span', `${n.legs} leg${n.legs > 1 ? 's' : ''}`), h('span', { title: 'Locked odds: size ÷ payout, the price of one USDe of payout' }, `${usd(n.stake)} @ ${n.odds == null ? '—' : n.odds.toFixed(n.odds < 0.1 ? 3 : 2)}`),
-          fairNow != null ? h('span', { title: 'The legs\' Polymarket prices now, multiplied (as if independent); the odds this bettor locked were ' + pct(n.odds, 1) }, 'Polymarket now ' + pct(fairNow, fairNow < 0.1 ? 1 : 0)) : null,
-          h('span.grow'), h('span', 'placed ' + U.fmtAgo(n.t))),
+        h('div.slip-hero',
+          h('div.k', heroK),
+          h('div.v', { class: heroCls }, heroV),
+          h('div.s', heroS)),
+        h('div.slip-strip',
+          cell('Stake', usd(n.stake)),
+          cell('Multiplier', mult(n.multiple), 'Payout ÷ stake'),
+          cell('Odds', n.odds == null ? '—' : pct(n.odds, n.odds < 0.1 ? 1 : 0), 'Locked odds: stake ÷ payout, the price of one USDe of payout'),
+          n.decided ? cell('Decided', decidedAt ? U.fmtDate(decidedAt).replace(', ' + new Date().getFullYear(), '') : '—', decidedAt ? U.fmtDateTime(decidedAt) : null)
+            : fairNow != null ? cell('Polymarket now', pct(fairNow, fairNow < 0.1 ? 1 : 0), 'The legs\' Polymarket prices now, multiplied (as if independent), against the ' + pct(n.odds, 1) + ' locked')
+              : cell('Placed', U.fmtAgo(n.t))),
+        h('div.slip-legs-head', h('span', n.legs > 1 ? `${n.legs} legs` : '1 leg'), h('span.grow'), n.legs > 1 ? h('span', 'every leg must win') : null),
         h('div.slip-legs', n.picks.map(leg)),
-        open ? h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Copy slip to Meridian Predict')
-          : h('button.btn.slip-copy', { type: 'button', disabled: true }, n.decided ? 'Decided: this slip can no longer be placed' : `Betting has closed on ${closed} of its ${n.legs} leg${n.legs > 1 ? 's' : ''}`),
-        open ? slipHowTo() : null,
         // (data-focus-key: a keyboard user's focus comes back to the button after a refresh redrew the card)
+        open ? h('div.slip-cta', h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Copy slip to Meridian Predict'), btnShare(false))
+          : h('div.slip-cta', btnShare(true)),
+        !open && !n.decided ? h('div.slip-note', { style: { textAlign: 'center' } }, `Betting has closed on ${closed} of its ${n.legs} leg${n.legs > 1 ? 's' : ''}: it can no longer be copied.`) : null,
+        open ? slipHowTo() : null,
         h('div.slip-actions',
-          h('button.btn.sm', { type: 'button', dataset: { focusKey: 'slip:share' }, title: 'Copy a link to this slip page', onclick: () => { U.copyText(slipLink(n.id)); U.toast('Slip link copied'); } }, U.icon('copy'), 'Share slip'),
-          h('button.btn.sm', { type: 'button', dataset: { focusKey: 'slip:details' }, title: 'Stake, odds, both sides, every leg and its resolution', onclick: () => openPrediction(n, ctx) }, U.icon('info'), 'Details'),
-          n.predictor ? h('a.btn.sm', { href: bettorUrl(n.predictor) }, U.icon('account'), 'Bettor ' + U.shortAddr(n.predictor, 4)) : null,
+          h('button.btn.sm.ghost', { type: 'button', dataset: { focusKey: 'slip:details' }, title: 'Stake, odds, both sides, every leg and its resolution', onclick: () => openPrediction(n, ctx) }, U.icon('info'), 'Details'),
+          n.predictor ? h('a.btn.sm.ghost', { href: bettorUrl(n.predictor), title: 'Every prediction of this bettor, its PnL and open positions' }, U.icon('account'), 'Bettor ' + U.shortAddr(n.predictor, 4)) : null,
           open ? null : h('a.btn.sm.ghost', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Meridian\'s page for this prediction' }, U.icon('external'), 'View on Meridian')),
-        builtAt ? h('div.slip-note', { style: { textAlign: 'center' } }, 'As of the snapshot built ' + U.fmtAgo(builtAt), UI.staleNote(builtAt), ' · the chances are Polymarket\'s, live.') : null));
+        h('div.slip-note', { style: { textAlign: 'center' } }, 'Placed ' + U.fmtDateTime(n.t) + (builtAt ? ' · as of the snapshot built ' + U.fmtAgo(builtAt) : ''), builtAt ? UI.staleNote(builtAt) : null, n.decided ? '' : ' · the chances are Polymarket\'s, live.')));
     };
     render();
     // Polymarket for the legs still open: their chances now, and where each one stands; the minute's redraw waits while

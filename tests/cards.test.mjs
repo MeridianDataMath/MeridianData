@@ -1,4 +1,5 @@
-// Link-preview cards: the SVG artwork and the share pages behind /a/<address> and /p/<address> (scripts/cards.mjs).
+// Link-preview cards: the SVG artwork and the share pages behind /a/<address>, /p/<address> and /s/<prediction id>
+// (scripts/cards.mjs).
 // The PNG rendering itself (resvg) is left to the deploy workflow; these check what goes into it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -89,6 +90,71 @@ test('the CSP in _headers allows index.html\'s inline script by its hash, and no
   assert.doesNotMatch(csp[0], /unsafe-inline|unsafe-eval/);
   assert.doesNotMatch(index, /\sstyle=|\son[a-z]+=/i, 'no inline style or handler in index.html');
   assert.deepEqual(dir['object-src'], ["'none'"]); assert.deepEqual(dir['base-uri'], ["'none'"]);
+});
+
+// a prediction as the slip files carry it (P.slim), legs [question, YES?] each
+const ID = '0x' + 'ab'.repeat(32);
+const slip = (stake, cp, verdict, t, legs) => MD.predict.full(MD.predict.slim(MD.predict.norm({ predictionId: ID, predictor: ME, counterparty: MAKER, predictorCollateral: wei(stake), counterpartyCollateral: wei(cp), settled: false, result: null,
+  createdAt: new Date(t).toISOString(), settledAt: null, pickConfig: { pickConfigId: 'pc', resolved: !!verdict, result: verdict,
+    picks: legs.map(([q, yes], i) => ({ conditionId: 'c' + i, predictedOutcome: yes ? 'YES' : 'NO', condition: { question: q, endTime: Math.floor((t + 86400000) / 1000) } })) } })));
+
+test('a slip card leads with the result: net PnL once won, the stake once lost, the payout while open', () => {
+  const T = Date.UTC(2026, 8, 27);
+  const won = slip(25, 943.5, 'PREDICTOR_WINS', T, [['Will France win on 2026-09-28?', true], ['Uruguay covers -1.5 spread vs Korea Republic?', true], ['Will Armenia vs Montenegro total be over 3.5?', true]]);
+  let svg = K.slipSvg(won); clean(svg);
+  assert.match(svg, />\+\$944</, 'whole dollars from $100 up'); assert.match(svg, />Won · 3-leg combo</); assert.match(svg, /#34d487/);
+  assert.match(svg, />\$969 paid on a \$25\.00 stake</); assert.match(svg, />38\.74×</); assert.match(svg, />DECIDED</);
+  assert.match(svg, />Uruguay covers -1\.5 spread vs Korea</, 'a long question wraps'); assert.match(svg, />Republic\?</);
+  assert.match(K.slipText(won).title, /^Won \+\$944 on a \$25\.00 3-leg combo \(38\.74×\) · Meridian Predict$/);
+
+  const lost = slip(25, 1249, 'COUNTERPARTY_WINS', T, [['A?', true], ['B?', false], ['C?', true]]);
+  svg = K.slipSvg(lost); clean(svg);
+  assert.match(svg, />-\$25\.00</); assert.match(svg, /#ef454a/); assert.match(svg, /would have paid \$1,274/);
+
+  const open = slip(5, 2.78, null, Date.now(), [['Will the price of Bitcoin be between $82,000 and $84,000 on September 30?', true]]);
+  svg = K.slipSvg(open); clean(svg);
+  assert.match(svg, />PAYS</); assert.match(svg, />\$7\.78</); assert.match(svg, />Live · Single</); assert.match(svg, /on a \$5\.00 stake, if it wins/);
+  assert.match(svg, />BETS CLOSE</); assert.match(svg, />Copy this slip in one click</);
+  assert.match(K.slipText(open).description, /^YES Will the price of Bitcoin.*Copy it on MeridianDataHub\.$/);
+
+  const shut = slip(5, 2.78, null, Date.now() - 2 * 86400000, [['A?', true], ['B?', true]]);   // a leg past its cutoff, not decided yet
+  svg = K.slipSvg(shut); clean(svg);
+  assert.match(svg, />BETS CLOSED</); assert.doesNotMatch(svg, /Copy this slip/); assert.doesNotMatch(K.slipText(shut).description, /Copy it/);
+
+  const many = slip(4, 4.72, 'PREDICTOR_WINS', T,Array.from({ length: 9 }, (_, i) => ['Question number ' + i + '?', i % 2 === 0]));
+  svg = K.slipSvg(many); clean(svg);
+  assert.match(svg, />\+ 5 more legs</, 'four legs shown, the rest counted'); assert.equal((svg.match(/>Question number \d\?</g) || []).length, 4);
+});
+
+test('the deploy makes cards for the slips people share', () => {
+  const now = Date.UTC(2026, 8, 30), D = 864e5;
+  const W = (o) => K.slipCardWanted(Object.assign({ decided: true, won: false, pnl: 0 }, o), now);
+  assert.equal(W({ decided: false }), true, 'open');
+  assert.equal(W({ decidedAt: now - 3 * D }), true, 'a loss of this week');
+  assert.equal(W({ decidedAt: now - 10 * D }), false, 'an older loss');
+  assert.equal(W({ won: true, pnl: 20, decidedAt: now - 20 * D }), true, 'a win of the last 30 days');
+  assert.equal(W({ won: true, pnl: 20, decidedAt: now - 40 * D }), false);
+  assert.equal(W({ won: true, pnl: 800, decidedAt: now - 90 * D }), true, 'a big win, however old');
+});
+
+test('a slip\'s share page lives at /s/<prediction id> and opens the slip page', () => {
+  const html = K.sharePage({ kind: 's', id: ID, title: 'Won +$944', description: 'd', image: 'cards/s/' + ID + '.png?v=abc', target: '/#/predict/p/' + ID });
+  assert.match(html, new RegExp(`<meta property="og:url" content="https://example\\.test/s/${ID}">`));
+  assert.match(html, /<meta property="og:type" content="article">/);
+  assert.match(html, new RegExp(`<a id="go" href="/#/predict/p/${ID}">`));
+  assert.throws(() => K.sharePage({ kind: 's', id: '0x12', title: 't', description: 'd', image: 'i', target: '/' }));
+  assert.throws(() => K.sharePage({ kind: 's', id: ID.toUpperCase().replace('0X', '0x') + '"', title: 't', description: 'd', image: 'i', target: '/' }));
+});
+
+test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash routes', () => {
+  const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const code = /<script>([\s\S]*?)<\/script>/.exec(index)[1];
+  const go = (pathname) => { let to = null; new Function('location', code)({ pathname, replace: (u) => { to = u; } }); return to; };
+  assert.equal(go('/a/' + A1.toUpperCase().replace('0X', '0x')), '/#/account?address=' + A1);
+  assert.equal(go('/p/' + A1), '/#/predict/bettor?address=' + A1);
+  assert.equal(go('/s/' + ID), '/#/predict/p/' + ID);
+  assert.equal(go('/predict/p/' + ID + '/'), '/#/predict/p/' + ID);
+  assert.equal(go('/s/0x12'), null); assert.equal(go('/'), null);
 });
 
 test('the site card counts accounts and Predict activity', () => {

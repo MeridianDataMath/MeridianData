@@ -1,8 +1,9 @@
-/* MeridianDataHub — "equity curve flex" cards: one 1200 × 630 artwork for a perps account or a Predict wallet, used twice:
+/* MeridianDataHub — link-preview cards: one 1200 × 630 artwork for a perps account, a Predict wallet or a Predict slip, used twice:
  *   · in the browser (js/flex.js): drawn from the page's live figures, downloaded or copied as a PNG, with a period and an
  *     option to hide dollar amounts;
- *   · by the deploy (scripts/build-cards.mjs): rendered with resvg for every account and wallet as the image behind its
- *     share link (/a/<address>, /p/<address>), plus the small page that carries it for link unfurlers.
+ *   · by the deploy (scripts/build-cards.mjs): rendered with resvg for every account, wallet and shareable slip as the
+ *     image behind its share link (/a/<address>, /p/<address>, /s/<prediction id>), plus the small page that carries it
+ *     for link unfurlers.
  * Classic script with no DOM access (the build loads it with vm): MD.cards.make({ U, P, site }) returns the builders. */
 (function () {
   const MD = (window.MD = window.MD || {});
@@ -230,13 +231,132 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
 </svg>`;
     };
 
+    // ---------------------------------------------------------------- one Predict slip
+    /** Characters of proportional text (Geist) that fit a width: about 0.49 em a character, 0.52 in semibold. */
+    const fits = (maxW, size, bold) => Math.max(4, Math.floor(maxW / (size * (bold ? 0.52 : 0.49))));
+    const clip = (s, maxW, size, bold) => { s = String(s || ''); const n = fits(maxW, size, bold); return s.length <= n ? s : s.slice(0, Math.max(1, n - 1)).replace(/\s+\S*$/, '') + '…'; };
+    /** Text broken into at most maxLines lines at word boundaries, the last one clipped. */
+    const wrapText = (s, maxW, size, bold, maxLines) => {
+      const n = fits(maxW, size, bold); const lines = []; let cur = '';
+      for (const w of String(s || '').split(/\s+/).filter(Boolean)) { const next = cur ? cur + ' ' + w : w; if (next.length <= n || !cur) cur = next; else { lines.push(cur); cur = w; } }
+      if (cur) lines.push(cur);
+      if (lines.length > maxLines) { const keep = lines.slice(0, maxLines); keep[maxLines - 1] = clip(keep[maxLines - 1] + ' ' + lines.slice(maxLines).join(' ') + ' …', maxW, size, bold); return keep; }
+      return lines.map((l) => clip(l, maxW, size, bold));
+    };
+    /** Money on a slip: whole dollars from $100 up (cents there are noise), cents below. */
+    const cash = (v, sign) => { const n = Number(v) || 0; return Math.abs(n) >= 1e5 ? U.fmtUsd(n, { compact: true, sign }) : Math.abs(n) >= 100 ? U.fmtUsd(n, { dp: 0, sign }) : U.fmtUsd(n, { sign }); };
+    /** Where one leg stands for the bettor, from the record alone (no live data: the image stays byte-identical until the
+     *  prediction changes): won / lost / void (a 50/50 is a loss on Meridian) once Meridian has settled the question, every
+     *  leg of a won prediction won, otherwise open. */
+    const legState = (k, n) => (n.won ? 'won' : k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false) ? (k.nonDecisive ? 'void' : k.resolvedToYes === !!k.yes ? 'won' : 'lost') : 'open');
+    const slipState = (n) => (n.decided ? (n.won ? 'won' : n.nd ? 'void' : 'lost') : 'open');
+    /** Can the slip still be copied: undecided and no leg past its cutoff. (The one thing on a card that changes with time
+     *  alone: the image changes once, when the first leg closes.) */
+    const slipCopyable = (n, now = Date.now()) => !n.decided && !n.picks.some((k) => k.endTime && k.endTime <= now);
+    /** Whether the deploy makes a slip's card and share page (scripts/build-cards.mjs): what people share, which is a slip
+     *  still open, one decided in the last week, a win of the last 30 days or a big win. */
+    const slipCardWanted = (n, now = Date.now()) => {
+      if (!n.decided) return true;
+      const age = now - (n.decidedAt || P.decidedAt(n) || 0), DAY = 864e5;
+      return age < 7 * DAY || (!!n.won && (age < 30 * DAY || (Number(n.pnl) || 0) > P.BIG_WIN));
+    };
+    /** A Predict slip (a full record, P.full): the result or what it can win, and every leg with where it stands.
+     *  o: { fontCss (the browser), now (the time it is judged at: can it still be copied?) } */
+    function slipSvg(n, o = {}) {
+      const st = slipState(n);
+      const col = st === 'won' ? C.green : st === 'lost' ? C.red : st === 'void' ? '#f5b64a' : C.accent;
+      const combo = n.legs > 1 ? `${n.legs}-leg combo` : 'Single';
+      const x = mult(n.multiple);
+      const hero = st === 'won' ? cash(n.pnl, true) : st === 'lost' ? cash(-n.stake, true) : st === 'void' ? cash(0) : cash(n.pool);
+      const heroLabel = st === 'won' ? 'Won' : st === 'lost' ? 'Lost' : st === 'void' ? 'Void' : 'Pays';
+      const sub = st === 'won' ? `${cash(n.pool)} paid on a ${cash(n.stake)} stake` : st === 'lost' ? `${cash(n.stake)} stake · would have paid ${cash(n.pool)}` : st === 'void' ? 'Stake returned' : `on a ${cash(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`;
+      const heroSize = fit(hero, 460, 104, 44);
+      const heroY = 250 + heroSize;
+      const pill = st === 'won' ? 'Won · ' + combo : st === 'lost' ? 'Lost · ' + combo : st === 'void' ? 'Void' : 'Live · ' + combo;
+      const pw = pill.length * 10.2 + 44;
+      const closes = Math.min(...n.picks.map((k) => k.endTime || Infinity)), copyable = slipCopyable(n, o.now);
+      const stats = [['Stake', cash(n.stake)], ['Multiplier', x], ['Odds', n.odds == null ? '—' : pct(n.odds * 100, n.odds < 0.1 ? 1 : 0)], n.decided ? ['Decided', dateShort(n.decidedAt || P.decidedAt(n)) || '—'] : [copyable ? 'Bets close' : 'Bets closed', Number.isFinite(closes) ? dateShort(closes) : '—']];
+      const cell = (i) => { const [k, v] = stats[i]; const cx = 64 + i * 122; return label(cx, 496, k) + t(cx, 530, v, fit(v, 112, 26, 16), { mono: true, w: 600 }); };
+      // the legs, right: side, question (wrapped: up to four lines for a single, fewer as the legs add up), and a mark
+      // for where each stands; up to five legs, the rest counted
+      const box = { x: 596, y: 118, w: 540, h: 404 };
+      const show = n.picks.slice(0, n.picks.length > 5 ? 4 : 5), more = n.picks.length - show.length;
+      // a single gets a large question in the middle of the panel; a pair a little larger than a list
+      const fs = show.length === 1 ? 28 : show.length === 2 ? 22 : 19, lh = Math.round(fs * 1.27), meta = show.length === 1 ? 17 : 14, mh = meta + 6;
+      const qW = box.w - 92 - 70, avail = box.h - 58 - (more ? 30 : 0);
+      let lines, maxL = show.length === 1 ? 6 : 4;
+      const used = () => U.sum(lines, (l) => l.length * lh + mh);
+      for (;;) { lines = show.map((k) => wrapText(k.q, qW, fs, true, maxL)); if (used() + show.length * 20 <= avail || maxL === 1) break; maxL--; }
+      const pad = Math.max(8, Math.min(show.length === 1 ? 24 : 16, (avail - used()) / (2 * Math.max(1, show.length))));
+      const block = used() + pad * 2 * show.length;
+      const tops = []; let yy = box.y + 50 + (show.length <= 2 ? Math.max(0, (avail - block) / 2) : 0);
+      for (const l of lines) { tops.push(yy); yy += pad * 2 + l.length * lh + mh; }
+      const mark = (s, cx, cy) => (s === 'won' ? `<circle cx="${cx}" cy="${cy}" r="14" fill="${C.green}" fill-opacity="0.16"/><path d="M${cx - 6} ${cy} L${cx - 1.5} ${cy + 5} L${cx + 7} ${cy - 5.5}" fill="none" stroke="${C.green}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`
+        : s === 'lost' ? `<circle cx="${cx}" cy="${cy}" r="14" fill="${C.red}" fill-opacity="0.16"/><path d="M${cx - 5} ${cy - 5} L${cx + 5} ${cy + 5} M${cx + 5} ${cy - 5} L${cx - 5} ${cy + 5}" stroke="${C.red}" stroke-width="3" stroke-linecap="round"/>`
+        : s === 'void' ? `<circle cx="${cx}" cy="${cy}" r="14" fill="#f5b64a" fill-opacity="0.16"/><path d="M${cx - 6} ${cy} L${cx + 6} ${cy}" stroke="#f5b64a" stroke-width="3" stroke-linecap="round"/>`
+        : `<circle cx="${cx}" cy="${cy}" r="14" fill="none" stroke="${C.accent}" stroke-opacity="0.55" stroke-width="2"/><circle cx="${cx}" cy="${cy}" r="4.5" fill="${C.accent}"/>`);
+      const legRow = (k, i) => {
+        const y = tops[i], ls = lines[i], h = pad * 2 + ls.length * lh + mh, mid = y + h / 2;
+        const side = k.yes ? 'YES' : 'NO', sc = k.yes ? C.green : C.red;
+        const s = legState(k, n);
+        const chance = s === 'open' && k.fairAtBet != null ? pct(k.fairAtBet * 100, 0) + ' at bet' : s === 'open' ? 'open' : s === 'void' ? '50/50 · a loss' : s;
+        const q0 = y + pad + Math.round(fs * 0.95);   // the first line's baseline
+        return (i ? `<line x1="${box.x + 24}" y1="${f1(y)}" x2="${box.x + box.w - 24}" y2="${f1(y)}" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>` : '')
+          + `<rect x="${box.x + 24}" y="${f1(mid - 14)}" width="${side === 'YES' ? 52 : 44}" height="28" rx="7" fill="${sc}" fill-opacity="0.14"/>`
+          + t(box.x + 24 + (side === 'YES' ? 26 : 22), mid + 6, side, 15, { anchor: 'middle', w: 700, fill: sc, ls: 0.8 })
+          + ls.map((l, j) => t(box.x + 92, q0 + j * lh, l, fs, { w: 600 })).join('')
+          + t(box.x + 92, q0 + (ls.length - 1) * lh + meta + (show.length === 1 ? 14 : 8), chance + (k.cat ? ' · ' + k.cat : ''), meta, { fill: C.text3 })
+          + mark(s, box.x + box.w - 38, mid);
+      };
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+<defs>
+${o.fontCss ? `<style>${o.fontCss}</style>` : ''}
+  <radialGradient id="glow" cx="0.2" cy="0.55" r="0.6"><stop offset="0" stop-color="${col}" stop-opacity="0.2"/><stop offset="0.55" stop-color="${col}" stop-opacity="0.05"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></radialGradient>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/></pattern>
+  <radialGradient id="gridFade" cx="0.3" cy="0.45" r="0.75"><stop offset="0" stop-color="#ffffff" stop-opacity="1"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+  <mask id="gridMask"><rect width="${W}" height="${H}" fill="url(#gridFade)"/></mask>
+</defs>
+<rect width="${W}" height="${H}" fill="${C.bg}"/>
+<rect width="${W}" height="${H}" fill="url(#grid)" mask="url(#gridMask)"/>
+<rect width="${W}" height="${H}" fill="url(#glow)"/>
+<g transform="translate(64 46) scale(0.28)"><path fill="${C.text}" fill-rule="evenodd" d="${LOGO}"/></g>
+<text x="116" y="70" font-family="${SANS}" font-weight="700" font-size="26" fill="${C.text}">Meridian<tspan fill="${C.accent}">DataHub</tspan></text>
+<rect x="${f1(W - 64 - pw)}" y="42" width="${f1(pw)}" height="38" rx="19" fill="${col}" fill-opacity="0.12" stroke="${col}" stroke-opacity="0.55" stroke-width="1.5"/>
+${t(W - 64 - pw / 2, 67, pill, 16, { anchor: 'middle', w: 600, fill: col })}
+${label(64, 150, 'Predict slip · Meridian', { fill: C.text2 })}
+${t(64, 188, 'by ' + short(n.predictor), 28, { mono: true, w: 600, fill: C.text2 })}
+${label(64, 248, heroLabel)}
+${t(60, heroY, hero, heroSize, { mono: true, w: 700, fill: st === 'open' ? C.text : col })}
+${t(64, heroY + 44, sub, 22, { fill: C.text2, w: 500 })}
+${[0, 1, 2, 3].map(cell).join('\n')}
+<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="22" fill="${C.panel}" fill-opacity="0.72" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
+${label(box.x + 24, box.y + 34, n.legs > 1 ? n.legs + ' legs' : '1 leg')}
+${t(box.x + box.w - 24, box.y + 34, n.legs > 1 ? 'every leg must win' : '', 14, { anchor: 'end', fill: C.text3 })}
+${show.map(legRow).join('\n')}
+${more ? t(box.x + 92, yy + 24, '+ ' + more + ' more leg' + (more > 1 ? 's' : ''), 17, { fill: C.text3, w: 600 }) : ''}
+<line x1="64" y1="578" x2="${W - 64}" y2="578" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
+${t(64, 610, site.replace(/^https?:\/\//, ''), 19, { w: 600, fill: C.accent })}
+${t(W - 64, 610, copyable ? 'Copy this slip in one click' : 'Meridian Predict · ' + (date(n.t) || ''), 17, { anchor: 'end', fill: C.text3 })}
+</svg>`;
+    }
+    /** The link preview's title and description for a slip. */
+    const slipText = (n, now) => {
+      const st = slipState(n), copyable = slipCopyable(n, now); const combo = n.legs > 1 ? `${n.legs}-leg combo` : 'single';
+      const legs = n.picks.slice(0, 4).map((k) => (k.yes ? 'YES ' : 'NO ') + k.q).join(' · ') + (n.picks.length > 4 ? ` · +${n.picks.length - 4} more` : '');
+      const title = st === 'won' ? `Won ${cash(n.pnl, true)} on a ${cash(n.stake)} ${combo} (${mult(n.multiple)})` : st === 'lost' ? `${cash(n.stake)} ${combo} at ${mult(n.multiple)}: lost` : st === 'void' ? `${cash(n.stake)} ${combo}: void` : `${cash(n.stake)} to win ${cash(n.pool)}: ${mult(n.multiple)} ${combo}`;
+      return { title: title + ' · Meridian Predict', description: legs + '. Placed ' + (date(n.t) || '') + ' by ' + short(n.predictor) + (copyable ? '. Copy it on MeridianDataHub.' : '.') };
+    };
+    const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m >= 100 ? 0 : 2) + '×');
+
     // ---------------------------------------------------------------- the page behind a share link
-    /** kind 'a' (perps account) or 'p' (Predict wallet); target = the site route people are sent to. People are sent on by
-     *  a refresh, which unfurlers ignore; the page carries no inline script or style, since the site's Content-Security-
-     *  Policy (_headers) allows only index.html's one inline script, and its look comes from the site's stylesheet. */
-    const sharePage = ({ kind, address, title, description, image, target }) => {
-      if (!isAddr(address)) throw new Error('bad address ' + address);
-      const url = `${site}/${kind}/${address}`; const img = `${site}/${image}`;
+    /** kind 'a' (perps account: address), 'p' (Predict wallet: address) or 's' (Predict slip: id, a prediction id);
+     *  target = the site route people are sent to. People are sent on by a script, which unfurlers ignore; the page
+     *  carries no inline script or style, since the site's Content-Security-Policy (_headers) allows only index.html's one
+     *  inline script, and its look comes from the site's stylesheet. */
+    const sharePage = ({ kind, address, id, title, description, image, target }) => {
+      const key = kind === 's' ? id : address;
+      if (kind === 's' ? !/^0x[0-9a-f]{64}$/.test(String(id || '')) : !isAddr(address)) throw new Error('bad ' + (kind === 's' ? 'id ' : 'address ') + key);
+      const url = `${site}/${kind}/${key}`; const img = `${site}/${image}`;
       return `<!doctype html>
 <html lang="en">
 <head>
@@ -245,7 +365,7 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
 <title>${esc(title)} · MeridianDataHub</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(url)}">
-<meta property="og:type" content="profile">
+<meta property="og:type" content="${kind === 's' ? 'article' : 'profile'}">
 <meta property="og:site_name" content="MeridianDataHub">
 <meta property="og:url" content="${esc(url)}">
 <meta property="og:title" content="${esc(title)}">
@@ -270,7 +390,7 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
 `;
     };
 
-    return { flexSvg, accountInput, accountSvg, accountText, walletInput, walletSvg, walletText, walletCurve, curveFromPredictions, siteSvg, sharePage, money, short, range, date };
+    return { flexSvg, accountInput, accountSvg, accountText, walletInput, walletSvg, walletText, walletCurve, curveFromPredictions, siteSvg, slipSvg, slipText, slipState, slipCardWanted, sharePage, money, short, range, date };
   }
 
   MD.cards = { W, H, SITE, esc, make };

@@ -104,16 +104,25 @@ Equity curve flex, loaded by `scripts/cards.mjs`; rendered with
 `cards/a|p/<address>.png`, plus a small page `a/<address>.html` / `p/<address>.html` that carries
 the Open Graph and Twitter tags and sends people on to the page itself. Served at
 `https://meridian.thedatahub.xyz/a/<address>` and `/p/<address>` (wrangler's auto-trailing-slash
-drops the `.html`); the Share buttons on account and bettor pages copy these links. A wallet
-without a page yet, or an address in mixed case, falls through to `index.html`, whose first
-script sends `/a/…` and `/p/…` paths on to the hash route. `cards/site.png` is the card of the
+drops the `.html`); the Share buttons on account and bettor pages copy these links. Predict slips
+get the same at `/s/<prediction id>` (`cards/s/<id>.png`, `s/<id>.html`): the hero is the result
+(net PnL once won, the stake once lost, the payout while open) beside the legs with a mark for
+each; cards are made for every open slip, every slip decided in the last 7 days, the wins of the
+last 30 days and every big win (net PnL over $500). The Share button on a slip opens a dialog
+that draws the same card in the browser (download, copy or share the image, post on X, copy the
+link). A wallet or slip without a page yet, or an address in mixed case, falls through to
+`index.html`, whose first script sends `/a/…`, `/p/…` and `/s/…` paths on to the hash route.
+`cards/site.png` is the card of the
 home page and of every other link. Rendering is deterministic and each image URL carries
 `?v=<hash of the card>`, so an unchanged card is not uploaded again and an unfurler that cached
 an old one fetches the new one. The leaderboard rows carry a compact all-time PnL curve
 (`row.curve`, at most 60 points) for the account cards. The step is `continue-on-error`: if it
-fails, the site deploys without cards and share links fall back to the site card. Locally:
-`npm ci`, then `node scripts/build-cards.mjs --dist <folder with data/>` (`--only <address>` for
-one card).
+fails, the site deploys without cards and share links fall back to the site card. A card takes
+about 0.1 s of one core and there are a couple of thousand, so the step runs one process per core
+(`--jobs`) and starts no card after minute 12 of the job (`--deadline`), leaving the deploy room in
+the 15-minute limit; slips come last, the oldest first. Locally: `npm ci`, then
+`node scripts/build-cards.mjs --dist <folder with data/>` (`--only <address or prediction id>`
+for one card, `--jobs 4` to use four cores).
 
 The perps build has a time budget (`--budget` seconds, 9 minutes by default: an account takes
 about two seconds, an active one with fills and candles more, and the job has 15 minutes in all);

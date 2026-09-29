@@ -33,6 +33,10 @@ jobs:
     timeout-minutes: 15
     # No `environment:` block on purpose: environments are unavailable on private repos on the Free plan.
     steps:
+      # the job's clock: the card step stops starting cards 12 minutes in, so the deploy still fits the 15-minute limit
+      - name: Start the clock
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       # only whether the secrets exist reaches this step, not their values
       - name: Cloudflare secrets are set
         env:
@@ -97,11 +101,13 @@ jobs:
       - name: Install the build tools (package-lock.json)
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      # link previews: a card image per perps account and Predict wallet plus the small pages behind /a/<address> and
-      # /p/<address> that carry them (Discord, X and co. never see the site's #/ routes). A failure deploys the site
-      # without them: until a later run builds them again, those links fall back to index.html and the home page's card.
-      - name: Link preview cards (dist/cards, dist/a, dist/p)
-        run: node scripts/build-cards.mjs --dist dist
+      # link previews: a card image per perps account, Predict wallet and shared Predict slip plus the small pages behind
+      # /a/<address>, /p/<address> and /s/<prediction id> that carry them (Discord, X and co. never see the site's #/
+      # routes). On every core of the runner, and no card is started after minute 12 of the job (the slips go last, the
+      # oldest first). A failure deploys the site without them: until a later run builds them again, those links fall back
+      # to index.html and the home page's card.
+      - name: Link preview cards (dist/cards, dist/a, dist/p, dist/s)
+        run: node scripts/build-cards.mjs --dist dist --jobs "$(nproc)" --deadline "$((JOB_START + 720))"
         continue-on-error: true
 
       - name: Deploy to Cloudflare

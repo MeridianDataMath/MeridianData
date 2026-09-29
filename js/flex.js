@@ -73,7 +73,8 @@
     const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([''], 't.png', { type: 'image/png' })] })); } catch (e) { return false; } })();
     const btnShare = canShareFiles ? h('button.btn', { onclick: () => {
       if (!pngBlob) { U.toast('The image is still being made: try again in a moment'); return; }
-      navigator.share({ files: [new File([pngBlob], fname(), { type: 'image/png' })], text: hide || !o.shareUrl ? MD.api.SITE_URL : o.shareUrl })   // the share link shows amounts.catch((e) => { if (e && e.name !== 'AbortError') U.toast('Sharing failed: use Download'); });
+      // the share link shows amounts, so with them hidden the post carries the site's address instead
+      navigator.share({ files: [new File([pngBlob], fname(), { type: 'image/png' })], text: hide || !o.shareUrl ? MD.api.SITE_URL : o.shareUrl }).catch((e) => { if (e && e.name !== 'AbortError') U.toast('Sharing failed: use Download'); });
     } }, U.icon('external'), 'Share image') : null;
     const btnX = h('button.btn', { onclick: () => {
       const inp = inputs.get(period); if (!inp) return;
@@ -108,6 +109,57 @@
     const obs = new MutationObserver(() => { if (!document.body.contains(modal.el)) { obs.disconnect(); if (previewUrl) URL.revokeObjectURL(previewUrl); } });
     obs.observe(document.body, { childList: true });
     render();
+    return modal;
+  };
+
+  /**
+   * A card to share as it is (a Predict slip): the link first, since a pasted link unfurls into this same card in Discord,
+   * X, Telegram…; the image for places that take a picture.
+   * o: { title, alt, draw: (fontCss) → SVG, fname, shareUrl, postText,
+   *      card: the published card's URL (does the link unfurl yet?), expected: whether the deploy makes one for it }
+   */
+  FX.card = function (o) {
+    let svg = null, previewUrl = null, pngP = null, pngBlob = null, ready = false;
+    const img = h('img', { alt: o.alt || o.title, style: { width: '100%', height: 'auto', display: 'block', borderRadius: '12px', border: '1px solid var(--border-3)' } });
+    const frame = h('div.flex-frame.busy', img);
+    const linkIn = h('input.input.mono.share-link-input', { value: o.shareUrl, readOnly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() });
+    const btnLink = h('button.btn.primary', { onclick: () => { U.copyText(o.shareUrl); U.toast(ready ? 'Link copied: wherever you paste it, it shows this card' : 'Link copied'); } }, U.icon('copy'), 'Copy link');
+    const btnDl = h('button.btn', { onclick: async () => { if (!svg) return; try { btnDl.disabled = true; saveBlob(await (pngP || FX.png(svg)), o.fname); U.toast('Saved ' + o.fname); } catch (e) { U.toast(e.message || 'Download failed'); } finally { btnDl.disabled = false; } } }, U.icon('download'), 'Download PNG');
+    const canCopy = !!(navigator.clipboard && window.ClipboardItem);
+    const btnCopy = canCopy ? h('button.btn', { onclick: async () => {
+      if (!svg) return;
+      try { await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngP || FX.png(svg) })]); U.toast('Image copied: paste it into a post or a chat'); }
+      catch (e) { U.toast('This browser would not copy the image: use Download'); }
+    } }, U.icon('copy'), 'Copy image') : null;
+    const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([''], 't.png', { type: 'image/png' })] })); } catch (e) { return false; } })();
+    const btnShare = canShareFiles ? h('button.btn', { onclick: () => {
+      if (!pngBlob) { U.toast('The image is still being made: try again in a moment'); return; }
+      navigator.share({ files: [new File([pngBlob], o.fname, { type: 'image/png' })], text: o.shareUrl }).catch((e) => { if (e && e.name !== 'AbortError') U.toast('Sharing failed: use Download'); });
+    } }, U.icon('external'), 'Share image') : null;
+    const btnX = h('button.btn', { onclick: () => window.open('https://x.com/intent/post?text=' + encodeURIComponent(o.postText || o.title) + '&url=' + encodeURIComponent(o.shareUrl), '_blank', 'noopener') }, U.icon('external'), 'Post on X');
+    const note = h('p.dim.xs', { style: { margin: '12px 0 0' } }, 'The link opens this slip on the site.');
+    const body = h('div.flex-modal',
+      frame,
+      h('div.share-link', linkIn, btnLink),
+      h('div.row.wrap', { style: { gap: '8px', marginTop: '10px' } }, btnX, btnShare, btnCopy, btnDl),
+      note);
+    const modal = MD.ui.modal({ title: o.title, body, wide: true });
+    // is the card published? Its URL answers with the image; a missing file gets the site's page (the SPA fallback)
+    if (o.card) fetch(o.card, { method: 'HEAD', cache: 'no-store' }).then((r) => r.ok && /^image\//.test(r.headers.get('content-type') || '')).catch(() => false).then((ok) => {
+      ready = ok;
+      note.textContent = ok ? 'Paste the link in Discord, X, Telegram or anywhere else: it shows this card, no click needed. The image is made in your browser.'
+        : o.expected ? 'The link opens this slip; its preview card is added with the next site update, within the hour. Until then, share the image.'
+          : 'The link opens this slip. Preview cards are made for open slips, the last week\'s and the wins: share the image for this one.';
+    });
+    (async () => {
+      try {
+        svg = o.draw(await FX.fonts());
+        previewUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })); img.src = previewUrl; frame.classList.remove('busy');
+        const p = (pngP = FX.png(svg)); p.then((b) => { if (pngP === p) pngBlob = b; }).catch(() => {});
+      } catch (e) { frame.classList.remove('busy'); frame.replaceWith(h('p.neg.small', e.message || 'Could not draw the card')); }
+    })();
+    const obs = new MutationObserver(() => { if (!document.body.contains(modal.el)) { obs.disconnect(); if (previewUrl) URL.revokeObjectURL(previewUrl); } });
+    obs.observe(document.body, { childList: true });
     return modal;
   };
 })();

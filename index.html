@@ -4,9 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MeridianDataHub</title>
-  <!-- share links: /a/<address> (perps account) and /p/<address> (Predict wallet) are static preview pages written at
-       deploy time (scripts/build-cards.mjs); a wallet without one, or an address in mixed case, lands here instead -->
-  <script>(function () { var p = location.pathname, m = /^\/(a|p)\/(0x[0-9a-fA-F]{40})\/?$/.exec(p), s = /^\/predict\/p\/(0x[0-9a-fA-F]{64})\/?$/.exec(p); if (m) location.replace('/#/' + (m[1] === 'a' ? 'account' : 'predict/bettor') + '?address=' + m[2].toLowerCase()); else if (s) location.replace('/#/predict/p/' + s[1].toLowerCase()); })();</script>
+  <!-- share links: /a/<address> (perps account), /p/<address> (Predict wallet) and /s/<prediction id> (Predict slip) are
+       static preview pages written at deploy time (scripts/build-cards.mjs); one without a page, or an address in mixed
+       case, lands here instead, as does /predict/p/<id> (Meridian's own slip path, with the domain swapped) -->
+  <script>(function () { var p = location.pathname, m = /^\/(a|p)\/(0x[0-9a-fA-F]{40})\/?$/.exec(p), s = /^\/(?:predict\/p|s)\/(0x[0-9a-fA-F]{64})\/?$/.exec(p); if (m) location.replace('/#/' + (m[1] === 'a' ? 'account' : 'predict/bettor') + '?address=' + m[2].toLowerCase()); else if (s) location.replace('/#/predict/p/' + s[1].toLowerCase()); })();</script>
   <meta name="description" content="MeridianDataHub — public analytics for the Meridian exchange on Robinhood Chain: every perps account, leaderboard, live market dashboard with stop map, copy trading (copyability scores, simulator, alerts, a self-hosted copy agent), tax center, and Meridian Predict bettors, questions and resolution tracking.">
   <link rel="canonical" href="https://meridian.thedatahub.xyz/">
   <meta property="og:type" content="website">
