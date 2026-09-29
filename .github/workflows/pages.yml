@@ -75,7 +75,7 @@ jobs:
           # environment, say), any other file would be served from the site's origin, and leaderboard.json is built above.
           mkdir -p data
           (cd .snapshots && find . -regextype posix-extended -type f \
-            -regex '\./(predict\.json|predict-status\.json|bettors/0x[0-9a-f]{40}\.json|questions/0x[0-9a-fA-F]{64}\.json|slips/[0-9a-f]{2}\.json)' \
+            -regex '\./(predict\.json|predict-status\.json|predict-ideas\.json|bettors/0x[0-9a-f]{40}\.json|questions/0x[0-9a-fA-F]{64}\.json|slips/[0-9a-f]{2}\.json)' \
             -print0 | xargs -0 -r cp --parents -t ../data)
           node -e "const j = JSON.parse(require('fs').readFileSync('data/predict.json', 'utf8')); if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }"
           echo "snapshot copied: $(find data -path 'data/bettors/*' -type f | wc -l) wallet files, $(find data -path 'data/questions/*' -type f | wc -l) question files, $(find data -path 'data/slips/*' -type f | wc -l) slip files"

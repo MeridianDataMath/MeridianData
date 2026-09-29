@@ -10,7 +10,7 @@
          under the API's 200 requests/minute; about 2-3 minutes)
       2. checks the result (Test-Snapshot below): the push replaces the only published snapshot, so a short or
          incomplete build is logged and dropped instead
-      3. publishes predict.json, predict-status.json, bettors/, questions/ and slips/ as a brand-new single-commit branch
+      3. publishes predict.json, predict-status.json, predict-ideas.json, bettors/, questions/ and slips/ as a brand-new single-commit branch
          "snapshots" (force-pushed, no parent), so the repository's history never grows: only the latest snapshot
          is ever kept.
       4. triggers the deploy workflow, which copies those files into data/ on the site.
@@ -106,6 +106,7 @@ try {
         Log ('built: {0} predictions, {1} bettors, {2} makers, {3} KB, {4:N0}s' -f $j.predictions, $j.agg.bettors.Count, $j.agg.makers.Count, [math]::Round((Get-Item $file).Length / 1024), $sw.Elapsed.TotalSeconds)
         Copy-Item $file (Join-Path $dataDir 'predict.json') -Force   # local copy for development (only of a snapshot that passed)
         $statusFile = Join-Path $tmp 'predict-status.json'; if (Test-Path $statusFile) { Copy-Item $statusFile (Join-Path $dataDir 'predict-status.json') -Force }
+        $ideasFile = Join-Path $tmp 'predict-ideas.json'; if (Test-Path $ideasFile) { Copy-Item $ideasFile (Join-Path $dataDir 'predict-ideas.json') -Force }
         $bettorsSrc = Join-Path $tmp 'bettors'
         if (Test-Path $bettorsSrc) { $bettorsDst = Join-Path $dataDir 'bettors'; if (Test-Path $bettorsDst) { [IO.Directory]::Delete($bettorsDst, $true) }; Copy-Item $bettorsSrc $bettorsDst -Recurse }
         $qSrc = Join-Path $tmp 'questions'
@@ -123,6 +124,7 @@ try {
     $env:GIT_INDEX_FILE = $idx
     $parts = @('predict.json', 'bettors', 'questions'); if (Test-Path (Join-Path $srcDir 'predict-status.json')) { $parts += 'predict-status.json' }
     if (Test-Path (Join-Path $srcDir 'slips')) { $parts += 'slips' }   # every prediction by id, for the slip page
+    if (Test-Path (Join-Path $srcDir 'predict-ideas.json')) { $parts += 'predict-ideas.json' }   # the Copy trading page's ideas
     & cmd /c "git --git-dir=`"$gitDir`" --work-tree=`"$srcDir`" add -A -- $($parts -join ' ') 2>&1" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'git add (temp index) failed' }
     $tree = (& cmd /c "git --git-dir=`"$gitDir`" write-tree").Trim()

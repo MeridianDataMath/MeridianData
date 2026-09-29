@@ -4,6 +4,7 @@
  *   data/leaderboard.json — perps leaderboard (every subaccount, all intervals)
  *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape, big wins)
  *                           plus bettors/<address>.json, questions/<conditionId>.json and slips/<2 hex>.json (every prediction by id)
+ *   data/predict-ideas.json — winning bettors and their slips that can still be placed (the Copy trading page)
  * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
@@ -283,6 +284,10 @@ async function buildPredict() {
   }
   const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
+  // the Copy trading page's ideas: winning bettors and their slips that can still be placed (a few KB, read on its own)
+  const ideas = P.ideas(norms, agg);
+  fs.writeFileSync(path.join(outDir, 'predict-ideas.json'), JSON.stringify(Object.assign({ builtAt: out.builtAt, criteria: P.IDEAS }, ideas)));
+  console.log(`  predict: ${ideas.bettors.length} winning bettors, ${ideas.ideas.length} open ideas`);
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
   fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600

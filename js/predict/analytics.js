@@ -213,7 +213,7 @@
   /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
    *  tape (the newest tapeSize) and bigWins (every win whose net PnL is above P.BIG_WIN, latest verdict first) are slim records
    *  with every leg's question id, so a page can show and open each one. */
-  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true } = {}) {
+  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true, records = true } = {}) {
     // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
     // making; counted in its figures it made its wallet a "market maker" with one prediction
     const selfMatched = norms.filter(P.selfMatch).length;
@@ -221,7 +221,8 @@
     const bettors = {}, makers = {}, cats = {}, combos = {}, daily = {}, weeks = {};
     const acc = (m, k, init) => m[k] || (m[k] = init());
     // decided = verdict in (claimed or not); settled = claimed; unclaimed = decided, not claimed (unclaimedWon / unclaimedPayout: money this side can collect)
-    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {} });
+    // (r*: the record against the odds, see finish; decided predictions with odds, not void)
+    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {}, rBets: [] });
     const bump = (s, n, asMaker) => {
       s.n++; s.wagered += asMaker ? n.cp : n.stake; s.legs += n.legs; if (n.combo) s.combos++;
       if (n.odds != null) { s.oddsSum += n.odds; s.oddsN++; }
@@ -229,10 +230,38 @@
       if (n.decided) { s.decided++; if (n.settled) s.settled++; else { s.unclaimed++; const w = asMaker ? n.lost : n.won; if (w) { s.unclaimedWon++; s.unclaimedPayout += n.pool; } } if (n.nd) s.nd = (s.nd || 0) + 1; else { const w = asMaker ? n.lost : n.won; if (w) s.won++; else s.lost++; } const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if (pnl > s.biggestWin) s.biggestWin = pnl; }
       else { s.open++; s.openWagered += asMaker ? n.cp : n.stake; }
       const st = asMaker ? n.cp : n.stake; if (st > s.biggestStake) s.biggestStake = st;
+      // the record against the odds (bettors; recordOf): a leg is its question id, or its text where a file dropped the id
+      if (!asMaker && n.decided && !n.nd && n.odds > 0 && n.odds < 1) s.rBets.push({ id: n.id, t: n.t, p: n.odds, won: n.won, stake: n.stake, legs: n.picks.map((k) => k.id || 'q:' + k.q) });
       if (s.first == null || n.t < s.first) s.first = n.t; if (s.last == null || n.t > s.last) s.last = n.t;
       s.cats[n.cat] = (s.cats[n.cat] || 0) + 1;
     };
-    const finish = (s) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = s.decided ? (s.pnl / Math.max(1e-9, s.wagered - s.openWagered)) * 100 : null; s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = Object.keys(s.cats).sort((a, b) => s.cats[b] - s.cats[a])[0] || null; delete s.oddsSum; delete s.oddsN; delete s.vigSum; delete s.vigN; delete s.legs; return s; };
+    const finish = (s, isBettor) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = s.decided ? (s.pnl / Math.max(1e-9, s.wagered - s.openWagered)) * 100 : null; s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = Object.keys(s.cats).sort((a, b) => s.cats[b] - s.cats[a])[0] || null;
+      s.rec = isBettor && records ? recordOf(s.rBets) : null;
+      for (const k of ['oddsSum', 'oddsN', 'vigSum', 'vigN', 'legs', 'rBets']) delete s[k]; return s; };
+    // The record against the odds (bettors): rec = { n bets, of them won, expected wins (the sum of their locked chances),
+    // luck, predictions }, luck = P.luckOf: how likely that many wins or more would be if every bet's true chance were
+    // exactly its locked odds. Counted in wins, not money: one 50× long shot that hit weighs one win, not fifty.
+    // Bets, not predictions: luck needs independent trials, and predictions that share a question share their fate (the
+    // same pick placed again: 0xec7a… had 11 predictions on 3 outcomes; combos built on one match or tournament). So the
+    // predictions linked through shared questions are one bet, and that bet is one real event: its largest-stake
+    // prediction, at that prediction's own odds and with its own result (a chance and an outcome that belong together;
+    // averaging the odds of a group while counting it won on most of its stake could turn one big winning single and
+    // small losing combos around it into a clean win). Every decided prediction counts, sold or not: a copier holds a
+    // pick to the verdict, and leaving out what was sold dropped the losers bettors dumped mid-event.
+    function recordOf(bets) {
+      if (!bets.length) return null;
+      const parent = bets.map((_, i) => i);
+      const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+      const byLeg = new Map();
+      bets.forEach((b, i) => { for (const k of b.legs) { if (byLeg.has(k)) parent[find(i)] = find(byLeg.get(k)); else byLeg.set(k, i); } });
+      const groups = new Map(); bets.forEach((b, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(b); });
+      const ps = []; let won = 0;
+      for (const g of groups.values()) {
+        const rep = g.reduce((a, b) => (b.stake > a.stake || (b.stake === a.stake && b.t < a.t) ? b : a));   // the largest stake; the earliest of equal ones
+        ps.push(rep.p); if (rep.won) won++;
+      }
+      return { n: ps.length, won, expected: r4(U.sum(ps)), luck: Number(P.luckOf(ps, won).toPrecision(3)), predictions: bets.length };
+    }
     // a defensible vig needs a defensible fair: singles and combos across different events; same-event legs are correlated
     const cleanVig = (n) => n.vig != null && n.sameEvent !== true;
     const vigAll = [], vigByCat = {};
@@ -269,7 +298,7 @@
         if (row) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || !n.unclaimed) continue; const ownWin = row === b ? n.won : n.lost; if (ownWin && bp.held < 1) { row.unclaimedPayout -= n.pool * (1 - bp.held); if (bp.held < 1e-6) row.unclaimedWon--; } }
       }
     }
-    const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a])));
+    const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a], m === bettors)));
     const vigSummary = (list) => ({ n: list.length, avg: avg(list), median: median(list), share: list.length ? list.filter((v) => v > 0).length / list.length : null });
     const vig = {
       overall: vigSummary(vigAll.map((n) => n.vig)),
@@ -329,8 +358,63 @@
     function netPnl(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? bp.pnl : n.pnl; }
   };
 
+  /** How likely `won` or more wins out of bets with these chances would be by luck alone, if each bet's true chance were
+   *  exactly its locked odds: the upper tail of the Poisson-binomial distribution, exact at any size. Exact matters:
+   *  long shots make the distribution far from normal. d[k] = P(k wins so far) for k < won, and d[won] = P(won or more),
+   *  a bin that absorbs (a win there stays a win), so the work is bets × won. */
+  P.luckOf = function (ps, won) {
+    if (won <= 0) return 1;
+    if (won > ps.length) return 0;
+    const d = new Float64Array(won + 1); d[0] = 1;
+    ps.forEach((p, i) => {
+      for (let k = Math.min(i + 1, won); k >= 1; k--) d[k] = k === won ? d[k] + d[k - 1] * p : d[k] * (1 - p) + d[k - 1] * p;
+      d[0] *= 1 - p;
+    });
+    return Math.min(1, Math.max(0, d[won]));
+  };
+
+  /** Winning bettors and their ideas to copy (the Copy trading page, from the snapshot's predict-ideas.json). A winning
+   *  bettor has at least minDecided decided bets (rec.n: predictions linked by a shared question count once), is in
+   *  profit, and has won more of them than its locked odds implied. Its tier says how clear of luck that record is:
+   *  ranking ~180 wallets by luck turns up a dozen "1 in 10" records by chance alone, so a tier is a Benjamini–Hochberg
+   *  cut across every bettor with a record, keeping the expected share of lucky ones among the strong under strongFdr
+   *  and among the good under goodFdr. */
+  P.IDEAS = { minDecided: 10, strongFdr: 0.1, goodFdr: 0.25 };
+  /** { bettors, ideas, tested, byChance }: every winning bettor, least likely by luck first, with its tier and the number
+   *  of its ideas; those ideas, the bettor's predictions that can still be placed at `now` (undecided, every leg before
+   *  its Meridian cutoff and not settled, the bettor still holding at least half its tokens), best record first, then
+   *  newest; tested = bettors with a record; byChance = how many of them luck alone would give a record of 1 in 10 or
+   *  better. agg: P.aggregate over the same norms (its bettor rows and soldOf). */
+  P.ideas = function (norms, agg, now = Date.now()) {
+    const tested = agg.bettors.filter((b) => b.rec && b.rec.n >= P.IDEAS.minDecided);
+    const lucks = tested.map((b) => b.rec.luck).sort((a, b) => a - b);
+    const cut = (q) => { let c = -1; lucks.forEach((l, i) => { if (l <= ((i + 1) / lucks.length) * q) c = l; }); return c; };   // the largest luck a BH cut at q keeps
+    const strongCut = cut(P.IDEAS.strongFdr), goodCut = cut(P.IDEAS.goodFdr);
+    const tierOf = (luck) => (luck <= strongCut ? 'strong' : luck <= goodCut ? 'good' : null);
+    const winning = tested.filter((b) => b.pnl > 0 && b.rec.won > b.rec.expected);
+    const byAddr = new Map(winning.map((b) => [b.address, b]));
+    const sold = (n) => (agg.soldOf ? agg.soldOf(n) : null);
+    const held = (n) => { const s = sold(n); return s && s.h != null ? s.h : 1; };
+    const open = norms.filter((n) => byAddr.has(n.predictor) && !n.decided && !P.selfMatch(n) && n.picks.length && n.picks.every((k) => k.endTime && k.endTime > now && !k.settled) && held(n) >= 0.5);
+    const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+    const ranked = winning.slice().sort((a, b) => a.rec.luck - b.rec.luck || b.pnl - a.pnl);
+    const rank = new Map(ranked.map((b, i) => [b.address, i]));
+    // one idea per bettor and set of picks: the same slip placed again (0x2dc3… put the same 97% favourite on four
+    // times) is the newest of them, with the count (x)
+    const same = (n) => n.predictor + '|' + n.picks.map((k) => k.id + ':' + (k.yes ? 1 : 0)).sort().join(',');
+    const seen = new Map(), ideas = [];
+    for (const n of open.sort((a, b) => rank.get(a.predictor) - rank.get(b.predictor) || b.t - a.t)) {
+      const k = same(n); if (seen.has(k)) { seen.get(k).x++; continue; }
+      const rec = Object.assign(P.slim(n, { ids: true }), sold(n), { x: 1 }); seen.set(k, rec); ideas.push(rec);
+    }
+    const count = {}; for (const r of ideas) count[r.p] = (count[r.p] || 0) + 1;
+    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b.rec.luck), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
+    return { bettors, ideas, tested: tested.length, byChance: Math.round(tested.length * 0.1) };
+  };
+
   /** Bettor-level summary from that bettor's own predictions (subset of aggregate). */
-  P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0, bigWins: false }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
+  // (no record: it is the snapshot's, over every prediction with its question ids; a wallet file has neither)
+  P.bettorSummary = (norms) => { const a = P.aggregate(norms, { tapeSize: 0, bigWins: false, records: false }); return { stats: a.bettors[0] || null, categories: a.categories, combos: a.combos, daily: a.daily, makers: a.makers }; };
 
   /** Slim record for the per-wallet snapshot files (≈400 bytes); P.unslim restores everything P.norm produces. */
   // Open predictions keep the leg's conditionId (6th element) so the resolution tracker can look the market up; settled

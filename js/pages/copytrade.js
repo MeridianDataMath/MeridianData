@@ -126,14 +126,18 @@
       const tableWrap = h('div');
       const summary = h('span.dim.small');
       const state = { filter: route.params.show || 'scored', sort: { key: 'score', desc: true } };
+      // Predict: open slips from winning bettors (js/pages/predict.js), under the perps leaders
+      const ideas = MD.predict && MD.predict.ideasCard ? MD.predict.ideasCard(ctx) : null;
       const hero = h('div.card.ct-hero',
         h('h1', 'Copy trading on Meridian'),
         h('p', 'A leaderboard tells you who made money. Copying needs a different question: what would a follower have kept, entering a minute later, at taker fees, at that size, against these books? Every wallet below is scored on exactly that, and the numbers behind each score are one click away.'),
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
-        h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first')));
+        h('p', 'Predict is copied by hand, one slip at a time: further down are the open slips of bettors whose record beats their own odds, each one click from Meridian Predict.'),
+        h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first'), h('span.grow'),
+          ideas ? h('button.btn.sm', { type: 'button', onclick: () => ideas.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, U.icon('target'), 'Predict ideas') : null));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
       const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), filterSeg, MD.defsLink()), tableWrap);
-      U.replace(root, h('div.page', h('div.stack', hero, leaders, alertsCard(ctx), h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
+      U.replace(root, h('div.page', h('div.stack', hero, leaders, ideas, alertsCard(ctx), h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
       ctx.onCleanup(U.on('favorites', () => render()));
       ctx.onCleanup(U.on('alerts', () => render()));
 

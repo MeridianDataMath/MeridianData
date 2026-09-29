@@ -469,6 +469,59 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   against whoever is on the exchange this week. Nothing on the page places orders; copying is
   done by the copy agent below, a program on the user's own machine with a Meridian linked
   signer.
+* **Predict ideas from winning bettors** (a card on the Copy trading page, `P.ideasCard`).
+  Predict is copied by hand, one slip at a time.
+  - *Winning bettor:* at least 10 decided bets (`P.IDEAS.minDecided`), in profit, and more of
+    them won than their locked odds implied.
+  - *The record* (`rec` on every bettor row of the snapshot). Its figures:
+    - bets, wins, and expected wins (the sum of the locked chances);
+    - `luck`: the exact chance of that many wins or more if every bet had exactly the chance its
+      odds priced (`P.luckOf`, the Poisson-binomial upper tail).
+    - The calculation is exact at any size: a bin that absorbs the tail keeps the work at bets ×
+      wins.
+  - *Bets, not predictions:* luck needs independent trials, but predictions that share a question
+    share their fate.
+    - Example: the same pick placed again; 0xec7a… had 11 predictions on 3 outcomes.
+    - Predictions linked through shared questions (union-find over leg ids) are one bet.
+    - That bet is one real event: its largest-stake prediction, at that prediction's own odds and
+      with its own result.
+    - Averaging a group's odds while counting it won on most of its stake mixed a chance and an
+      outcome that do not belong together. One big winning single could absorb the small losing
+      combos around it.
+    - Every decided prediction counts, sold or not: a copier holds a pick to the verdict. Leaving
+      out what was sold dropped the losers bettors dumped mid-event.
+    - Only an idea needs the bettor to still hold at least half its tokens.
+    - Wallet files drop settled legs' ids, so a bettor page does not compute a record
+      (`P.bettorSummary`); the snapshot's is the one.
+  - *Why wins, not money:* a long shot's payout is so skewed that a money-weighted z-score read
+    one 49× hit among nine losses as a "5-sigma" record. Counted in wins, that bettor won 1
+    where the odds implied 4.5, so it has no record at all.
+  - *Tiers across everyone tested:* ranking every bettor with a record (137 on 2026-09-30) by luck
+    turns up about a tenth of them at "1 in 10" or better by chance alone.
+    - So strong and good are Benjamini–Hochberg cuts across all of them (false discovery at most
+      10% and 25%, `P.IDEAS.strongFdr` / `goodFdr`).
+    - A record that does not survive shows its figure in a neutral chip ("luck 1 in 258").
+    - On that date none survived. The best, 17 of 24 bets won where 11.3 were implied, comes about
+      1 in 105 by luck, so luck alone gives about one such record across 137 bettors.
+  - *An idea:* one of their predictions that can still be placed: undecided, every leg before its
+    Meridian cutoff and unsettled, and the bettor still holding at least half its tokens. The
+    same picks placed again count once, with the count (×4).
+  - *Ranking:* ideas are ranked by the bettor's record, or by closing time, or newest first.
+  - *Each idea shows:*
+    - the bettor and its record;
+    - the legs and time to the first cutoff;
+    - the bettor's odds and stake;
+    - Polymarket's chance for the whole slip now, and how far it moved since the bet. That is
+      measured against Polymarket's chance at the bet, not the locked odds, which include the
+      maker's margin; `≈` marks legs on one event;
+    - **Copy to Meridian** (Meridian's page for the prediction with the referral code; see
+      Slips) and **Slip**.
+  - *Winning bettors* view: the list itself, with record, luck, PnL, ROI, wagered, open slips and
+    last bet.
+  - *Snapshot:* it writes `predict-ideas.json` (bettors and ideas, a few tens of KB), so the page
+    does not load the Predict snapshot.
+  - *Supply:* there are few ideas at any moment. Most winning bettors have not bet for weeks, so
+    the card shows how many winning bettors there are when none has an open slip.
 * **Copy simulator** (`#/copytrade/sim?address=…&sub=…`, the Simulate button on every leader)
   – replays a leader's positions as a follower with a chosen size (fixed dollars per position,
   or a percentage of the leader's quantity), delay (instant … 120 s), slippage (from today's
