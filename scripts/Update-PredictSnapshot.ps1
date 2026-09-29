@@ -10,7 +10,7 @@
          under the API's 200 requests/minute; about 2-3 minutes)
       2. checks the result (Test-Snapshot below): the push replaces the only published snapshot, so a short or
          incomplete build is logged and dropped instead
-      3. publishes predict.json, predict-status.json, bettors/ and questions/ as a brand-new single-commit branch
+      3. publishes predict.json, predict-status.json, bettors/, questions/ and slips/ as a brand-new single-commit branch
          "snapshots" (force-pushed, no parent), so the repository's history never grows: only the latest snapshot
          is ever kept.
       4. triggers the deploy workflow, which copies those files into data/ on the site.
@@ -110,16 +110,19 @@ try {
         if (Test-Path $bettorsSrc) { $bettorsDst = Join-Path $dataDir 'bettors'; if (Test-Path $bettorsDst) { [IO.Directory]::Delete($bettorsDst, $true) }; Copy-Item $bettorsSrc $bettorsDst -Recurse }
         $qSrc = Join-Path $tmp 'questions'
         if (Test-Path $qSrc) { $qDst = Join-Path $dataDir 'questions'; if (Test-Path $qDst) { [IO.Directory]::Delete($qDst, $true) }; Copy-Item $qSrc $qDst -Recurse }
+        $sSrc = Join-Path $tmp 'slips'
+        if (Test-Path $sSrc) { $sDst = Join-Path $dataDir 'slips'; if (Test-Path $sDst) { [IO.Directory]::Delete($sDst, $true) }; Copy-Item $sSrc $sDst -Recurse }
     }
 
     if ($DryRun) { Log 'dry run: not publishing'; exit 0 }
 
-    # publish the whole snapshot directory (predict.json + predict-status.json + bettors/*.json + questions/*.json) as a
+    # publish the whole snapshot directory (predict.json + predict-status.json + bettors/, questions/ and slips/ *.json) as a
     # fresh single-commit branch: a temporary index turns the directory into a tree without touching the working copy;
     # no history growth.
     $idx = Join-Path $env:TEMP ('md-index-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $env:GIT_INDEX_FILE = $idx
     $parts = @('predict.json', 'bettors', 'questions'); if (Test-Path (Join-Path $srcDir 'predict-status.json')) { $parts += 'predict-status.json' }
+    if (Test-Path (Join-Path $srcDir 'slips')) { $parts += 'slips' }   # every prediction by id, for the slip page
     & cmd /c "git --git-dir=`"$gitDir`" --work-tree=`"$srcDir`" add -A -- $($parts -join ' ') 2>&1" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'git add (temp index) failed' }
     $tree = (& cmd /c "git --git-dir=`"$gitDir`" write-tree").Trim()

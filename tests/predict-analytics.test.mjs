@@ -95,6 +95,15 @@ test('big wins go by what the bettor made: a win sold for little is none, a part
   assert.equal(P.resultFor(t, false, t.held).label, 'won', 'nothing left for the seller to claim');
 });
 
+test('a slip copied to Meridian opens its shared-prediction page under the referral code; anything else is not a slip', () => {
+  const id = '0x' + 'c0'.repeat(32);
+  assert.equal(MD.api.REF, 'BJ9Y51H9XB1L');
+  assert.equal(P.meridianSlipUrl(id), 'https://app.meridian.xyz/predict/p/' + id + '?ref=BJ9Y51H9XB1L');
+  assert.equal(P.meridianSlipUrl('0x' + 'C0'.repeat(32)), P.meridianSlipUrl(id), 'lower-cased');
+  for (const bad of ['0x12', id + '00', 'javascript:alert(1)', id.slice(2), null]) { assert.equal(P.isPredictionId(bad), false, String(bad)); assert.equal(P.meridianSlipUrl(bad), P.APP_URL); }
+  assert.ok(P.APP_URL.endsWith('?ref=BJ9Y51H9XB1L') && P.CLAIM_URL.endsWith('?ref=BJ9Y51H9XB1L') && MD.api.APP_URL.endsWith('?ref=BJ9Y51H9XB1L'), 'every app link keeps the code');
+});
+
 test('result chips: a loss is simply lost; "unclaimed" only where this side has something to collect', () => {
   const lostUnclaimed = pred('l', 5, 38.61, 'COUNTERPARTY_WINS', false);   // the report: a bettor's lost bet the maker had not collected
   assert.equal(P.resultFor(lostUnclaimed, false).label, 'lost');

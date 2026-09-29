@@ -8,8 +8,14 @@
   P.CHAIN = 4663;
   P.PAGE = 25;                        // hard cap of the API
   P.LAUNCH_SEC = 1782691200;          // 2026-06-29 00:00 UTC, day before the first prediction
-  P.APP_URL = 'https://app.meridian.xyz/predict?ref=BJ9Y51H9XB1L';
-  P.CLAIM_URL = 'https://app.meridian.xyz/portfolio/prediction-stats?ref=BJ9Y51H9XB1L';   // the app's Predict portfolio: "Claimable Payout" and its claim button
+  P.APP_URL = 'https://app.meridian.xyz/predict?ref=' + MD.api.REF;
+  P.CLAIM_URL = 'https://app.meridian.xyz/portfolio/prediction-stats?ref=' + MD.api.REF;   // the app's Predict portfolio: "Claimable Payout" and its claim button
+  /** A prediction id as the exchange writes it (and as a slip link carries it). */
+  P.isPredictionId = (id) => /^0x[0-9a-f]{64}$/i.test(String(id || ''));
+  /** Meridian's own page for one prediction ("Shared Prediction"): its Add To Slip button loads the same picks into the
+   *  visitor's bet slip. The app keeps ?ref= as the pending referral code (checked 2026-09-29: localStorage
+   *  pending-referral-code), so a slip copied from here brings the visitor in under the site's code. */
+  P.meridianSlipUrl = (id) => (P.isPredictionId(id) ? 'https://app.meridian.xyz/predict/p/' + String(id).toLowerCase() + '?ref=' + MD.api.REF : P.APP_URL);
 
   /** 18-decimal amount → USDe. The API serialises these as strings when large and as JSON numbers when they fit
    *  (e.g. 6916996047430642 = 0.0069 USDe), so numbers are wei too. Only for wei fields, never for USD decimals. */

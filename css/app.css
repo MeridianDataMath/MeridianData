@@ -530,6 +530,34 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .bigwins .it .pl { width: 68px; }
 .bigwins .it .on { font-weight: 700; }
 
+/* Slip page (#/predict/p/<id>): one prediction as a card, like Meridian's shared-prediction page */
+.slip-wrap { width: 100%; max-width: 580px; margin: 4px auto 0; }
+.slip { background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.slip-head { display: flex; align-items: center; gap: 8px; }
+.slip-brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.slip-brand span { color: var(--accent); }
+.slip-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.slip-tile { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.slip-tile .k { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; }
+.slip-tile .v { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 600; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slip-tile .s { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.slip-tile.hi .v { color: var(--green); }
+.slip-tile.lo .v { color: var(--red); }
+.slip-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 12px; color: var(--text-3); }
+.slip-legs { display: flex; flex-direction: column; border: 1px solid var(--border-2); border-radius: 10px; overflow: hidden; }
+.slip-leg { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border-2); }
+.slip-leg:last-child { border-bottom: 0; }
+.slip-leg .side { flex: none; width: 52px; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.slip-leg .q { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.35; }
+.slip-leg .meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; }
+.slip-leg > .chip { flex: none; }
+.gauge-wrap { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
+.gauge { display: inline-block; width: 14px; height: 14px; border-radius: 50%; }
+.slip-copy { width: 100%; justify-content: center; padding: 11px 14px; font-size: 14px; }
+.slip-note { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.slip-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+@media (max-width: 480px) { .slip { padding: 12px; } .slip-tile { padding: 8px 10px; } .slip-tile .v { font-size: 17px; } }
+
 /* Copy-trading page */
 .ct-hero { position: relative; overflow: hidden; background: radial-gradient(700px 300px at 85% 0%, rgba(35,212,188,.18), transparent 60%), var(--bg-2); }
 .ct-hero h1 { font-size: 24px; margin-bottom: 6px; }

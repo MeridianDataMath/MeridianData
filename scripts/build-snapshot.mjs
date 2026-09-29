@@ -3,6 +3,7 @@
  * Builds the shared snapshots the site serves to every visitor:
  *   data/leaderboard.json — perps leaderboard (every subaccount, all intervals)
  *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape, big wins)
+ *                           plus bettors/<address>.json, questions/<conditionId>.json and slips/<2 hex>.json (every prediction by id)
  * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
@@ -300,6 +301,16 @@ async function buildPredict() {
     fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: kept.map(P.slim), trades: tradesOf[addr] || undefined }));
     files++;
   }
+  // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id
+  // (about 40 predictions, some 25 KB each today, growing with the count), so a shared slip link loads one small file
+  // whoever placed it and however many predictions that wallet has (wallet files stop at 600). A bettor who traded its
+  // position tokens carries what it still held and its own result (h, lp), as the big wins do.
+  const isPid = (id) => /^0x[0-9a-f]{64}$/i.test(id);
+  const sdir = path.join(outDir, 'slips'); fs.mkdirSync(sdir, { recursive: true });
+  const shards = dict(); let slips = 0;
+  for (const n of norms) { if (!isPid(n.id)) continue; const k = n.id.slice(2, 4).toLowerCase(); (shards[k] || (shards[k] = dict()))[n.id.toLowerCase()] = Object.assign(P.slim(n), agg.soldOf(n)); slips++; }
+  for (const [k, list] of Object.entries(shards)) fs.writeFileSync(path.join(sdir, k + '.json'), JSON.stringify({ builtAt: out.builtAt, slips: list }));
+  console.log(`  predict: ${slips} slips in ${Object.keys(shards).length} files`);
   if (badWallets.size) console.warn(`  predict: skipped ${badWallets.size} wallet values that are not addresses (${dropped} predictions left out, the rest trade parties without a file), e.g. ${Array.from(badWallets).slice(0, 3).map(shown).join(', ')}`);
   if (badConds.size) console.warn(`  predict: skipped ${badConds.size} question ids that are not condition ids (no question file, not in the list), e.g. ${Array.from(badConds).slice(0, 3).map(shown).join(', ')}`);
   console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);

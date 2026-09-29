@@ -210,7 +210,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     - every leg with its result: Meridian's own once it has settled the question, before that
       Polymarket's. Leg questions link to that question's dialog, and ⓘ opens the resolution
       details;
-    - **Open bettor's account**.
+    - **Open bettor's account**;
+    - **Copy slip to Meridian** while the slip can still be placed, and **Slip** (the slip page).
 
     A loss dates from the first leg that went against the bettor: its other legs may run for
     weeks. Where the bettor sold its tokens, the dialog shows its own result and who collects.
@@ -222,6 +223,27 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     - The top dialog takes the keyboard focus, and the page behind it is inert. Focus returns
       where it was when the dialog closes.
     - Live tapes hold still while a row has the keyboard focus.
+  * *Slips* (`#/predict/p/<predictionId>`, Meridian's own path). `index.html` redirects
+    `/predict/p/<id>` there, so a link from the app works with the domain swapped. One prediction
+    as a card like Meridian's shared-prediction page:
+    - size, payout, max gain (or the result, with who collects when the bettor sold its tokens),
+      and each leg with its live Polymarket chance and where it stands;
+    - **Copy slip to Meridian Predict** opens Meridian's page for that prediction
+      (`app.meridian.xyz/predict/p/<id>?ref=<code>`). Its **Add To Slip** adds the same picks to
+      the visitor's bet slip, next to anything already there. No other site can fill Meridian's
+      slip directly: it lives in the app's own storage.
+    - The app keeps `?ref=` as its pending referral code (checked 2026-09-29), so a copied slip
+      brings the visitor in under the site's code (`MD.api.REF`; every link to the app carries
+      it).
+    - A slip cannot be copied once it is decided, or once any leg has stopped taking bets: past
+      its cutoff, settled on Meridian, or its Polymarket market closed.
+    - **Share slip** copies the page's link. `#/predict/p` without an id takes a pasted Meridian
+      link.
+    - The snapshot carries every prediction by id in `slips/<first two hex digits>.json`, about
+      25 KB each today and growing with the count, so a slip link loads one small file. Where the
+      bettor traded its tokens, records carry `h` and `lp`, as big wins do.
+    - A slip file that cannot be read is reported as such (with a retry), not as a missing
+      prediction.
   * *Snapshot compatibility.* Tape rows (`P.compact`) keep every field they always had and add
     the legs (`k`), so a page that has not reloaded still reads a new snapshot. `P.full` turns
     any stored row back into a full record.

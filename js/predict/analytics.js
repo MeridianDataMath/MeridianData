@@ -307,7 +307,7 @@
       byCat: Object.keys(cats).map((c) => Object.assign({ cat: c }, realizedOf(settledBets.filter((n) => n.cat === c)))).filter((r) => r.n).sort((a, b) => b.n - a.n),
     };
     vig.realized = realized;
-    return {
+    const out = {
       totals: Object.assign(totals, { selfMatched, bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null }),
       bettors: rowsOf(bettors, 'address').sort((a, b) => b.pnl - a.pnl),
       makers: rowsOf(makers, 'address').sort((a, b) => b.n - a.n),
@@ -319,6 +319,9 @@
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
       bigWins: bigWins ? norms.filter((n) => n.won && netPnl(n) > P.BIG_WIN).sort((a, b) => (b.decidedAt || P.decidedAt(b)) - (a.decidedAt || P.decidedAt(a))).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
     };
+    // the same {h, lp} for any record the caller writes (the snapshot's slip files); not enumerable, so not in the JSON
+    Object.defineProperty(out, 'soldOf', { value: sold, enumerable: false });
+    return out;
     // a bettor who sold its position tokens before the verdict does not collect the payout: its share still held (h) and
     // its own result on the prediction, the sale included (lp), from its ledger
     function sold(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? { h: r4(bp.held), lp: r4(bp.pnl) } : null; }
