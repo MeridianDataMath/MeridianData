@@ -421,14 +421,33 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     the moment of the bet**, overall, per category, per odds bucket, singles vs combos, and per
     week. The Predict API only exposes a question's source probability as it is now, so the
     snapshot builder fetches the price at bet time from Polymarket's own CLOB price history
-    (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet; 1-minute
-    samples for short spans, up to 15-minute for long ones) and caches it per prediction in
-    `data/cache/polymarket-prices.json`, so a run only looks up new predictions. Combos
-    multiply the legs, so combos whose legs sit on one Polymarket event (correlated) are shown
-    separately and kept out of the headline. The page's second half is the ex-post view,
-    *Quote-implied vs realized*: on settled bets, the locked odds against the realized hit rate
-    (with a 95% interval) and bettor ROI, overall, by bet type, by odds bucket and by category;
-    that needs no source price and already contains correlation and bettor skill.
+    (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet, else the
+    first one up to 6 h after; 1-minute samples for windows up to 3 days, 5-minute up to 15) and
+    caches it per prediction in `data/cache/polymarket-prices.json`, so a run only looks up new
+    predictions. The CLOB refuses any window longer than 15 days (HTTP 400 "interval is too
+    long"), so a question's bets are fetched in runs of at most 13 days. Until 2026-10-01 they
+    went in one window per question, and 549 predictions on questions bet on over more than 15
+    days stayed unpriced (the page called them "without Polymarket history", which was wrong);
+    the builder retries them. Combos multiply the legs, so combos with legs sharing a
+    Polymarket event (correlated: the product understates fair for legs that go together and
+    overstates it for a range) are shown separately and kept out of the headline. The page's
+    second half is the ex-post view, *Quote-implied vs realized*: on settled bets, the locked
+    odds against the realized hit rate and bettor ROI (each bet's result ÷ stake, as if held to
+    the verdict, before secondary-market trades), overall, by bet type, by odds bucket and by
+    category; that needs no source price and already contains correlation and bettor skill.
+    - *The 95% interval.* Bets on the same question win or lose together (41 singles rode on one
+      Fed decision), so the interval is not that of independent coin flips: `P.aggregate`
+      simulates 1,000 outcomes with every question resolved once for all its bets (YES with its
+      Polymarket price at bet), with a fixed seed, and the ± is 1.96 standard deviations of the
+      simulated hit rate. It is 1.1 to 4.4 times the independent one; a gap is coloured only
+      when the implied rate falls outside it. Figures built without the simulation (a single
+      wallet's) use the Wilson interval, tested against its own bounds (it is not centred on the
+      raw hit rate).
+    - *The generated note* ("How to read this if you bet") states only figures from the snapshot:
+      the quoted vig's mean and median, the pooled realized return, the odds ranges with a clearly
+      negative return (with their wins against the wins their odds implied) and each bet type's
+      pooled return. It names no positive odds range, because a pooled positive return can rest
+      on a single wallet.
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center gains a Predict block with realized PnL, monthly table

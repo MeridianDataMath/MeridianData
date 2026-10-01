@@ -23,7 +23,6 @@
       { name: 'predict', path: '/predict/vig', icon: 'scale', label: 'Vig & edge' },
     ] },
   ];
-  const NAV = SECTIONS.flatMap((s) => s.items);
   const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', tax: 'Tax center', copytrade: 'Copy trading', predict: 'Predict', status: 'Data status' };
   const PATH_TITLES = { '/predict': 'Predict · Overview', '/predict/bettors': 'Predict · Bettors', '/predict/questions': 'Predict · Questions', '/predict/makers': 'Predict · Market makers', '/predict/vig': 'Predict · Vig & edge', '/predict/bettor': 'Predict · Bettor' };
   const X_URL = 'https://x.com/meridiandotxyz';
@@ -77,7 +76,7 @@
     ['Liquidation price', 'Uses the app\'s pool maths: maintenance margin = notional × (1 / (2 × max leverage) + taker fee), solved per position with the equity left after the other positions\' maintenance margin. "none" when pool equity is far above it.'],
     ['Meridian OI (Predict)', 'Collateral escrowed on Meridian for a question right now: bettor stakes plus the market makers\' matching collateral of open predictions.'],
     ['Vig (Predict)', 'Locked odds (stake ÷ pool) minus the mirrored Polymarket market\'s price at the moment the bet was placed, from Polymarket\'s price history (last sample at or before the bet; combos multiply the legs, and combos with legs on one Polymarket event are shown separately because that product ignores correlation). Positive = the bettor paid above the fair price; that margin is the market maker\'s quoted edge.'],
-    ['Realized edge (Predict)', 'On decided bets (claimed or not): average locked odds (the win probability bettors paid for) versus the share they actually won, with a 95% interval, and bettor ROI = net result ÷ stake. Outcomes include correlation and bettor skill, so this is the maker\'s realized take; the ± says how much of a gap could be luck.'],
+    ['Realized edge (Predict)', 'On decided bets (claimed or not): average locked odds (the win probability bettors paid for) versus the share they actually won, with a 95% interval that allows for bets on the same question winning or losing together, and bettor ROI = each bet\'s result (payout − stake, or the stake lost) ÷ stake, as if held to the verdict, before secondary-market trades. Outcomes include correlation and bettor skill, so this is the maker\'s realized take; a gap inside the interval could be luck.'],
   ];
   MD.openDefinitions = () => MD.ui.modal({ title: 'How the numbers are calculated', body: h('div', h('div.kv', MD.DEFINITIONS.flatMap(([k, v]) => [h('div.k', k), h('div', { style: { color: 'var(--text-2)' } }, v)])), h('p.muted.small', { style: { margin: '14px 0 0' } }, 'All figures come from Meridian\'s public API and archive; nothing is estimated. Amounts are USD-equivalent (USDe-settled). Times are shown in your local time zone, except the Tax center, which uses UTC.')) });
   MD.defsLink = () => h('a.defs.small', { href: '#', onclick: (e) => { e.preventDefault(); MD.openDefinitions(); } }, U.icon('help'), 'How are these calculated?');

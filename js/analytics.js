@@ -333,7 +333,6 @@
     // result per position in bps of entry notional: gross, and net of trading fees (funding left out on both sides)
     const withCost = closed.filter((c) => U.num(c.p.totalIncreaseNotional) > 0);
     const bps = (c) => (U.num(c.p.realizedPnl) / U.num(c.p.totalIncreaseNotional)) * 1e4;
-    const nfBps = (c) => ((U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd)) / U.num(c.p.totalIncreaseNotional)) * 1e4;
     const costSum = U.sum(withCost, (c) => U.num(c.p.totalIncreaseNotional));
     out.grossBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl)) / costSum * 1e4) : null;        // notional-weighted
     out.netFeeBps = withCost.length ? r1(U.sum(withCost, (c) => U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd)) / costSum * 1e4) : null;

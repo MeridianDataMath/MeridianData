@@ -74,7 +74,6 @@
       if (opts.glitch !== false) events.push({ t: Date.UTC(2026, 2, 3, 12), token: 'XAGUSD', kind: 'glitch', amount: 0.1 });
 
       // ---- daily ledger per token: cumulative fields like the archive; balance carries every event incl. position fees
-      const byDay = {};
       const tokList = Object.keys(TOKENS);
       const cum = {}; for (const tok of tokList) cum[tok] = { deposit: 0, withdrawal: 0, withdrawalFee: 0, depositFee: 0, conversionIn: 0, conversionOut: 0, realizedPnl: 0, tradingFee: 0, realizedFunding: 0, balance: 0 };
       events.sort((a, b) => a.t - b.t);

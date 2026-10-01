@@ -49,7 +49,7 @@ const keepCond = (id) => isCond(id) || (badConds.add(id), false);
 // ---------------------------------------------------------------- Polymarket price at bet time
 // The Predict API only exposes a question's source probability as it is now, so a real vig needs the price the mirrored
 // Polymarket market showed when the bet was placed. Meridian's conditionId is Polymarket's, so: Gamma API → the YES
-// outcome's CLOB token → CLOB price history around each bet → the last price at or before the bet (5-minute buckets).
+// outcome's CLOB token → CLOB price history around each bet → the last price at or before the bet (1- or 5-minute samples).
 // Results persist in a cache file (data/cache/polymarket-prices.json, gitignored) so a run only fetches new predictions.
 const GAMMA = 'https://gamma-api.polymarket.com/markets';
 const CLOB_HISTORY = 'https://clob.polymarket.com/prices-history';
@@ -70,8 +70,10 @@ async function attachPricesAtBet(norms) {
   try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
   cache.tokens = Object.assign(dict(), cache.tokens); cache.preds = Object.assign(dict(), cache.preds);
   const now = Date.now();
-  // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried for 3 days)
-  const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || now - c.at < 3 * 86400000)); });
+  // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried every 3 days until
+  // priced, and at once if they were looked up before the windows were split (w: their history request spanned over 15
+  // days, which the CLOB refuses))
+  const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || (c.w && now - c.at < 3 * 86400000))); });
   console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up`);
   // 2. YES-token ids from Gamma for the conditions involved (closed markets need a second pass with closed=true)
   // (also the Polymarket event each market belongs to, so combos with legs on the same event can be told apart)
@@ -94,22 +96,28 @@ async function attachPricesAtBet(norms) {
   }
   for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
   if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); fs.writeFileSync(cacheFile, JSON.stringify(cache)); return; }
-  // 3. one history request per condition covering every new bet on it, then the last price at or before each bet
+  // 3. history requests per condition covering its new bets, then the last price at or before each bet
   const byCond = dict();
   for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
   const conds = Object.keys(byCond); let done = 0, lastLog = Date.now(), next = 0;
   const oneCondition = async (id) => {
-    const legs = byCond[id]; const times = legs.map((l) => l.n.t);
-    const from = Math.floor(Math.min(...times) / 1000) - 6 * 3600, to = Math.floor(Math.max(...times) / 1000) + 3600;
-    const spanDays = (to - from) / 86400; const fidelity = spanDays <= 3 ? 1 : spanDays <= 30 ? 5 : spanDays <= 120 ? 15 : 60;
-    let hist = [];
-    try { const j = await getJson(CLOB_HISTORY + '?market=' + encodeURIComponent(cache.tokens[id].yes) + '&startTs=' + from + '&endTs=' + to + '&fidelity=' + fidelity); hist = (j && j.history) || []; }
-    catch (e) { console.warn('  predict: history failed for', id.slice(0, 12), e.message); }
-    for (const { n, i } of legs) {
-      const t = n.t / 1000; let best = null;
-      for (const h of hist) { if (h.t <= t) best = h; else break; }                           // last sample at or before the bet
-      if (!best || t - best.t > 86400) { const after = hist.find((h) => h.t > t && h.t - t < 6 * 3600); if (!best && after) best = after; }
-      n.picks[i].priceAtBet = best ? Number(best.p) : null;
+    // the CLOB refuses a window longer than 15 days (HTTP 400 "interval is too long"), so one request per run of bets within
+    // 13 days (with the 6 h before and 1 h after, under 15)
+    const sorted = byCond[id].slice().sort((a, b) => a.n.t - b.n.t); const groups = [];
+    for (const l of sorted) { const g = groups[groups.length - 1]; if (g && l.n.t - g[0].n.t <= 13 * 86400000) g.push(l); else groups.push([l]); }
+    for (const legs of groups) {
+      const times = legs.map((l) => l.n.t);
+      const from = Math.floor(Math.min(...times) / 1000) - 6 * 3600, to = Math.floor(Math.max(...times) / 1000) + 3600;
+      const fidelity = (to - from) / 86400 <= 3 ? 1 : 5;
+      let hist = [];
+      try { const j = await getJson(CLOB_HISTORY + '?market=' + encodeURIComponent(cache.tokens[id].yes) + '&startTs=' + from + '&endTs=' + to + '&fidelity=' + fidelity); if (!j) console.warn('  predict: history refused for', id.slice(0, 12), from, to); hist = (j && j.history) || []; }
+      catch (e) { console.warn('  predict: history failed for', id.slice(0, 12), e.message); }
+      for (const { n, i } of legs) {
+        const t = n.t / 1000; let best = null;
+        for (const h of hist) { if (h.t <= t) best = h; else break; }                         // last sample at or before the bet
+        if (!best) best = hist.find((h) => h.t > t && h.t - t < 6 * 3600) || null;             // else the first one within 6 h after
+        n.picks[i].priceAtBet = best ? Number(best.p) : null;
+      }
     }
     done++;
     if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: price history ${done}/${conds.length} conditions`); }
@@ -117,7 +125,7 @@ async function attachPricesAtBet(norms) {
   // a few requests in flight, ~8/s overall; the CLOB answered 5/s sequential bursts without complaint
   await Promise.all(Array.from({ length: 3 }, async () => { while (next < conds.length) { const id = conds[next++]; await oneCondition(id); await sleep(250); } }));
   // 4. record, apply, save
-  for (const n of todo) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now };
+  for (const n of todo) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now, w: 1 };
   for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p);
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
   fs.writeFileSync(cacheFile, JSON.stringify(cache));
@@ -266,6 +274,7 @@ async function buildPredict() {
     if (n.decided && n.settled) continue;   // open, or decided and not yet claimed: still someone's money
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); if (keepCond(k.id)) withOi.push(rowOf(k)); } }
   }
+  const questionsLive = withOi.length;   // questions with money still on them; the rest of the list is the most recently settled
   // … and the questions of predictions settled (decided) in the last 30 days, newest settlement first and capped, so
   // "Settled" shows what people bet on; dated by the settlement, not by when a winner claimed
   const settledAt = (n) => P.decidedAt(n) || 0;
@@ -297,7 +306,7 @@ async function buildPredict() {
   fs.writeFileSync(path.join(outDir, 'predict-ideas.json'), JSON.stringify(Object.assign({ builtAt: out.builtAt, criteria: P.IDEAS }, ideas)));
   console.log(`  predict: ${ideas.bettors.length} winning bettors, ${ideas.ideas.length} open ideas`);
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
-  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: agg.makers.length, questions: withOi.length, vigCoverage: agg.vig.coverage.withAtBet, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: P.splitMakers(agg.makers).makers.length, questions: withOi.length, questionsLive, vigCoverage: agg.vig.coverage.withAtBet, vigTotal: agg.vig.coverage.total, vigClean: agg.vig.coverage.clean, vigSameEvent: agg.vig.coverage.sameEvent, selfMatched: agg.totals.selfMatched || 0, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = dict();
   for (const n of norms) for (const a of [n.predictor, n.counterparty]) if (keepWallet(a)) (byWallet[a] || (byWallet[a] = [])).push(n);
@@ -365,7 +374,7 @@ const rows = []; let failed = 0;
 results.forEach((r, i) => { if (r.ok) { if (r.value) rows.push(r.value); } else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
 if (skipped) console.warn(`time budget of ${budgetMs / 1000}s reached: ${skipped} of ${subs.length} accounts not built this run`);
 
-const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: 'github-actions', accounts: subs.length, failed, skipped, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
+const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, skipped, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
 fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
 const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
 console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed, ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);

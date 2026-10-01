@@ -84,7 +84,7 @@
       function renderTable() {
         const data = P.cache();
         if (!data || !data.rows) { U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'The leaderboard has not been built yet.'), h('button.btn.primary', { onclick: () => build(true) }, 'Build leaderboard'))); U.replace(summary, ''); return; }
-        const { rows, val } = rowsFiltered(data);
+        const { rows } = rowsFiltered(data);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (state.page > pages) state.page = pages;
         const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
         const iv = state.interval;

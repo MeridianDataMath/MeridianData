@@ -199,7 +199,7 @@
   };
 
   // ---------- WebSocket stream ----------
-  const WS = (A.ws = {
+  A.ws = ({
     sock: null, status: 'closed', subs: new Map(), handlers: new Map(), statusFns: new Set(), retry: 0, idleT: null,
     key(type, id) { return type + '|' + id; },
     onStatus(fn) { this.statusFns.add(fn); fn(this.status); return () => this.statusFns.delete(fn); },

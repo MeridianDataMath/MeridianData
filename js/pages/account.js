@@ -568,7 +568,6 @@
     const ps = AN.positionStats(positions, ref);
     const is = AN.intervalStats(series, AN.startFor('all', sa.createdAt), { upnl: acct.upnl, equity: acct.equity }, U.DAY);
     const makerN = fills.filter((f) => f.isMaker).length;
-    const feesFills = U.sum(fills, (f) => U.num(f.feeUsd));
     const m = (k, v, s, cls) => UI.metric(k, v, s, cls);
     const grid = h('div.metric-list',
       m('Total PnL (all time)', U.fmtUsd(is.pnl, { sign: true }), 'incl. unrealized', U.pnlClass(is.pnl)),

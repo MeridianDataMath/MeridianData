@@ -7,7 +7,6 @@ import { load } from './_load.mjs';
 
 const MD = load(['js/util.js', 'js/api.js', 'js/predict/api.js', 'js/predict/analytics.js', 'js/predict/resolution.js']);
 const R = MD.predict.res;
-const DAY = 86400000;
 
 // Gamma records served by a stubbed fetch, keyed by condition id; CLOB price histories keyed by token id
 const GAMMA = {}, PRICES = {};

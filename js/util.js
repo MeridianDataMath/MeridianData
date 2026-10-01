@@ -192,8 +192,10 @@
   U.fmtPct = (x, opts = {}) => {
     const n = U.num(x);
     if (!Number.isFinite(n)) return '—';
-    const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
-    return s + fmtN(Math.abs(n), opts.dp ?? 2) + '%';
+    // the sign follows the rounded figure: -0.04 at one decimal reads "0.0%", not "-0.0%"
+    const dp = opts.dp ?? 2, zero = Number(Math.abs(n).toFixed(dp)) === 0;
+    const s = zero ? '' : n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
+    return s + fmtN(Math.abs(n), dp) + '%';
   };
   U.fmtCompact = (x, dp = 1) => {
     const n = U.num(x); const a = Math.abs(n); const s = n < 0 ? '-' : '';

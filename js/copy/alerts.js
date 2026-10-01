@@ -9,7 +9,7 @@
   const TAB = Math.random().toString(36).slice(2, 10);
   const DEF = () => ({ v: 1, leaders: [], events: { open: true, add: false, reduce: false, close: true, reverse: true, liq: true }, minNotional: 0, browser: true, ntfy: { server: 'https://ntfy.sh', topic: '' }, history: [] });
   AL.MAX_LEADERS = 15;   // each followed account takes two account streams of the socket's fifty
-  let st = null; const subs = new Map(); const pos = {}; const posAt = {}; const pending = new Map(); const seenFills = new Set(); let owner = false; let ownerT = null; let started = false;
+  let st = null; const subs = new Map(); const pos = {}; const posAt = {}; const pending = new Map(); const seenFills = new Set(); let owner = false; let started = false;
   /** The leader's open sizes per market, and per market the time of the last fill the exchange's position records show
    *  (open records carry the sizes, the newest records the closes). A fill at or before that time is already inside the
    *  size read, so the socket's copy of it must not be added again when the two meet (see flush). */
@@ -49,7 +49,7 @@
     if (started) return; started = true;
     AL.state();
     claimOwner();
-    ownerT = setInterval(heartbeat, 5000);
+    setInterval(heartbeat, 5000);
     const release = () => { if (owner) U.storage.del(OWNER); };   // hand over at once when this tab goes away (pagehide fires where beforeunload does not)
     window.addEventListener('beforeunload', release); window.addEventListener('pagehide', release);
     window.addEventListener('storage', (e) => {

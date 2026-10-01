@@ -2,7 +2,7 @@
    config), then watch and control it through its local status port. The site never holds a key: the signer key stays
    on the user's machine, the owner wallet signs the link in the browser. */
 (function () {
-  const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const C = MD.charts; const h = U.h;
+  const MD = window.MD; const U = MD.util; const A = MD.api; const UI = MD.ui; const AL = MD.alerts; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';
   const KEY = 'md.agent.v1';   // page state kept in this browser: config draft, status port, token
   // the agent's control token: random, since it is all that stands between any local web page and pause / resume / close all
@@ -102,7 +102,7 @@
             { key: 'n', label: 'Name', render: (r) => r.name || h('span.dim', '—') },
             { key: 's', label: 'Status', render: (r) => UI.chip(String(r.status || '').toLowerCase(), r.status === 'ACTIVE' ? 'green' : r.status === 'PENDING' ? 'amber' : '') },
             { key: 'e', label: 'Expires', render: (r) => (r.expiresAt ? U.fmtDate(U.num(r.expiresAt) < 1e12 ? U.num(r.expiresAt) * 1000 : U.num(r.expiresAt)) : h('span.dim', '—')) },
-            { key: 'x', label: '', render: (r) => (r.status === 'ACTIVE' || r.status === 'PENDING' ? h('button.btn.sm.ghost', { onclick: async () => { if (!confirm('Revoke this signer? The agent can no longer trade with it (permanent for that address).')) return; try { const { rpc } = await rpcTypes(); const msg = { sender: st.cfg.owner, signer: r.signer || r.address, subaccount: r.subaccount, nonce: String(Date.now()) + '000000', signedAt: Math.floor(Date.now() / 1000) }; const signature = await walletSign('RevokeLinkedSigner', Object.assign({}, msg, { nonce: msg.nonce }), st.cfg.owner); await fetch(A.BASE + '/v1/linked-signer/revoke', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: Object.assign({}, msg, { subaccountId: sid }), signature }) }).then(async (x) => { if (!x.ok) throw new Error((await x.json()).message || x.status); }); U.toast('Revoked'); listSigners(); } catch (e) { U.toast('Revoke failed: ' + (e.message || e)); } } }, 'Revoke') : null) },
+            { key: 'x', label: '', render: (r) => (r.status === 'ACTIVE' || r.status === 'PENDING' ? h('button.btn.sm.ghost', { onclick: async () => { if (!confirm('Revoke this signer? The agent can no longer trade with it (permanent for that address).')) return; try { const msg = { sender: st.cfg.owner, signer: r.signer || r.address, subaccount: r.subaccount, nonce: String(Date.now()) + '000000', signedAt: Math.floor(Date.now() / 1000) }; const signature = await walletSign('RevokeLinkedSigner', Object.assign({}, msg, { nonce: msg.nonce }), st.cfg.owner); await fetch(A.BASE + '/v1/linked-signer/revoke', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: Object.assign({}, msg, { subaccountId: sid }), signature }) }).then(async (x) => { if (!x.ok) throw new Error((await x.json()).message || x.status); }); U.toast('Revoked'); listSigners(); } catch (e) { U.toast('Revoke failed: ' + (e.message || e)); } } }, 'Revoke') : null) },
           ], rows }) : h('div.small.dim', 'none yet'));
         } catch (e) { if (!isAbort(e)) U.replace(signersOut, h('div.small.neg', 'Could not list signers: ' + e.message)); }
       };

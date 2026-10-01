@@ -341,16 +341,44 @@
     };
     // Ex-post view, no source price needed: on settled bets, the odds the bettors locked (their implied win probability)
     // against how often they actually won, and the money-weighted result. Correlation and bettor skill are in the outcomes,
-    // so this is the maker's realized edge; the price is luck (± = 95% interval on the hit rate) and needing settlement.
+    // so this is the maker's realized edge; the price is luck (± = 95% interval on the hit rate, allowing for bets on the
+    // same question winning or losing together) and needing settlement.
     const settledBets = norms.filter((n) => n.decided && !n.nd && n.odds != null);   // decided, claimed or not
+    // Bets on the same question win or lose together (41 singles on one Fed decision), so the hit rate does not spread like
+    // independent coin flips: it is simulated with every question resolved once for all its bets, YES with its Polymarket
+    // price at bet (averaged over the bets on it; without one, the locked odds of the singles on it, else 1/2), 1,000 runs
+    // with a fixed seed so a rebuild gives the same figures. ± = 1.96 standard deviations of the simulated hit rate.
+    let sharedSd = null;
+    if (records && settledBets.length) {
+      const qIx = new Map(), qAcc = [];
+      const legIx = settledBets.map((n) => n.picks.map((k) => {
+        const key = k.id || 'q:' + k.q + '|' + (k.endTime || ''); let i = qIx.get(key);
+        if (i == null) { i = qAcc.length; qIx.set(key, i); qAcc.push([0, 0, 0, 0]); }
+        const a = qAcc[i];
+        if (k.priceAtBet != null) { a[0] += k.priceAtBet; a[1]++; } else if (n.picks.length === 1) { a[2] += k.yes ? n.odds : 1 - n.odds; a[3]++; }
+        return k.yes ? i + 1 : -(i + 1);
+      }));
+      const qYes = qAcc.map(([s, c, s2, c2]) => Math.min(0.999, Math.max(0.001, c ? s / c : c2 ? s2 / c2 : 0.5)));
+      let seed = 1; const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+      const wins = Array.from({ length: 1000 }, () => { const o = qYes.map((p) => rnd() < p); return Uint8Array.from(legIx, (ls) => (ls.every((x) => (x > 0 ? o[x - 1] : !o[-x - 1])) ? 1 : 0)); });
+      const pos = new Map(settledBets.map((n, i) => [n, i]));
+      sharedSd = (list) => {
+        const ix = list.map((n) => pos.get(n));
+        const hs = wins.map((w) => { let s = 0; for (const i of ix) s += w[i]; return s / ix.length; });
+        const m = hs.reduce((a, b) => a + b, 0) / hs.length;
+        return Math.sqrt(hs.reduce((a, b) => a + (b - m) * (b - m), 0) / (hs.length - 1));
+      };
+    }
     const realizedOf = (list) => {
       const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null };
       const implied = list.reduce((a, n) => a + n.odds, 0) / k, hit = list.filter((n) => n.won).length / k;
       const stake = list.reduce((a, n) => a + n.stake, 0), pnl = list.reduce((a, n) => a + n.pnl, 0);
-      // Wilson half-width: the plain normal interval collapses to ±0 at a 0 % or 100 % hit rate, which a one-bet
-      // bucket reaches trivially; Wilson stays honest about how little a handful of bets can say
-      const z = 1.96, ci = (z * Math.sqrt((hit * (1 - hit)) / k + (z * z) / (4 * k * k))) / (1 + (z * z) / k);
-      return { n: k, implied, hit, ci, gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+      // without the simulation (a single wallet's figures): the Wilson interval, which stays honest at a 0 % or 100 % hit
+      // rate (a one-bet bucket reaches that trivially); it is centred off the raw hit rate, so its bounds are given as well
+      const z = 1.96;
+      if (sharedSd) return { n: k, implied, hit, ci: z * sharedSd(list), ciKind: 'shared', gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+      const ci = (z * Math.sqrt((hit * (1 - hit)) / k + (z * z) / (4 * k * k))) / (1 + (z * z) / k), c = (hit + (z * z) / (2 * k)) / (1 + (z * z) / k);
+      return { n: k, implied, hit, ci, ciKind: 'wilson', lo: Math.max(0, c - ci), hi: Math.min(1, c + ci), gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
     };
     const realized = {
       overall: realizedOf(settledBets),

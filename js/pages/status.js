@@ -23,9 +23,9 @@
       const api = h('div.card', UI.loading('Pinging the exchange…'));
       U.replace(root, h('div.page', h('div.stack',
         h('div.card', h('h1', { style: { margin: '0 0 6px', fontSize: '20px' } }, 'Is the data current?'),
-          h('p.muted', { style: { margin: 0, maxWidth: '820px' } }, 'Live pages (accounts, dashboard, order books) read the exchange directly. The leaderboard, copyability scores and the Predict section read published snapshots: the perps one is rebuilt by a scheduled job every 30 minutes, the Predict one on a machine of the site owner (the Predict API refuses datacenter addresses) and published the same way. This page says how old each is right now.')),
+          h('p.muted', { style: { margin: 0, maxWidth: '820px' } }, 'Live pages (accounts, dashboard, order books) read the exchange directly. The leaderboard, copyability scores and the Predict section read published snapshots: the perps one is rebuilt by GitHub Actions every 30 minutes, the Predict one every 30 minutes on the site owner\'s PC (the Predict API refuses requests from datacenter addresses), and both are published with the site. This page shows how old each one is right now.')),
         h('div.grid.cols-3', perps, predict, api),
-        h('div.footer-note', 'Times in your local time zone. "Late" means the last build is older than 45 minutes; "stale" older than two hours, at which point the pages that use it say so too.'))));
+        h('div.footer-note', 'Times in your local time zone. "Late" means the last build is older than 45 minutes, "stale" older than two hours. A stale snapshot is also flagged on the Leaderboard, Copy trading, the Predict Overview, Bettors, Questions, Market makers and Vig & edge pages, and on slip pages.'))));
 
       // ---- perps snapshot (data/leaderboard.json, ~30 KB, already cached by the leaderboard page)
       (async () => {
@@ -36,12 +36,12 @@
           U.replace(perps, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Perps snapshot'), UI.chip(state, cls)),
             s ? kv([
               ['Built', when(s.builtAt)],
-              ['Builder', s.source === 'github-actions' ? 'GitHub Actions' : s.source || '—'],
+              ['Builder', s.source === 'github-actions' ? 'GitHub Actions' : s.source === 'local' ? 'a local run' : s.source || '—'],
               ['Accounts', `${U.fmtNum(s.rows.length, 0)} of ${U.fmtNum(s.accounts || s.rows.length, 0)}` + (s.failed ? ` · ${s.failed} failed` : '') + (s.skipped ? ` · ${s.skipped} not reached in the ${U.fmtDuration((s.budgetS || 0) * 1000)} budget` : '') + (s.partial ? ' · partial' : ''), s.failed || s.skipped ? 'neg' : ''],
-              ['Copy profiles', `${U.fmtNum(s.rows.filter((r) => r.copy && r.copy.driftN).length, 0)} with fill drift`],
+              ['Copy profiles', `${U.fmtNum(s.rows.filter((r) => r.copy && r.copy.driftN).length, 0)} accounts with their price move after a fill measured`],
               s.durationMs ? ['Build took', U.fmtDuration(s.durationMs)] : null,
             ]) : h('div.empty', 'No published perps snapshot: the leaderboard is built in each visitor\'s browser instead.'),
-            h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: Leaderboard, Copy trading (scores), Home (top wallets), Dashboard (stop map account list).'));
+            h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: Leaderboard, Copy trading (scores, also in the simulator), Home (top wallets), Favorites (PnL 30d), Dashboard (stop map account list).'));
         } catch (e) { if (!isAbort(e)) U.replace(perps, UI.error(e)); }
       })();
 
@@ -54,7 +54,7 @@
           // a publish from before the status file existed: read the snapshot's own header (the 1 MB the Predict pages load anyway)
           if (!s && MD.predict && MD.predict.loadSnapshot) {
             U.replace(predict, UI.loading('No status file yet: reading the Predict snapshot itself…'));
-            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && MD.predict.splitMakers(p.agg.makers).makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
+            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); const cov = p && p.agg && p.agg.vig ? p.agg.vig.coverage : null; if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && MD.predict.splitMakers(p.agg.makers).makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, selfMatched: p.agg && p.agg.totals.selfMatched, vigCoverage: cov ? cov.withAtBet : null, vigTotal: cov ? cov.total : null, vigClean: cov ? cov.clean : null, vigSameEvent: cov ? cov.sameEvent : null, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
           }
           if (ctx.signal.aborted) return;
           const [state, cls] = s && s.error ? ['failed', 'red'] : ageState(s && s.builtAt);
@@ -63,14 +63,15 @@
               ['Built', when(s.builtAt)],
               ['Builder', s.source === 'pc' ? 'the site owner\'s PC' : s.source === 'github-actions' ? 'GitHub Actions' : s.source || '—'],
               s.error ? ['Error', s.error, 'neg'] : null,
-              s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : '') + (s.preLaunch ? ` · ${s.preLaunch} launch-day test predictions left out` : ''), s.apiTotal && s.predictions < s.apiTotal - (s.preLaunch || 0) - 50 ? 'neg' : ''] : null,
-              s.bettors != null ? ['Bettors · makers', `${U.fmtNum(s.bettors, 0)} · ${U.fmtNum(s.makers || 0, 0)}`] : null,
-              s.questions != null ? ['Questions listed', U.fmtNum(s.questions, 0)] : null,
-              s.vigCoverage != null ? ['Priced at bet time', `${U.fmtNum(s.vigCoverage, 0)}` + (s.predictions ? ` of ${U.fmtNum(s.predictions, 0)}` : '')] : null,   // predictions with the source market's price at the moment of the bet (the vig needs it)
+              s.predictions != null ? ['Predictions', `${U.fmtNum(s.predictions, 0)}` + (s.apiTotal ? ` of ${U.fmtNum(s.apiTotal, 0)} the API counts` : '') + (s.preLaunch ? ` · ${s.preLaunch} dated before launch (29 Jun 2026) left out` : '') + (s.selfMatched ? ` · ${s.selfMatched} self-matched (one wallet on both sides) left out of the Predict figures` : ''), s.apiTotal && s.predictions < s.apiTotal - (s.preLaunch || 0) - 50 ? 'neg' : ''] : null,
+              s.bettors != null ? ['Bettors · market makers', `${U.fmtNum(s.bettors, 0)} · ${U.fmtNum(s.makers || 0, 0)}`] : null,
+              s.questions != null ? ['Questions page list', s.questionsLive != null ? `${U.fmtNum(s.questions, 0)}: ${U.fmtNum(s.questionsLive, 0)} with money on them, then the ${U.fmtNum(s.questions - s.questionsLive, 0)} most recently settled` : `${U.fmtNum(s.questions, 0)}: the questions with money on them, then the most recently settled`] : null,
+              // predictions with the source market's price at the moment of the bet (the vig needs it), on the base the Vig & edge page uses
+              s.vigCoverage != null ? ['Priced at bet time', `${U.fmtNum(s.vigCoverage, 0)} of ${U.fmtNum(s.vigTotal != null ? s.vigTotal : s.predictions - (s.selfMatched || 0), 0)}` + (s.vigClean != null ? ` · ${U.fmtNum(s.vigClean, 0)} in the vig figures, ${U.fmtNum(s.vigSameEvent || 0, 0)} combos with legs sharing an event shown apart` : '')] : null,
               s.requests != null ? ['API requests', `${U.fmtNum(s.requests, 0)}` + (s.retries ? ` · ${s.retries} retried` : '')] : null,
               s.durationMs ? ['Build took', U.fmtDuration(s.durationMs)] : null,
             ]) : h('div.empty', 'No Predict snapshot published yet.'),
-            h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: every Predict page, the Predict tab of an account, the tax center\'s Predict ledger.'));
+            h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: every Predict page, the Predict tab of an account, the tax center\'s Predict ledger, and the Predict ideas on Copy trading.'));
         } catch (e) { if (!isAbort(e)) U.replace(predict, UI.error(e)); }
       })();
 
@@ -83,15 +84,19 @@
           if (ctx.signal.aborted) return;
           const ws = h('span');
           ctx.onCleanup(A.ws.onStatus((s) => { ws.textContent = s === 'open' ? 'connected' : s; }));
-          const maint = m && m.isEnabled;
+          // the flag is known only when the exchange answered with one; a failed check says so instead of "off"
+          const known = !!m && typeof m.isEnabled === 'boolean'; const maint = known && m.isEnabled;
+          const alerting = !!(MD.alerts && MD.alerts.isOwner && MD.alerts.isOwner() && (MD.alerts.state().leaders || []).length);
           U.replace(api, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange API'), UI.chip(maint ? 'maintenance' : 'answering', maint ? 'amber' : 'green')),
             kv([
               ['Round trip', `${rtt} ms`],
-              ['Your clock', Math.abs(offset) < 1000 ? 'in sync' : `${(Math.abs(offset) / 1000).toFixed(1)} s ${offset > 0 ? 'behind' : 'ahead of'} the exchange`, Math.abs(offset) > 5000 ? 'neg' : ''],
-              ['Maintenance', maint ? 'on: data may be stale' : 'off', maint ? 'neg' : ''],
-              ['WebSocket', ws],
+              ['Your clock', Math.abs(offset) < 1000 ? 'within 1 s of the exchange' : `${(Math.abs(offset) / 1000).toFixed(1)} s ${offset > 0 ? 'behind' : 'ahead of'} the exchange`, Math.abs(offset) > 5000 ? 'neg' : ''],
+              ['Maintenance', !known ? 'unknown (the maintenance check did not answer)' : maint ? 'on (the exchange reports maintenance mode)' : 'off', maint ? 'neg' : !known ? 'dim' : ''],
+              ['WebSocket (this tab)', ws],
             ]),
-            h('div.dim.xs', { style: { marginTop: '10px' } }, 'The socket connects when a page needs it (dashboard, Live tab, alerts); "closed" here just means no page is using it.'));
+            h('div.dim.xs', { style: { marginTop: '10px' } }, alerting
+              ? 'This tab is listening for leader alerts on this socket, so "closed" or "connecting" means the connection dropped and is being retried.'
+              : 'This is this browser tab\'s own connection, not the exchange\'s service. It opens only while something uses it (the dashboard, an account\'s Live tab, a paper copy in the copy simulator, leader alerts) and closes 20 seconds after the last one stops, so "closed" here is normal.'));
         } catch (e) { if (!isAbort(e)) U.replace(api, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange API'), UI.chip('unreachable', 'red')), h('div.neg.small', String(e.message || e))); }
       })();
     },

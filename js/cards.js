@@ -23,7 +23,6 @@
     const money = (v, sign) => { const n = Number(v) || 0; return Math.abs(n) >= 1e5 ? U.fmtUsd(n, { compact: true, sign }) : U.fmtUsd(n, { sign }); };
     const pct = (v, dp = 1, sign = false) => (v == null || !Number.isFinite(v) ? '—' : U.fmtPct(v, { dp, sign }));
     const roiTxt = (v) => (v == null || !Number.isFinite(v) ? null : pct(v, Math.abs(v) < 10 ? 1 : 0, true));
-    const tone = (v) => (v > 0.004 ? C.green : v < -0.004 ? C.red : C.text2);
     const date = (t) => (t ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : null);
     const dateShort = (t) => (t ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) : null);
     const range = (a, b) => { if (!a || !b) return null; const ya = new Date(a).getUTCFullYear(), yb = new Date(b).getUTCFullYear(); return (ya === yb ? dateShort(a) : date(a)) + ' – ' + date(b); };

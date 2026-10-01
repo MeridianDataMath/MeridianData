@@ -258,3 +258,24 @@ test('a one-off counterparty is not a market maker', () => {
   const { makers, oneOff } = P.splitMakers([{ address: 'a', n: 5558 }, { address: 'b', n: 16 }, { address: 'c', n: 1 }]);
   assert.deepEqual(makers.map((m) => m.address), ['a', 'b']); assert.deepEqual(oneOff.map((m) => m.address), ['c']);
 });
+test('the realized interval allows for bets on the same question winning or losing together', () => {
+  // 40 even-money singles on ONE question (they all win or all lose together) against 40 on 40 different questions
+  const single = (id, q, won) => P.norm({ predictionId: id, predictor: ME, counterparty: MAKER, predictorCollateral: wei(10), counterpartyCollateral: wei(10), settled: true, result: won ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS',
+    createdAt: new Date(T0).toISOString(), settledAt: new Date(T0 + DAY).toISOString(),
+    pickConfig: { pickConfigId: 'pc-' + id, resolved: true, result: won ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', picks: [{ conditionId: q, predictedOutcome: 'YES', condition: { question: q, endTime: Math.floor((T0 + DAY / 2) / 1000) } }] } });
+  const same = Array.from({ length: 40 }, (_, i) => single('s' + i, 'cSAME', true));
+  const apart = Array.from({ length: 40 }, (_, i) => single('d' + i, 'c' + i, i % 2 === 0));
+  const rs = P.aggregate(same).vig.realized.overall, ra = P.aggregate(apart).vig.realized.overall;
+  assert.equal(rs.ciKind, 'shared'); assert.equal(ra.ciKind, 'shared');
+  assert.ok(rs.ci > 0.8, 'one question: the hit rate is 0 % or 100 %, so the interval spans nearly everything (' + rs.ci + ')');
+  assert.ok(ra.ci > 0.1 && ra.ci < 0.25, '40 independent coin flips: about ±15 points (' + ra.ci + ')');
+  // without the simulation (a wallet's own figures): the Wilson interval, with its bounds
+  const w = P.aggregate(apart, { records: false }).vig.realized.overall;
+  assert.equal(w.ciKind, 'wilson'); assert.ok(w.lo < w.hit && w.hit < w.hi);
+});
+
+test('a percentage rounded to zero carries no sign', () => {
+  assert.equal(MD.util.fmtPct(-0.04, { sign: true, dp: 1 }), '0.0%');
+  assert.equal(MD.util.fmtPct(-0.06, { sign: true, dp: 1 }), '-0.1%');
+  assert.equal(MD.util.fmtPct(2.5, { sign: true, dp: 0 }), '+3%');
+});
