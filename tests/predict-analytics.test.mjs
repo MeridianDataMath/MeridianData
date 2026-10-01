@@ -222,3 +222,39 @@ test('a self-match is no bet: left out, so its wallet is no "market maker" (0xf0
   near(assert, a.totals.bettorPnl, 10, 1e-9, 'the self-match adds nothing');
   assert.equal(a.bettors.find((b) => b.address === ME).n, 1);
 });
+
+// a prediction whose legs carry Meridian's settlement times (condition.settledAt, unix seconds)
+const legsPred = (id, verdict, claimedAt, legs) => P.norm({ predictionId: id, predictor: ME, counterparty: MAKER, predictorCollateral: wei(25), counterpartyCollateral: wei(1165),
+  settled: !!claimedAt, result: claimedAt ? verdict : null, createdAt: new Date(T0).toISOString(), settledAt: claimedAt ? new Date(claimedAt).toISOString() : null,
+  pickConfig: { pickConfigId: 'pc-' + id, resolved: !!verdict, result: verdict, picks: legs.map(([yes, settledAt, resYes], i) => ({ conditionId: 'c' + id + i, predictedOutcome: yes ? 'YES' : 'NO',
+    condition: { question: 'Q' + i, endTime: Math.floor((T0 + 90 * DAY) / 1000), settled: settledAt != null, settledAt: settledAt == null ? null : Math.floor(settledAt / 1000), resolvedToYes: settledAt == null ? null : resYes } })) } });
+
+test('a result is dated when it settled on Meridian, never when its payout was claimed', () => {
+  // the user's case: both legs settled by Sep 13, the payout claimed Sep 29 (legs listed to end months later)
+  const s1 = T0 + 41 * DAY, s2 = T0 + 43 * DAY, claim = T0 + 59 * DAY;
+  const win = legsPred('w', 'PREDICTOR_WINS', claim, [[false, s1, false], [true, s2, true]]);
+  assert.equal(P.legVerdictAt(win), s2, 'a win: when its last leg settled');
+  assert.equal(P.decidedAt(win), s2);
+  const unclaimed = legsPred('u', 'PREDICTOR_WINS', null, [[true, s1, true], [true, s2, true]]);
+  assert.equal(P.decidedAt(unclaimed), s2, 'unclaimed: dated all the same');
+  // a combo lost on its first leg: decided then, although its other leg is open for months
+  const lost = legsPred('l', 'COUNTERPARTY_WINS', claim, [[true, s1, false], [true, null, null]]);
+  assert.equal(P.decidedAt(lost), s1, 'a loss: when the first leg settled against the bettor');
+  // never after the claim (a settlement time cannot be later), and old records without leg times keep the estimate
+  const odd = legsPred('o', 'PREDICTOR_WINS', s1, [[true, s2, true]]);
+  assert.equal(P.decidedAt(odd), s1);
+  // the time survives the snapshot's compact records, and a record from before leg times were kept falls back
+  const round = P.unslim(JSON.parse(JSON.stringify(P.slim(win))));
+  assert.equal(round.picks[1].settledAt, s2); assert.equal(P.decidedAt(round), s2);
+  const old = P.unslim(Object.assign(JSON.parse(JSON.stringify(P.slim(win))), { k: P.slim(win).k.map((k) => k.slice(0, 9)) }));
+  assert.equal(P.legVerdictAt(old), null); assert.ok(P.decidedAt(old) <= claim, 'an estimate, never after the claim');
+  // a snapshot's own time (da) is used when the legs carry none
+  assert.equal(P.decidedAt(Object.assign({}, old, { decidedAt: s2 })), s2);
+  // the tape's compact rows keep it too
+  assert.equal(P.full(Object.assign(P.compact(Object.assign({}, win, { decidedAt: s2 })), { k: undefined })).decidedAt, s2);
+});
+
+test('a one-off counterparty is not a market maker', () => {
+  const { makers, oneOff } = P.splitMakers([{ address: 'a', n: 5558 }, { address: 'b', n: 16 }, { address: 'c', n: 1 }]);
+  assert.deepEqual(makers.map((m) => m.address), ['a', 'b']); assert.deepEqual(oneOff.map((m) => m.address), ['c']);
+});

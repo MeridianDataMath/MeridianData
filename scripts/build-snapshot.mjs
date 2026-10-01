@@ -125,7 +125,7 @@ async function attachPricesAtBet(norms) {
   console.log(`  predict: price-at-bet ready for ${got}/${norms.length} predictions (${conds.length} history requests)`);
 }
 
-// ---------------------------------------------------------------- when a big win was decided
+// ---------------------------------------------------------------- when each prediction settled
 // The exchange keeps no decision time. A won prediction was decided when its last leg resolved, which Polymarket records
 // (umaEndDate, else closedTime) and which can be a day before the leg's listed end (a price question about Sep 28 is
 // listed to end on the 29th): the listed end would date the win late, and the date would move as snapshots pass it.
@@ -136,10 +136,16 @@ async function attachDecidedAt(norms) {
   try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
   const resolved = Object.assign(dict(), cache.resolved);
   const now = Date.now();
-  // every win paying more than P.BIG_WIN: the big wins (net PnL above it) are among them, since the payout includes the
-  // PnL; a traded position's own result is only known in P.aggregate, and one that somehow beats its payout (the page
-  // dates that itself) would be the only exception
-  const wins = norms.filter((n) => n.won && n.pool > P.BIG_WIN);
+  // Every decided prediction first, from Meridian's own leg settlement times (condition.settledAt): a win when its last
+  // leg settled, a loss when the first leg settled against the bettor (P.legVerdictAt). That is the moment the slip
+  // settled, whether or not anyone has claimed it since, and every page dates results by it.
+  let fromLegs = 0;
+  for (const n of norms) { const v = P.legVerdictAt(n); if (v) { n.decidedAt = Math.min(v, now); fromLegs++; } }
+  // Below, Polymarket's resolution times, only for a win paying more than P.BIG_WIN whose legs carry no settlement time:
+  // the big wins (net PnL above it) are among them, since the payout includes the PnL; a traded position's own result is
+  // only known in P.aggregate, and one that somehow beats its payout (the page dates that itself) would be the only
+  // exception
+  const wins = norms.filter((n) => n.won && n.pool > P.BIG_WIN && !n.decidedAt);
   const lc = (id) => String(id || '').toLowerCase();
   const ids = Array.from(new Set(wins.flatMap((n) => n.picks.map((k) => lc(k.id))).filter(isCond)));
   const need = ids.filter((id) => { const r = resolved[id]; return !r || (r.t == null && now - r.at > 86400000); });   // no time yet: asked again after a day
@@ -170,7 +176,7 @@ async function attachDecidedAt(norms) {
   }
   try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.resolved = resolved; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
   catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ resolved })); }
-  console.log(`  predict: big wins dated ${dated} of ${wins.length} (${need.length} resolution times looked up, ${Object.keys(resolved).length} cached)`);
+  console.log(`  predict: ${fromLegs} decided predictions dated from Meridian's leg settlement times; big wins without them dated ${dated} of ${wins.length} (${need.length} resolution times looked up, ${Object.keys(resolved).length} cached)`);
 }
 
 // ---------------------------------------------------------------- secondary market
@@ -224,7 +230,7 @@ async function buildPredict() {
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
-  try { await attachDecidedAt(norms); } catch (e) { console.warn('predict: big-win decision times failed, the page estimates them:', e.message); }
+  try { await attachDecidedAt(norms); } catch (e) { console.warn('predict: settlement times failed, the page estimates them:', e.message); }
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
   // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
   const trades = await buildTrades(norms);
@@ -260,8 +266,10 @@ async function buildPredict() {
     if (n.decided && n.settled) continue;   // open, or decided and not yet claimed: still someone's money
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); if (keepCond(k.id)) withOi.push(rowOf(k)); } }
   }
-  // … and the questions of predictions settled in the last 30 days (newest first, capped), so "Settled" shows what people bet on
-  const recent = norms.filter((n) => n.settled && n.settledAt && n.settledAt > Date.now() - 30 * 86400000).sort((a, b) => b.settledAt - a.settledAt);
+  // … and the questions of predictions settled (decided) in the last 30 days, newest settlement first and capped, so
+  // "Settled" shows what people bet on; dated by the settlement, not by when a winner claimed
+  const settledAt = (n) => P.decidedAt(n) || 0;
+  const recent = norms.filter((n) => n.decided && settledAt(n) > Date.now() - 30 * 86400000).sort((a, b) => settledAt(b) - settledAt(a));
   for (const n of recent) {
     if (withOi.length >= 1200) break;
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); if (keepCond(k.id)) withOi.push(rowOf(k)); } }

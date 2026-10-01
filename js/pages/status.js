@@ -54,7 +54,7 @@
           // a publish from before the status file existed: read the snapshot's own header (the 1 MB the Predict pages load anyway)
           if (!s && MD.predict && MD.predict.loadSnapshot) {
             U.replace(predict, UI.loading('No status file yet: reading the Predict snapshot itself…'));
-            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && p.agg.makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
+            try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && MD.predict.splitMakers(p.agg.makers).makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
           }
           if (ctx.signal.aborted) return;
           const [state, cls] = s && s.error ? ['failed', 'red'] : ageState(s && s.builtAt);

@@ -12,7 +12,7 @@
       const c = k.condition || {};
       const ep = c.estimatedPrice == null ? null : Number(c.estimatedPrice);
       const yes = String(k.predictedOutcome).toUpperCase() === 'YES';
-      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), event: k.event || null, settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, cat:(c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
+      return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), event: k.event || null, settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, settledAt: c.settled && c.settledAt ? P.legTime(c.settledAt) : null, pub: c.isPublic == null ? null : !!c.isPublic, cat:(c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
     });
     let fair = null;
     if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
@@ -68,11 +68,16 @@
   /** Compact row for the tape: the fields the Overview's tape has always read, plus every leg (k, as in P.slim, with its
    *  question id), the transaction, the claim time and the traded pick configuration, so a row can be opened (P.full). */
   P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, decided: n.decided, unclaimed: n.unclaimed, nd: n.nd, won: n.won, pnl: r4(n.pnl),
-    k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, pc: n.pcTraded ? n.pc : undefined });
+    k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, da: n.decidedAt || undefined, pc: n.pcTraded ? n.pc : undefined });
   /** A big win: the bettor won and its net PnL (payout − stake; for a bettor who sold its tokens, its own result with the
    *  sale) is above this many dollars (the Overview lists them). */
   P.BIG_WIN = 500;
-  const r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
+  /** A market maker is a counterparty that has taken at least this many predictions. Anyone can take the other side of a
+   *  prediction once (0x3106…88d1: a single $1 against $1 at 50 %, settled ten minutes later), which is a test, not a
+   *  market; such one-off counterparties are named apart from the makers (their results still count in the totals). */
+  P.MAKER_MIN = 5;
+  P.splitMakers = (rows) => ({ makers: (rows || []).filter((m) => m.n >= P.MAKER_MIN), oneOff: (rows || []).filter((m) => !(m.n >= P.MAKER_MIN)) });
+  const r4 =(x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
   const dayKey = (ms) => Math.floor(ms / DAY) * DAY;
@@ -113,9 +118,29 @@
     };
   };
 
-  /** When a prediction was decided: the API keeps no decision time, so its last question's end (or the bet itself). */
-  // never later than its claim or than now: a combo lost on its first leg is decided while a later leg (months out) is open
-  P.decidedAt = (n) => Math.min(Math.max(U.num(n.t), ...(n.picks || []).map((k) => U.num(k.endTime) || 0)), n.settledAt || Infinity, Date.now());
+  /** A condition's settlement time on Meridian (unix seconds from the API) in ms. */
+  P.legTime = (x) => { const v = Number(x); return Number.isFinite(v) && v > 0 ? (v < 1e12 ? v * 1000 : v) : typeof x === 'string' ? P.ms(x) : null; };
+  /** When a prediction was settled on Meridian, from its legs' own settlement times (the API keeps none for the
+   *  prediction): a win when its last leg settled, a loss when the first leg settled against the bettor (a combo lost on
+   *  its first leg is decided while a later leg, months out, is open). Null when the legs carry no times (records from
+   *  before they were kept). Never before the bet or after the claim. */
+  P.legVerdictAt = (n) => {
+    const legs = n.picks || []; if (!n.decided || !legs.length) return null;
+    let at = null;
+    if (n.won) { if (legs.every((k) => k.settledAt)) at = Math.max(...legs.map((k) => k.settledAt)); }
+    else { const against = legs.filter((k) => k.settled && k.settledAt && (k.nonDecisive || k.resolvedToYes === !k.yes)); if (against.length) at = Math.min(...against.map((k) => k.settledAt)); }
+    return at == null ? null : Math.min(Math.max(U.num(n.t), at), n.settledAt || Infinity);
+  };
+  /** When a prediction was settled (decided): Meridian's own leg settlement times (P.legVerdictAt), else the snapshot's
+   *  time (n.decidedAt, 'da'), else an estimate: a win from its last question's end, a loss from the first leg settled
+   *  against the bettor, else its last question's end; never before the bet, after its claim, or after now. */
+  P.decidedAt = (n) => {
+    const exact = P.legVerdictAt(n) || n.decidedAt; if (exact) return exact;
+    const legs = n.picks || [];
+    const against = n.won ? [] : legs.filter((k) => k.settled && (k.nonDecisive || k.resolvedToYes === !k.yes) && U.num(k.endTime));
+    const at = against.length ? Math.min(...against.map((k) => U.num(k.endTime))) : Math.max(0, ...legs.map((k) => U.num(k.endTime) || 0));
+    return Math.min(Math.max(U.num(n.t), at), n.settledAt || Infinity, Date.now());
+  };
 
   /**
    * One wallet's secondary-market ledger over the pick configurations it traded. Position tokens belong to a pick
@@ -274,7 +299,8 @@
       const c = acc(cats, n.cat, () => ({ cat: n.cat, n: 0, wagered: 0, settled: 0, won: 0, pnl: 0, vig: [] })); c.n++; c.wagered += n.stake; if (n.decided) { c.settled++; if (n.won) c.won++; c.pnl += n.pnl; } if (cleanVig(n)) c.vig.push(n.vig);
       const k = acc(combos, n.legs, () => ({ legs: n.legs, n: 0, settled: 0, won: 0, wagered: 0, pnl: 0, odds: [], multiples: [] })); k.n++; k.wagered += n.stake; if (n.decided) { k.settled++; if (n.won) k.won++; k.pnl += n.pnl; } if (n.odds != null) k.odds.push(n.odds); if (n.multiple != null) k.multiples.push(n.multiple);
       const d = acc(daily, dayKey(n.t), () => ({ t: dayKey(n.t), n: 0, wagered: 0, bettors: new Set(), settledPnl: 0, settledN: 0 })); d.n++; d.wagered += n.stake; d.bettors.add(n.predictor);
-      if (n.settledAt) { const ds = acc(daily, dayKey(n.settledAt), () => ({ t: dayKey(n.settledAt), n: 0, wagered: 0, bettors: new Set(), settledPnl: 0, settledN: 0 })); ds.settledPnl += n.pnl; ds.settledN++; }
+      // results on the day they settled (decided), claimed or not; no page draws them yet
+      if (n.decided) { const v = dayKey(P.decidedAt(n)); const ds = acc(daily, v, () => ({ t: v, n: 0, wagered: 0, bettors: new Set(), settledPnl: 0, settledN: 0 })); ds.settledPnl += n.pnl; ds.settledN++; }
       if (cleanVig(n)) { vigAll.push(n); const wk = acc(weeks, weekKey(n.t), () => ({ t: weekKey(n.t), vig: [], n: 0, wagered: 0 })); wk.vig.push(n.vig); wk.n++; wk.wagered += n.stake; (vigByCat[n.cat] || (vigByCat[n.cat] = [])).push(n.vig); }
     }
     // secondary market: a wallet that sold (or bought) position tokens gets the ledger's result in place of the
@@ -346,7 +372,7 @@
       vig,
       secondary,
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
-      bigWins: bigWins ? norms.filter((n) => n.won && netPnl(n) > P.BIG_WIN).sort((a, b) => (b.decidedAt || P.decidedAt(b)) - (a.decidedAt || P.decidedAt(a))).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
+      bigWins: bigWins ? norms.filter((n) => n.won && netPnl(n) > P.BIG_WIN).sort((a, b) => P.decidedAt(b) - P.decidedAt(a)).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
     };
     // the same {h, lp} for any record the caller writes (the snapshot's slip files); not enumerable, so not in the JSON
     Object.defineProperty(out, 'soldOf', { value: sold, enumerable: false });
@@ -419,12 +445,12 @@
   // Meridian's result for a settled question (9th element) says which legs won or lost a decided prediction.
   // leg = [question, yes, sourcePriceNow, endTime, category, conditionId, priceAtBet, polymarket event, result (1 YES, 0 NO, 2 50/50)]
   const legResult = (k) => (k.settled ? (k.nonDecisive ? 2 : k.resolvedToYes ? 1 : 0) : null);
-  function slimLegs(n, ids) { return n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, (ids || !n.settled) && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null, legResult(k)]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }); }
+  function slimLegs(n, ids) { return n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, (ids || !n.settled) && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null, legResult(k), k.settled && k.settledAt ? Math.round(k.settledAt / 1000) : null]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }); }
   P.slim = (n, o) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, da: n.decidedAt || undefined, k: slimLegs(n, !!(o && o.ids)) });
   P.unslim = function (s) {
     if (s.picks) return s;                               // already a full record
     const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
-    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id, pb, ev, res]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: pb == null ? null : pb, event: ev || null, settled: res != null, resolvedToYes: res === 1 ? true : res === 0 ? false : null, nonDecisive: res === 2, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
+    const picks = (s.k || []).map(([q, yes, ep, endTime, cat, id, pb, ev, res, sat]) => ({ id: id || null, q, short: q, yes: !!yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: pb == null ? null : pb, event: ev || null, settled: res != null, resolvedToYes: res === 1 ? true : res === 0 ? false : null, nonDecisive: res === 2, settledAt: res != null && sat ? sat * 1000 : null, cat: cat || s.cat, catSlug: null, endTime: endTime || null, tags: [] }));
     let fair = null; if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
     const odds = pool > 0 ? stake / pool : null; const settled = !!s.st; const decided = settled || s.dv != null;
     const won = settled ? s.r === 'PREDICTOR_WINS' : s.dv === 1; const nd = settled ? s.r === 'NON_DECISIVE' : s.dv === 2;
@@ -442,7 +468,7 @@
     if (x.p) return P.unslim(x);
     const decided = !!x.decided, settled = !!x.settled;
     const n = P.unslim({ id: x.id, t: x.t, sa: x.sa, p: x.predictor, c: x.counterparty, s: x.stake, cp: x.cp, st: settled ? 1 : 0, pc: x.pc, dv: decided && !settled ? (x.won ? 1 : x.nd ? 2 : 0) : undefined,
-      r: settled ? (x.won ? 'PREDICTOR_WINS' : x.nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, tx: x.tx, cat: x.cat, h: x.h, lp: x.lp, k: x.k || [[x.q || '', x.yes ? 1 : 0]] });
+      r: settled ? (x.won ? 'PREDICTOR_WINS' : x.nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, tx: x.tx, cat: x.cat, h: x.h, lp: x.lp, da: x.da, k: x.k || [[x.q || '', x.yes ? 1 : 0]] });
     if (!x.k) Object.assign(n, { legs: x.legs || 1, combo: (x.legs || 1) > 1, partial: true });
     return n;
   };

@@ -257,7 +257,7 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
      *  still open, one decided in the last week, a win of the last 30 days or a big win. */
     const slipCardWanted = (n, now = Date.now()) => {
       if (!n.decided) return true;
-      const age = now - (n.decidedAt || P.decidedAt(n) || 0), DAY = 864e5;
+      const age = now - (P.decidedAt(n) || 0), DAY = 864e5;
       return age < 7 * DAY || (!!n.won && (age < 30 * DAY || (Number(n.pnl) || 0) > P.BIG_WIN));
     };
     /** A Predict slip (a full record, P.full): the result or what it can win, and every leg with where it stands.
@@ -275,7 +275,7 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
       const pill = st === 'won' ? 'Won · ' + combo : st === 'lost' ? 'Lost · ' + combo : st === 'void' ? 'Void' : 'Live · ' + combo;
       const pw = pill.length * 10.2 + 44;
       const closes = Math.min(...n.picks.map((k) => k.endTime || Infinity)), copyable = slipCopyable(n, o.now);
-      const stats = [['Stake', cash(n.stake)], ['Multiplier', x], ['Odds', n.odds == null ? '—' : pct(n.odds * 100, n.odds < 0.1 ? 1 : 0)], n.decided ? ['Decided', dateShort(n.decidedAt || P.decidedAt(n)) || '—'] : [copyable ? 'Bets close' : 'Bets closed', Number.isFinite(closes) ? dateShort(closes) : '—']];
+      const stats = [['Stake', cash(n.stake)], ['Multiplier', x], ['Odds', n.odds == null ? '—' : pct(n.odds * 100, n.odds < 0.1 ? 1 : 0)], n.decided ? ['Settled', dateShort(P.decidedAt(n)) || '—'] : [copyable ? 'Bets close' : 'Bets closed', Number.isFinite(closes) ? dateShort(closes) : '—']];
       const cell = (i) => { const [k, v] = stats[i]; const cx = 64 + i * 122; return label(cx, 496, k) + t(cx, 530, v, fit(v, 112, 26, 16), { mono: true, w: 600 }); };
       // the legs, right: side, question (wrapped: up to four lines for a single, fewer as the legs add up), and a mark
       // for where each stands; up to five legs, the rest counted
@@ -336,7 +336,7 @@ ${show.map(legRow).join('\n')}
 ${more ? t(box.x + 92, yy + 24, '+ ' + more + ' more leg' + (more > 1 ? 's' : ''), 17, { fill: C.text3, w: 600 }) : ''}
 <line x1="64" y1="578" x2="${W - 64}" y2="578" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
 ${t(64, 610, site.replace(/^https?:\/\//, ''), 19, { w: 600, fill: C.accent })}
-${t(W - 64, 610, copyable ? 'Copy this slip in one click' : 'Meridian Predict · ' + (date(n.t) || ''), 17, { anchor: 'end', fill: C.text3 })}
+${t(W - 64, 610, copyable ? 'Copy this slip in one click' : 'Meridian Predict · placed ' + (date(n.t) || ''), 17, { anchor: 'end', fill: C.text3 })}
 </svg>`;
     }
     /** The link preview's title and description for a slip. */

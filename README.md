@@ -198,7 +198,12 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     its own result, sale included, so a win sold for little is not one.
     - *Row.* Each row shows the stake, the multiplier (payout ÷ stake) and the PnL (payout −
       stake). The payout itself is in the prediction's dialog.
-    - *Sorting.* Newest verdict first by default, or by PnL or multiplier.
+    - *Sorting.* Latest settlement first by default, or by PnL or multiplier. A row's time is
+      when the win was settled (decided), never when its payout was claimed, which can be weeks
+      later: 0x4a72… settled Sep 13 and was claimed Sep 29. A win settled but not claimed yet is
+      listed all the same, with an *unclaimed* chip, and the card's header counts them. The
+      tooltip has the settlement, claim and placement times. The same rule holds across the site:
+      a result is dated at its settlement.
     - *Decided time.* The exchange keeps no decision time, so it is the last leg's resolution on
       Polymarket (never after the claim).
       - The snapshot builder looks each time up once and caches it in the price cache
@@ -326,19 +331,30 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       question, so the Ended tab names this cause.
     - On Meridian a leg that resolves 50/50 does not refund: the prediction settles as
       COUNTERPARTY_WINS, so the tracker counts such a leg as lost.
-  * *Decided vs settled* – a prediction is **decided** when every leg has resolved on Meridian and
-    the verdict is recorded (`pickConfig.resolved` / `result`); it is **settled** only when the
-    winner claims, which most do late or never (roughly 1,000 of 1,300 "unsettled" predictions are
-    decided). Results, win rates, PnL and the ex-post vig therefore count from the verdict, so
-    claiming changes none of them. As of 2026-09-23 that is 1,102 decided predictions left
+  * *Settled vs claimed* – a prediction is **settled** (decided) when every leg has resolved on
+    Meridian and the verdict is recorded (`pickConfig.resolved` / `result`); it is **claimed**
+    (paid out) only when the winner collects, which most do late or never (roughly 1,000 of 1,300
+    unclaimed predictions are settled). In the code, `n.decided` is the verdict and `n.settled` /
+    `n.settledAt` the claim, as the API names them. Results, win rates, PnL and the ex-post vig
+    count from the settlement, and so does every date the site shows for a result (Big wins, slip
+    pages and cards, curves, the Questions page's last 30 days): claiming changes none of them.
+    The tax center is the one exception: it books Predict results on the claim date, when the
+    cash arrives.
+    - *Settlement time.* The API keeps none for a prediction, but each leg's condition carries
+      Meridian's `settledAt`. `P.legVerdictAt` dates a win when its last leg settled and a loss
+      when the first leg settled against the bettor. The snapshot builder stores that as `da` on
+      every decided prediction, and the compact leg records keep the leg's time as a tenth field
+      (unix seconds), which older readers ignore. Without leg times (older records) the builder's
+      Polymarket resolution times for big wins, then an estimate from the listed ends, stand in,
+      never after the claim. The user's example: 0x4a72… settled Sep 13 and was claimed Sep 29;
+      it is dated Sep 13 everywhere. As of 2026-09-23 that is 1,102 decided predictions left
     unclaimed: 389 bettor wins and 713 maker wins. The Overview mentions the count only in its
     footnote. A bettor page shows an *Unclaimed winnings* tile (money that bettor can collect). A
     maker page doesn't, because makers leave hundreds uncollected. Offline, a wallet page's
     *Cumulative PnL* chart is drawn from the verdicts too (`curveFromPredictions`). The old
     claim-based chart ended at +$508 for maker 0xdd9b…, whose PnL is +$1,500. When the file holds
     only the newest predictions, the chart's window ends at the all-time figure.
-    `P.decidedAt` is capped at the claim and at now: a combo lost on its first leg is decided
-    while a later leg is still open. A result chip reads from the side of the page it is on (the maker's on a maker's page)
+    A combo lost on its first leg is settled while a later leg is still open. A result chip reads from the side of the page it is on (the maker's on a maker's page)
     and says *unclaimed* only where that side has something to collect: a decided loss is simply
     *lost*, whether or not the winner has claimed. Checked against the exchange: an account's
     `statsHistory` books PnL at the verdict (its cumulative PnL equals the sum of every decided
@@ -392,7 +408,13 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     seller's unclaimed winnings; the tax center books a sale as a disposal on its date and the
     held share on its claim, with a trades CSV.
   * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
-    committed, open exposure, PnL, win rate, vig captured.
+    committed, open exposure, PnL, win rate, vig captured. A counterparty counts as a market maker
+    from its fifth prediction (`P.MAKER_MIN`). Anyone can take the other side once:
+    0x3106…88d1 took a single $1 against $1 at 50 % on Sep 29, settled ten minutes later, which is
+    a test, not a market. Such one-off counterparties are named under the table and left out of
+    the lists, the counts and the chart; their results still count in the Maker PnL total. Since
+    Sep 30, 0xea41…5250 (a plain wallet, no contract, quoting priced odds on crypto, weather and
+    sports questions) is a third market maker beside 0x79cb… and 0xdd9b….
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at
     the moment of the bet**, overall, per category, per odds bucket, singles vs combos, and per
     week. The Predict API only exposes a question's source probability as it is now, so the

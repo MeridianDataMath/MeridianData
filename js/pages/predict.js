@@ -113,12 +113,12 @@
   async function mountOverview(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Overview'));
     await withSnapshot(body, ctx, async (snap) => {
-      const a = snap.agg; const T = a.totals;
+      const a = snap.agg; const T = a.totals; const MK = P.splitMakers(a.makers);
       const tiles = h('div.stats',
         UI.stat('Predictions', U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
         UI.stat('Wagered', usd(T.wagered, { compact: true }), 'bettor stakes'),
         UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
-        UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${T.makers} market makers`),
+        UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${MK.makers.length} market maker${MK.makers.length === 1 ? '' : 's'}`),
         UI.stat('Bettor win rate', T.winRate == null ? '—' : U.fmtPct(T.winRate, { dp: 1 }), 'of decided predictions'),
         UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), 'decided, claimed or not · incl. positions sold on the secondary market', U.pnlClass(T.bettorPnl)),
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
@@ -131,8 +131,11 @@
       const tapeBody = h('div.feed.pause-hover');
       const tapeNote = h('span.dim.small', 'newest first · refreshes every 20 s');
       const tapeCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live predictions'), tapeNote, h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), h('div.feed-fill', tapeBody));
+      // Recent = the latest settlement first: when the win was decided, never when its payout was claimed, which can be
+      // weeks later (0x4a72…: settled Sep 13, claimed Sep 29); a win counts from its settlement whether claimed or not
+      const winTime = (n) => decidedTime(n) || n.t;
       const BW_SORTS = [
-        { v: 'recent', label: 'Recent', title: 'Latest verdict first', val: (n) => decidedTime(n) },
+        { v: 'recent', label: 'Recent', title: 'Latest settlement first (claimed or not)', val: winTime },
         { v: 'pnl', label: 'PnL', title: 'Largest profit first: payout − stake (a bettor who sold its tokens: its own result)', val: (n) => bigPnl(n) },
         { v: 'mult', label: 'Multiplier', title: 'Highest payout ÷ stake first', val: (n) => n.multiple || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
@@ -166,7 +169,7 @@
         { key: 'wr', label: 'Maker win rate', num: true, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
         { key: 'v', label: 'Avg vig captured', num: true, render: (r) => vigCell(r.avgVig) },
         { key: 'f', label: 'Last active', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
-      ], rows: a.makers.slice(0, 5), onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
+      ], rows: MK.makers.slice(0, 5), onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       // secondary market: closed by default (few people need it); opening it loads the trades, and the choice is remembered
       const secBody = h('div', UI.loading('Loading secondary market…'));
       const SEC_KEY = 'md.predict.secOpen'; let secLoaded = false;
@@ -202,10 +205,13 @@
       // and a narrow card drops the stake (.opt). A bettor who sold part of its tokens before the verdict is marked, and
       // its PnL is its own result, the sale included.
       const bigRow = (n) => {
-        const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = decidedTime(n) || n.t; const pl = bigPnl(n);
+        const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = winTime(n), paid = !!(n.settled && n.settledAt); const pl = bigPnl(n);
+        const when = 'Settled ' + U.fmtDateTime(at) + (paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout not claimed yet') + '\nPlaced ' + U.fmtDateTime(n.t);
         const sold = n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: n.held < 1e-6 ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, n.held < 1e-6 ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
+        // settled in the bettor's favour, but nobody has collected the payout yet: listed all the same, marked
+        const waiting = !paid && n.unclaimed ? h('span.chip.amber', { title: n.held != null && n.held < 1e-6 ? 'Settled as a win, not claimed yet: the payout is the token buyer\'s to collect' : 'Settled as a win, not claimed yet: the payout is waiting for the bettor' }, 'unclaimed') : null;
         return predRow(n, 'big', '',
-          h('span.t', { title: 'Decided ' + U.fmtDateTime(at) }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), sold,
+          h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), waiting, sold,
           h('span.num.dim.fix.stk.opt', { title: 'Stake' }, usd(n.stake)),
           h('span.num.fix.mul', { class: on('mult'), title: 'Multiplier: payout ÷ stake (the payout, ' + usd(n.pool) + ', is in the dialog)' }, mult(n.multiple)),
           h('span.num.fix.pl', { class: on('pnl') + ' ' + U.pnlClass(pl), title: n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
@@ -213,7 +219,8 @@
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        U.replace(bwNote, h('span', { title: 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'in the last ' + snap.windowDays + ' days'}` : '')));
+        const waiting = bigWins ? bigWins.filter((n) => n.unclaimed).length : 0;
+        U.replace(bwNote, h('span', { title: 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale. A win counts from its verdict, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
@@ -340,7 +347,7 @@
     const predState = (n) => {
       if (n.decided) return resultChip(n);
       const ps = R.predictionState(n.picks.map((k) => [k.id, k.yes]));
-      return ps.code === 'won' ? UI.chip('won · awaiting payout', 'green') : ps.code === 'lost' ? UI.chip('lost · awaiting settlement', 'red') : UI.chip('open', 'accent');
+      return ps.code === 'won' ? UI.chip('won on Polymarket · awaiting settlement', 'green') : ps.code === 'lost' ? UI.chip('lost · awaiting settlement', 'red') : UI.chip('open', 'accent');
     };
     const render = () => { const st = R.state(view, id); U.replace(body,
       h('div.row.wrap', { style: { gap: '8px', marginBottom: st.sub ? '2px' : '10px' } }, R.chip(view, id), h('span.small', st.main || ''), h('span.grow'), h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`)),
@@ -385,15 +392,16 @@
     const m = k.id ? R.get(k.id).m : null; if (!m || !(m.closed || m.uma === 'resolved')) return false;
     const y = R.resolvedYes(m); return y === 'void' || ((y === true || y === false) && y !== !!k.yes);
   };
-  /** When a leg was decided: its source market's resolution once loaded, else its listed end (which can be a day late: a
-   *  price question about Sep 28 is listed to end on the 29th). */
-  const legTime = (k) => { const m = k.id ? R.get(k.id).m : null; return (m && (m.resolvedAt || m.closedAt)) || U.num(k.endTime) || null; };
-  /** When a decided prediction was decided, for display; null when it cannot be told. The exchange keeps no time. A big
-   *  win carries the snapshot's (its last leg's resolution on Polymarket); otherwise a win dates from its last leg, a loss
-   *  from the first leg that went against the bettor (its other legs may run for weeks), never after the claim. */
+  /** When a leg was settled: Meridian's own settlement time, else its source market's resolution once loaded, else its
+   *  listed end (which can be a day late: a price question about Sep 28 is listed to end on the 29th). */
+  const legTime = (k) => { if (k.settledAt) return k.settledAt; const m = k.id ? R.get(k.id).m : null; return (m && (m.resolvedAt || m.closedAt)) || U.num(k.endTime) || null; };
+  /** When a decided prediction was settled, for display, never when its payout was claimed; null when it cannot be told.
+   *  Meridian's leg settlement times where the record has them (P.legVerdictAt), else the snapshot's time, else: a win
+   *  dates from its last leg, a loss from the first leg that went against the bettor (its other legs may run for weeks),
+   *  never after the claim. */
   const decidedTime = (n) => {
     if (!n.decided) return null;
-    if (n.decidedAt) return n.decidedAt;
+    const exact = P.legVerdictAt(n) || n.decidedAt; if (exact) return exact;
     const times = (n.won ? n.picks : n.picks.filter(legAgainst)).map(legTime).filter(Boolean);
     if (!times.length) return null;
     return Math.max(U.num(n.t), Math.min(n.won ? Math.max(...times) : Math.min(...times), n.settledAt || Infinity, Date.now()));
@@ -451,8 +459,8 @@
         h('div.kv', { style: { marginBottom: '14px' } },
           kv('Bettor', who(n.predictor)), kv('Market maker', n.counterparty ? who(n.counterparty) : null),
           kv('Placed', U.fmtDateTimeS(n.t) + ' · ' + U.fmtAgo(n.t)),
-          kv('Decided', decidedAt ? h('span', { title: 'The exchange keeps no decision time: a win dates from its last leg, a loss from the first leg that went against the bettor, each at its Polymarket resolution where known, else the question\'s listed end; never after the claim' }, U.fmtDateTime(decidedAt)) : null),
-          n.won || n.nd ? kv('Paid out', n.settled && n.settledAt ? 'claimed ' + U.fmtDateTime(n.settledAt) : n.unclaimed ? (soldAll ? 'the buyer\'s to claim' : 'not claimed yet') : null) : kv('Settled', n.settled && n.settledAt ? 'the market maker claimed ' + U.fmtDateTime(n.settledAt) : null),
+          kv('Settled', decidedAt ? h('span', { title: 'When the slip settled on Meridian, claimed or not: a win when its last leg settled, a loss when the first leg settled against the bettor (each leg at Meridian\'s own settlement time where known, else its Polymarket resolution or listed end)' }, U.fmtDateTime(decidedAt)) : null),
+          n.won || n.nd ? kv('Paid out', n.settled && n.settledAt ? 'claimed ' + U.fmtDateTime(n.settledAt) : n.unclaimed ? (soldAll ? 'the buyer\'s to claim' : 'not claimed yet') : null) : kv('Claimed', n.settled && n.settledAt ? 'by the market maker, ' + U.fmtDateTime(n.settledAt) : null),
           kv('Category', n.cat || null),
           kv('Secondary market', soldAll ? 'the bettor sold all its position tokens before the verdict' : soldPart ? `the bettor sold ${soldPct} of its position tokens before the verdict` : traded ? 'position tokens on these picks changed hands before the verdict, so part of the payout may have gone to a buyer' : null)),
         h('div.card.tight', UI.table({ cols: [
@@ -596,7 +604,7 @@
           cell('Stake', usd(n.stake)),
           cell('Multiplier', mult(n.multiple), 'Payout ÷ stake'),
           cell('Odds', n.odds == null ? '—' : pct(n.odds, n.odds < 0.1 ? 1 : 0), 'Locked odds: stake ÷ payout, the price of one USDe of payout'),
-          n.decided ? cell('Decided', decidedAt ? U.fmtDate(decidedAt).replace(', ' + new Date().getFullYear(), '') : '—', decidedAt ? U.fmtDateTime(decidedAt) : null)
+          n.decided ? cell('Settled', decidedAt ? U.fmtDate(decidedAt).replace(', ' + new Date().getFullYear(), '') : '—', decidedAt ? U.fmtDateTime(decidedAt) : null)
             : fairNow != null ? cell('Polymarket now', pct(fairNow, fairNow < 0.1 ? 1 : 0), 'The legs\' Polymarket prices now, multiplied (as if independent), against the ' + pct(n.odds, 1) + ' locked')
               : cell('Placed', U.fmtAgo(n.t))),
         h('div.slip-legs-head', h('span', n.legs > 1 ? `${n.legs} legs` : '1 leg'), h('span.grow'), n.legs > 1 ? h('span', 'every leg must win') : null),
@@ -619,6 +627,9 @@
     const kbdInside = () => { const a = document.activeElement; return !!a && a !== wrap && wrap.contains(a) && a.matches(':focus-visible'); };
     const refresh = () => R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !kbdInside()) render(); }).catch(() => {});
     if (ids.length) refresh();
+    // a decided slip without the snapshot's settlement time: its legs' Polymarket resolutions date it (decidedTime), once
+    const done = n.decided && !P.legVerdictAt(n) && !n.decidedAt ? Array.from(new Set(n.picks.filter((k) => k.id && k.settled).map((k) => k.id))) : [];
+    if (done.length) R.load(done, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !kbdInside()) render(); }).catch(() => {});
     const t = setInterval(() => { if (!ctx.signal.aborted && ids.length) refresh(); }, 60000);
     ctx.onCleanup(() => clearInterval(t));
   }
@@ -894,8 +905,14 @@
   async function mountMakers(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Market makers'));
     await withSnapshot(body, ctx, (snap) => {
-      const a = snap.agg; const T = a.totals; const cv = h('canvas');
-      const makerPnl = U.sum(a.makers, (m) => m.pnl || 0);   // the rows below; bettors' net differs by what secondary-market traders took
+      const a = snap.agg; const T = a.totals; const cv = h('canvas'); const MK = P.splitMakers(a.makers);
+      // every counterparty, one-off ones included (the bettors' net mirrors them all); bettors' net differs by what
+      // secondary-market traders took
+      const makerPnl = U.sum(a.makers, (m) => m.pnl || 0);
+      const oneOffNote = MK.oneOff.length ? h('div.footer-note', { style: { textAlign: 'left', padding: '10px 14px' } },
+        `Not market makers: ${MK.oneOff.length === 1 ? 'a wallet that' : MK.oneOff.length + ' wallets that'} took the other side of fewer than ${P.MAKER_MIN} predictions (a one-off or a test, not a market): `,
+        ...MK.oneOff.flatMap((m, i) => [i ? ', ' : '', bettorLink(m.address, 4), ` (${U.fmtNum(m.n, 0)} prediction${m.n === 1 ? '' : 's'}, ${usd(m.wagered)}, ${usd(m.pnl || 0, { sign: true })})`]),
+        '. Their results count in the Maker PnL total.') : null;
       const tbl = UI.table({ cols: [
         { key: 'a', label: 'Market maker', render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 6), U.copyBtn(r.address)) },
         { key: 'n', label: 'Predictions taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
@@ -908,13 +925,13 @@
         { key: 'ao', label: 'Avg bettor odds', num: true, render: (r) => pct(r.avgOdds, 0) },
         { key: 'cat', label: 'Top category', render: (r) => r.topCat || '—' },
         { key: 'f', label: 'Active', render: (r) => h('span.dim', U.fmtDate(r.first) + ' → ' + U.fmtAgo(r.last)) },
-      ], rows: a.makers, onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
+      ], rows: MK.makers, onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds. The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
-        h('div.stats', UI.stat('Market makers', String(a.makers.length)), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toOthers) >= 1 ? ' · ' + usd(a.secondary.toOthers, { sign: true, compact: true }) + ' went to secondary-market traders' : ''), U.pnlClass(makerPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
-        h('div.card.tight', tbl),
+        h('div.stats', UI.stat('Market makers', String(MK.makers.length), MK.oneOff.length ? `+ ${MK.oneOff.length} one-off counterpart${MK.oneOff.length === 1 ? 'y' : 'ies'}` : null), UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'committed since launch'), UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toOthers) >= 1 ? ' · ' + usd(a.secondary.toOthers, { sign: true, compact: true }) + ' went to secondary-market traders' : ''), U.pnlClass(makerPnl)), UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })), UI.stat('Avg vig captured', pp(a.vig.overall.avg)), UI.stat('Stake-weighted vig', pp(a.vig.weighted))),
+        h('div.card.tight', tbl, oneOffNote),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Maker PnL'), h('div.chart-box.sm', cv)));
-      C.bars(cv, a.makers.map((m) => U.shortAddr(m.address)), a.makers.map((m) => m.pnl), { horizontal: true });
+      C.bars(cv, MK.makers.map((m) => U.shortAddr(m.address)), MK.makers.map((m) => m.pnl), { horizontal: true });
     });
   }
 
@@ -1094,6 +1111,16 @@
     const openRow = (n) => { const bp = L.byPrediction[n.id]; openPrediction(n, ctx, bp && n.predictor === addr ? { here: addr, traded: true, held: bp.held, ledgerPnl: bp.pnl } : { here: addr, traded: !!bp }); };
     const last = hist.length ? hist[hist.length - 1] : null;
     const claimable = last ? last.claimable : 0;
+    // offline: the cumulative result from the predictions themselves, each at its settlement (js/cards.js
+    // curveFromPredictions). A wallet on both sides is drawn for the role the headline counts, and a curve that cannot
+    // reach the headline (only the newest predictions loaded, or the other role left out) ends at it: { pts, anchored }
+    const verdictCurve = () => {
+      const both = !!(asBettor.length && asMaker.length);
+      const c = MD.cards.make({ U, P }).curveFromPredictions(both ? mine : norms, m.trades || [], addr);
+      if (!c || c.length < 2) return null;
+      const shift = (m.truncated && agg) || both ? F.pnl - c[c.length - 1][1] : 0;
+      return { pts: Math.abs(shift) > 0.005 ? c.map(([s, v]) => [s, Math.round((v + shift) * 100) / 100]) : c, anchored: Math.abs(shift) > 0.005 };
+    };
     // Equity curve flex (js/flex.js): all time, from the exchange's own history when live, else from the predictions the
     // way the snapshot counts them (decided at the verdict, traded positions through the token ledger); a wallet whose
     // predictions are not all loaded gets its card without the curve rather than a partial one
@@ -1101,7 +1128,7 @@
       const K = MD.cards.make({ U, P });
       MD.flex.open({ address: addr, what: 'wallet', periods: [{ v: 'all', label: 'All time' }], period: 'all', shareUrl: MD.api.shareUrl('p', addr), build: async () => {
         const act = hist.findIndex((x) => x.total || x.pnl);
-        const curve = m.live ? (act >= 0 ? hist.slice(Math.max(0, act - 1)).map((x) => [Math.round(x.t / 1000), Math.round(x.cumPnl * 100) / 100]) : null) : !m.truncated ? K.curveFromPredictions(norms, m.trades || [], addr) : null;
+        const curve = m.live ? (act >= 0 ? hist.slice(Math.max(0, act - 1)).map((x) => [Math.round(x.t / 1000), Math.round(x.cumPnl * 100) / 100]) : null) : !m.truncated ? (verdictCurve() || {}).pts || null : null;
         const cats = {}; for (const n of mine) cats[n.cat] = (cats[n.cat] || 0) + 1;
         const topCat = agg ? agg.topCat : Object.keys(cats).sort((x, y) => cats[y] - cats[x])[0];
         const decided = (F.won || 0) + (F.lost || 0);
@@ -1124,18 +1151,16 @@
       F.unclaimedWon && !isMaker ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), h('span', `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
         h('div', { style: { marginTop: '8px' } }, h('a.btn.sm', { href: P.CLAIM_URL, target: '_blank', rel: 'noopener', title: 'Opens the Predict portfolio in the Meridian app, where the wallet\'s owner claims every payout at once' }, U.icon('external'), 'Claim on Meridian'))), 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
-    // Cumulative PnL. Live: the exchange's own daily history, booked at the verdict. Offline that history is rebuilt from
-    // claims, which lags every wallet that leaves wins uncollected (a market maker's chart ended $800 away from its
-    // headline), so the curve comes from the verdicts like the headline; when the file holds only the newest
-    // predictions, that window ends at the all-time figure. A wallet on both sides keeps the claim-based history.
+    // Cumulative PnL, every result at its settlement (the verdict), never at its claim. Live: the exchange's own daily
+    // history, booked at the verdict. Offline that history is rebuilt from claims (the tax center's cash basis), which
+    // lags every wallet that leaves wins uncollected, so the curve comes from the verdicts like the headline
+    // (verdictCurve, above); a wallet on both sides is drawn for the role the headline counts.
     const firstAct = hist.findIndex((x) => x.total || x.volume);
     const h2 = firstAct >= 0 ? hist.slice(Math.max(0, firstAct - 1)) : hist;
-    let pnlPts = h2.map((x) => ({ x: x.t, y: x.cumPnl })), anchored = false, fromVerdicts = false;
-    if (!m.live && !(asBettor.length && asMaker.length)) {
-      const c = MD.cards.make({ U, P }).curveFromPredictions(norms, m.trades || [], addr);
-      if (c && c.length >= 2) { anchored = !!(m.truncated && agg); const shift = anchored ? F.pnl - c[c.length - 1][1] : 0; pnlPts = c.map(([s, v]) => ({ x: s * 1000, y: Math.round((v + shift) * 100) / 100 })); fromVerdicts = true; }
-    }
-    const pnlNote = !m.live && m.truncated ? `newest ${mine.length} predictions · ` + (anchored ? 'ends at the all-time PnL' : fromVerdicts ? 'at their verdicts' : 'booked when claimed') : null;
+    let pnlPts = h2.map((x) => ({ x: x.t, y: x.cumPnl })), anchored = false;
+    const vc = m.live ? null : verdictCurve();
+    if (vc) { anchored = vc.anchored; pnlPts = vc.pts.map(([s, v]) => ({ x: s * 1000, y: v })); }
+    const pnlNote = !m.live && (m.truncated || anchored) ? (m.truncated ? `newest ${mine.length} predictions · ` : '') + (anchored ? 'ends at the all-time PnL' : 'at their settlement') : null;
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: false, question: k.q });
     const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id

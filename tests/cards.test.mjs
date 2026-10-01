@@ -103,7 +103,7 @@ test('a slip card leads with the result: net PnL once won, the stake once lost, 
   const won = slip(25, 943.5, 'PREDICTOR_WINS', T, [['Will France win on 2026-09-28?', true], ['Uruguay covers -1.5 spread vs Korea Republic?', true], ['Will Armenia vs Montenegro total be over 3.5?', true]]);
   let svg = K.slipSvg(won); clean(svg);
   assert.match(svg, />\+\$944</, 'whole dollars from $100 up'); assert.match(svg, />Won · 3-leg combo</); assert.match(svg, /#34d487/);
-  assert.match(svg, />\$969 paid on a \$25\.00 stake</); assert.match(svg, />38\.74×</); assert.match(svg, />DECIDED</);
+  assert.match(svg, />\$969 paid on a \$25\.00 stake</); assert.match(svg, />38\.74×</); assert.match(svg, />SETTLED</);
   assert.match(svg, />Uruguay covers -1\.5 spread vs Korea</, 'a long question wraps'); assert.match(svg, />Republic\?</);
   assert.match(K.slipText(won).title, /^Won \+\$944 on a \$25\.00 3-leg combo \(38\.74×\) · Meridian Predict$/);
 

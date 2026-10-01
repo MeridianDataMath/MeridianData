@@ -135,7 +135,7 @@ if (fs.existsSync(slipDir)) {
       let s; try { s = MD.predict.full(r); } catch (e) { if (first) { failed++; console.warn('slip unreadable in', f, e.message); } continue; }
       const id = String((s && s.id) || '').toLowerCase(); if (!isId(id)) { skip('slip', s && s.id); continue; }
       if (only && id !== only) continue;
-      if (K.slipCardWanted(s, now)) list.push([id, s, s.decided ? (s.decidedAt || MD.predict.decidedAt(s) || 0) : Infinity]);
+      if (K.slipCardWanted(s, now)) list.push([id, s, s.decided ? (MD.predict.decidedAt(s) || 0) : Infinity]);
     }
   }
   list.sort((a, b) => b[2] - a[2] || (a[0] < b[0] ? -1 : 1));
