@@ -204,10 +204,12 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       listed all the same, with an *unclaimed* chip, and the card's header counts them. The
       tooltip has the settlement, claim and placement times. The same rule holds across the site:
       a result is dated at its settlement.
-    - *Decided time.* The exchange keeps no decision time, so it is the last leg's resolution on
-      Polymarket (never after the claim).
-      - The snapshot builder looks each time up once and caches it in the price cache
-        (`resolved`), then stores it as `da` on the record.
+    - *Settlement time.* When the win settled on Meridian: its last leg's `condition.settledAt`
+      (`P.legVerdictAt`), stored as `da` on every decided record (see *Settled vs claimed*
+      below).
+      - Older records without leg times fall back to Polymarket's resolution time, which the
+        builder looked up once for big wins and cached in the price cache (`resolved`), then to
+        the listed end, never after the claim.
       - A leg's listed end can be a day late: a price question about Sep 28 is listed to end on
         the 29th.
     - *Sold positions.* A bettor who sold its position tokens before the verdict does not collect
@@ -220,7 +222,7 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   * *Any prediction opens a dialog.* This covers the tape, big wins, a question's predictions and
     a bettor page's history and open positions. The dialog shows:
     - the result, stake, payout, odds, PnL and vig;
-    - the bettor and the market maker, and the placed, decided and claimed times;
+    - the bettor and the market maker, and the placed, settled and claimed times;
     - every leg with its result: Meridian's own once it has settled the question, before that
       Polymarket's. Leg questions link to that question's dialog, and ⓘ opens the resolution
       details;

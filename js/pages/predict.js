@@ -67,7 +67,7 @@
     })().finally(() => { P._loading = null; bytesListeners = []; });
     return P._loading;
   };
-  const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · last ${s.windowDays} days only`);
+  const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · predictions placed in the last ${s.windowDays} days only`);
   const offlineNote = 'live queries are not available from this domain (the Predict API only allows Meridian\'s own origins), so this shows the published snapshot';
   const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
   async function withSnapshot(body, ctx, render) {
@@ -220,7 +220,7 @@
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
         const waiting = bigWins ? bigWins.filter((n) => n.unclaimed).length : 0;
-        U.replace(bwNote, h('span', { title: 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale. A win counts from its verdict, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
+        U.replace(bwNote, h('span', { title: 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale. A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
