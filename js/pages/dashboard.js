@@ -28,11 +28,11 @@
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'current 1h rate · projected · annualized')), fundBody))));
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'last hourly charge · projected next charge · annualized from the last charge')), fundBody))));
 
       const ref = await A.ref(ctx);
       const ids = ref.active.map((p) => p.id);
-      const [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
+      let [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
       const live = {}; // ticker -> ticker ws data
       const now = Date.now();
       let gaps = [];
@@ -48,30 +48,42 @@
       };
 
       function renderTiles() {
+        // summed from the Markets table's own rows, so the tiles always equal the column totals
         let vol = 0, oi = 0;
-        for (const p of ref.active) { const o = mark(p); vol += U.num(p.volume24h) * o; oi += U.num(p.openInterest) * o; }
-        U.replaceLive(tiles, UI.stat('Active markets', String(ref.active.length), ref.products.length - ref.active.length ? (ref.products.length - ref.active.length) + ' pending/delisted' : null), UI.stat('24h volume', U.fmtUsd(vol, { compact: true })), UI.stat('Open interest', U.fmtUsd(oi, { compact: true })), UI.stat('Accounts', subs ? String(subs.length) : '—', subs && subs.length ? 'newest ' + U.fmtAgo(Math.max(...subs.map((s) => s.createdAt))) : null), UI.stat('Points distributed', points ? U.fmtCompact(points.totalPoints) : '—', points ? 'updated ' + U.fmtAgo(points.updatedAt) : null));
+        for (const r of marketRows()) { vol += r.volUsd; oi += r.oiUsd; }
+        U.replaceLive(tiles, UI.stat('Active markets', String(ref.active.length), ref.products.length - ref.active.length ? (ref.products.length - ref.active.length) + ' pending/delisted' : null),
+          UI.stat(h('span', { title: '24 h traded quantity (base units) × current mark price, summed over markets' }, '24h volume'), U.fmtUsd(vol, { compact: true })),
+          UI.stat('Open interest', U.fmtUsd(oi, { compact: true }), 'long + short · one side ' + U.fmtUsd(oi / 2, { compact: true })),
+          UI.stat('Accounts', subs ? String(subs.length) : '—', subs && subs.length ? 'newest ' + U.fmtAgo(Math.max(...subs.map((s) => s.createdAt))) : null), UI.stat('Points distributed', points ? U.fmtCompact(points.totalPoints) : '—', points ? 'updated ' + U.fmtAgo(points.updatedAt) : null));
       }
       const mark = (p) => { const l = live[p.ticker]; if (l && U.num(l.markPx)) return U.num(l.markPx); const px = prices[p.id]; return px ? U.num(px.oraclePrice) : 0; };
       const sparks = {};
-      function renderMarkets() {
-        const rows = ref.active.map((p) => {
+      // one row per market, shared by the tiles and the Markets / Funding tables
+      function marketRows() {
+        return ref.active.map((p) => {
           const l = live[p.ticker] || {}; const px = prices[p.id] || {};
           const m = mark(p); const p24 = U.num(l.markPx24h || px.price24hAgo);
           const bid = U.num(l.bidPx || px.bestBidPrice), ask = U.num(l.askPx || px.bestAskPrice);
-          const oiN = U.num(l.oi || p.openInterest); const volN = U.num(l.vol24h || p.volume24h);
-          const fr = U.num(l.fr1h || p.fundingRate1h); const proj = projected[p.id] ? U.num(projected[p.id].fundingRateProjected1h) : null;
+          // one source per field, shared by tiles and table: REST open interest matched the open positions
+          // while the WebSocket oi lagged for minutes; volume takes the live figure when there is one
+          const oiN = U.num(p.openInterest); const volN = U.num(l.vol24h || p.volume24h);
+          const fr = U.num(p.fundingRate1h);   // rate charged at the last hourly funding
+          const proj = l.fr1h != null && l.fr1h !== '' ? U.num(l.fr1h) : projected[p.id] ? U.num(projected[p.id].fundingRateProjected1h) : null;   // WS fr1h = projected rate for the end of the hour
           return { p, m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, fr, proj };
         });
+      }
+      function renderMarkets() {
+        const rows = marketRows();
         U.replaceLive(mktBody, UI.table({
           cols: [
-            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · fee ' + U.fmtPct(U.num(r.p.takerFee) * 100, { dp: 2 })) },
-            { key: 'px', label: 'Mark price', num: true, render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
-            { key: 'chg', label: '24h', num: true, render: (r) => UI.pct(r.chg, { dp: 2 }) },
+            // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
+            { key: 'px', label: 'Mark price', num: true, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
+            { key: 'chg', label: '24h', num: true, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
-            { key: 'fr', label: 'Funding 1h', num: true, title: 'positive = longs pay', render: (r) => h('span', { class: r.fr > 0 ? 'pos' : r.fr < 0 ? 'neg' : '' }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
-            { key: 'oi', label: 'Open interest', num: true, render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
-            { key: 'vol', label: '24h volume', num: true, render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
+            { key: 'fr', label: 'Funding 1h', num: true, title: 'rate charged at the last hourly funding · positive = longs pay', render: (r) => h('span', { class: r.fr > 0 ? 'pos' : r.fr < 0 ? 'neg' : '' }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
+            { key: 'oi', label: 'Open interest', num: true, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
+            { key: 'vol', label: '24h volume', num: true, title: '24 h traded quantity (base units) × current mark price', render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
             { key: 'spark', label: '7d', render: (r) => { const c = sparks[r.p.ticker] || (sparks[r.p.ticker] = h('canvas.spark', { width: 110, height: 30 })); return c; } },
             { key: 'note', label: 'Status', render: (r) => closureNote(r.p) || h('span.xs.dim', r.p.marginMode === 'CROSS' ? '24/7' : 'open') },
           ], rows,
@@ -79,11 +91,12 @@
         U.replaceLive(fundBody, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
-            { key: 'fr', label: 'Current 1h', num: true, render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
-            { key: 'proj', label: 'Projected 1h', num: true, render: (r) => (r.proj == null ? '—' : h('span', { class: U.pnlClass(r.proj) }, U.fmtPct(r.proj * 100, { dp: 4, sign: true }))) },
-            { key: 'apr', label: 'Annualized', num: true, render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 24 * 365 * 100, { dp: 1, sign: true })) },
+            { key: 'fr', label: 'Last 1h', num: true, title: 'rate charged at the last hourly funding · positive = longs pay', render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 100, { dp: 4, sign: true })) },
+            { key: 'proj', label: 'Projected 1h', num: true, title: 'projected rate for the next hourly charge (live once the WebSocket is connected)', render: (r) => (r.proj == null ? '—' : h('span', { class: U.pnlClass(r.proj) }, U.fmtPct(r.proj * 100, { dp: 4, sign: true }))) },
+            { key: 'apr', label: 'Annualized', num: true, title: 'last 1h rate × 24 × 365', render: (r) => h('span', { class: U.pnlClass(r.fr) }, U.fmtPct(r.fr * 24 * 365 * 100, { dp: 1, sign: true })) },
             { key: 'base', label: 'Baseline / clamp / max APR', num: true, render: (r) => h('span.dim', U.fmtPct(U.num(r.p.fundingBaselineApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingClampApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingMaxApr) * 100, { dp: 0 })) },
-            { key: 'cum', label: 'Cumulative funding', num: true, render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) },
+            // a per-unit index (the sum of the hourly per-unit charges), not money paid on the market
+            { key: 'cum', label: 'Cumulative funding / unit', num: true, title: 'Funding paid by a one-unit long held since funding began (negative = received); the sum of the hourly per-unit charges', render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) + ' / ' + (r.p.baseTokenName || 'unit') },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.fundingUpdatedAt)) },
           ], rows,
         }));
@@ -97,6 +110,17 @@
       function drawSparks() { for (const t of Object.keys(sparkData)) { const cv = sparks[t]; if (cv && cv.isConnected && !cv.__chart) C.sparkline(cv, sparkData[t]); } }
       const renderMarketsThrottled = U.throttle(() => { renderMarkets(); renderTiles(); }, 1500);
       renderTiles(); renderMarkets(); loadSparks();
+      // products (last funding charge, cumulative funding, open interest, REST volume) and the projected rates
+      // change on the exchange every hour or faster; refresh them every minute on a page left open
+      const refreshRest = async () => {
+        try {
+          const r = await A.get(A.BASE + '/v1/product?limit=200', { signal: ctx.signal });   // no ttl: A.ref's 5-minute cache would hand back the same objects
+          for (const p of (r && r.data) || []) if (ref.byId[p.id]) Object.assign(ref.byId[p.id], p);   // ref.active and ref.byId hold the same objects
+          Object.assign(projected, await A.projectedFunding(ids, ctx));
+          renderMarketsThrottled();
+        } catch (_) {}
+      };
+      const restT = setInterval(refreshRest, 60000); ctx.onCleanup(() => clearInterval(restT));
 
       // ---- stop map: TP / SL / entry stop levels of every account, per market ----
       let sm = null, smMarket = null, smScanning = false;
@@ -106,16 +130,20 @@
         try {
           const LB = MD.router.pages.leaderboard; if (LB) await LB.loadRemote();
           const snap = LB && LB.cache(); const known = {}; if (snap && snap.rows) for (const r of snap.rows) known[r.sid] = r;
-          const accounts = subs || (await A.allSubaccounts(ctx));
-          const levels = []; let scanned = 0;
+          // a fresh list on every scan, so accounts opened after the page loaded are scanned too; the last good
+          // list stands in when the refresh fails, and with no list at all the scan fails as before
+          const accounts = await A.allSubaccounts({ signal: ctx.signal, ttl: 60000 }).catch((e) => { if (isAbort(e) || !subs) throw e; return subs; });
+          if (accounts.length) subs = accounts;               // the Accounts tile follows on the next render
+          const levels = []; let scanned = 0, skipped = 0;
           const tasks = accounts.map((sa) => async () => {
             const k = known[sa.id];
-            if (k && k.inactive) return;                       // never funded / traded → nothing to find
+            if (k && k.inactive) { skipped++; return; }       // empty with no positions and no trading volume in the last snapshot → nothing to find
             const o = { signal: ctx.signal };
-            const pending = await A.pendingOrders(sa.id, o).catch(() => []);
+            let ok = true;
+            const pending = await A.pendingOrders(sa.id, o).catch(() => { ok = false; return []; });
+            if (ok) scanned++;                                 // "checked" counts only accounts whose orders were read
             let positions = [], working = [];
             if (!k || k.openCount > 0 || pending.length) [positions, working] = await Promise.all([A.openPositions(sa.id, o).catch(() => []), A.openOrders(sa.id, o).catch(() => [])]);
-            scanned++;
             if (!pending.length && !positions.length) return;
             const px = {}; for (const p of positions) { const prod = ref.byId[p.productId]; px[p.productId] = { oraclePrice: prod ? mark(prod) : 0 }; }
             const st = AN.accountState({ balances: [], positions, ref, prices: px });
@@ -133,7 +161,7 @@
           });
           await U.pLimit(tasks, 4);
           if (ctx.signal.aborted) return;
-          sm = { at: Date.now(), scanned, total: accounts.length, levels };
+          sm = { at: Date.now(), scanned, skipped, total: accounts.length, levels };
           if (!smMarket || !levels.some((l) => l.productId === smMarket)) { const by = {}; for (const l of levels) by[l.productId] = (by[l.productId] || 0) + l.usd; smMarket = Object.keys(by).sort((a, b) => by[b] - by[a])[0] || null; }
           renderStopMap();
         } catch (e) { if (!isAbort(e)) U.replace(smSummary, h('span.neg', 'scan failed: ' + e.message)); }
@@ -149,7 +177,8 @@
           const near = (list) => (list.length ? list.reduce((a, l) => (Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a)) : null);
           agg.nearSl = near(agg.sl); agg.nearTp = near(agg.tp); return agg;
         }).sort((a, b) => b.usd - a.usd);
-        U.replace(smSummary, `${L.length} levels · ${U.fmtUsd(U.sum(L, (l) => l.usd), { compact: true })} · ${new Set(L.map((l) => l.sid)).size} accounts · scanned ${sm.scanned}/${sm.total} · ${U.fmtAgo(sm.at)}`);
+        // a protected position counts in both its TP and its SL, so the dollar figure is order notional, not exposure
+        U.replace(smSummary, `${L.length} orders · ${U.fmtUsd(U.sum(L, (l) => l.usd), { compact: true })} order notional (TP + SL + entry) · ${new Set(L.map((l) => l.sid)).size} accounts · ${sm.scanned} of ${sm.total} accounts checked${sm.skipped ? ` (${sm.skipped} skipped: empty and never traded in the last snapshot)` : ''} · at ${U.fmtTime(sm.at)}`);
         if (!markets.length) { U.replace(smSel); U.replace(smLadder, UI.empty('No stop orders on the exchange right now.')); U.replace(smTable); return; }
         const cur = markets.find((x) => x.pid === smMarket) || markets[0]; smMarket = cur.pid;
         U.replace(smSel, UI.seg(markets.map((x) => ({ v: x.pid, label: x.p.displayTicker })), smMarket, (v) => { smMarket = v; renderStopMap(); }, 'sm'));
@@ -237,7 +266,9 @@
         } finally { resolving = false; }
       };
       (async () => {
-        const seed = await Promise.all(ref.active.map((p) => A.trades(p.id, 15, ctx).then((rows) => rows.map((r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null }))).catch(() => [])));
+        // SHOW rows per market: one market can fill at most SHOW rows, so the newest SHOW of the merged list are
+        // exactly the newest SHOW trades (with fewer per market a busy market's older trades went missing)
+        const seed = await Promise.all(ref.active.map((p) => A.trades(p.id, SHOW, ctx).then((rows) => rows.map((r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null }))).catch(() => [])));
         trades = U.sortBy(seed.flat(), (t) => t.t, true);
         renderTrades();
         resolveVisible();
@@ -255,7 +286,7 @@
       // ---- liquidations ----
       // the API's cause (LiquidationCause) in plain words: what took the pool's equity below its maintenance margin
       const CAUSES = {
-        MarkChanged: ['Price move', 'The mark price moved against the position (a long fell, a short rose) and its unrealized loss took the pool\'s equity below the maintenance margin.'],
+        MarkChanged: ['Price move', 'A mark price change took the margin pool\'s equity below its maintenance margin; in a cross pool the price that moved can be another market\'s. A liquidation closes every position in that pool.'],
         Funding: ['Funding', 'A funding payment took the pool\'s equity below the maintenance margin.'],
         PositionFee: ['Position fee', 'An mPerp position fee took the pool\'s equity below the maintenance margin; it can happen while the market is closed and the price is frozen.'],
       };
@@ -273,9 +304,9 @@
               { key: 'acct', label: 'Account', render: (r) => h('a.addr', { href: U.accountUrl('', r.subaccountId) }, U.shortAddr(r.subaccountId, 4)) },
               { key: 'm', label: 'Market', render: (r) => (ref.byId[r.productId] ? ref.byId[r.productId].displayTicker : '—') },
               { key: 'side', label: 'Side', render: (r) => U.sideEl(r.positionSide, true) },
-              { key: 'cost', label: 'Cost', num: true, render: (r) => U.fmtUsd(r.cost) },
+              { key: 'cost', label: 'Notional', num: true, title: 'USD value of the position closed by the liquidation (size × liquidation fill price), as the exchange reports it; not the trader\'s loss', render: (r) => U.fmtUsd(r.cost) },
               { key: 'px', label: 'Liq. price', num: true, render: (r) => U.fmtPrice(r.liquidationPrice, ref.byId[r.productId] && ref.byId[r.productId].tickSize) },
-              { key: 'cause', label: 'Cause', title: 'What took the account below its maintenance margin: a price move, a funding payment or an mPerp position fee', render: causeEl },
+              { key: 'cause', label: 'Cause', title: 'What took the margin pool below its maintenance margin: a price move, a funding payment or an mPerp position fee', render: causeEl },
             ], rows, empty: 'No liquidations recorded',
           }));
         } catch (e) { if (e.name !== 'AbortError') U.replace(liqBody, UI.error(e)); }

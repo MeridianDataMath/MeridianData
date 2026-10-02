@@ -43,7 +43,7 @@
         { key: 'n', label: 'Size', num: true, render: (a) => (a.notional ? U.fmtUsd(a.notional, { compact: true, dp: 0 }) : h('span.dim', '—')) },
         { key: 'p', label: 'Price', num: true, render: (a) => (a.px ? U.fmtPrice(a.px, a.tick) : h('span.dim', '—')) },
         { key: 'go', label: '', render: (a) => h('a.btn.sm.ghost', { href: '#/copytrade/sim?address=' + a.address + '&sub=' + a.sid }, 'Simulate') },
-      ], rows: hist, empty: s.leaders.length ? 'Nothing yet: the followed leaders have not traded since this tab started listening' : 'Follow a leader to start' });
+      ], rows: hist, empty: s.leaders.length ? 'Nothing logged yet: no trade by a followed leader has matched the events and minimum size above since listening started or the log was last cleared' : 'Follow a leader to start' });
       U.replace(card,
         h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Leader alerts'), UI.chip('live', 'blue'), status, h('span.grow'), hist.length ? h('button.btn.sm.ghost', { onclick: () => AL.clearHistory() }, 'Clear') : null),
         h('div.grid.cols-2',
@@ -77,13 +77,16 @@
       h('div.dim.xs', { style: { marginBottom: '8px' } }, sub),
       h('div.stack', { style: { gap: '8px' } }, sc.parts.filter((p) => p.pillar === key).map((p) => barRow(p.label, p.v, p.note))))));
     // what is left for a copier, per position, in bps of entry notional (a profile from an older snapshot may lack the parts)
+    // (each row's mean is taken on its own, so the first row's parts are stated as averages, not as a sum to its value)
+    const nMean = c.nTrim != null ? c.nTrim : c.closed;
+    const after = [`their trading fees (${U.fmtNum(c.feesBps, 1)} bps on average)`].concat(c.posFeeBps ? [`mPerp position fees (${U.fmtNum(c.posFeeBps, 1)} bps)`] : [], c.fundPosBps ? [`funding (${U.fmtNum(Math.abs(c.fundPosBps), 1)} bps ${c.fundPosBps > 0 ? 'received' : 'paid'} on average)`] : []);
     const wf = c.copyBps != null && c.netTrimBps != null && c.feesBps != null ? [
-      ['Leader, per position', c.netTrimBps, `${U.fmtNum(c.grossTrimBps, 1)} bps gross − ${U.fmtNum(c.feesBps, 1)} their fees` + (c.fundPosBps ? ` ${c.fundPosBps > 0 ? '+' : '−'} ${U.fmtNum(Math.abs(c.fundPosBps), 1)} funding` : '') + ' · plain mean over positions, both tails winsorized at 5% / 95% so one jackpot or blow-up cannot carry it'],
-      ['+ Their fees back', c.feesBps, 'a copier pays its own fees instead'],
+      ['Leader, per position', c.netTrimBps, `each position's result after ${after.length > 1 ? after.slice(0, -1).join(', ') + ' and ' + after[after.length - 1] : after[0]}, ` + (nMean >= 10 ? 'a plain mean over positions with the most extreme 5% on each side (at least one position) winsorized, so one jackpot or blow-up cannot carry it' : `a plain mean over ${nMean} positions, too few to winsorize, so one position can move it`)],
+      ['+ Their trading fees back', c.feesBps, 'a copier pays its own trading fees instead; position fees and funding stay in, as a copier holding the same position pays or receives them too'],
       ['− Copier taker fees', -2 * c.feeBps, `${U.fmtNum(c.feeBps, 1)} bps in and out`],
-      ['− Price drift after their fills', -2 * c.drift1, `${U.fmtNum(c.drift1, 1)} bps per fill one minute later, in and out · measured over ${U.fmtNum(c.driftN, 0)} fills (${U.fmtNum(c.drift5, 1)} bps after five minutes)`],
+      ['− Price drift after their fills', -2 * c.drift1, `${U.fmtNum(c.drift1, 1)} bps per fill one minute later, in and out · measured over their latest ${U.fmtNum(c.driftN, 0)} fills (${U.fmtNum(c.drift5, 1)} bps after five minutes)`],
       ['− Slippage for a copier', -2 * c.slipBps, `${U.fmtNum(c.slipBps, 1)} bps to fill ${usd0(c.copySize)} against today's books, in and out` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` · ${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${usd0(c.notMed)}` : '')],
-      ['= Copier, per position', c.copyBps, c.netTrimBps <= 0 ? 'the leader\'s positions lose after fees, so there is no edge to keep' : c.edgeLeft <= 0 ? 'nothing survives: the copier\'s costs exceed the leader\'s result' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's result survives`],
+      ['= Copier, per position', c.copyBps, c.netTrimBps <= 0 ? 'the leader\'s positions do not make money after fees and funding, so there is no edge to keep' : c.edgeLeft > 100 ? `the copier keeps more per position than the leader (${U.fmtNum(c.copyBps, 1)} vs ${U.fmtNum(c.leaderBps, 1)} bps)` : c.edgeLeft <= 0 ? 'nothing survives: the copier\'s costs exceed the leader\'s result' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's result survives`],
     ] : null;
     const wfTbl = wf ? UI.table({ cols: [
       { key: 'k', label: 'Per position, on entry notional', render: (x) => h('span', { class: /^=/.test(x[0]) ? 'bold' : '' }, x[0]) },
@@ -97,24 +100,25 @@
       h('div.card.tight', { style: { padding: '12px 14px' } }, h('h3', 'How they trade'), kv([
         ['Hold times', h('div', holdBar, h('div.dim.xs', { style: { marginTop: '4px' } }, 'scalps · intraday · swing · long · median ' + (c.holdMed == null ? '—' : U.fmtDuration(c.holdMed))))],
         ['Typical size', h('span', usd0(c.notMed), h('span.dim.small', ` median · ${usd0(c.notP90)} at the 90th percentile` + (c.lev ? ` · ${U.fmtNum(c.lev, 1)}× equity` : '')))],
-        ['Markets', h('div.row.wrap', { style: { gap: '4px' } }, c.markets.map((m) => UI.chip(`${m.t} ${U.fmtPct(m.share, { dp: 0 })}`, '')))],
+        ['Markets', h('div', h('div.row.wrap', { style: { gap: '4px' } }, c.markets.map((m) => UI.chip(`${m.t} ${U.fmtPct(m.share, { dp: 0 })}`, ''))), h('div.dim.xs', { style: { marginTop: '4px' } }, 'share of positions, closed and open' + (c.nMarkets > c.markets.length ? ` · top ${c.markets.length} of ${c.nMarkets} markets` : '')))],
         ['Positions', h('span', `${c.closed} closed · ${c.open} open · ${c.closed30} closed in 30d` + (c.liq ? ` · ${c.liq} liquidated` : '') + (c.adl ? ` · ${c.adl} deleveraged` : ''))],
         ['Per position', h('span', bps(c.netTrimBps, { sign: true }), h('span.dim.small', ' after fees and funding · '), bps(c.grossMedBps, { sign: true }), h('span.dim.small', ' median gross' + (c.tStat != null ? ` · t = ${U.fmtNum(c.tStat, 1)}` : '')))]])),
       h('div.card.tight', { style: { padding: '12px 14px' } }, h('h3', 'Track record'), kv([
         ['All-time PnL', h('span', U.pnlEl(s.pnl, { dp: 0 }), h('span.dim.small', s.roi == null ? '' : ` · ROI ${U.fmtPct(s.roi, { dp: 1, sign: true })}`))],
         ['Win rate', h('span', r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 }), h('span.dim.small', c.top == null ? '' : ` · largest win ${U.fmtPct(c.top, { dp: 0 })} of all wins`))],
-        ['Consistency', h('span', c.weeksActive ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable` : '—')],
+        ['Consistency', h('span', c.weeksActive ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable (weeks start Monday 00:00 UTC)` : '—')],
         ['Drawdown', h('span', s.ddPct == null || !(s.ddPct > 0) ? '—' : U.fmtDd(s.ddPct))],
-        ['Activity', h('span', (c.lastAt ? 'last trade ' + U.fmtAgo(c.lastAt) : '—') + (c.tenureD != null ? ` · ${U.fmtNum(c.tenureD, 0)} days on the exchange` : '') + (c.perWeek != null ? ` · ${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} closed / week` : ''))]])));
+        // under a week old, perWeek is the plain count, not a weekly rate
+        ['Activity', h('span', (c.lastAt ? 'last trade ' + U.fmtAgo(c.lastAt) : '—') + (c.tenureD != null ? (c.tenureD < 1 ? ' · less than a day on the exchange' : ` · ${U.fmtNum(c.tenureD, 0)} day${Math.round(c.tenureD) === 1 ? '' : 's'} on the exchange`) : '') + (c.perWeek != null ? (c.tenureD < 7 ? ` · ${c.closed} closed in its first ${U.fmtDuration(Date.now() - c.firstAt)}` : ` · ${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} closed / week`) : ''))]])));
     UI.modal({ wide: true,
       title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), MD.bellBtn({ sid: r.sid, address: r.account, name: r.name }), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
-        h('div.dim.small', 'Copyability ' + sc.total + ' = 35% track record (' + sc.track + ') + 45% copy friction (' + sc.friction + ') + 20% activity (' + sc.activity + ')' + (sc.losing ? ', scaled down and capped at 45 while the account is not profitable' : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
+        h('div.dim.small', `Copyability ${sc.total}. Before caps: 35% track record (${sc.track}) + 45% copy friction (${sc.friction}) + 20% activity (${sc.activity}) = ${sc.raw}` + (sc.losing ? ', then scaled down by 40% and capped at 45 while the account is not profitable' : sc.raw !== sc.total ? `, capped at ${sc.total} (reasons below)` : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
         pillars,
         UI.card('What is left for a copier', wfTbl, h('span.dim.small', `the same moves one minute later, at taker fees, with a ${usd0(c.copySize || AN.COPY_SIZE)} position`)),
         facts,
-        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after each fill, and the order books as they were when the snapshot was built. Past results are not a promise of future returns; copyability says how much of a result a copier could have kept, not whether there will be one.')) });
+        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after its most recent fills (up to 400), and the order books as they were when the snapshot was built. Past results are not a promise of future returns. Copyability combines how much of a result a copier could have kept with the track record and recent activity behind it; it does not say whether there will be a result.')) });
   }
 
   MD.router.pages.copytrade = {
@@ -130,7 +134,7 @@
       const ideas = MD.predict && MD.predict.ideasCard ? MD.predict.ideasCard(ctx) : null;
       const hero = h('div.card.ct-hero',
         h('h1', 'Copy trading on Meridian'),
-        h('p', 'A leaderboard tells you who made money. Copying needs a different question: what would a follower have kept, entering a minute later, at taker fees, at that size, against these books? Every wallet below is scored on exactly that, and the numbers behind each score are one click away.'),
+        h('p', 'A leaderboard tells you who made money. Copying needs a different question: how much of a leader\'s result would a follower keep, entering a minute later, at taker fees, against today\'s order books, with a position the size of the leader\'s median one but no more than $2,000? Every wallet with at least 5 closed positions is scored on that, together with its track record and recent activity, and the numbers behind each score are one click away.'),
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
         h('p', 'Predict is copied by hand, one slip at a time: further down are open slips of bettors whose record beats their own odds; each opens on Meridian Predict, where Add To Slip adds its picks to your slip.'),
         h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first'), h('span.grow'),
@@ -152,12 +156,13 @@
           U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No leaderboard snapshot yet.'), h('a.btn.primary', { href: '#/leaderboard' }, 'Open the leaderboard')));
           U.replace(summary, ''); return;
         }
-        const traders = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !AN.noTrades(r));
+        const traders = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !AN.noTrades(r) && !AN.exchangeAccount(r));
         const scored = traders.map((r) => ({ r, sc: AN.copyScore(r), c: r.copy }));
         let rows = scored;
         if (state.filter === 'scored') rows = rows.filter((x) => x.sc);
         if (state.filter === 'copyable') rows = rows.filter((x) => x.sc && x.sc.total >= 70);
-        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': return c.edgeLeft; case 'pnl': return s.pnl; case 'roi': return s.roi; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
+        // edge left over 100% shows as '>100%', so those rows sort as one value rather than by a ratio never shown
+        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': return c.edgeLeft == null ? null : Math.min(c.edgeLeft, 100.5); case 'pnl': return s.pnl; case 'roi': return s.roi; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
         rows = U.sortBy(rows, (x) => val(x, state.sort.key), state.sort.desc);
         if (state.sort.key === 'score') rows = rows.slice().sort((a, b) => { const d = (b.sc ? b.sc.total : -1) - (a.sc ? a.sc.total : -1); return (state.sort.desc ? d : -d) || (b.r.stats.all.pnl - a.r.stats.all.pnl); });
         const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; render(); };
@@ -170,7 +175,7 @@
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.total >= 70 ? 'top' : '' }, String(i)); } },
               { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: '0–100: track record, copy friction and activity; click a row for the breakdown', render: (x) => scorePill(x.sc, x.c) },
-              { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their fills and slippage for a $2K position', render: (x) => (x.c && x.c.leaderBps != null && x.c.leaderBps <= 0 ? h('span.dim', { title: 'The leader\'s positions lose after fees and funding: there is no edge to keep' }, '—') : x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg') }, U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
+              { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their most recent fills (up to 400) and slippage at the leader\'s median position size, capped at $2K', render: (x) => (x.c && x.c.leaderBps != null && x.c.leaderBps <= 0 ? h('span.dim', { title: 'The leader\'s positions do not make money after fees and funding: there is no edge to keep' }, '—') : x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg'), title: `per position: leader ${U.fmtNum(x.c.leaderBps, 1)} bps, copier ${U.fmtNum(x.c.copyBps, 1)} bps` }, x.c.edgeLeft > 100 ? '>100%' : U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'pnl', label: 'All-time PnL', num: true, sortVal: 1, render: (x) => U.pnlEl(x.r.stats.all.pnl, { dp: 0 }) },
               { key: 'roi', label: 'ROI', num: true, sortVal: 1, render: (x) => UI.pct(x.r.stats.all.roi, { dp: 1 }) },
               { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (x) => (x.r.winRate == null ? h('span.dim', '—') : U.fmtPct(x.r.winRate, { dp: 0 })) },
@@ -178,7 +183,7 @@
               { key: 'hold', label: 'Median hold', num: true, sortVal: 1, render: (x) => (x.c && x.c.holdMed != null ? U.fmtDuration(x.c.holdMed) : h('span.dim', '—')) },
               { key: 'size', label: 'Typical size', num: true, sortVal: 1, title: 'Median entry notional per position', render: (x) => (x.c && x.c.notMed ? usd0(x.c.notMed) : h('span.dim', '—')) },
               // one line: the two main markets by share, the rest counted (chips stacked made every row three lines tall)
-              { key: 'mk', label: 'Markets', render: (x) => (x.c && x.c.markets.length ? h('span', { title: x.c.markets.map((m) => `${m.t} ${U.fmtPct(m.share, { dp: 0 })}`).join(' · ') }, x.c.markets.slice(0, 2).map((m) => m.t.replace(/-USD$/, '')).join(' · '), x.c.nMarkets > 2 ? h('span.dim', ' +' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
+              { key: 'mk', label: 'Markets', title: 'Most-traded markets by number of positions (closed and open); hover a cell for each market\'s share', render: (x) => (x.c && x.c.markets.length ? h('span', { title: 'Share of positions (closed and open): ' + x.c.markets.map((m) => `${m.t} ${U.fmtPct(m.share, { dp: 0 })}`).join(' · ') }, x.c.markets.slice(0, 2).map((m) => m.t.replace(/-USD$/, '')).join(' · '), x.c.nMarkets > 2 ? h('span.dim', ' +' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
               { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],

@@ -33,7 +33,9 @@
     const s = st.settings;
     const orderQty = fill.orderQty && fill.orderQty > Math.abs(q) ? fill.orderQty : Math.abs(q);
     const k = s.mode === 'ratio' ? s.ratio : s.size / (orderQty * fill.px);
-    return (st.open[fill.pid] = { pid: fill.pid, ticker: fill.ticker, k, qty: 0, leaderQty: 0, cash: 0, fees: 0, slip: 0, drift: 0, funding: 0, openedAt: exec.at, fills: 0, entryNotional: 0, leaderPx0: fill.px, side: Math.sign(q) });
+    // basis: what the quantity still held cost at its entry prices (signed), scaled down in proportion on a reduction:
+    // the exchange's average-cost convention. A position kept before it existed has none (see P.unrealized).
+    return (st.open[fill.pid] = { pid: fill.pid, ticker: fill.ticker, k, qty: 0, leaderQty: 0, cash: 0, fees: 0, slip: 0, drift: 0, funding: 0, openedAt: exec.at, fills: 0, entryNotional: 0, basis: 0, leaderPx0: fill.px, side: Math.sign(q) });
   }
   /** Close the episode when the copy is flat: realized = cash − fees + funding. */
   function settle(st, pos, at, row, why) {
@@ -56,6 +58,13 @@
    * goes past zero opens a position on the other side.
    */
   P.apply = (st, fill, exec) => {
+    if (st.settings.markets && !st.settings.markets.includes(fill.pid)) {
+      // a market the copy does not follow: the fill is marked seen and the leader's position there tracked as not ours
+      if (fill.id) { if (st.seen[fill.id]) return null; st.seen[fill.id] = 1; }
+      const pre = st.pre || (st.pre = {}); pre[fill.pid] = (pre[fill.pid] || 0) + (fill.side === 'BUY' ? 1 : -1) * Math.abs(fill.qty); if (Math.abs(pre[fill.pid]) < EPS) delete pre[fill.pid];
+      st.lastSeen = Math.max(st.lastSeen, fill.t); if (fill.t) st.fillT = Math.max(st.fillT || 0, fill.t);
+      return [];
+    }
     if (fill.id && st.seen[fill.id]) return null;
     if (fill.id) st.seen[fill.id] = 1;
     const s = st.settings; const pre = st.pre || (st.pre = {});
@@ -67,6 +76,7 @@
       const d = Math.sign(q); const px = exec.px * (1 + (d * slip) / 1e4);
       const notional = Math.abs(q) * px; const f = fee(notional); const sl = Math.abs(q) * exec.px * (slip / 1e4);
       const drift = q * (exec.px - fill.px);   // what the wait cost, signed like the simulator
+      if (pos.basis != null) { if (d === pos.side) pos.basis += q * px; else if (Math.abs(pos.qty) > EPS) pos.basis *= Math.max(0, 1 - Math.abs(q) / Math.abs(pos.qty)); }
       pos.qty += q; pos.leaderQty += leaderPart; pos.cash -= q * px; pos.fees += f; pos.slip += sl; pos.drift += drift; pos.fills++;
       if (d === pos.side) pos.entryNotional += notional;
       st.totals.fees += f; st.totals.slip += sl; st.totals[exec.live ? 'driftLive' : 'driftModeled'] += drift; if (exec.live) st.totals.liveFills++; else st.totals.caughtUp++;
@@ -137,6 +147,7 @@
     const all = share >= 1 - 1e-12; const q = all ? -pos.qty : -pos.qty * share;
     const notional = Math.abs(q) * px; const fee = notional * (st.settings.feeRate && st.settings.feeRate[pid] != null ? st.settings.feeRate[pid] : 0.0003);
     pos.cash -= q * px; pos.fees += fee; pos.fills++; st.totals.fees += fee;
+    if (pos.basis != null) pos.basis = all ? 0 : pos.basis * (1 - share);
     pos.qty = all ? 0 : pos.qty + q; pos.leaderQty = all ? 0 : pos.leaderQty * (1 - share);
     const row = { t: at, leaderT: at, ticker: pos.ticker, side: q > 0 ? 'BUY' : 'SELL', qty: Math.abs(q), leaderQty: 0, leaderPx: px, px, fee, drift: 0, live: false, why };
     logRow(st, row);
@@ -186,7 +197,7 @@
     return rows.filter(Boolean);
   };
 
-  /** Accrue an hour of funding on the open virtual positions from each market's current hourly rate (longs pay when positive). */
+  /** Accrue `hours` of funding on the open virtual positions at each market's latest hourly rate in `ref` (longs pay when positive). */
   P.accrueFunding = (st, ref, marks, hours) => {
     for (const pos of Object.values(st.open)) {
       const prod = ref.byId[pos.pid]; const mark = marks[pos.pid]; if (!prod || !mark) continue;
@@ -195,6 +206,9 @@
     }
   };
 
-  /** Unrealized result of the open virtual positions at the given marks. */
-  P.unrealized = (st, marks) => U.sum(Object.values(st.open), (pos) => (marks[pos.pid] ? pos.cash + pos.qty * marks[pos.pid] - pos.fees + pos.funding : 0));
+  /** Unrealized result of the open virtual positions at the given marks: the quantity held against its basis, before fees.
+   *  A position kept before basis existed has only its result so far (partial closes, fees and funding included). */
+  P.unrealized = (st, marks) => U.sum(Object.values(st.open), (pos) => (!marks[pos.pid] ? 0 : pos.basis != null ? pos.qty * marks[pos.pid] - pos.basis : pos.cash + pos.qty * marks[pos.pid] - pos.fees + pos.funding));
+  /** What the positions still open have already booked: partial closes, fees and funding (the realized part of them). */
+  P.bookedOpen = (st) => U.sum(Object.values(st.open), (pos) => (pos.basis != null ? pos.cash + pos.basis - pos.fees + pos.funding : 0));
 })();

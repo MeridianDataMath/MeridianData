@@ -10,7 +10,7 @@ import { root, near } from './_load.mjs';
 const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
-const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk })', { Math, Number, String, parseFloat, Infinity });
+const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty })', { Math, Number, String, parseFloat, Infinity });
 const plain = (x) => JSON.parse(JSON.stringify(x));   // objects and arrays from the block's own context, compared as data
 
 test('quantities round down to the lot, limits to the tick in the direction that never tightens the cap', () => {
@@ -168,4 +168,95 @@ test('a rejection about the time is retried once; the control port answers to it
   assert.equal(A.hostOk('localhost:8790', 8790), true);
   assert.equal(A.hostOk('LOCALHOST:8790', 8790), true);
   for (const h of ['attacker.example:8790', 'attacker.example', '127.0.0.1', '127.0.0.1:8791', '', undefined]) assert.equal(A.hostOk(h, 8790), false, String(h));
+});
+
+test('the day\'s loss baseline: the first reading of a UTC day, with deposits and withdrawals counted from it', () => {
+  const t0 = Date.parse('2026-10-02T11:40:00Z');
+  const fresh = plain(A.dayBaseline({ dayKey: '2026-10-01', equityDayStart: 900, dayBaseAt: t0 - 86400000 }, { day: '2026-10-02', readAt: t0, equity: 6203.07 }));
+  assert.deepEqual(fresh, { dayKey: '2026-10-02', equityDayStart: 6203.07, dayBaseAt: t0, fresh: true }, 'a new UTC day starts at this reading');
+  const kept = plain(A.dayBaseline({ dayKey: '2026-10-02', equityDayStart: 6203.07, dayBaseAt: t0 }, { day: '2026-10-02', readAt: t0 + 30000, equity: 6150 }));
+  assert.deepEqual(kept, { dayKey: '2026-10-02', equityDayStart: 6203.07, dayBaseAt: t0, fresh: false }, 'the same day keeps it, a restart included');
+  const old = plain(A.dayBaseline({ dayKey: '2026-10-02', equityDayStart: 1000 }, { day: '2026-10-02', readAt: t0, equity: 6203.07 }));
+  assert.deepEqual(old, { dayKey: '2026-10-02', equityDayStart: 6203.07, dayBaseAt: t0, fresh: true }, 'a state file without dayBaseAt starts afresh, not from 00:00');
+  // the audit's case: 6,190.28 deposited between 05:38 and 11:08 UTC, the agent started at 11:40 and read again 30 s later
+  const transfers = [[Date.parse('2026-10-02T05:38:00Z'), 100], [Date.parse('2026-10-02T06:00:00Z'), 900], [Date.parse('2026-10-02T09:00:00Z'), 2029.94], [Date.parse('2026-10-02T11:08:00Z'), 3161.34]];
+  const flowsSince = (since) => transfers.reduce((a, [t, v]) => a + (t > since ? v : 0), 0);
+  const dayPnl = 6203.07 - kept.equityDayStart - flowsSince(kept.dayBaseAt);
+  near(assert, dayPnl, 0, 1e-9, 'the deposits before the first reading are inside the baseline, not a loss');
+});
+
+test('the drawdown peak is restored only with the time its flows count from', () => {
+  assert.deepEqual(plain(A.restorePeak({ equityPeak: 1000, peakSince: 1700 }, 5000)), { equityPeak: 1000, peakSince: 1700 }, 'kept across a restart');
+  assert.deepEqual(plain(A.restorePeak({ equityPeak: 1000 }, 5000)), { equityPeak: null, peakSince: 5000 }, 'an older agent\'s peak is dropped: its flows are unknown');
+  assert.deepEqual(plain(A.restorePeak({}, 5000)), { equityPeak: null, peakSince: 5000 }, 'a fresh start');
+  assert.deepEqual(plain(A.restorePeak({ equityPeak: 0, peakSince: 1700 }, 5000)), { equityPeak: 0, peakSince: 1700 });
+  // run 1: equity 1000, peak 1000, then 500 withdrawn; after a restart the withdrawal still counts from peakSince
+  const p = A.restorePeak({ equityPeak: 1000, peakSince: 1700 }, 5000);
+  const equity = 500, flowsSincePeak = -500, adjEquity = equity - flowsSincePeak;   // as refreshOwn takes them out
+  near(assert, (p.equityPeak - adjEquity) / p.equityPeak, 0, 1e-12, 'no drawdown from a withdrawal');
+  assert.ok(A.parseState('{"dayBaseAt":"today"}').error, 'a garbled dayBaseAt');
+  assert.equal(A.parseState('{"peakSince":null,"equityPeak":5}').error, undefined, 'null is "not saved"');
+  assert.ok(A.parseState('{"peakSince":"x"}').error, 'a garbled peakSince');
+  assert.equal(A.parseState('{"dayBaseAt":1790000000000,"peakSince":1790000000000}').error, undefined);
+});
+
+test('a leader\'s re-read says, per market, whether its last record there was a liquidation', () => {
+  const open = [{ productId: 'btc', size: '0.5', updatedAt: 100 }];
+  const recent = [
+    { productId: 'eth', size: '0', isLiquidated: true, updatedAt: 200 }, { productId: 'eth', size: '0', isLiquidated: false, updatedAt: 150 },
+    { productId: 'btc', size: '0', isLiquidated: true, updatedAt: 90 },
+    { productId: 'sol', size: '0', isLiquidated: false, updatedAt: 300 }, { productId: 'sol', size: '0', isLiquidated: true, updatedAt: 250 },
+  ];
+  const r = plain(A.leaderRead(open, recent));
+  assert.deepEqual(r.pos, { btc: 0.5 });
+  assert.equal(r.at.eth, 200); assert.equal(r.at.btc, 100);
+  assert.equal(r.liq.eth, true, 'the newest record ended in a liquidation');
+  assert.equal(r.liq.btc, false, 'an open position: not liquidated, whatever an older record says');
+  assert.equal(r.liq.sol, false, 'an older liquidation does not count when a normal close came after it');
+  assert.deepEqual(plain(A.leaderRead(null, undefined)), { pos: {}, at: {}, liq: {} });
+});
+
+test('leader flat → the flat option; leader liquidated → the liquidation option, on every re-read', () => {
+  const flatHold = { onLeaderFlat: 'hold', onLeaderLiquidation: 'close' }, liqHold = { onLeaderFlat: 'close', onLeaderLiquidation: 'hold' };
+  assert.equal(A.flatAction(flatHold, true), 'close', 'flat hold + liquidated close: a liquidation closes the copy');
+  assert.equal(A.flatAction(flatHold, false), 'hold');
+  assert.equal(A.flatAction(liqHold, true), 'hold', 'liquidated hold: a periodic re-read that finds the liquidation holds too');
+  assert.equal(A.flatAction(liqHold, false), 'close');
+  assert.equal(A.flatAction({}, true), 'close', 'left out: close'); assert.equal(A.flatAction({}, false), 'close');
+});
+
+test('a reversal\'s new side is sized on the rest of the leader\'s order, over all its groups of fills', () => {
+  // as onLeaderOrder does: classify each group, add up the part of the order that closed the old position, size the opening
+  const copy = (start, groups, orderQty, px = 100000) => {
+    let pos = start, closed = 0, out = null;
+    for (const q of groups) {
+      const prev = pos, next = prev + q, kind = A.classify(prev, next); closed += A.closedByOrder(prev, q); pos = next;
+      if (kind === 'open' || kind === 'reverse') out = A.sizeOrder({ mode: 'fixed', size: 200 }, { kind, leaderDelta: kind === 'reverse' ? Math.abs(next) : Math.abs(q), px, orderQty: A.openingOrderQty(orderQty, closed) });
+    }
+    return out.q * px;
+  };
+  near(assert, copy(1, [-3], 3), 200, 1e-9, 'long 1, sells 3 in one group: a $200 short, not $133.33');
+  near(assert, copy(1, [-1, -2], 3), 200, 1e-9, 'close 1, then open 2 in a later group of the same order');
+  near(assert, copy(1, [-0.5, -2.5], 3), 200, 1e-9, 'reduce 0.5, then reverse with 2.5');
+  near(assert, copy(0, [1], 3), 200 / 3, 1e-9, 'an opening from flat is still sized on the whole order');
+  assert.equal(A.closedByOrder(0, -2), 0); assert.equal(A.closedByOrder(1, 0.5), 0, 'an add closes nothing'); assert.equal(A.closedByOrder(-2, 0.5), 0.5);
+  assert.equal(A.openingOrderQty(undefined, 1), undefined, 'no order quantity (ratio / per-fill): unchanged');
+  assert.equal(A.openingOrderQty(3, 5), 0, 'nothing left: sizeOrder falls back to the leader\'s change');
+});
+
+test('a resync in a flat market: close or hold, and a held liquidation is no longer followed', () => {
+  assert.deepEqual(plain(A.resyncFlat({ onLeaderFlat: 'close', onLeaderLiquidation: 'close' }, false)), { action: 'close', unfollow: false });
+  // a config that sets only onLeaderFlat: 'hold' keeps the default onLeaderLiquidation 'close': a liquidation closes the copy
+  assert.deepEqual(plain(A.resyncFlat({ onLeaderFlat: 'hold', onLeaderLiquidation: 'close' }, true)), { action: 'close', unfollow: false });
+  assert.deepEqual(plain(A.resyncFlat({ onLeaderFlat: 'hold', onLeaderLiquidation: 'close' }, false)), { action: 'hold', unfollow: false });
+  assert.deepEqual(plain(A.resyncFlat({ onLeaderFlat: 'close', onLeaderLiquidation: 'hold' }, true)), { action: 'hold', unfollow: true });
+});
+
+test('the risk stops keep running when the transfer list cannot be read', () => {
+  const last = { day: -50, peak: -200, dayKey: '2026-10-02' };
+  assert.deepEqual(plain(A.flowsForStops({ day: 10, peak: 30 }, last, '2026-10-02')), { day: 10, peak: 30, stale: false });
+  // unreadable: the last full read stands in (the day's only on the same UTC day), never "skip the stops"
+  assert.deepEqual(plain(A.flowsForStops({ day: null, peak: null }, last, '2026-10-02')), { day: -50, peak: -200, stale: true });
+  assert.deepEqual(plain(A.flowsForStops({ day: null, peak: 30 }, last, '2026-10-03')), { day: 0, peak: 30, stale: true });
+  assert.deepEqual(plain(A.flowsForStops({ day: null, peak: null }, null, '2026-10-02')), { day: 0, peak: 0, stale: true });
 });

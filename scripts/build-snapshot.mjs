@@ -402,9 +402,12 @@ const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
 ctx.copy = await AN.copyContext(ref, ctx);
 console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
 
-// A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): an account takes
-// about two seconds, an active one with fills and candles more, so past a few hundred accounts the build would outlast
-// the job. Accounts not reached are left out and the snapshot is marked partial rather than the whole deploy failing.
+// A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
+// built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
+// with fills and candles more, and an older one more again, since its funding charges are read three days at a time, one
+// request after another (five to seven seconds at four to five weeks old). So past several hundred accounts the build
+// would outlast the job. Accounts not reached are left out and the snapshot is marked partial rather than the whole deploy
+// failing.
 const budgetMs = (args.includes('--budget') ? Number(args[args.indexOf('--budget') + 1]) : 540) * 1000;
 let skipped = 0;
 const results = await U.pLimit(

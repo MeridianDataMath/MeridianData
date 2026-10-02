@@ -383,6 +383,7 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .acct-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
 .acct-head > * { flex: none; }
 @media (max-width: 900px) { .acct-head .since, .acct-head .explorer { display: none; } }
+.acct-head .since { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }   /* a date cut short ends in "…", never reads as another day */
 .acct-head .addr-box { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 13px; }
 .acct-head .subsel { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px; padding: 4px 6px 4px 10px; font-size: 12.5px; color: var(--text-2); }
 .acct-head .subsel select { background: transparent; border: 0; color: var(--text-1); outline: none; font-size: 12.5px; }
@@ -617,6 +618,7 @@ textarea.input:focus { border-color: var(--accent); }
   body { overflow: visible; }
   .app { display: block; height: auto; }
   .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg, .no-print { display: none !important; }
+  .footer-note.print-keep { display: block !important; }   /* a disclaimer or basis note the printed report needs */
   .card-head .dim, .stat .sub { color: #555; }
   .tbl-wrap { overflow: visible; }
   table.tbl { font-size: 11px; }

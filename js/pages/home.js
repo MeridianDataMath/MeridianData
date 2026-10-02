@@ -30,8 +30,8 @@
       const lb = LB && LB.cache();
       if (lb && lb.rows && lb.rows.length) {
         // ranked by all-time PnL (realized + unrealized since the exchange launched) → copy-trading candidates
-        // copy-trade candidates must have traded: the exchange's fee-collector subaccount "earns" PnL with zero volume
-        const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r));
+        // copy-trade candidates must be traders: the fee collector (no trades) and the exchange's own account are left out
+        const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r) && !MD.analytics.exchangeAccount(r));
         const ranked = U.sortBy(rows, (r) => r.stats.all.pnl, true);
         const winners = ranked.filter((r) => r.stats.all.pnl > 0).slice(0, 24);
         const items = winners.length >= 4 ? winners : ranked.slice(0, 12);
@@ -61,8 +61,8 @@
         for (const p of ref.active) { const px = prices[p.id]; const o = px ? U.num(px.oraclePrice) : 0; vol += U.num(p.volume24h) * o; oi += U.num(p.openInterest) * o; }
         U.replace(foot,
           h('span', 'Markets ', h('b', String(ref.active.length))),
-          h('span', '24h volume ', h('b', U.fmtUsd(vol, { compact: true }))),
-          h('span', 'Open interest ', h('b', U.fmtUsd(oi, { compact: true }))),
+          h('span', { title: '24 h traded quantity × current oracle price, summed over markets' }, '24h volume ', h('b', U.fmtUsd(vol, { compact: true }))),
+          h('span', { title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it' }, 'Open interest (long + short) ', h('b', U.fmtUsd(oi, { compact: true }))),
           subs ? h('span', 'Accounts ', h('b', String(subs.length))) : null,
           h('span', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz')),
           h('span', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data updated ', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—')));

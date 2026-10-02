@@ -62,17 +62,45 @@
    * episodes the fill window cannot have seen whole: when the exchange says a position in that market was already open
    * at the episode's first fill, that fill was a reduction or close of an older position (the fill history is
    * fetched newest-first and cut off), not an opening, and the episode is left out of the replay.
+   * Records are matched nearest first across all episodes (within 5 s, each record used once), so a fast flipper's
+   * episodes a second apart each get their own record, not the newest one in the market.
    */
   S.attachPositions = function (episodes, positions) {
-    for (const e of episodes) {
-      const p = (positions || []).find((p) => p.productId === e.pid && Math.abs(U.num(p.createdAt) - e.start) < 5000);
-      e.pos = p || null;
+    const pairs = [];
+    episodes.forEach((e, i) => { for (const p of positions || []) { if (p.productId !== e.pid) continue; const d = Math.abs(U.num(p.createdAt) - e.start); if (d < 5000) pairs.push([d, i, p]); } });
+    pairs.sort((x, y) => x[0] - y[0]);
+    const match = new Map(), taken = new Set();
+    for (const [, i, p] of pairs) if (!match.has(i) && !taken.has(p)) { match.set(i, p); taken.add(p); }
+    episodes.forEach((e, i) => {
+      const p = match.get(i) || null;
+      e.pos = p;
       if (!p && (positions || []).some((p) => p.productId === e.pid && U.num(p.createdAt) < e.start - 5000 && (U.num(p.size) !== 0 || U.num(p.updatedAt) >= e.start))) e.partial = true;
       e.liq = !!(p && p.isLiquidated);
-      e.fundingRecv = p ? -U.num(p.fundingAccruedUsd) : 0;         // + = received
-      e.posFee = p ? U.num(p.positionFeeAccruedUsd) : 0;
-    }
+      e.fundingRecv = p ? -(U.num(p.fundingAccruedUsd) + U.num(p.fundingUsd)) : 0;   // + = received; an open position's charged-but-unapplied funding is in fundingUsd
+      e.posFee = p ? U.num(p.positionFeeAccruedUsd) + U.num(p.positionFeeUsd) : 0;
+    });
     return episodes;
+  };
+
+  /**
+   * The copy agent's own fills from its order records ({id, pid, side, reduceOnly, close, fills: [{id, t, px, qty, fee}]}),
+   * oldest first: a reduction or close counts only up to what the agent's own openings hold in that market; the rest
+   * closed a position it adopted at start, one traded by hand (Close all) or one whose opening order has left the
+   * 1000-order log, and is left out. Rows shaped like /v1/order/fill, for S.episodes.
+   */
+  S.agentFills = function (recs) {
+    const all = [];
+    for (const r of recs || []) for (const fl of r.fills || []) all.push({ r, fl });
+    all.sort((x, y) => (x.fl.t - y.fl.t) || (String(x.fl.id) < String(y.fl.id) ? -1 : String(x.fl.id) > String(y.fl.id) ? 1 : 0));
+    const held = {}, out = [];
+    for (const { r, fl } of all) {
+      const dir = r.side === 'BUY' ? 1 : -1; const h0 = held[r.pid] || 0; let q = fl.qty;
+      if (r.reduceOnly || r.close) q = Math.min(q, Math.max(0, -dir * h0));
+      if (!(q > 1e-12)) continue;
+      held[r.pid] = h0 + dir * q;
+      out.push({ id: fl.id, createdAt: fl.t, productId: r.pid, side: dir > 0 ? 0 : 1, filled: q, price: fl.px, feeUsd: fl.fee * (q / fl.qty), orderId: r.id });
+    }
+    return out;
   };
 
   /** Leader's own result of an episode: gross from its fills (cash flow), fees, funding, position fee, entry notional. */
@@ -101,8 +129,8 @@
    *   perfill: every entry fill is `size` USD, up to `maxPos` in the position.
    *   ratio:   every fill is `ratio` × the leader's quantity.
    * In every mode a reduction cuts the copier's position by the same share as the leader's, so a capped position is
-   * still closed when the leader closes. Funding and position fees scale with the copier's average share of the
-   * leader's position over the episode.
+   * still closed when the leader closes. Funding and position fees scale with the copier's share of the leader's
+   * position size × time over the episode.
    */
   S.replayEpisode = async function (e, settings, mark) {
     const fo = S.firstOrderNotional(e);
@@ -110,9 +138,13 @@
     const maxPos = S.maxPosition(settings);
     const slip = typeof settings.slipBps === 'number' ? settings.slipBps : (settings.slipBps && settings.slipBps[e.pid]) || 0;
     const feeRate = typeof settings.feeRate === 'number' ? settings.feeRate : (settings.feeRate && settings.feeRate[e.pid]) || 0.0003;
-    let cash = 0, fees = 0, driftCost = 0, slipCost = 0, notional = 0, entryNotional = 0, leaderQty = 0, copierQty = 0, shareSum = 0, shareN = 0, capped = false;
+    let cash = 0, fees = 0, driftCost = 0, slipCost = 0, notional = 0, entryNotional = 0, leaderQty = 0, copierQty = 0, capped = false;
+    // funding and position fees accrue with size × time: the copier's share of them is the ratio of the two positions' size-time
+    let intL = 0, intC = 0, lastT = e.start;
+    const span = (t) => { if (t > lastT) { intL += Math.abs(leaderQty) * (t - lastT); intC += Math.abs(copierQty) * (t - lastT); lastT = t; } };
     const legs = [];
     for (const f of e.fills) {
+      span(f.t);
       let q;
       const entry = Math.sign(f.q) === e.side;
       if (!entry) { q = leaderQty ? (f.q / leaderQty) * copierQty : 0; if (Math.abs(q) > Math.abs(copierQty)) q = -copierQty; }   // the same share as the leader cut
@@ -129,10 +161,10 @@
       driftCost += q * (late - f.px);                 // paid because the price moved before the copier acted: a buy at a higher price, a sell at a lower one
       slipCost += Math.abs(q) * late * (slip / 1e4);
       leaderQty += f.q; copierQty += q;
-      if (Math.abs(leaderQty) > EPS) { shareSum += Math.abs(copierQty / leaderQty); shareN++; }
       legs.push({ t: f.t + settings.delaySec * 1000, q, px, leaderPx: f.px, fee });
     }
-    const k = shareN ? shareSum / shareN : kFixed;    // the copier's share of the leader's position, for funding and position fees
+    span(e.end || Date.now());
+    const k = intL > 0 ? intC / intL : kFixed;    // the copier's share of the leader's position, for funding and position fees
     const openQ = copierQty; const m = openQ ? (mark || e.fills[e.fills.length - 1].px) : 0;
     const gross = cash + openQ * m;
     const funding = (e.fundingRecv || 0) * k, posFee = (e.posFee || 0) * k;
@@ -141,7 +173,8 @@
 
   /**
    * Replay every episode of a leader that opened at or after `since`. Returns per-episode rows (leader vs copier), totals,
-   * cumulative curves for both, and the copier's max drawdown on its own cumulative net.
+   * cumulative curves for both (the leader's scaled to the copier's size), and the copier's max drawdown on its own
+   * cumulative net.
    */
   S.replay = async function ({ episodes, settings, marks, since = 0, ref }) {
     const rows = []; let partial = 0, noFunding = 0;
@@ -158,16 +191,19 @@
         leaderBps: L.entryNotional ? (L.net / L.entryNotional) * 1e4 : null, copierBps: Cp.entryNotional ? (Cp.net / Cp.entryNotional) * 1e4 : null });
     }
     rows.sort((a, b) => a.t1 - b.t1);
-    const T = { leaderNet: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
+    // leaderNet: the leader's own dollars; leaderScaled: its result scaled to the copier's size position by position, which
+    // the share kept and the leader's curve are measured against (dollars at two sizes would only show the size ratio)
+    const T = { leaderNet: 0, leaderScaled: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
     let cum = 0, cumL = 0, peak = 0, dd = 0; const curve = [], curveL = [];
     for (const r of rows) {
-      T.leaderNet += r.L.net; T.leaderGross += r.L.gross; T.leaderFees += r.L.fees; T.copierNet += r.C.net; T.copierGross += r.C.gross; T.fees += r.C.fees; T.drift += r.C.driftCost; T.slip += r.C.slipCost; T.funding += r.C.funding; T.posFee += r.C.posFee; T.notional += r.C.notional;
+      const lAtC = r.L.entryNotional ? r.L.net * (r.C.entryNotional / r.L.entryNotional) : 0;   // the leader's result at the copier's size
+      T.leaderNet += r.L.net; T.leaderScaled += lAtC; T.leaderGross += r.L.gross; T.leaderFees += r.L.fees; T.copierNet += r.C.net; T.copierGross += r.C.gross; T.fees += r.C.fees; T.drift += r.C.driftCost; T.slip += r.C.slipCost; T.funding += r.C.funding; T.posFee += r.C.posFee; T.notional += r.C.notional;
       if (r.C.net > 0) T.wins++; if (r.open) T.open++; if (r.liq) T.liq++; if (r.C.capped) T.capped++;
-      cum += r.C.net; cumL += r.L.net; curve.push({ x: r.t1, y: cum }); curveL.push({ x: r.t1, y: cumL });
+      cum += r.C.net; cumL += lAtC; curve.push({ x: r.t1, y: cum }); curveL.push({ x: r.t1, y: cumL });
       if (cum > peak) peak = cum; if (peak - cum > dd) dd = peak - cum;
     }
     T.maxDd = dd; T.winRate = rows.length ? (T.wins / rows.length) * 100 : null;
-    T.edgeKept = T.leaderNet > 0 ? (T.copierNet / T.leaderNet) * 100 : null;
+    T.edgeKept = T.leaderScaled > 0 ? (T.copierNet / T.leaderScaled) * 100 : null;
     return { rows, T, curve, curveL };
   };
 

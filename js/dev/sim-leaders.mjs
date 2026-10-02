@@ -90,8 +90,13 @@ function simulate(st, ref, seed) {
         const tt = Math.round(t) + k * 3000;
         fills.push({ id: st.id + '-f' + String(fills.length).padStart(6, '0'), orderId: oid, createdAt: tt, productId: p.id, side, filled: String(qty / pieces), price: String(price), feeUsd: String((notional / pieces) * feeRate), isMaker: maker, reduceOnly: t === close });
         const s = side === 0 ? 1 : -1;
-        candle.set(tt + MIN, price * (1 + (s * (st.drift1 + gauss(r) * 2)) / 1e4));
-        candle.set(tt + 5 * MIN, price * (1 + (s * (st.drift5 + gauss(r) * 4)) / 1e4));
+        // AN.fillDrift and the simulator read the price exactly 1 / 5 minutes later on a straight line from the close of
+        // the minute before (none here, so from the fill price) to the stored one: it is set so that line lands on the
+        // drift the style asks for
+        const p1 = price * (1 + (s * (st.drift1 + gauss(r) * 2)) / 1e4), p5 = price * (1 + (s * (st.drift5 + gauss(r) * 4)) / 1e4);
+        const lift = (v) => price + (v - price) / Math.max(1e-3, (tt % MIN) / MIN);
+        candle.set(tt + MIN, lift(p1));
+        candle.set(tt + 5 * MIN, lift(p5));
       }
     }
   }

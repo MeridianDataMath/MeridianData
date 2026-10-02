@@ -28,6 +28,12 @@ test('an account card: headline in the account\'s colour, its curve, no stray va
   const loss = K.accountSvg(Object.assign({}, row, { stats: { all: { pnl: -2300.87, roi: -0.2, ddPct: 0.17 } }, curve: null }));
   clean(loss); assert.match(loss, />-\$2,300\.87</); assert.match(loss, /#ef454a/); assert.match(loss, /Not enough history for a curve yet/, 'no curve: said so');
   const t = K.accountText(row); assert.match(t.title, /^0x7c75…34de on Meridian: \+\$2,044\.19 all-time PnL$/);
+  // drawdown reads as on the leaderboard and the account page (U.fmtDd): two decimals, '<0.01%' for a sliver, '—' for none
+  assert.match(svg, />19\.38%</); assert.match(t.description, / · 19\.38% max drawdown · /);
+  const tiny = Object.assign({}, row, { stats: { all: { pnl: 0.5, roi: 0.5, ddPct: 0.00469 } } });
+  assert.match(K.accountSvg(tiny), />&lt;0\.01%</); assert.match(K.accountText(tiny).description, / · <0\.01% max drawdown · /);
+  const none = Object.assign({}, row, { stats: { all: { pnl: 10, roi: 1, ddPct: 0 } } });
+  assert.doesNotMatch(K.accountText(none).description, /max drawdown/);
 });
 
 test('with dollar amounts hidden the card leads with the return and shows no dollar figure', () => {
@@ -39,6 +45,17 @@ test('with dollar amounts hidden the card leads with the return and shows no dol
   assert.match(svg, />Sep 18 – Sep 23, 2026</, 'the period instead of the ROI pill');
   const loss = K.flexSvg(Object.assign({}, K.accountInput(Object.assign({}, row, { stats: { all: { pnl: -50, roi: -5.2 } } })), { hideAmounts: true }));
   assert.match(loss, />-5\.2%</); assert.match(loss, /#ef454a/);
+});
+
+test('the exchange\'s own account is called that, not a trader of its style', () => {
+  const row = { account: '0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7', sid: '01a047c4-2be2-774c-ae58-1e45d2f2a99d', exchange: true, createdAt: Date.UTC(2026, 7, 28, 9, 47), equity: 10224.6, volumeAll: 6022.37,
+    winRate: 100, style: 'Scalper', positionsCount: 1, stats: { all: { pnl: 145.99, roi: 1.21, ddPct: 0 } }, curve: null };
+  assert.equal(K.accountInput(row).footRight, 'Exchange account · since Aug 28, 2026');
+  const svg = K.accountSvg(row); clean(svg);
+  assert.match(svg, /Exchange account · since Aug 28, 2026/); assert.doesNotMatch(svg, /Scalper trader/);
+  assert.doesNotMatch(K.accountText(row).description, /trader/);
+  // the same row without the flag keeps the style
+  assert.match(K.accountInput(Object.assign({}, row, { exchange: undefined })).footRight, /^Scalper trader · since /);
 });
 
 test('big figures switch to compact and shrink to fit', () => {
@@ -237,7 +254,8 @@ test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash rout
 
 test('the site card counts accounts and Predict activity', () => {
   const svg = K.siteSvg({ lb: { rows: [{ volumeAll: 1000 }, { volumeAll: 2500 }] }, pr: { agg: { totals: { bettors: 711, wagered: 350000 } } } }); clean(svg);
-  assert.match(svg, />2</); assert.match(svg, />\$3,500</); assert.match(svg, />711</); assert.match(svg, />\$350\.0K</);
+  // exchange volume: each fill is in its maker's and its taker's account volume, so the sum of the rows is halved
+  assert.match(svg, />2</); assert.match(svg, />\$1,750</); assert.doesNotMatch(svg, /\$3,500/); assert.match(svg, />711</); assert.match(svg, />\$350\.0K</);
 });
 
 test('a self-matched slip (one wallet on both sides) says so on its card and in its link preview', () => {

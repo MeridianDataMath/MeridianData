@@ -75,10 +75,12 @@ second) runs before anything else in the workflow; a failure stops the job, so n
 deployed. They load the site's own scripts the way the snapshot builder does and cover the money
 math: the Predict secondary-market ledger with the cases checked against the exchange
 (`predict-ledger`), prediction semantics, result chips and a bettor page's headline figures
-(`predict-analytics`), the copy simulator's and paper copy's sizing, cap and reductions
-(`copy-engines`), the copy agent's decisions (`agent`: the lines between `@pure-begin` and
-`@pure-end` in `agent/copy-agent.mjs`, loaded on their own since the agent needs ethers and a
-key), account analytics and the copyability caps (`analytics`), formatting and routing (`util`).
+(`predict-analytics`), the copy simulator's and paper copy's sizing, cap, reductions, funding
+share, position records and cost basis (`copy-engines`), the copy agent's decisions (`agent`:
+the lines between `@pure-begin` and `@pure-end` in `agent/copy-agent.mjs`, loaded on their own
+since the agent needs ethers and a key), account analytics, the copy profile and the
+copyability caps (`analytics`), formatting and routing (`util`), the bar chart's value-axis
+formatter (`charts`).
 
 **Equity curve flex.** The **Flex** button on an account page and **Equity curve flex** on a
 bettor page open the account's or wallet's PnL card: headline PnL and ROI, the equity curve,
@@ -134,8 +136,10 @@ the 15-minute limit; slips come last, the oldest first. Locally: `npm ci`, then
 `node scripts/build-cards.mjs --dist <folder with data/>` (`--only <address or prediction id>`
 for one card, `--jobs 4` to use four cores).
 
-The perps build has a time budget (`--budget` seconds, 9 minutes by default: an account takes
-about two seconds, an active one with fills and candles more, and the job has 15 minutes in all);
+The perps build has a time budget (`--budget` seconds, 9 minutes by default: four accounts are
+built at a time and one takes two to three seconds from a PC, about half that on the Action's
+runner; an active one with fills and candles takes more, and an older one more again, since its
+funding charges are read three days at a time, one request after another; the job has 15 minutes in all);
 accounts not reached are left out and the snapshot is marked partial (`skipped`) rather than the
 deploy failing. `#/status` (**Data status**, linked from the home page's footer and from every
 "stale" note) shows both snapshots' age, builder, counts and build time, plus the exchange's
@@ -159,25 +163,43 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   * *Overview* – equity / balance / margin per pool (USD cross pool + one isolated pool per
     mPerp), estimated liquidation prices, chart of PnL · Volume · Balance · Equity · Funding ·
     Fees (cumulative or per bucket, 24h / 7d / 30d / all time), interval stats, and tables for
-    open positions, open orders, fills, position history and deposits/withdrawals/conversions.
+    open positions, orders & stops, fills, position history and deposits/withdrawals/conversions.
+    The chart and the interval tiles count funding when it is charged (open positions' unsettled
+    funding included; "Funding settled" when the archive's funding history cannot be read), and
+    their fees include mPerp position fees. Line charts plot each archive bucket at its end and end
+    on the live figures (the PnL line at the PnL tile, the Equity line at the live equity); the
+    all-time bars are UTC days. Auto-refresh reloads the archive series whenever a balance moves
+    (a close, funding settlement, fee or transfer).
   * *Live* – WebSocket-driven positions, orders, fills and an L2 order book for any market.
   * *Performance* – win rate, profit factor, expectancy, Sharpe, max drawdown, trading style,
-    per-market breakdown, cumulative and daily PnL charts.
+    per-market breakdown, cumulative and daily PnL charts (both end on the all-time total, live
+    unrealized PnL included); funding includes the open positions' unsettled funding, fees the
+    mPerp position fees.
   * *Rewards* – points per season (rank, tier, referral points, epoch history), exchange-wide
     points, linked API signers.
 * **Favorites** – starred accounts with live equity (stored in this browser only).
 * **Leaderboard** – every subaccount on the exchange, ranked; sortable columns and filters for
   interval (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
-  style. A snapshot is published every 30 minutes by the deploy workflow; **Update** rebuilds one
-  in your browser (a few API calls per account), cached in `localStorage`. Subaccounts that
-  never traded (the exchange's fee collector) are tagged *no trades*.
-* **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest,
-  volume, sparkline and mPerp closure windows; a **stop map** (every account's take-profit,
-  stop-loss and entry-stop levels per market as a ladder around the mark price, sized by
-  notional, with the accounts behind each level); live trade tape (taker/maker links to the
-  accounts); liquidation feed; funding table.
+  style. PnL, volume, ROI, Sharpe and drawdown follow the interval; equity, positions, win rate
+  and trading style do not. **#** is the account's rank on the whole leaderboard in the current
+  sort, also while a search or filter hides other rows. A snapshot is published every 30 minutes
+  by the deploy workflow; **Update** rebuilds one in your browser (a few API calls per account),
+  cached in `localStorage`; cancelling it drops the partial build and keeps the snapshot shown.
+  Subaccounts that never traded (the exchange's fee collector) are tagged *no trades*; the
+  exchange's own subaccount 0x1598… (it took over a liquidated trader's position and is credited
+  the mPerps position fees; `AN.EXCHANGE`) is tagged *exchange account*.
+* **Dashboard** – all markets with live mark price, 24h change, bid/ask, funding, open interest
+  (long + short, as Meridian reports it), 24h volume (traded quantity × current mark price),
+  sparkline and mPerp closure windows; the volume and open-interest tiles are the column
+  totals, and products and
+  projected funding are re-read every minute; a **stop map** (every account's take-profit,
+  stop-loss and entry-stop orders per market as a ladder around the mark price, sized by
+  notional, with the accounts behind each level; the account list is re-read on every scan);
+  live trade tape (taker/maker links to the accounts); liquidation feed; funding table (rate
+  charged at the last hourly funding, projected next charge, cumulative funding per unit of
+  the base asset).
 * **Tax center** – a full tax report per subaccount: fiscal-year presets (calendar, UK, Australia,
-  New Zealand, India, South Africa, Egypt/Pakistan) or a custom UTC range; a reporting currency
+  New Zealand, India, South Africa, Pakistan) or a custom UTC range; a reporting currency
   (28 currencies at ECB daily reference rates via frankfurter.dev, USD kept in every export);
   net result, realized PnL, gains and losses, fees, funding received / paid, deposits,
   withdrawals, long-term positions (held over a year), open positions at period end; an income
@@ -195,8 +217,15 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   year's first day in three-month steps (UK: 6 Apr – 5 Jul, …); "open at period end" is
   computed from open/close times for past periods too; every figure is shown in cents; the
   balance reconciliation (opening + deposits − withdrawals + result = closing) names any pool
-  the ledger cannot explain; the transaction ledger's cash-effect column sums to the balance
-  change. `js/dev/sim-tax.js` (not loaded by the site) fakes a busy two-year account with a
+  the ledger cannot explain; the transaction ledger's cash-effect column does not add up to the
+  balance change (it has no row for PnL booked on partial closes of positions still open, carries
+  each closed position's whole result and position fee at its close, and lists only order fills,
+  not liquidation fills), so the reconciliation is the check; the realized PnL that the closed
+  positions do not explain (booked on positions open at the period end, less what the closed ones
+  booked before the period) is its own line; funding received / paid is split by the sign of each
+  UTC day's net, not per hourly payment; the unrealized PnL of open positions is net of unsettled
+  funding and position fees, as on the account page, and is in no total; printing lists every row
+  of the closed-positions and transaction tables. `js/dev/sim-tax.js` (not loaded by the site) fakes a busy two-year account with a
   ledger built from the same events, for stress-testing the report against a realistic
   return: `MDSim.install()` in the console, then open `#/tax?address=<its address>`.
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
@@ -626,31 +655,44 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   as on a slip page) a market Gamma marks *proposed* reads *Outcome proposed on UMA* with no time:
   Gamma's `updatedAt` is a batch-refresh stamp, not the proposal time.
 * **Copy trading** (`#/copytrade`, leaders) – every trading wallet scored for **copyability**, the
-  question a copier actually has: not "who made money" but "what would a follower have kept,
-  entering a minute later, at taker fees, at that size, against these books?". The snapshot
-  build gives each account a copy profile (`row.copy`): closed / open positions, hold-time
-  buckets and median hold, median and 90th-percentile entry notional, market mix, result per
-  position in bps (gross and net of fees), largest-win concentration, profitable weeks among
-  active weeks, tenure and cadence, plus the frictions: slippage at the account's median size
-  walked through today's books (`AN.bookSlippage`), how much of its 90th-percentile size fills
-  within 1%, taker fees, and the price drift one and five minutes after each of its fills
-  (`AN.fillDrift`, one-minute oracle candles from the TradingView endpoint, fetched in 3,000-bar
-  windows and shared across accounts). The per-position result is the plain mean over positions
-  (a fixed-size copier gets each position in equal measure), both tails winsorized at the 5th /
-  95th percentile so one jackpot or blow-up cannot carry it, with a t-statistic saying whether
-  it is clear of the noise; funding counts on both sides (a copier receives it too). "Edge
-  left" = the share of that result that survives a copier's taker fees, drift and slippage (for
-  a $2,000 position, `AN.COPY_SIZE`) in and out. The score (`AN.copyScore`, 0–100, computed on
-  the site so the formula can change without a rebuild) is 35% track record, 45% copy
-  friction, 20% activity, each pillar a weighted mean of its measured parts (unmeasured parts
-  are left out, not zeroed), then capped with the reason shown: nothing survives copying → 40;
-  less than all of it → 30 + 0.7 × edge left; fewer than 10 / 20 closed positions → 55 / 65;
-  t < 2 → 60; no trade for 30 / 60 days → 60 / 45; a tenth of positions liquidated → 55; one
-  position over 60% of all wins → 60; drawdown over 40% → 60; not profitable → scaled down and
-  capped at 45; fewer than 5 closed positions means no score. Verdicts: Copyable (70+), Copy
-  with care (50+), Hard to copy, Losing so far. Every row opens a breakdown with each part's
-  value and reason, the caps that applied, the per-position waterfall from the leader's result
-  to the copier's, hold-time strip, sizes, markets and track record. `js/dev/sim-leaders.mjs`
+  question a copier actually has: not "who made money" but "how much of a leader's result would
+  a follower keep, entering a minute later, at taker fees, against today's order books, with a
+  position the size of the leader's median one but no more than $2,000?". The snapshot build
+  gives each account a copy profile (`row.copy`): closed / open positions, hold-time buckets and
+  median hold, median and 90th-percentile (nearest rank) entry notional, market mix (share of
+  positions, closed and open), result per position in bps (gross and net of fees),
+  largest-win concentration, profitable weeks among active weeks (Monday to Sunday, UTC, as on
+  Predict), tenure and cadence, plus the frictions: slippage at the account's median size
+  walked through today's books (`AN.bookSlippage`), the share of its 90th-percentile size that
+  the asks within 1% of the mid absorb, taker fees, and the price drift exactly one and five
+  minutes after each of its most recent fills (up to 400; `AN.fillDrift`, the price at that
+  moment interpolated between one-minute oracle closes as the copy simulator prices a delay,
+  candles from the TradingView endpoint fetched in 3,000-bar windows and shared across
+  accounts). A fill more than 5% from the oracle at the time (a dust order that swept a parked
+  far quote) is left out: notional-weighted it would outweigh every other fill. The
+  per-position result is the plain mean over positions (a fixed-size copier gets each position
+  in equal measure); from 10 positions on, the most extreme 5% on each side (at least one
+  position) is winsorized so one jackpot or blow-up cannot carry it, below 10 it is the plain
+  mean (the breakdown says which, from `nTrim`), with a t-statistic saying whether it is clear
+  of the noise. Funding and mPerp position fees count on both sides (a copier holding the same
+  position receives or pays them too, `posFeeBps`); only the leader's trading fees (`feesBps`)
+  are swapped for the copier's taker fees. "Edge left" = the share of that result that
+  survives a copier's taker fees, drift and slippage (for a $2,000 position, `AN.COPY_SIZE`, or
+  the leader's median entry size when smaller) in and out, divided on the unrounded means; over
+  100% the page shows ">100%" with both per-position figures. The score (`AN.copyScore`, 0–100,
+  computed on the site so the formula can change without a rebuild) is 35% track record, 45%
+  copy friction, 20% activity, each pillar a weighted mean of its measured parts (unmeasured
+  parts are left out, not zeroed), then capped with the reason shown: a per-position result
+  not positive after fees and funding, or nothing of it surviving copying → 40; less than all
+  of it → 30 + 0.7 × edge left; fewer than 10 / 20 closed positions → 55 / 65; from 10 closed
+  positions, the result not clear of the noise (t < 2) → 60; under 50% of a 90th-percentile
+  order filling within 1% of the mid → 60; no trade for 30 / 60 days → 60 / 45; a tenth of
+  positions liquidated → 55; one position 60% or more of all wins → 60; drawdown of 40% or more
+  → 60; not profitable → scaled down by 40% and capped at 45; fewer than 5 closed positions
+  means no score. Verdicts: Copyable (70+), Copy with care (50+), Hard to copy, Losing so far.
+  Every row opens a breakdown with each part's value and reason, the score before caps (`raw`)
+  and the caps that applied, the per-position waterfall from the leader's result to the
+  copier's, hold-time strip, sizes, markets and track record. `js/dev/sim-leaders.mjs`
   runs twenty synthetic traders of very different styles (steady swing trader, profitable
   scalper, market maker, grid bot, whale, one-hit wonder, gambler, funding harvester, …)
   through the same pipeline against today's real books and prints the ranking with the
@@ -760,11 +802,20 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   oracle price `delay` seconds later (from the fill price to its minute's close inside the fill's
   minute, from the previous close to that minute's close afterwards), moved against the copier
   by the slippage, at the market's taker fee; funding and position fees are the leader's scaled
-  to the copier's average share of the position; open positions are marked at the current
-  oracle price. The page shows copier vs leader net,
-  the share kept, per-position bps, costs split into fees / drift / slippage, funding, the
-  copier's max drawdown, the cumulative curves of both, a latency-sensitivity table (the same
-  copy at every delay) and every position with both sides' results. `sim-leaders.mjs --replay
+  by the copier's share of the leader's position size × time (they accrue with size held over
+  time, so a leader who opens tiny and scales in does not inflate the copier's share), an open
+  position's charged-but-unapplied funding (`fundingUsd`, `positionFeeUsd`) included; each
+  episode takes the exchange's position record nearest its first fill (within 5 s, nearest
+  pairs first, each record used once, so a fast flipper's episodes a second apart each get
+  their own); open positions are marked at the current oracle price. The page shows copier vs
+  leader net, the share kept (the copier's net against the leader's result scaled to the
+  copier's size position by position, `T.leaderScaled`; the leader's curve is drawn the same
+  way, while the Leader net tile stays in the leader's own dollars), per-position bps, costs
+  split into fees / drift / slippage (drift signed as a cost everywhere: + = a worse price),
+  funding, the copier's max drawdown, the cumulative curves of both, a latency-sensitivity
+  table (the same copy at every delay, each delay counting its own fills without a candle)
+  and every position with both sides' results, newest opened first. The start date is a UTC
+  day. `sim-leaders.mjs --replay
   <style>` runs the engine on a synthetic leader and checks the arithmetic against the style's
   known parameters (the leader's cash flows are conserved exactly).
 * **Paper copy** (the card under the simulator) – the same copier, live: a virtual account in
@@ -780,8 +831,12 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   - **Sizing:** a fixed-size copy is sized on the leader's whole order (looked up by order id):
     what filled once the order is done, else what was asked. It is not sized on the first piece,
     and a reversal's new side is sized on the part of the order that opened it. It is capped per
-    position like the simulator's. Fees and slippage are as set; funding accrues hourly from
-    each market's current rate while a tab follows, counted once however many tabs are open.
+    position like the simulator's. Fees and slippage are as set; funding accrues each minute at
+    each market's latest hourly rate (the products re-read, cached 5 minutes) while a tab
+    follows, counted once however many tabs are open.
+  - **Settings:** exactly what the form shows when following starts, Run pressed or not: size,
+    maximum, ratio, delay, slippage and the Markets filter. A fill in a market left out is
+    marked seen and the leader's position there is kept as not the copy's (`pre`).
   - **Timing:** times are the exchange's clock (`/v1/time`), not the browser's. The history is
     read oldest first, so a page cap never drops the fills a later sync would need.
   - **Positions held before following:** following starts from the leader's open positions at
@@ -800,9 +855,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   - **Rebuild:** recomputes the account from the fills since it started, at candle prices, from
     the leader's positions at that moment (rebuilt from its position records and fills).
     Accounts kept by an earlier version get a note offering it.
-  - **The card:** realized, unrealized at the live mark, delay cost (measured / modelled), fees
-    and slippage, funding, open virtual positions and the mirrored-fill log. Stop & discard
-    removes the account.
+  - **The card:** realized (closed positions plus what the open ones already booked: partial
+    closes, fees and funding), unrealized at the live mark against the cost of what is still
+    held (`basis`, the exchange's average-cost convention: a reduction scales it down in
+    proportion, so Avg entry stays the entry price), delay cost (+ = a cost; measured /
+    modelled), fees and slippage, funding, open virtual positions and the mirrored-fill log
+    (a reconcile cut that leaves the position open reads "cut at mark"). A position kept before
+    the basis existed shows its result so far (partial closes, fees and funding included) under
+    "Result so far" until Rebuild. Stop & discard removes the account.
 * **Leader alerts** (the bell on any leader row, breakdown or simulator; the card on the Copy
   trading page) – follow up to 15 subaccounts and be told when one opens, adds to, reduces,
   closes or reverses a position, or is liquidated. `js/copy/alerts.js` subscribes to each
@@ -810,8 +870,10 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   positions, resynced every ten minutes), groups the fills of one order for 2.5 s and classifies
   the order against the running position; a fill dated at or before the `updatedAt` of the
   position record last read is already inside that size and is not added again, so a resync
-  landing mid-order cannot turn a close into a "reversed" alert. Events and a minimum notional
-  are configurable.
+  landing mid-order cannot turn a close into a "reversed" alert. A liquidation's size is the
+  position's (`sz` is signed, negative for a short: its sign gives the side, and the notional
+  is never negative, so a minimum size does not drop a short's liquidation), dated at the
+  event's time. Events and a minimum notional are configurable.
   Delivery: a toast on the site, a browser notification (permission asked on the page), and
   optionally an ntfy push to a phone (topic and server on the page, "Send a test"; the tab
   POSTs to the topic, which is the only secret: *Generate* fills in a random one, a guessable
@@ -827,13 +889,23 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   API signer of that subaccount: submit and cancel orders only, never withdrawals, revocable
   from the same page. The site never sees a key. `run` follows the leaders in `config.json`
   over the exchange WebSocket (fills grouped per order, sized on the whole opening order), keeps
-  a book per leader and market, and mirrors: open → sized order (fixed $ per position, fixed $
-  per fill, or a % of the leader's quantity), add → in proportion, reduce → the same share of
-  its own position (reduce-only), close → a close order (quantity 0, reduce-only), reverse →
-  close then open, leader liquidated or found flat on the 5-minute resync → close (or hold, by
-  config). Orders are limit IOC at the mark ± a slippage cap (or market), EIP-712-signed with
-  the domain and type strings from `/v1/rpc/config`, exactly as the official SDK does; the
-  unfilled remainder of an IOC is logged, never chased. Risk limits, checked before every new
+  a book per leader and market, and mirrors: open → sized order (fixed $ per position, counted
+  on the quantity the leader ordered, so an order cancelled after a partial fill gives a
+  proportionally smaller copy where the simulator counts only what filled; fixed $ per leader
+  order, per batch of its fills arriving within 1.2 s of each other, where the simulator's
+  "$ per fill" sizes every entry fill; or a % of the leader's quantity, as in the simulator),
+  add → in proportion, reduce → the same share of its own position (reduce-only), close → a
+  close order (quantity 0, reduce-only), reverse → close then open, the new side sized on the
+  rest of the leader's order (the part that closed the old position, added up over all of the
+  order's groups of fills, is taken out, as paper copy does). A leader found flat on a re-read
+  → close (or hold, by config); when the leader's last position record in that market is a
+  liquidation (or a liquidation event prompted the re-read), the liquidation option applies
+  instead, on every re-read, and a position held after a liquidation is no longer followed
+  (an orphan). Openings, adds and reductions are limit IOC at the mark ± a slippage cap (or
+  market orders, by config); closes always go out as market orders. Every order is
+  EIP-712-signed with the domain and type strings from `/v1/rpc/config`, exactly as the
+  official SDK does; the unfilled part of an opening or add is logged, never chased, and that
+  of a reduction is carried to the next reduction of the market. Risk limits, checked before every new
   or larger position: max notional per market, max open positions, max leverage on equity,
   daily loss stop and drawdown stop (a trip makes the agent reduce-only, or close everything,
   until resumed), minimum order size, denied markets; one leader per market. The three size
@@ -843,7 +915,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   multiple of the size. A local status
   port (127.0.0.1 only, origin-checked, token-guarded for pause / resume / close all) feeds
   the page's dashboard: equity, day and peak change, leverage, own positions against the
-  leaders', every order with its status and fill, the event log. `run --dry` sends every order
+  leaders', the latest 30 orders with their status and fill (the daily log files in `logs/`
+  keep every one), the event log. `run --dry` sends every order
   to the exchange's dry-run endpoint instead (margin check, nothing placed) and keeps a virtual
   book, so the whole loop can be watched before any money moves; `/simulate` on the status
   port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected orders,
@@ -864,9 +937,10 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     are counted at the exchange's mark. A leader fill more than `maxPriceDeviationPct` (3%) off
     the mark, or older than `maxFillAgeMs` (15 s), opens nothing. Closes and reductions still
     follow.
-  - **Strict arguments.** A typo exits. `--dry`, `--dry-run`, `COPY_AGENT_DRY=1` or
-    `npm run dry` / `npm start -- --dry` select the dry run, and the mode is printed
-    unmistakably.
+  - **Strict arguments.** A typo that reaches the agent exits. `--dry`, `--dry-run`,
+    `COPY_AGENT_DRY=1` or `npm run dry` / `npm start -- --dry` select the dry run, and the mode
+    is printed unmistakably. A misspelt flag typed before npm's `--` (`npm start --dyr`) stays
+    with npm and the agent starts live, so `npm run dry` is the safest way to a dry run.
   - **Fails closed.** A damaged `state.json` stops the agent rather than clearing a tripped risk
     stop.
   - **Clock.** The clock offset is measured again periodically and after a time rejection.
@@ -884,12 +958,15 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   dry-run endpoint; `signedAt` must sit inside the exchange's clock tolerance, so the offset to
   `/v1/time` is measured and applied (this PC was 3 s off); a signer's `expiresAt` is in
   milliseconds and a revoked signer fails every order with `SignerRevoked`, on which the agent
-  pauses. Safety rules: one serial queue for every decision and order (two leader orders arriving
+  pauses. The agent cannot extend its signer (the exchange currently sets 90 days from
+  linking): before then a new key is made (`keygen --force`), linked on the page and the agent
+  restarted. Safety rules: one serial queue for every decision and order (two leader orders arriving
   together cannot both size against the same stale position); adds scale to what is actually
   held after partial fills; state (`state.json`: what is followed from whom, stops, the order
   log) survives restarts, and on start open positions that a followed leader also holds are
   adopted while the rest are flagged as orphans (left alone, or closed with `onOrphan`); the
-  leaders are re-read on every `PositionUpdate` / liquidation hint, on reconnect and every five
+  leaders are re-read on every `PositionUpdate` hint (debounced per leader, so one leader's
+  hint never cancels another's re-read) and liquidation hint, on reconnect and every five
   minutes, and a close, a reduction or a side change missed over a disconnect is mirrored (an
   opening is not chased); a re-read and the socket never count a fill twice: a position
   record's `updatedAt` is the time of its last fill, so a grouped fill dated at or before the
@@ -899,59 +976,89 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   will not take yet (below the market's minimum quantity, or the remainder an IOC left, or a
   rejection) is carried and folded into the next reduction of that market, with adds sized on
   what should be held, so the copy does not stay bigger than the leader's share ("owed" on the
-  dashboard's positions; a close clears it); no order without a live
-  mark, none while the own-account read is more
+  dashboard's positions; a close clears it); no opening, add or reduction without a mark
+  (closes are market orders), no opening or add while the own-account read is more
   than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
-  stops take deposits and withdrawals out (`/v1/token/transfer`) so a transfer can neither trip
-  nor mask them; quantities are capped at the market's `maxQuantity` and rounded to its lot.
+  stops take deposits and withdrawals out (`/v1/token/transfer`, every page), counted from the
+  day's first reading and from the time the drawdown peak was set, both kept in `state.json`
+  across restarts (a state file from an older agent starts both afresh), so a transfer can
+  neither trip nor mask them; while the transfers cannot be read the stops are not checked and
+  the dashboard says so; quantities are capped at the market's `maxQuantity` and rounded to its lot.
 * **Copy history** (the last card of the Copy agent page) – attribution of what the agent did.
   Every mirrored order carries the leader's own fill price and time; the exchange's fills for
   the agent's orders attach to their order (from the `OrderFill` stream, backfilled from
   `/v1/order/fill` on start), and the page rebuilds the copy account's positions from those
   fills with the simulator's episode engine, each position attributed to the leader whose
-  order opened it. Per leader: closed and open positions, share profitable, net (realized less
-  fees plus funding, the latter and liquidations from the exchange's position records),
-  size-weighted slippage of your fills against the leader's (positive = you paid more), average
-  delay from the leader's fill to yours; a cumulative realized chart per leader; every
-  position with its slippage and delay. A close made after a resync has no leader price and is
-  marked "at mark". Positions traded by hand on the same subaccount are not attributed.
+  order opened it. Only what the agent opened counts (`CS.agentFills`): a reduction or close
+  counts up to what the agent's own openings hold in that market, so closing a position it
+  adopted at start, one traded by hand (Close all) or one whose opening order has left the
+  1,000-order log adds no position. Per leader: closed and open positions, share profitable,
+  net (the result less trading fees and mPerps position fees plus funding received: realized
+  for closed positions, at the live mark for open ones; funding, position fees and liquidations
+  from the exchange's position records), slippage of your fills against the leader's weighted
+  by each fill's notional (positive = you paid more), average delay from the leader's fill to
+  yours; a cumulative realized chart per leader; every position with its slippage and delay
+  (the newest 40 listed). A close made after a resync has no leader price and is marked "at
+  mark". Positions traded by hand on the same subaccount are not attributed.
 
 The sidebar opens with labels on desktop and collapses to icons with the button at its bottom
 (remembered per browser). Press `/` anywhere to jump to the search box. A thin progress line
-under the top bar shows every page load; "How are these calculated?" (leaderboard, performance
-tab, tax center) opens the metric definitions below in a panel. Published snapshots that are more
-than two hours old are flagged as stale wherever they are shown. Subaccounts that never traded
-(the exchange's fee-collector account "earns" PnL from fees received) are tagged *no trades* on the
-leaderboard and left out of the home ticker and the copy-trading leaders.
+under the top bar shows every page load; "How are these calculated?" (leaderboard, copy trading,
+performance tab, tax center) opens the metric definitions below in a panel. Published snapshots
+that are more than two hours old are flagged as stale wherever they are shown. Subaccounts that
+never traded (the exchange's fee-collector account "earns" PnL from fees received) are tagged
+*no trades* on the leaderboard, and the exchange's own subaccount 0x1598… (it took over a
+liquidated trader's position and is credited the mPerps position fees) is tagged *exchange
+account*; both are left out of the home ticker and the copy-trading leaders. The latter's row in
+the snapshot carries `exchange: true` for the share cards, which call it an exchange account
+rather than a trader of its style.
 
 ## Metric definitions
 
-* **PnL** (interval) = realized PnL + trading fees + realized funding over the interval, plus the
-  change in unrealized PnL between the start of the interval and now.
+* **PnL** (interval) = realized PnL − trading fees − mPerp position fees + funding over the
+  interval, plus the change in unrealized PnL from the start of the interval to now. Funding counts
+  when the exchange charges it each hour, including funding charged to open positions and not yet
+  settled into the balance; unrealized PnL is net of that unsettled funding at both ends (and of
+  unsettled position fees at the end): the archive's unrealized PnL is price-only, so each bucket
+  is put on that basis from the archive's hourly funding history (`AN.netOfUnsettled`). Position
+  fees are not in the exchange's daily ledger: they are the balance change it records no deposit,
+  withdrawal, conversion, trade, fee or funding entry for (`posFee` in `AN.buildSeries`; the tax
+  center keeps its own position-fee line and does not read it). An interval starts at the first
+  archive bucket boundary at or after its nominal start (within 1 hour for 24h, 2 hours for 7d,
+  8 hours for 30d); all-time starts at the subaccount's creation.
 * **Equity** = Σ margin balances (all pools are USD-equivalent tokens) + net unrealized PnL
   (unrealized − unsettled funding − unsettled position fees).
 * **ROI** = PnL ÷ (equity at the start of the interval + deposits during it).
 * **Max drawdown** = largest peak-to-trough decline in the interval, as a percentage of a time-weighted
   return index (each bucket's gain on the capital it started with, plus that bucket's deposits, compounded), so
   deposits and withdrawals change nothing: losing $30 of $184 and then withdrawing the rest is a 16.6 % drawdown,
-  not 100 %. The dollar figure is the loss since the high-water mark of the flow-adjusted PnL curve.
-* **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized; shown only with
-  at least 10 buckets (so never for the 7-day interval)
-  (daily buckets for 7d/30d/all, hourly for 24h).
-* **Win rate** = closed positions with positive net result (realized − fees − funding) ÷ closed
-  positions. **Trading style** is the average holding time of closed positions:
-  Scalper < 1h, Intraday < 1d, Swing < 7d, otherwise Long-term.
-* **Liquidation price** uses the app's pool maths: maintenance margin =
+  not 100 %. Buckets are 1 hour for 24h, 2 hours for 7d, 8 hours for 30d and 1 day for all-time, on the
+  leaderboard, the account page and the cards alike (`AN.resFor`); finer buckets catch swings inside a day, so a
+  shorter interval can show a deeper drawdown than a longer one. The dollar figure (account page) is the loss
+  since the high-water mark of the flow-adjusted PnL curve.
+* **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized, with the same
+  buckets as the drawdown; shown only with at least 10 returns, at least 3 of them non-zero (an
+  account's first bucket has no prior equity, so its all-time Sharpe appears from its 11th day at
+  the earliest).
+* **Win rate** = closed positions with positive net result (realized − trading fees − position
+  fees + funding received − funding paid) ÷ closed positions. **Trading style** is the average
+  holding time of closed positions: Scalper < 1h, Intraday < 1d, Swing < 7d, otherwise Long-term.
+* **Liquidation price** is an estimate from the app's pool maths: maintenance margin =
   notional × (1 / (2 × maxLeverage) + takerFee), solved per position with the equity left after
-  the other positions' maintenance margin.
+  the other positions' maintenance margin, the other positions held at their marks. "none" when
+  even a fall to zero would not liquidate a long; a liquidation more than 500% from the mark is
+  tagged ">500%".
 
 ## Notes / limits
 
-* Funding sign: the API reports funding as positive when *paid*; the UI flips it so that
-  positive always means *received* (green).
+* Funding sign: the position endpoints (`fundingUsd`, `fundingAccruedUsd`) and the archive's
+  funding history (`fundingCharge`) report funding as positive when *paid*, the archive's
+  `realizedFunding` as positive when *received*; the UI shows positive = received (green)
+  everywhere.
 * The leaderboard analyses the most recent 600 positions per account and the Archive API's
-  daily buckets (hourly for the 24h interval). With many hundreds of accounts a build takes a
-  few minutes; the public rate limit is generous (20 000 points per window).
+  1-hour, 2-hour, 8-hour and daily buckets for 24h / 7d / 30d / all-time, plus its hourly funding
+  history (3-day windows) so funding counts when charged. With many hundreds of accounts a build
+  takes a few minutes; the public rate limit is generous (20 000 points per window).
 * Meridian's history API clamps ranges (e.g. 3 days at 1-hour resolution, 120 days at daily);
   the client chunks requests automatically.
 * Nothing is written anywhere except `localStorage` (favorites, leaderboard snapshot, chart

@@ -63,8 +63,6 @@
     const pts = opts.points || [];
     const color = opts.color || col.accent;
     const type = opts.type || 'line';
-    const xs = pts.map((p) => p.x);
-    const range = xs.length > 1 ? xs[xs.length - 1] - xs[0] : U.DAY;
     const yFmt = opts.yFmt || C.axisUsd;
     // monotone interpolation stays smooth but never overshoots between points (a plain spline through a few daily
     // points drew peaks and dips the data never had); short series show their points so the reader sees where data is
@@ -86,8 +84,9 @@
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
         scales: {
           // bounds 'data': the axis ends at the data (or xMin / xMax), not at the next round number of milliseconds, which
-          // left up to a week of empty chart after the last point; bars get a half-bar margin at each end instead
-          x: { type: 'linear', min: opts.xMin, max: opts.xMax, bounds: 'data', offset: type === 'bar', afterBuildTicks: alignTicks, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, callback: xTick(range), padding: 8 } },
+          // left up to a week of empty chart after the last point; bars get a half-bar margin at each end instead. Labels
+          // take their format from the axis span, as the ticks do (a plain function: Chart.js calls it with the scale as this)
+          x: { type: 'linear', min: opts.xMin, max: opts.xMax, bounds: 'data', offset: type === 'bar', afterBuildTicks: alignTicks, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, callback: function (v) { return xTick(this.max - this.min)(v); }, padding: 8 } },
           y: { position: 'right', grid: { color: (c) => (c.tick.value === 0 && opts.zero !== false ? '#3a3a3d' : col.grid), drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 6, callback: (v) => yFmt(v), padding: 8 }, beginAtZero: opts.beginAtZero || false },
         },
         plugins: {
@@ -127,6 +126,7 @@
     return chart;
   };
 
+  /** Bars, green when ≥ 0. opts: {horizontal, fmt (tooltip), axisFmt (value-axis ticks; C.axisUsd unless given)} */
   C.bars = function (canvas, labels, values, opts = {}) {
     if (!window.Chart) return null;
     C.destroy(canvas);
@@ -137,7 +137,7 @@
       data: { labels, datasets: [{ data: values, backgroundColor: colors.map((c) => hexA(c, 0.6)), borderColor: colors, borderWidth: 1, borderRadius: 3, maxBarThickness: 26 }] },
       options: {
         responsive: true, maintainAspectRatio: false, indexAxis: opts.horizontal ? 'y' : 'x',
-        scales: { x: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? { callback: C.axisUsd } : {} }, y: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? {} : { callback: C.axisUsd } } },
+        scales: { x: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? { callback: opts.axisFmt || C.axisUsd } : {} }, y: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? {} : { callback: opts.axisFmt || C.axisUsd } } },
         plugins: { tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, displayColors: false, callbacks: { label: (it) => (opts.fmt || U.fmtUsd)(it.raw) } } },
       },
     });

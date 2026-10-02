@@ -86,8 +86,9 @@
     });
     const unLiq = A.ws.subscribe('SubaccountLiquidation', sid, (m) => {
       const d = m.data || {}; const items = Array.isArray(d.d) ? d.d : [d];
-      // an unknown market's name is kept as text only: the history is stored and rendered on every visit
-      for (const it of items) { const prod = it.s ? ref.byTicker[it.s] : null; emit({ sid, kind: 'liq', ticker: prod ? prod.displayTicker : (typeof it.s === 'string' ? it.s : ''), pid: prod ? prod.id : null, qty: U.num(it.sz), px: U.num(it.px), t: Date.now(), notional: U.num(it.sz) * U.num(it.px) }); if (prod) pos[sid][prod.id] = 0; }
+      // an unknown market's name is kept as text only: the history is stored and rendered on every visit.
+      // sz is the position size at liquidation, signed (negative for a short): the side, and a size that is never negative
+      for (const it of items) { const prod = it.s ? ref.byTicker[it.s] : null; const sz = U.num(it.sz); emit({ sid, kind: 'liq', ticker: prod ? prod.displayTicker : (typeof it.s === 'string' ? it.s : ''), pid: prod ? prod.id : null, side: sz < 0 ? 'SHORT' : sz > 0 ? 'LONG' : undefined, qty: Math.abs(sz), px: U.num(it.px), t: U.num(d.t) || Date.now(), notional: Math.abs(sz) * U.num(it.px) }); if (prod) pos[sid][prod.id] = 0; }
     });
     const un = () => { unFill(); unLiq(); };
     if (pendingUn.has(sid) || !subs.has(sid)) { pendingUn.delete(sid); un(); subs.delete(sid); return; }   // unfollowed meanwhile
@@ -123,7 +124,7 @@
 
   function emit(a) {
     const s = AL.state(); const l = s.leaders.find((x) => x.sid === a.sid); if (!l) return;
-    a.address = l.address; a.name = l.name; a.id = a.sid.slice(0, 8) + '-' + a.t + '-' + a.kind;
+    a.address = l.address; a.name = l.name; a.id = a.sid.slice(0, 8) + '-' + a.t + '-' + a.kind + (a.kind === 'liq' && a.ticker ? '-' + a.ticker : '');   // one liquidation event can list several markets: their notifications must not replace each other
     if (!s.events[a.kind]) return;
     if (s.minNotional && a.notional && a.notional < s.minNotional) return;
     a.msg = AL.describe(a);

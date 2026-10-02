@@ -53,6 +53,73 @@ test('the delayed price runs from the fill to its minute\'s close, then close to
   near(assert, await f('p', 30000, 100, 0), 100, 0, 'no delay: the fill price');
 });
 
+test('funding and position fees follow the copier\'s share of size × time, not the average over fills', async () => {
+  // the leader opens 0.01, scales to 10 a second later and holds for 99 s; the fixed $2,000 copy is 20 units, then capped at 100
+  const e = { pid: 'p', start: 0, end: 100000, side: 1, qty: 0, fundingRecv: -10, posFee: 1, fills: [fill(0, 0.01, 'o1'), fill(1000, 9.99, 'o2'), fill(100000, -10, 'o3')] };
+  const r = await S.replayEpisode(e, Object.assign({ mode: 'fixed' }, base), null);
+  const k = (20 * 1000 + 100 * 99000) / (0.01 * 1000 + 10 * 99000);   // ≈ 10, where the per-fill average was (2,000 + 10) / 2
+  near(assert, r.k, k, 1e-9); near(assert, r.funding, -10 * k, 1e-9); near(assert, r.posFee, k, 1e-9);
+});
+
+test('position records: the nearest unused one per episode; an open position\'s unapplied funding counts', () => {
+  // four SOL episodes 1-4 s apart, records listed newest first (as the API returns them)
+  const starts = [40800, 42655, 43865, 44734];
+  const eps = starts.map((t) => ({ pid: 'sol', start: t }));
+  const recs = starts.slice().reverse().map((t) => ({ id: 'r' + t, productId: 'sol', createdAt: t, size: '0', fundingAccruedUsd: String(t / 1e5) }));
+  S.attachPositions(eps, recs);
+  assert.deepEqual(eps.map((e) => e.pos.id), starts.map((t) => 'r' + t), 'each episode its own record');
+  near(assert, eps[0].fundingRecv, -0.408, 1e-12);
+  const [open] = S.attachPositions([{ pid: 'xau', start: 1000 }], [{ id: 'o', productId: 'xau', createdAt: 1000, size: '3', fundingAccruedUsd: '2', fundingUsd: '421', positionFeeAccruedUsd: '0.1', positionFeeUsd: '0.0009' }]);
+  near(assert, open.fundingRecv, -423, 1e-9, 'applied and charged-but-unapplied funding (paid)'); near(assert, open.posFee, 0.1009, 1e-12);
+});
+
+test('the share kept is against the leader\'s result at the copier\'s size: a cost-free copy keeps 100%', async () => {
+  const e = { pid: 'p', start: 0, end: 2000, side: 1, qty: 0, pos: {}, fundingRecv: 0, posFee: 0, fills: [{ t: 0, q: 10, px: 100, fee: 0, oid: 'a' }, { t: 2000, q: -10, px: 110, fee: 0, oid: 'b' }] };
+  for (const s of [{ mode: 'ratio', ratio: 0.1 }, { mode: 'fixed', size: 2000 }]) {
+    const R = await S.replay({ episodes: [e], settings: Object.assign({ delaySec: 0, slipBps: 0, feeRate: 0, priceAt }, s), marks: {}, since: 0, ref: null });
+    near(assert, R.T.leaderNet, 100, 1e-9, 'the leader\'s own dollars');
+    near(assert, R.T.edgeKept, 100, 1e-9, s.mode); near(assert, R.T.leaderScaled, R.T.copierNet, 1e-9);
+    near(assert, R.curveL[R.curveL.length - 1].y, R.T.leaderScaled, 1e-9, 'the leader\'s curve at the copier\'s size');
+  }
+});
+
+test('paper copy: average-cost basis keeps the entry price; partial closes are booked, not unrealized', () => {
+  const ratio1 = { mode: 'ratio', ratio: 1, delay: 0, slipBps: 0, feeRate: { p: 0 } };
+  const go = (st, id, side, qty, p) => PP.apply(st, { id, t: 1, pid: 'p', ticker: 'P', side, qty, px: p }, { px: p, live: true, at: 1 });
+  const st = PP.start('sid', '0x', ratio1, {});
+  go(st, 'b', 'BUY', 10, 100); go(st, 's', 'SELL', 9, 150);
+  const pos = st.open.p;
+  near(assert, pos.basis / pos.qty, 100, 1e-9, 'Avg entry stays 100');
+  near(assert, PP.unrealized(st, { p: 150 }), 50, 1e-9, 'the 1 still held');
+  near(assert, st.totals.realized + PP.bookedOpen(st), 450, 1e-9, 'the 9 sold');
+  near(assert, PP.unrealized(st, { p: 150 }) + PP.bookedOpen(st), pos.cash + pos.qty * 150, 1e-9, 'the sum is unchanged');
+  // cut, then added to: 0.5 left at 100, plus 1 at 200
+  const st2 = PP.start('sid', '0x', ratio1, {});
+  go(st2, 'b1', 'BUY', 1, 100); go(st2, 's1', 'SELL', 0.5, 120); go(st2, 'b2', 'BUY', 1, 200);
+  near(assert, st2.open.p.basis / st2.open.p.qty, 250 / 1.5, 1e-9);
+  // a reconcile cut scales the basis the same way
+  PP.cutAt(st2, 'p', 0.5, 300, 2, 'test');
+  near(assert, st2.open.p.basis / st2.open.p.qty, 250 / 1.5, 1e-9); near(assert, st2.open.p.qty, 0.75, 1e-12);
+  // a position kept before the basis existed keeps the old split, and an add does not start a partial basis
+  const old = PP.start('sid', '0x', ratio1, {});
+  go(old, 'b', 'BUY', 10, 100); delete old.open.p.basis; go(old, 's', 'SELL', 9, 150); go(old, 'b2', 'BUY', 1, 160);
+  assert.equal(old.open.p.basis, undefined);
+  near(assert, PP.bookedOpen(old), 0, 0); near(assert, PP.unrealized(old, { p: 150 }), old.open.p.cash + old.open.p.qty * 150, 1e-9);
+});
+
+test('paper copy: a fill in a market left out is marked seen and tracked as the leader\'s own, without a trade', () => {
+  const st = PP.start('sid', '0x', { mode: 'fixed', size: 2000, ratio: 0.1, delay: 0, slipBps: 0, feeRate: {}, markets: ['a'] }, {});
+  const f = (id, pid, side, qty, t) => ({ id, t, pid, ticker: pid.toUpperCase(), side, qty, px: 100, orderQty: qty });
+  assert.deepEqual(PP.apply(st, f('x1', 'b', 'BUY', 2, 5000), { px: 100, live: true, at: 5000 }), []);
+  assert.equal(st.seen.x1, 1); assert.equal(st.fillT, 5000); near(assert, st.pre.b, 2, 1e-12);
+  assert.deepEqual(Object.keys(st.open), []); assert.equal(st.log.length, 0);
+  assert.equal(PP.apply(st, f('x1', 'b', 'BUY', 2, 5000), { px: 100, live: true, at: 5000 }), null, 'once');
+  PP.apply(st, f('x2', 'b', 'SELL', 2, 6000), { px: 100, live: true, at: 6000 });
+  assert.equal(st.pre.b, undefined, 'the leader flat there again'); assert.deepEqual(PP.needsReconcile(st, {}), []);
+  PP.apply(st, f('y1', 'a', 'BUY', 2, 7000), { px: 100, live: true, at: 7000 });
+  near(assert, st.open.a.qty * 100, 2000, 1e-6, 'a followed market is copied');
+});
+
 test('paper copy follows the same cap and ends flat', () => {
   const st = PP.start('sid', '0x', { mode: 'fixed', size: 2000, ratio: 0.1, delay: 0, slipBps: 0, feeRate: {} });
   const seq = [[0.08, 'BUY'], [3, 'BUY'], [3, 'BUY'], [3.15, 'BUY'], [4.615, 'SELL'], [4.615, 'SELL']];
@@ -134,4 +201,36 @@ test('reconcile: flat leader closes the copy, a smaller leader position cuts it,
   assert.deepEqual(PP.reconcile(st, { [ETH]: 7.5 }, () => null, 4), [], 'no price: left alone');
   const rows = PP.reconcile(st, {}, () => 2100, 5);
   assert.equal(rows.length, 1); assert.ok(rows[0].why); assert.deepEqual(Object.keys(st.open), []);
+});
+
+// The copy agent's order records (what Copy history is built from): only what the agent itself opened is a position
+const rec = (id, side, opts, fills) => Object.assign({ id, pid: 'btc', side, reduceOnly: false, close: false, fills }, opts);
+const fl = (id, t, qty, px) => ({ id, t, qty, px, fee: qty * px * 0.0003 });
+
+test('agent fills: a close of a position the agent adopted (or that was traded by hand) is not a position of its own', () => {
+  // a long of 2 adopted at start, closed by the agent's close order when the leader closed
+  assert.deepEqual(S.agentFills([rec('c', 'SELL', { reduceOnly: true, close: true }, [fl('f1', 1000, 2, 119)])]), []);
+  // the same, cut by half first (a reduce-only sell)
+  assert.deepEqual(S.agentFills([rec('r', 'SELL', { reduceOnly: true }, [fl('f1', 1000, 1, 119)]), rec('c', 'SELL', { reduceOnly: true, close: true }, [fl('f2', 2000, 1, 120)])]), []);
+});
+
+test('agent fills: an opening and its close are unchanged', () => {
+  const recs = [rec('o', 'BUY', {}, [fl('f1', 1000, 0.5, 100), fl('f2', 1001, 0.5, 101)]), rec('c', 'SELL', { reduceOnly: true, close: true }, [fl('f3', 5000, 1, 110)])];
+  const out = S.agentFills(recs);
+  assert.equal(out.length, 3);
+  assert.deepEqual(out.map((x) => [x.id, x.side, x.filled, x.price, x.orderId]), [['f1', 0, 0.5, 100, 'o'], ['f2', 0, 0.5, 101, 'o'], ['f3', 1, 1, 110, 'c']]);
+  near(assert, out[2].feeUsd, 1 * 110 * 0.0003, 1e-12, 'fee kept whole');
+  const eps = S.episodes(out, []);
+  assert.equal(eps.length, 1); assert.equal(eps[0].qty, 0); assert.equal(eps[0].side, 1);
+});
+
+test('agent fills: the agent\'s own long after a phantom close survives, and a close larger than its own part is cut', () => {
+  // Close all of a hand long (SELL 2), then the agent opens a long of 1 and the leader closes it
+  const recs = [rec('h', 'SELL', { reduceOnly: true, close: true }, [fl('f1', 1000, 2, 119)]), rec('o', 'BUY', {}, [fl('f2', 2000, 1, 120)])];
+  const eps = S.episodes(S.agentFills(recs), []);
+  assert.equal(eps.length, 1); assert.equal(eps[0].side, 1); near(assert, eps[0].qty, 1, 1e-12, 'one open long, not a short');
+  // an adopted long of 2 plus the agent's own add of 1, all closed together: only the 1 is the agent's
+  const mixed = S.agentFills([rec('a', 'BUY', {}, [fl('f1', 1000, 1, 100)]), rec('c', 'SELL', { reduceOnly: true, close: true }, [fl('f2', 2000, 3, 110)])]);
+  near(assert, mixed[1].filled, 1, 1e-12); near(assert, mixed[1].feeUsd, 3 * 110 * 0.0003 / 3, 1e-12, 'the fee in proportion');
+  assert.equal(S.episodes(mixed, [])[0].qty, 0);
 });

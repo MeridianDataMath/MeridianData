@@ -44,7 +44,7 @@
             { key: 'acct', label: 'Account', render: (r) => h('div.row', U.addrLink(r.f.address, r.f.subaccountId), U.copyBtn(r.f.address)) },
             { key: 'sub', label: 'Subaccount', render: (r) => h('span.dim', r.f.name || 'primary') },
             { key: 'equity', label: 'Equity', num: true, render: (r) => (r.error ? h('span.neg', 'error') : UI.usd(r.st.equity)) },
-            { key: 'upnl', label: 'Unrealized PnL', num: true, render: (r) => (r.error ? '—' : U.pnlEl(r.st.upnl)) },
+            { key: 'upnl', label: 'Net unrealized PnL', num: true, title: 'Price PnL of the open positions at the oracle price, plus unsettled funding received (minus paid), minus unsettled mPerp position fees: the amount that counts in equity. Meridian\'s app and API show unrealized PnL without these.', render:(r) => (r.error ? '—' : U.pnlEl(r.st.upnl)) },
             { key: 'pos', label: 'Open positions', num: true, render: (r) => (r.error ? '—' : String(r.st.positions.length)) },
             { key: 'notional', label: 'Notional', num: true, render: (r) => (r.error ? '—' : UI.usd(r.st.notional, { compact: true })) },
             { key: 'vol', label: 'Volume (all)', num: true, render: (r) => (r.vol == null ? '—' : UI.usd(r.vol, { compact: true })) },

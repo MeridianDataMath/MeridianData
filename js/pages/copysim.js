@@ -44,7 +44,7 @@
         UI.starBtn({ address: sa.account, subaccountId: sid, name: U.decodeBytes32(sa.name) }), MD.bellBtn({ sid, address: sa.account, name: U.decodeBytes32(sa.name) }), h('h2', U.shortAddr(sa.account, 6)), U.copyBtn(sa.account),
         sc ? h('span.chip', { class: { 'Copyable': 'green', 'Copy with care': 'amber' }[sc.verdict] || 'red' }, `copyability ${sc.total} · ${sc.verdict}`) : null,
         h('span.grow'), h('a.btn.sm', { href: U.accountUrl(sa.account, sid) }, 'Account page')),
-        h('p.muted', { style: { margin: '8px 0 0', maxWidth: '900px' } }, 'What a follower would have kept copying this account: every position it opened since the start date is replayed with your size, entered and exited a set number of seconds after each of its fills at the oracle price of that moment, at taker fees, with slippage for your size against today\'s order books. Funding and mPerp position fees follow the leader\'s, scaled to your size.'));
+        h('p.muted', { style: { margin: '8px 0 0', maxWidth: '900px' } }, 'What a follower would have kept copying this account: every position it opened since the start date is replayed with your size, entered and exited a set number of seconds after each of its fills at the oracle price of that moment, at taker fees, with slippage from today\'s order books at your size (' + usd0(AN.COPY_SIZE) + ' in % of leader mode). Funding and mPerp position fees follow the leader\'s, scaled to your size.'));
       const status = h('div.card', UI.loading('Loading fills, positions and books…'));
       U.replace(body, head, status);
 
@@ -66,23 +66,27 @@
       const modeSeg = UI.seg([{ v: 'fixed', label: '$ per position', title: 'the leader\'s opening order becomes this much; adds follow in proportion up to the maximum, reductions cut the same share' }, { v: 'perfill', label: '$ per fill', title: 'every entry fill becomes this much, up to the maximum per position; reductions cut the same share' }, { v: 'ratio', label: '% of leader', title: 'every fill is this share of the leader\'s quantity' }], st.mode, (v) => { st.mode = v; sizeIn.style.display = maxWrap.style.display = v === 'ratio' ? 'none' : ''; ratioIn.parentElement.style.display = v === 'ratio' ? '' : 'none'; }, 'sm');
       const ratioWrap = h('span.row', { style: { gap: '4px', display: st.mode === 'ratio' ? '' : 'none' } }, ratioIn, h('span.dim.small', '%'));
       sizeIn.style.display = maxWrap.style.display = st.mode === 'ratio' ? 'none' : '';
-      const delaySeg = UI.seg(DELAYS.map((d) => ({ v: d, label: d ? d + ' s' : 'instant' })), st.delay, (v) => { st.delay = v; }, 'sm');
-      const slipIn = h('input.input.sm', { type: 'number', min: 0, step: 0.5, placeholder: 'auto', value: st.slip === 'auto' ? '' : st.slip, style: { width: '80px' }, title: 'Leave empty to take today\'s books at your size' });
+      const delaySeg = UI.seg(DELAYS.map((d) => ({ v: d, label: d ? d + ' s' : 'instant' })), st.delay, (v) => { st.delay = v; if (!paper) renderPaper(); }, 'sm');   // the paper card's text names the delay
+      const slipIn = h('input.input.sm', { type: 'number', min: 0, step: 0.5, placeholder: 'auto', value: st.slip === 'auto' ? '' : st.slip, style: { width: '80px' }, title: 'Leave empty to take today\'s books at your size (' + usd0(AN.COPY_SIZE) + ' in % of leader mode)' });
       const mkWrap = h('div.row.wrap', { style: { gap: '4px' } });
       const renderMarkets = () => U.replace(mkWrap, traded.map((p) => { const on = !st.markets || st.markets.has(p.id); return h('button.chip', { class: on ? 'green' : '', style: { cursor: 'pointer' }, onclick: () => { if (!st.markets) st.markets = new Set(traded.map((x) => x.id)); if (st.markets.has(p.id)) st.markets.delete(p.id); else st.markets.add(p.id); if (st.markets.size === traded.length) st.markets = null; renderMarkets(); } }, p.displayTicker); }));
       renderMarkets();
       const runBtn = h('button.btn.primary.sm', { onclick: () => run() }, 'Run');
       const settings = h('div.card.no-print', h('div.stack', { style: { gap: '10px' } },
-        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Copy since'), sinceIn, h('span.dim.small', 'Size'), modeSeg, sizeIn, maxWrap, ratioWrap, h('span.dim.small', 'Delay'), delaySeg),
-        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Slippage'), slipIn, h('span.dim.small', 'bps each way (empty = from today\'s books at your size)'), h('span.dim.small', { style: { marginLeft: '8px' } }, 'Markets'), mkWrap, h('span.grow'), runBtn)));
+        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Copy since (UTC)'), sinceIn, h('span.dim.small', 'Size'), modeSeg, sizeIn, maxWrap, ratioWrap, h('span.dim.small', 'Delay'), delaySeg),
+        h('div.row.wrap', { style: { gap: '10px', rowGap: '10px' } }, h('span.dim.small', 'Slippage'), slipIn, h('span.dim.small', 'bps each way (empty = from today\'s books at your size; ' + usd0(AN.COPY_SIZE) + ' in % of leader mode)'), h('span.dim.small', { style: { marginLeft: '8px' } }, 'Markets'), mkWrap, h('span.grow'), runBtn)));
       const results = h('div.stack');
       U.replace(body, head, settings, results);
 
-      async function run() {
-        runBtn.disabled = true;
+      // the form's size, maximum, ratio and slippage, read when they are used, so an edited field counts (Run and Start following)
+      function readInputs() {
         st.since = sinceIn.value || st.since; st.size = Math.max(10, U.num(sizeIn.value) || AN.COPY_SIZE); st.ratio = Math.max(0.1, U.num(ratioIn.value) || 10);
         st.maxPos = U.num(maxIn.value) >= st.size ? U.num(maxIn.value) : null; maxIn.value = st.maxPos || '';
         st.slip = slipIn.value === '' ? 'auto' : Math.max(0, U.num(slipIn.value));
+      }
+      async function run() {
+        runBtn.disabled = true;
+        readInputs();
         MD.router.setParams({ address: addr, sub: sid, since: st.since, mode: st.mode !== 'fixed' ? st.mode : null, size: st.mode !== 'ratio' && st.size !== AN.COPY_SIZE ? st.size : null, max: st.mode !== 'ratio' && st.maxPos ? st.maxPos : null, ratio: st.mode === 'ratio' ? st.ratio : null, delay: st.delay !== 30 ? st.delay : null, slip: st.slip === 'auto' ? null : st.slip, markets: st.markets ? Array.from(st.markets).join(',') : null }, { silent: true });
         U.replace(results, h('div.card', UI.loading('Replaying fills against one-minute candles…')));
         try {
@@ -90,24 +94,25 @@
           const copyNotional = st.mode !== 'ratio' ? st.size : null;
           const slipAuto = S.slippageFor(depth, ref, copyNotional || AN.COPY_SIZE);
           const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003;
-          const base = { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, slipBps: st.slip === 'auto' ? slipAuto : st.slip, feeRate, priceAt: S.priceAtFactory(candles, ref), markets: st.markets };
+          const base = { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, slipBps: st.slip === 'auto' ? slipAuto : st.slip, feeRate, markets: st.markets };
           const runs = {};
-          for (const d of DELAYS) runs[d] = await S.replay({ episodes, settings: Object.assign({}, base, { delaySec: d }), marks, since, ref });
+          // a pricer per delay, so each run counts its own fills without a candle (the candle cache is shared: no extra requests)
+          for (const d of DELAYS) { const priceAt = S.priceAtFactory(candles, ref); runs[d] = await S.replay({ episodes, settings: Object.assign({}, base, { delaySec: d, priceAt }), marks, since, ref }); runs[d].candleStats = priceAt.stats; }
           if (ctx.signal.aborted) return;
-          renderResults(runs, base, slipAuto, base.priceAt.stats);
+          renderResults(runs, base, slipAuto, runs[st.delay].candleStats);
         } catch (e) { if (!isAbort(e)) U.replace(results, UI.error(e, () => run())); }
         runBtn.disabled = false;
       }
 
       function renderResults(runs, base, slipAuto, candleStats) {
         const R = runs[st.delay]; const T = R.T; const R0 = runs[0].T;
-        if (!R.rows.length) { U.replace(results, h('div.card', h('div.empty', 'No positions opened since ' + st.since + (st.markets ? ' in the chosen markets' : '') + '. Move the start date back.'))); return; }
+        if (!R.rows.length) { U.replace(results, h('div.card', h('div.empty', 'No positions opened since ' + st.since + ' (UTC)' + (st.markets ? ' in the chosen markets' : '') + '. Move the start date back.'))); return; }
         const maxPos = S.maxPosition(base);
         const sizeLabel = st.mode === 'fixed' ? usd0(st.size) + ' per position (the opening order)' : st.mode === 'perfill' ? usd0(st.size) + ' per entry fill' : U.fmtNum(st.ratio, 1) + '% of the leader\'s size';
         const perPos = T.n ? T.copierNet / T.n : 0, perPosL = T.n ? T.leaderNet / T.n : 0;
         const avgEntry = T.n ? U.sum(R.rows, (r) => r.C.entryNotional) / T.n : 0, avgEntryL = T.n ? U.sum(R.rows, (r) => r.L.entryNotional) / T.n : 0;
         const tiles = h('div.stats',
-          UI.stat('Copier net', usd0(T.copierNet, { sign: true }), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's result` : ''), U.pnlClass(T.copierNet)),
+          UI.stat('Copier net', usd0(T.copierNet, { sign: true }), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's result at your size` : ''), U.pnlClass(T.copierNet)),
           UI.stat('Leader net', usd0(T.leaderNet, { sign: true }), 'same positions, their fills, fees and funding', U.pnlClass(T.leaderNet)),
           UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps`, U.pnlClass(perPos)),
           UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '') + (T.capped ? ` · ${T.capped} capped at ${usd0(maxPos)}` : '')),
@@ -117,12 +122,12 @@
           UI.stat('If instant', usd0(R0.copierNet, { sign: true }), 'the same copy with zero delay: what latency costs is the gap', U.pnlClass(R0.copierNet)));
         const canvas = h('canvas');
         const col = C.colors();
-        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Cumulative result'), h('span.grow'), h('span.dim.small', 'by position close · both at the copier\'s size' + (st.mode === 'fixed' ? '' : ' ratio'))), h('div.chart-box', canvas));
+        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Cumulative result'), h('span.grow'), h('span.dim.small', 'by position close · the leader\'s result scaled to your size, position by position')), h('div.chart-box', canvas));
         // delay sensitivity
         const sens = UI.table({ cols: [
           { key: 'd', label: 'Delay', render: (d) => h('span', { class: d === st.delay ? 'bold' : '' }, d ? d + ' s' : 'instant') },
           { key: 'net', label: 'Copier net', num: true, render: (d) => U.pnlEl(runs[d].T.copierNet, { dp: 0 }) },
-          { key: 'kept', label: 'Of the leader\'s', num: true, render: (d) => (runs[d].T.edgeKept == null ? h('span.dim', '—') : h('span', { class: 'num ' + (runs[d].T.edgeKept >= 50 ? 'pos' : runs[d].T.edgeKept > 0 ? '' : 'neg') }, U.fmtPct(runs[d].T.edgeKept, { dp: 0 }))) },
+          { key: 'kept', label: 'Of the leader\'s', num: true, title: 'The copier\'s net as a share of the leader\'s result on the same positions, scaled to the copier\'s size per position', render: (d) => (runs[d].T.edgeKept == null ? h('span.dim', '—') : h('span', { class: 'num ' + (runs[d].T.edgeKept >= 50 ? 'pos' : runs[d].T.edgeKept > 0 ? '' : 'neg') }, U.fmtPct(runs[d].T.edgeKept, { dp: 0 }))) },
           { key: 'drift', label: 'Drift cost', num: true, render: (d) => usd0(runs[d].T.drift, { sign: true }) },
           { key: 'wr', label: 'Profitable', num: true, render: (d) => U.fmtPct(runs[d].T.winRate || 0, { dp: 0 }) },
         ], rows: DELAYS });
@@ -130,7 +135,7 @@
         // per-position table
         const wrap = h('div'); let page = 1;
         const renderTbl = () => {
-          const rows = R.rows.slice().reverse(); const slice = rows.slice((page - 1) * PAGE, page * PAGE);
+          const rows = R.rows.slice().sort((a, b) => b.t0 - a.t0); const slice = rows.slice((page - 1) * PAGE, page * PAGE);   // newest opened first, as the first column reads
           U.replace(wrap, UI.table({ cols: [
             { key: 't', label: 'Opened (UTC)', render: (r) => h('span.dim', new Date(r.t0).toISOString().replace('T', ' ').slice(0, 16)) },
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
@@ -140,28 +145,29 @@
             { key: 'ln', label: 'Leader net', num: true, render: (r) => h('span', U.pnlEl(r.L.net, { dp: 2 }), bpsEl(r.leaderBps)) },
             { key: 'cs', label: 'Copier size', num: true, title: 'Everything the copier would have put in: the opening order plus every add. The maximum per position limits what is held at once, so a position trimmed and added to again can total more than it', render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
             { key: 'cn', label: 'Copier net', num: true, render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
-            { key: 'dr', label: 'Drift', num: true, title: 'what the price move between the leader\'s fills and the copier\'s cost', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(-r.C.driftCost, { sign: true, dp: 2 }))) },
+            { key: 'dr', label: 'Drift cost', num: true, title: 'What the price move between each of the leader\'s fills and the copier\'s fill cost the copier (+ = a worse price, − = a better one)', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(r.C.driftCost, { sign: true, dp: 2 }))) },
             { key: 'sl', label: 'Slippage', num: true, render: (r) => (r.C.slipCost ? U.fmtUsd(r.C.slipCost, { dp: 2 }) : h('span.dim', '—')) },
             { key: 'fe', label: 'Fees', num: true, render: (r) => U.fmtUsd(r.C.fees, { dp: 2 }) },
             { key: 'fu', label: 'Funding', num: true, render: (r) => (Math.abs(r.C.funding) < 0.005 ? h('span.dim', '—') : U.pnlEl(r.C.funding, { dp: 2 })) },
           ], rows: slice }), rows.length > PAGE ? UI.pager({ page, pageSize: PAGE, total: rows.length, onPage: (p) => { page = p; renderTbl(); } }) : null);
         };
         renderTbl();
-        const slipNote = st.slip === 'auto' ? 'Slippage from today\'s books at ' + usd0(base.mode !== 'ratio' ? st.size : AN.COPY_SIZE) + ': ' + traded.map((p) => `${p.displayTicker} ${U.fmtNum(slipAuto[p.id] == null ? 0 : slipAuto[p.id], 1)} bps`).join(' · ') : `Slippage set to ${U.fmtNum(st.slip, 1)} bps each way.`;
+        // a market whose book did not load gets no entry from S.slippageFor, and the replay then uses 0 bps for it: say so
+        const slipNote = st.slip === 'auto' ? 'Slippage from today\'s books at ' + usd0(base.mode !== 'ratio' ? st.size : AN.COPY_SIZE) + ': ' + traded.map((p) => `${p.displayTicker} ${slipAuto[p.id] == null ? 'no book loaded, 0 bps used' : U.fmtNum(slipAuto[p.id], 1) + ' bps'}`).join(' · ') + '. A size the book cannot fill, or one costing more than 60 bps, counts as 60 bps.' : `Slippage set to ${U.fmtNum(st.slip, 1)} bps each way.`;
         const notes = h('div.card', h('h3', { style: { marginBottom: '8px' } }, 'What this assumes'), h('div.note-grid',
-          h('div.it', h('div.t', 'Prices'), h('div.d', 'Each of the leader\'s fills is copied at the one-minute oracle close ' + (st.delay ? st.delay + ' seconds' : '0 seconds') + ' later (interpolated inside the fill\'s minute), then moved against you by the slippage. The leader\'s own fills are what it actually paid.')),
+          h('div.it', h('div.t', 'Prices'), h('div.d', (st.delay ? 'Each of the leader\'s fills is copied at the estimated oracle price ' + st.delay + ' seconds later: a straight line between the nearest known prices on either side of that moment (the fill itself and the end of its minute while still inside the fill\'s minute; after that, the one-minute closes before and after it)' : 'Each of the leader\'s fills is copied at the leader\'s own fill price') + ', then moved against you by the slippage. The leader\'s own fills are what it actually paid.')),
           h('div.it', h('div.t', 'Fees, funding, position fees'), h('div.d', 'You pay the taker fee of each market on every fill. Funding and mPerp position fees are the leader\'s for the same position, scaled to your size: you would hold it over the same hours.')),
           h('div.it', h('div.t', 'Sizing'), h('div.d', st.mode === 'fixed' ? `The leader's opening order (all of its fills, not just the first piece) becomes ${usd0(st.size)} for you; later adds follow the leader in proportion until the position reaches ${usd0(maxPos)}, the most one position may hold (a leader who opens small and scales in would otherwise make yours any multiple of ${usd0(st.size)}). A reduction cuts your position by the same share as the leader's.` : st.mode === 'perfill' ? `Every entry fill becomes ${usd0(st.size)} for you, until the position reaches ${usd0(maxPos)}, the most one position may hold; a reduction cuts your position by the same share as the leader's.` : `Every fill is ${U.fmtNum(st.ratio, 1)}% of the leader's quantity.`)),
           h('div.it', h('div.t', 'Liquidations and open positions'), h('div.d', 'A position the leader was liquidated out of is closed at the leader\'s exit price; whether you would have been liquidated depends on your own margin. Positions still open are marked at the current oracle price.')),
-          h('div.it', h('div.t', 'Books'), h('div.d', slipNote + '. Unfillable sizes count as 60 bps.')),
+          h('div.it', h('div.t', 'Books'), h('div.d', slipNote)),
           h('div.it', h('div.t', 'Not modelled'), h('div.d', 'Your own market impact on top of the leader\'s, rejected or partially filled orders, and the leader trading in more than one subaccount.')),
           (data.truncated || T.partial || T.noFunding || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
             (data.truncated ? `The exchange returned the newest ${U.fmtNum(data.fills.length, 0)} fills (back to ${U.fmtDateTime(data.oldestFill)}); older positions are not replayed. ` : '') +
             (T.partial ? `${T.partial} position${T.partial > 1 ? 's' : ''} whose opening lies before that window ${T.partial > 1 ? 'were' : 'was'} left out. ` : '') +
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
             (candleStats && candleStats.noCandle ? `${U.fmtNum(candleStats.noCandle, 0)} of ${U.fmtNum(candleStats.fills, 0)} delayed fills had no candle and were priced at the leader's fill (no drift).` : ''))) : null));
-        U.replace(results, tiles, h('div.grid.cols-2', chartCard, sensCard), UI.card('Positions', wrap, h('span.dim.small', `${T.n} since ${st.since}, newest first`)), notes);
-        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
+        U.replace(results, tiles, h('div.grid.cols-2', chartCard, sensCard), UI.card('Positions', wrap, h('span.dim.small', `${T.n} opened since ${st.since} (UTC), newest first`)), notes);
+        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader (at your size)' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
       }
 
       // ---- paper copy: the same copier, live, in a virtual account kept in this browser
@@ -177,7 +183,8 @@
       const recentFill = {};         // productId → the newest leader fill the stream announced there
       let clockOffset = 0; const serverNow = () => Date.now() + clockOffset;
       async function syncClock() { try { const t0 = Date.now(); const r = await A.serverTime({ signal: ctx.signal }); const t1 = Date.now(); if (r && U.num(r.time)) clockOffset = U.num(r.time) - (t0 + t1) / 2; } catch (e) { if (isAbort(e)) throw e; } }
-      const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode !== 'ratio' ? st.size : AN.COPY_SIZE) : st.slip, feeRate }; };
+      // markets as an array: the settings are saved as JSON, where a Set would become {}
+      const paperSettings = () => { const feeRate = {}; for (const p of ref.active) feeRate[p.id] = U.num(p.takerFee) || 0.0003; return { mode: st.mode, size: st.size, maxPos: st.maxPos, ratio: st.ratio / 100, delay: st.delay, slipBps: st.slip === 'auto' ? S.slippageFor(depth, ref, st.mode !== 'ratio' ? st.size : AN.COPY_SIZE) : st.slip, feeRate, markets: st.markets ? Array.from(st.markets) : null }; };
       // detach: the stream and the timers of following; stopAll also drops a sync waiting for a fill's delay
       const detach = () => { for (const u of unsubs) { try { u(); } catch (_) {} } unsubs = []; if (fundingTimer) clearInterval(fundingTimer); fundingTimer = null; };
       const stopAll = () => { detach(); clearTimeout(syncTimer); syncTimer = null; syncAt = 0; };
@@ -187,7 +194,7 @@
       /** Prices to act on now: the stream's while fresh, else the exchange's market price; nothing when neither answers. */
       async function freshMarks(pids) {
         const out = {}; const ask = pids.filter((pid) => { const m = markOf(pid); if (m) out[pid] = m; return !m; });
-        if (ask.length) { try { const pm = await A.marketPrices(ask, { signal: ctx.signal, ttl: 3000 }); for (const pid of ask) { const x = pm[pid]; const v = x && (U.num(x.oraclePrice) || U.num(x.markPrice)); if (v) out[pid] = v; } } catch (e) { if (isAbort(e)) throw e; } }
+        if (ask.length) { try { const pm = await A.marketPrices(ask, { signal: ctx.signal, ttl: 3000 }); for (const pid of ask) { const x = pm[pid]; const v = x && U.num(x.oraclePrice); if (v) out[pid] = v; } } catch (e) { if (isAbort(e)) throw e; } }   // the market price endpoint has no markPrice: its oracle price is the mark
         return out;
       }
       /** An order's size for a fixed-size copy: what filled once it is done, else what was asked (a working order, not cached). */
@@ -225,7 +232,9 @@
         if (paper !== acct) { syncAgain = true; return 0; }   // the account changed meanwhile (another tab, a rebuild, a discard)
         const now = serverNow(); const due = [], later = [];
         for (const f of fills) { if (acct.seen[f.id]) continue; (U.num(f.createdAt) + delayMs <= now + 500 ? due : later).push(f); }
-        const oq = {}; if (acct.settings.mode === 'fixed') for (const f of due) if (oq[f.orderId] == null) oq[f.orderId] = await orderQty(f.orderId);
+        // order sizes only for markets the copy follows (P.apply discards the rest without using them)
+        const follows = (f) => !acct.settings.markets || acct.settings.markets.includes(f.productId);
+        const oq = {}; if (acct.settings.mode === 'fixed') for (const f of due) if (follows(f) && oq[f.orderId] == null) oq[f.orderId] = await orderQty(f.orderId);
         const priceAt = S.priceAtFactory(AN.candleCache({ signal: ctx.signal }), ref);   // a fresh cache: one read earlier may end before these fills
         if (paper !== acct) { syncAgain = true; return 0; }
         const rows = await PP.applyFills(acct, due, ref, async (f) => {
@@ -315,11 +324,13 @@
         }));
         // funding while a tab follows, for the time since the account's last accrual (another tab's included), at most two
         // minutes at a time: a laptop asleep follows nothing
-        fundingTimer = setInterval(() => {
-          if (!paper || rebuilding) return;
+        // each market's latest hourly rate: `ref` from page load would keep accruing at the rate of that hour
+        fundingTimer = setInterval(async () => {
+          let r = ref; try { r = await A.ref({ signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; }   // cached 5 min
+          if (!paper || rebuilding || ctx.signal.aborted) return;   // read after the wait: a rebuild or a discard may have landed meanwhile
           const cur = PP.load(sid); if (sameAcct(cur, paper) && (cur.rev || 0) > (paper.rev || 0)) paper = cur;
           const now = Date.now(); const hours = Math.min(120000, Math.max(0, now - (paper.fundingAt || now))) / 3600000;
-          if (hours > 0) PP.accrueFunding(paper, ref, marksNow(), hours);
+          if (hours > 0) PP.accrueFunding(paper, r, marksNow(), hours);
           paper.fundingAt = now; savePaper(); renderPaper();
         }, 60000);
         // a fill whose message the stream lost (a reconnect, a sleeping laptop) is found by the next look at the history
@@ -333,41 +344,50 @@
         let book;
         try { await syncClock(); book = PP.leaderBook(await A.openPositions(sid, { signal: ctx.signal })); }
         catch (e) { if (isAbort(e)) return; U.toast('Could not read the leader\'s open positions, so following did not start: ' + (e.message || e)); return; }
+        readInputs();   // exactly what the form shows, Run pressed or not
         paper = PP.start(sid, sa.account, paperSettings(), book, serverNow()); attach(); renderPaper();
       }
       function renderPaper() {
         if (!paper) {
           U.replace(paperCard, h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Paper copy'), UI.chip('live', 'blue'), h('span.grow'), h('button.btn.primary.sm', { onclick: startPaper }, 'Start following')),
-            h('p.muted', { style: { margin: 0, maxWidth: '900px' } }, 'Follow this account in a virtual account with the settings above. Each of its fills is mirrored ' + (st.delay ? st.delay + ' seconds' : 'immediately') + ' later at the mark price of that moment, so the delay cost is measured on the real tape rather than modelled. The account lives in this browser: it follows while a tab with this page is open, and fills that happen while it is closed are caught up from the exchange\'s fill history at candle prices when you come back.'));
+            h('p.muted', { style: { margin: 0, maxWidth: '900px' } }, 'Follow this account in a virtual account with the settings above (size, delay, slippage and markets as set when you start). Each of its fills is mirrored ' + (st.delay ? st.delay + ' seconds later' : 'as soon as the page sees it') + ' at the mark price of that moment, so the delay cost is measured on the real tape rather than modelled. The account lives in this browser: it follows while a tab with this page is open, and fills that happen while it is closed are caught up from the exchange\'s fill history at candle prices when you come back.'));
           return;
         }
         const mk = marksNow(); const unreal = PP.unrealized(paper, mk); const T = paper.totals;
         const openRows = Object.values(paper.open);
+        // positions kept before the cost basis existed cannot split partial closes from what is open: until Rebuild,
+        // the open tile is their result so far
+        const legacy = openRows.some((p) => p.basis == null);
+        const realized = T.realized + PP.bookedOpen(paper);
+        const delay = T.driftLive + T.driftModeled;   // + = a cost, as in the simulator
         const tiles = h('div.stats',
-          UI.stat('Realized', usd0(T.realized, { sign: true }), `${paper.closed.length} closed position${paper.closed.length === 1 ? '' : 's'}`, U.pnlClass(T.realized)),
-          UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark`, U.pnlClass(unreal)),
-          UI.stat('Delay cost', usd0(-(T.driftLive + T.driftModeled), { sign: true }), `${usd0(-T.driftLive, { sign: true })} measured on ${T.liveFills} live fill${T.liveFills === 1 ? '' : 's'} · ${usd0(-T.driftModeled, { sign: true })} modelled on ${T.caughtUp} caught up`, T.driftLive + T.driftModeled > 0 ? 'neg' : T.driftLive + T.driftModeled < 0 ? 'pos' : ''),
+          UI.stat('Realized', usd0(realized, { sign: true }), `${paper.closed.length} closed position${paper.closed.length === 1 ? '' : 's'}` + (openRows.some((p) => p.basis != null) ? ' · incl. partial closes, fees and funding of open ones' : ''), U.pnlClass(realized)),
+          legacy ? UI.stat('Result so far', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark, incl. partial closes, fees and funding · Rebuild to split it`, U.pnlClass(unreal))
+            : UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark, before fees`, U.pnlClass(unreal)),
+          UI.stat('Delay cost', usd0(delay, { sign: true }), `${usd0(T.driftLive, { sign: true })} measured on ${T.liveFills} live fill${T.liveFills === 1 ? '' : 's'} · ${usd0(T.driftModeled, { sign: true })} modelled on ${T.caughtUp} caught up`, delay > 0 ? 'neg' : delay < 0 ? 'pos' : ''),
           UI.stat('Fees & slippage', usd0(T.fees + T.slip), `${usd0(T.fees)} fees · ${usd0(T.slip)} slippage`, 'neg'),
-          UI.stat('Funding', usd0(T.funding, { sign: true }), 'accrued hourly from each market\'s current rate while a tab follows', U.pnlClass(T.funding)));
+          UI.stat('Funding', usd0(T.funding, { sign: true }), 'accrued each minute at each market\'s latest hourly rate while a tab follows', U.pnlClass(T.funding)));
+        const tickOf = (pid) => (ref.byId[pid] || {}).tickSize;
         const openTbl = UI.table({ cols: [
           { key: 'm', label: 'Market', render: (p) => UI.marketCell(p.ticker) },
           { key: 's', label: 'Side', render: (p) => U.sideEl(p.qty > 0, true) },
-          { key: 'q', label: 'Size', num: true, render: (p) => h('span', U.fmtQty(Math.abs(p.qty)), h('span.dim.xs', ' · ' + usd0(p.entryNotional))) },
-          { key: 'e', label: 'Avg entry', num: true, render: (p) => U.fmtPrice(Math.abs(p.cash / p.qty), (ref.byId[p.pid] || {}).tickSize) },
-          { key: 'mk', label: 'Mark', num: true, render: (p) => (mk[p.pid] ? U.fmtPrice(mk[p.pid], (ref.byId[p.pid] || {}).tickSize) : h('span.dim', '—')) },
-          { key: 'u', label: 'Unrealized', num: true, render: (p) => (mk[p.pid] ? U.pnlEl(p.cash + p.qty * mk[p.pid] - p.fees + p.funding, { dp: 2 }) : h('span.dim', '—')) },
+          { key: 'q', label: 'Size', num: true, render: (p) => h('span', U.fmtQty(Math.abs(p.qty)), p.basis != null ? h('span.dim.xs', { title: 'what the position now held cost at its entry prices' }, ' · ' + usd0(Math.abs(p.basis))) : null) },
+          { key: 'e', label: 'Avg entry', num: true, render: (p) => (p.basis != null && p.qty ? U.fmtPrice(Math.abs(p.basis / p.qty), tickOf(p.pid)) : h('span.dim', '—')) },
+          { key: 'mk', label: 'Mark', num: true, render: (p) => (mk[p.pid] ? U.fmtPrice(mk[p.pid], tickOf(p.pid)) : h('span.dim', '—')) },
+          { key: 'u', label: 'Unrealized', num: true, render: (p) => (!mk[p.pid] ? h('span.dim', '—') : p.basis != null ? U.pnlEl(p.qty * mk[p.pid] - p.basis, { dp: 2 }) : h('span', { title: 'kept before this page split them: incl. partial closes, fees and funding (Rebuild to split it)' }, U.pnlEl(p.cash + p.qty * mk[p.pid] - p.fees + p.funding, { dp: 2 }))) },
           { key: 't', label: 'Since', render: (p) => h('span.dim', U.fmtAgo(p.openedAt)) },
         ], rows: openRows, empty: 'No open virtual position' });
+        const tickOfT = (t) => (ref.products.find((p) => p.displayTicker === t) || {}).tickSize;   // log rows hold display tickers; ref.byTicker is keyed by the raw ones
         const logTbl = UI.table({ cols: [
           { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
           { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
           { key: 's', label: 'Side', render: (r) => U.sideEl(r.side === 'BUY') },
           { key: 'q', label: 'Size', num: true, render: (r) => U.fmtQty(r.qty) },
-          { key: 'lp', label: 'Leader px', num: true, render: (r) => U.fmtPrice(r.leaderPx, (ref.byTicker[r.ticker] || {}).tickSize) },
-          { key: 'cp', label: 'Copier px', num: true, render: (r) => U.fmtPrice(r.px, (ref.byTicker[r.ticker] || {}).tickSize) },
-          { key: 'd', label: 'Wait cost', num: true, render: (r) => (Math.abs(r.drift) < 0.005 ? h('span.dim', '—') : h('span', { class: r.drift > 0 ? 'neg' : 'pos' }, U.fmtUsd(-r.drift, { sign: true, dp: 2 }))) },
+          { key: 'lp', label: 'Leader px', num: true, render: (r) => U.fmtPrice(r.leaderPx, tickOfT(r.ticker)) },
+          { key: 'cp', label: 'Copier px', num: true, render: (r) => U.fmtPrice(r.px, tickOfT(r.ticker)) },
+          { key: 'd', label: 'Wait cost', num: true, title: 'What the price move between the leader\'s fill and the copy cost the copier (+ = a worse price, − = a better one)', render: (r) => (Math.abs(r.drift) < 0.005 ? h('span.dim', '—') : h('span', { class: r.drift > 0 ? 'neg' : 'pos' }, U.fmtUsd(r.drift, { sign: true, dp: 2 }))) },
           { key: 'f', label: 'Fee', num: true, render: (r) => U.fmtUsd(r.fee, { dp: 2 }) },
-          { key: 'k', label: '', render: (r) => h('span', r.why ? UI.chip('closed at mark', 'amber') : r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null, r.why ? h('span.dim.xs', { title: r.why }, ' ⓘ') : null) },
+          { key: 'k', label: '', render: (r) => h('span', r.why ? UI.chip(r.closed ? 'closed at mark' : 'cut at mark', 'amber') : r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null, r.why ? h('span.dim.xs', { title: r.why }, ' ⓘ') : null) },
         ], rows: paper.log.slice(0, 30), empty: 'No fills mirrored yet' });
         const rebuildBtn = h('button.btn.sm.ghost', { title: 'Recompute this account from the exchange\'s fills since it started, at candle prices, from the leader\'s positions at that moment', onclick: async () => {
           if (rebuilding || !confirm('Recompute this paper account from the exchange\'s fills since ' + U.fmtDateTime(paper.startedAt) + '? Fills mirrored live are recomputed at candle prices, and funding is kept only for positions still open.')) return;
@@ -381,13 +401,13 @@
         // before following as a new short (and closed it at the mark later): offer to recompute it
         const oldNote = (paper.v || 0) < PP.V ? h('div.small', { style: { color: 'var(--amber)', margin: '0 0 10px' } }, 'This paper account was kept by an earlier version of this page, which mirrored the leader cutting or closing a position it already held when you started following as a new position of yours. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); rebuildBtn.click(); } }, 'Rebuild it'), ' from the exchange\'s fills to correct that.') : null;
         U.replace(paperCard,
-          h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
+          h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (paper.settings.markets ? ' · ' + paper.settings.markets.map((id) => (ref.byId[id] || {}).displayTicker || id).join(', ') + ' only' : '') + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
             rebuildBtn,
             h('button.btn.sm.ghost', { disabled: rebuilding, onclick: () => { if (confirm('Stop following and discard this paper account?')) { stopAll(); PP.clear(sid); paper = null; announced.clear(); pending = 0; renderPaper(); } } }, 'Stop & discard')),
           oldNote,
           tiles,
           h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('Open virtual positions', openTbl), UI.card('Mirrored fills', logTbl, h('span.dim.small', 'newest first'))),
-          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account only proves what following would have done from here on; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.'));
+          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account shows what following would have done from the moment it started, by this page\'s rules; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.'));
       }
       // the exchange's clock and the stream first, then the catch-up: a fill during the catch-up is announced, not lost
       if (paper) { renderPaper(); try { await syncClock(); attach(); const n = await sync(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } renderPaper(); }

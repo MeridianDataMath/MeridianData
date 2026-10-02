@@ -14,8 +14,9 @@
  *   node copy-agent.mjs status                 what the running agent is doing (from its local status port)
  *   --config <file>                            another config than config.json (any command)
  *
- * Any argument the agent does not know stops it: a mistyped --dry must never start it live. Its first line says
- * DRY RUN or LIVE.
+ * Any argument the agent does not know stops it, so node copy-agent.mjs run --dyr (or npm start -- --dyr) exits without
+ * starting. A misspelt flag typed before the "--" (npm start --dyr) stays with npm and the agent starts live, so
+ * npm run dry is the safest way to start a dry run. Either way, its first line says DRY RUN or LIVE.
  *
  * Non-custodial by construction: the signer key is a Meridian linked signer (submit / cancel orders only), generated
  * and kept on this machine; the owner wallet signs the link once in the browser. Public data only otherwise: leaders'
@@ -62,7 +63,8 @@ const roundTick = (x, tick, up) => { const d = dec(tick); const st = num(tick) |
 const classify = (prev, next) => (!prev ? 'open' : !next ? 'close' : Math.sign(next) !== Math.sign(prev) ? 'reverse' : Math.abs(next) > Math.abs(prev) ? 'add' : 'reduce');
 /**
  * The quantity for an opening, an add or a reversal's new leg. ratio: that share of the leader's quantity; perfill: `size`
- * USD per fill; fixed: the leader's whole opening order (orderQty, not its first piece) becomes `size` USD, and an add of
+ * USD per group of fills; fixed: the leader's whole opening order (orderQty, not its first piece, less any part of it
+ * that closed an old position: openingOrderQty) becomes `size` USD, and an add of
  * a position we follow scales with what we hold less what earlier reductions still owe. Returns {q, k}: k is the copy
  * ratio fixed at a fixed-size opening (null otherwise).
  */
@@ -155,10 +157,42 @@ const parseState = (text) => {
   for (const k of ['books', 'marketOwner', 'carry']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
   if (s.orders != null && !Array.isArray(s.orders)) return { error: 'orders is garbled' };
   if (s.tripped != null && (typeof s.tripped !== 'object' || typeof s.tripped.why !== 'string')) return { error: 'tripped is garbled' };
-  for (const k of ['equityDayStart', 'equityPeak', 'savedAt']) if (s[k] != null && !Number.isFinite(s[k])) return { error: k + ' is garbled' };
+  for (const k of ['equityDayStart', 'equityPeak', 'savedAt', 'dayBaseAt', 'peakSince']) if (s[k] != null && !Number.isFinite(s[k])) return { error: k + ' is garbled' };
   if (s.dayKey != null && !/^\d{4}-\d{2}-\d{2}$/.test(s.dayKey)) return { error: 'dayKey is garbled' };
   return { state: s };
 };
+/** The day's loss baseline: the first reading of a UTC day starts it, and deposits and withdrawals count from that
+ *  reading (one made earlier that day is already inside it). A state file without dayBaseAt (an older agent) starts a
+ *  fresh baseline rather than counting from 00:00. */
+const dayBaseline = (prev, { day, readAt, equity }) => (prev.dayKey !== day || !prev.dayBaseAt ? { dayKey: day, equityDayStart: equity, dayBaseAt: readAt, fresh: true } : { dayKey: prev.dayKey, equityDayStart: prev.equityDayStart, dayBaseAt: prev.dayBaseAt, fresh: false });
+/** The drawdown peak from state.json with the time flows count from; a peak saved without that time (an older agent)
+ *  is dropped, the flows it was measured against being unknown */
+const restorePeak = (saved, now) => (saved && saved.equityPeak != null && saved.peakSince ? { equityPeak: saved.equityPeak, peakSince: saved.peakSince } : { equityPeak: null, peakSince: now });
+/** Per market, from a leader's open position records and its newest records: the open size, the time of the last fill
+ *  in it, and whether the newest record ended in a liquidation */
+const leaderRead = (openRows, recentRows) => {
+  const pos = {}, at = {}, liq = {};
+  for (const p of (openRows || []).concat(recentRows || [])) { const t = num(p.updatedAt) || num(p.createdAt); if (t > (at[p.productId] || 0)) { at[p.productId] = t; liq[p.productId] = !num(p.size) && !!p.isLiquidated; } }
+  for (const p of openRows || []) if (num(p.size)) { pos[p.productId] = num(p.size); liq[p.productId] = false; }
+  return { pos, at, liq };
+};
+/** A market we copy where the leader is now flat: the liquidation option when its last record there is a liquidation
+ *  (or a liquidation prompted the re-read), the flat option otherwise */
+const flatAction = (ex, wasLiq) => ((wasLiq ? ex.onLeaderLiquidation : ex.onLeaderFlat) === 'hold' ? 'hold' : 'close');
+/** A resync in a market whose leader is flat: close ours or hold it; a held copy of a liquidated position is no longer
+ *  followed (listed as an orphan), since the leader's next trade there starts something new */
+const resyncFlat = (ex, wasLiq) => { const action = flatAction(ex, wasLiq); return { action, unfollow: action === 'hold' && !!wasLiq }; };
+/** Deposits and withdrawals for the risk stops: the fresh reads, else the last full read (the day's only on the same UTC
+ *  day), else 0. The stops keep running when the transfer list cannot be read: the last amounts can only miss a transfer
+ *  made since, and a missed withdrawal counts as a loss, which errs towards stopping. read: { day, peak }, null = unreadable */
+const flowsForStops = (read, last, dayKey) => {
+  const day = read.day != null ? read.day : last && last.dayKey === dayKey && last.day != null ? last.day : 0;
+  const peak = read.peak != null ? read.peak : last && last.peak != null ? last.peak : 0;
+  return { day, peak, stale: read.day == null || read.peak == null };
+};
+/** The part of a leader order that closed the old position before it reversed (the new side is sized on the rest) */
+const closedByOrder = (prev, q) => (prev && Math.sign(q) !== Math.sign(prev) ? Math.min(Math.abs(q), Math.abs(prev)) : 0);
+const openingOrderQty = (orderQty, closed) => (orderQty ? Math.max(0, orderQty - (closed || 0)) : orderQty);
 /** A rejection that says the order's time or nonce was off: worth one retry after measuring the clock again */
 const isClockReject = (status, msg) => status >= 400 && status < 500 && status !== 401 && status !== 403 && /signed.?at|timestamp|clock|nonce|expired|too (old|early|late|far)|in the future/i.test(String(msg || ''));
 /** The control port answers to its own name only: a DNS-rebinding page reaches 127.0.0.1 under a name of its own, and
@@ -314,11 +348,11 @@ async function run() {
   // the risk stop set (see loadState): only an explicit resume clears it
   const { saved, damaged } = loadState();
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: damaged ? { t: Date.now(), why: `${damaged}${saved.tripped ? '; the stop it had: ' + saved.tripped.why : ''}: check the positions and resume` } : saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, equityPeak: saved.equityPeak || null, flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [] };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [] };
   let persistErr = null, onDiskGood = !damaged;   // a damaged file must not become the backup
   const persist = () => {
     try {
-      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, equityPeak: S.equityPeak, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
+      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
       // written whole beside it and swapped in: a crash or a full disk mid-write leaves the last good file, never half of one
       if (onDiskGood && fs.existsSync(statePath)) fs.copyFileSync(statePath, statePath + '.bak');
       fs.renameSync(statePath + '.tmp', statePath); persistErr = null; onDiskGood = true;
@@ -344,9 +378,22 @@ async function run() {
 
   // ---- own account: balances, positions, marks, and the deposits / withdrawals that must not count as PnL
   const dayKeyOf = (t) => new Date(t).toISOString().slice(0, 10);
-  const dayStartMs = () => Date.parse(dayKeyOf(serverNow()) + 'T00:00:00Z');
-  const flows = async (since) => { try { const rows = (await api('/v1/token/transfer', { params: { subaccountId: SID, createdAfter: since, limit: 100 } })).data || []; return rows.reduce((a, t) => { const ty = String(t.type || '').toUpperCase(); const amt = num(t.amount); return a + (/DEPOSIT/.test(ty) ? amt - num(t.fee) : /WITHDRAW/.test(ty) ? -(amt + num(t.fee)) : 0); }, 0); } catch (_) { return 0; } };
+  // deposits and withdrawals since `since`, every page; null when unreadable, so the stops wait a cycle rather than take
+  // a transfer for a loss
+  const flows = async (since) => {
+    try {
+      let sum = 0, cursor = null;
+      for (let page = 0; page < 50; page++) {
+        const r = await api('/v1/token/transfer', { params: { subaccountId: SID, createdAfter: since, limit: 100, cursor } });
+        for (const t of r.data || []) { const ty = String(t.type || '').toUpperCase(); const amt = num(t.amount); sum += /DEPOSIT/.test(ty) ? amt - num(t.fee) : /WITHDRAW/.test(ty) ? -(amt + num(t.fee)) : 0; }
+        if (!(r.hasNext && r.nextCursor)) return sum;
+        cursor = r.nextCursor;
+      }
+      return null;   // more than 50 pages: not all of them read
+    } catch (_) { return null; }
+  };
   const refreshOwn = async () => {
+    const readAt = serverNow();   // the baseline is taken before the reads it is compared with
     const [bal, pos, prices] = await Promise.all([api('/v1/subaccount/balance', { params: { subaccountId: SID, limit: 100 } }), api('/v1/position', { params: { subaccountId: SID, open: true, limit: 100 } }), api('/v1/product/market-price?' + products.filter((p) => p.status === 'ACTIVE').map((p) => 'productIds=' + p.id).join('&'))]);
     const mark = {}; for (const x of prices.data || []) mark[x.productId] = num(x.oraclePrice) || num(x.markPrice);
     const own = {}; let upnl = 0, notional = 0;
@@ -355,13 +402,15 @@ async function run() {
     const balance = (bal.data || []).reduce((a, b) => a + num(b.amount), 0);
     S.own = own; S.mark = mark; S.equity = balance + upnl; S.notional = notional; S.balance = balance; S.ownAt = Date.now();
     for (const pid of Object.keys(S.carry)) if (!own[pid] || !(S.carry[pid] > 1e-12)) delete S.carry[pid];   // nothing left to reduce, nothing owed
-    const day = dayKeyOf(serverNow());
-    if (S.dayKey !== day) { S.dayKey = day; S.equityDayStart = S.equity; S.flowsDay = 0; }
-    else S.flowsDay = await flows(dayStartMs());
-    S.flowsSinceStart = await flows(S.startedAt);
-    if (S.equityPeak == null) S.equityPeak = S.equity;
-    const adjEquity = S.equity - S.flowsSinceStart;   // deposits since start do not raise the peak, withdrawals do not count as loss
-    if (adjEquity > S.equityPeak) S.equityPeak = adjEquity;
+    const db = dayBaseline(S, { day: dayKeyOf(readAt), readAt, equity: S.equity }); S.dayKey = db.dayKey; S.equityDayStart = db.equityDayStart; S.dayBaseAt = db.dayBaseAt;
+    const fDay = db.fresh ? 0 : await flows(S.dayBaseAt), fPeak = await flows(S.peakSince);
+    // an unreadable transfer list does not switch the stops off: they run on the last amounts read (flowsForStops)
+    const fl = flowsForStops({ day: fDay, peak: fPeak }, S.flowsLast, S.dayKey);
+    if (fl.stale) { if (!S.flowsErr) { const msg = 'deposits and withdrawals could not be read: the daily-loss and drawdown stops use the last amounts read until they can (a withdrawal made since counts as a loss)'; note('warn', msg); push('Copy agent: transfers unreadable', msg); } S.flowsErr = true; }
+    else { S.flowsErr = false; S.flowsLast = { day: fl.day, peak: fl.peak, dayKey: S.dayKey }; }
+    S.flowsDay = fl.day; S.flowsSinceStart = fl.peak;
+    const adjEquity = S.equity - S.flowsSinceStart;   // deposits since peakSince do not raise the peak, withdrawals do not count as loss
+    if (S.equityPeak == null || adjEquity > S.equityPeak) S.equityPeak = adjEquity;   // the first reading sets it, in the same terms
     S.dayPnl = S.equity - S.equityDayStart - S.flowsDay;
     S.ddPct = S.equityPeak > 0 ? ((S.equityPeak - adjEquity) / S.equityPeak) * 100 : 0;
     if (!S.tripped && ((risk.dailyLossStop && -S.dayPnl >= risk.dailyLossStop) || (risk.drawdownStopPct && S.ddPct >= risk.drawdownStopPct))) {
@@ -482,13 +531,11 @@ async function run() {
   // A position record's updatedAt is the time of the last fill in it, so a fill whose time is at or before the record's
   // updatedAt is already inside the size that was read; the socket's copy of that fill must not be added on top
   // (a resync landing while an order's fills are still being grouped would otherwise count them twice and, say, take
-  // a close for a reversal). Open records carry the sizes; the newest records carry the updatedAt of recent closes.
+  // a close for a reversal). Open records carry the sizes; the newest records carry the updatedAt of recent closes and
+  // whether one was a liquidation (a liquidation leaves no fill, so a re-read is the only place it shows).
   const readLeader = async (l) => {
     const [openR, recentR] = await Promise.all([api('/v1/position', { params: { subaccountId: l.sid, open: true, limit: 100 } }), api('/v1/position', { params: { subaccountId: l.sid, limit: 50 } })]);
-    const pos = {}, at = {};
-    for (const p of (openR.data || []).concat(recentR.data || [])) { const t = num(p.updatedAt) || num(p.createdAt); if (t > (at[p.productId] || 0)) at[p.productId] = t; }
-    for (const p of openR.data || []) if (num(p.size)) pos[p.productId] = num(p.size);
-    return { pos, at };
+    return leaderRead(openR.data, recentR.data);
   };
   const seedLeader = async (l) => { try { const r = await readLeader(l); S.leaderPos[l.sid] = r.pos; S.leaderPosAt[l.sid] = r.at; S.leaderSeeded[l.sid] = true; } catch (e) { S.leaderSeeded[l.sid] = false; note('warn', `could not read ${who(l)}'s positions: ${e.message}; not copying its openings until it can be read`); } S.books[l.sid] = S.books[l.sid] || {}; };
   for (const l of cfg.leaders) await seedLeader(l);
@@ -496,7 +543,7 @@ async function run() {
 
   // ---- preflight: what would make an order fail or a result mislead
   if (Math.abs(offset) > 5000) note('warn', `this machine's clock is ${(offset / 1000).toFixed(1)} s off the exchange's; corrected for signing`);
-  if (!DRY && signer && num(signer.expiresAt) && num(signer.expiresAt) < Date.now() + 3 * 86400000) { note('warn', `the linked signer expires ${new Date(num(signer.expiresAt)).toISOString()}: extend it before then`); push('Copy agent signer expiring', new Date(num(signer.expiresAt)).toISOString()); }
+  if (!DRY && signer && num(signer.expiresAt) && num(signer.expiresAt) < Date.now() + 3 * 86400000) { note('warn', `the linked signer expires ${new Date(num(signer.expiresAt)).toISOString()}: before then make a new key (node copy-agent.mjs keygen --force), link it on the site and restart the agent`); push('Copy agent signer expiring', new Date(num(signer.expiresAt)).toISOString()); }
   if (S.equity <= 0) note('warn', 'the copy account has no equity; nothing can be opened');
   if (ex.type === 'MARKET') note('warn', 'execution.type is MARKET: the only slippage protection is the exchange\'s own cap (MarketOrderReachedMaxSlippage); IOC with a bps cap is safer');
   if (sizing.mode !== 'ratio' && num(sizing.size) < (risk.minOrderUsd || 0)) note('warn', `sizing.size ${sizing.size} is below risk.minOrderUsd ${risk.minOrderUsd}: every order would be skipped`);
@@ -532,7 +579,11 @@ async function run() {
     const book = S.books[l.sid] || (S.books[l.sid] = {}); const px = g.badPx ? NaN : g.notional / Math.abs(g.q);
     const own = S.own[prod.id]; const ownQty = own ? own.size : 0; const followed = S.marketOwner[prod.id] === l.sid;
     const kind = classify(prev, lp[prod.id]);
-    note('leader', `${name} ${kind} ${prod.displayTicker} ${g.q > 0 ? '+' : ''}${g.q} @ ${Number.isFinite(px) ? px : 'no price'}`);
+    // the part of this leader order that closed the old position, over all its groups of fills: the new side is sized
+    // on the rest of the order (as paper copy does)
+    const cp = closedByOrder(prev, g.q);
+    if (g.oid && cp) { if (!S.orderClosed || Object.keys(S.orderClosed).length > 200) S.orderClosed = {}; S.orderClosed[g.oid] = (S.orderClosed[g.oid] || 0) + cp; }
+    note('leader',`${name} ${kind} ${prod.displayTicker} ${g.q > 0 ? '+' : ''}${g.q} @ ${Number.isFinite(px) ? px : 'no price'}`);
     const ctxL = { leaderSid: l.sid, leaderPx: px > 0 && Number.isFinite(px) ? px : null, leaderT: g.t || serverNow(), kind };
     if (kind === 'close') { if (followed && ownQty) await closeMarket(prod.id, `${name} closed`, name, ctxL); return; }
     if (kind === 'reduce') {
@@ -554,7 +605,7 @@ async function run() {
     if (bad) { missed({ leader: name, sid: l.sid, pid: prod.id, ticker: prod.displayTicker, kind, q: g.q, px: ctxL.leaderPx, t: g.t || null, why: bad }); return; }
     // sized and limited at the mark: the leader's price only had to be near it
     const leaderDelta = kind === 'reverse' ? Math.abs(next) : Math.abs(g.q);
-    const sz = sizeOrder(sizing, { kind, leaderDelta, px: mark, followed, ownNow, prev, orderQty: g.orderQty, owed: S.carry[prod.id] || 0 });
+    const sz = sizeOrder(sizing, { kind, leaderDelta, px: mark, followed, ownNow, prev, orderQty: openingOrderQty(g.orderQty, (S.orderClosed || {})[g.oid]), owed: S.carry[prod.id] || 0 });
     let q = sz.q; if (sz.k != null) book[prod.id] = { k: sz.k, openedAt: Date.now() };
     const side = next > 0 ? 0 : 1;
     // the size limits cut the order to what they allow (a leader scaling in beyond the cap is followed up to it);
@@ -588,7 +639,14 @@ async function run() {
       const prod = byId[pid]; const b = before[pid] || 0, a = after[pid] || 0; const ownQty = S.own[pid].size;
       const ctxL = { leaderSid: l.sid, leaderPx: markOf(pid) || null, leaderT: serverNow() };   // the leader's own price is unknown here: the mark stands in, flagged
       const acted = () => { S.resyncAt[pid] = read.at[pid] || Date.now(); };   // a fill of that time or earlier is covered by this
-      if (!a) { if (ex.onLeaderFlat !== 'hold' && (why !== 'liquidation' || ex.onLeaderLiquidation !== 'hold')) { note('leader', `${who(l)} is flat in ${prod.displayTicker} (${why})`); acted(); await closeMarket(pid, `leader flat (${why})`, who(l), Object.assign({ resync: true }, ctxL)); } }
+      if (!a) {
+        // on every re-read, not only the one a liquidation event prompts: the leader's last record there says which option applies
+        const wasLiq = why === 'liquidation' || !!(read.liq && read.liq[pid]);
+        const rf = resyncFlat(ex, wasLiq);
+        if (rf.action === 'close') { note('leader', `${who(l)} is ${wasLiq ? 'liquidated' : 'flat'} in ${prod.displayTicker} (${why})`); acted(); await closeMarket(pid, `leader ${wasLiq ? 'liquidated' : 'flat'} (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
+        // held after a liquidation: no longer this leader's, so later re-reads leave it alone (an orphan); flat + hold does nothing
+        else if (rf.unfollow) { delete S.marketOwner[pid]; if (S.books[l.sid]) delete S.books[l.sid][pid]; if (!S.orphans.includes(pid)) S.orphans.push(pid); note('leader', `${who(l)} was liquidated in ${prod.displayTicker}: holding ours (onLeaderLiquidation hold); it is no longer followed`); }
+      }
       else if (Math.sign(a) !== Math.sign(ownQty)) { note('leader', `${who(l)} is on the other side in ${prod.displayTicker} (${why}); closing ours, not chasing`); acted(); await closeMarket(pid, `leader reversed (${why})`, who(l), Object.assign({ resync: true }, ctxL)); }
       else if (b && Math.abs(a) < Math.abs(b) - 1e-12) { const share = 1 - Math.abs(a) / Math.abs(b); note('leader', `${who(l)} reduced ${prod.displayTicker} by ${(share * 100).toFixed(0)}% while the socket was quiet`); acted(); await reduceBy(pid, share, Object.assign({ why: `${who(l)} reduced (${why})`, leader: who(l), kind: 'reduce', resync: true }, ctxL)); }
     }
@@ -601,6 +659,7 @@ async function run() {
   const backfillFills = async () => { try { const rows = (await api('/v1/order/fill', { params: { subaccountId: SID, limit: 100 } })).data || []; for (const f of rows) attachFill({ id: f.id, orderId: f.orderId, t: num(f.createdAt), px: num(f.price), qty: num(f.filled), fee: num(f.feeUsd), maker: !!f.isMaker }); } catch (_) {} };
   if (!DRY) await backfillFills();
   const pending = new Map(); const seen = new Set();
+  const puTimer = {};   // one per leader: a hint for one leader must not cancel another's re-read
   const onFill = (l, prod, f) => {
     const key = l.sid + '|' + prod.id + '|' + f.oid; const cur = pending.get(key); const badPx = !(f.px > 0);   // one unpriced piece spoils the order's average
     if (cur) { cur.q += f.q; cur.notional += Math.abs(f.q) * f.px; cur.t = Math.max(cur.t, f.t); cur.parts.push({ q: f.q, t: f.t }); cur.badPx = cur.badPx || badPx; clearTimeout(cur.timer); cur.timer = setTimeout(() => flush(key), ex.groupMs); return; }
@@ -638,7 +697,7 @@ async function run() {
       if (!l) continue;
       if (m.e === 'OrderFill') { const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); } onFill(l, prod, { q: (String(it.sd) === '0' ? 1 : -1) * num(it.sz), px: num(it.px), oid: it.oid || it.id, t: num(it.t || d.t) || serverNow() }); }
       else if (m.e === 'SubaccountLiquidation') { note('leader', `${who(l)}: liquidation event`); push('Leader liquidated', who(l)); setTimeout(() => serial(() => resync(l, 'liquidation')), 1500); }
-      else if (m.e === 'PositionUpdate') { clearTimeout(S._pu); S._pu = setTimeout(() => serial(() => resync(l, 'position update')), 4000); }   // after the fills of the same order have been handled
+      else if (m.e === 'PositionUpdate') { clearTimeout(puTimer[l.sid]); puTimer[l.sid] = setTimeout(() => { delete puTimer[l.sid]; serial(() => resync(l, 'position update')); }, 4000); }   // after the fills of the same order have been handled
     }
   };
   connect();
@@ -664,7 +723,7 @@ async function run() {
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }   // a preflight carries no token; the request after it must
     if (!tokenOk(req.headers['x-agent-token'])) return deny(401, 'token');
     const url = new URL(req.url, 'http://x');
-    if (req.method === 'GET' && url.pathname === '/status') { res.writeHead(200, cors); return res.end(JSON.stringify(Object.assign({}, S, { _pu: undefined, uptime: Date.now() - S.startedAt, now: Date.now() }))); }
+    if (req.method === 'GET' && url.pathname === '/status') { res.writeHead(200, cors); return res.end(JSON.stringify(Object.assign({}, S, { uptime: Date.now() - S.startedAt, now: Date.now() }))); }
     if (req.method === 'POST') {
       let bodyTxt = ''; for await (const c of req) { bodyTxt += c; if (bodyTxt.length > 65536) return deny(413, 'body'); } let bodyJ = {}; try { bodyJ = JSON.parse(bodyTxt || '{}'); } catch (_) {}
       if (url.pathname === '/pause') { S.paused = true; note('control', 'paused from the site'); persist(); }

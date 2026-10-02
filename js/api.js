@@ -165,6 +165,23 @@
     month1: { ms: 30 * U.DAY, max: Infinity },
   };
   A.totalVolume = (sid, o) => A.get(A.ARCHIVE + '/v1/subaccount/total-volume' + qs({ subaccountId: sid }), { ttl: (o && o.ttl) || 0, signal: o && o.signal }).then((r) => U.num(r && r.volumeUsd));
+  /** Hourly funding charges on a subaccount's positions since `start` (archive; fundingCharge: + = paid). The archive serves
+   *  1 hour to 3 days per request and floors startTime to the hour, so the windows run back from the next whole hour, each
+   *  71 hours, a few at a time; a row two windows share is kept once. Hour-aligned, the same windows within the hour hit
+   *  the request cache. Null when a window holds more rows than are read (40 pages): netting against part of the charges
+   *  would misdate every earlier bucket, so callers fall back to the settled funding. */
+  A.fundingCharges = async function (sid, start, o) {
+    const W = 3 * U.DAY - U.HOUR, top = Math.ceil(Date.now() / U.HOUR) * U.HOUR;
+    const ends = []; for (let e = top; e > start; e -= W) ends.push(e);
+    // the newest window sends no endTime, so the archive ends it at its own clock (it rejects an endTime past that)
+    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: e - W, endTime: e === top ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4);
+    const bad = res.find((r) => !r.ok); if (bad) throw bad.error;   // an abort or a failed window, as a serial loop would throw
+    const parts = res.map((r) => r.value);
+    if (parts.some((p) => !p || p.truncated)) return null;
+    const seen = new Set(); const rows = [];
+    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k)) { seen.add(k); rows.push(c); } }
+    return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+  };
   /**
    * History rows for kind in {balance, unrealized-pnl, volume}, automatically chunked to the
    * resolution's max range and paginated. Returns rows sorted ascending by time.

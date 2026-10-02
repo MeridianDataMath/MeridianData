@@ -38,7 +38,7 @@
       // narrow screens stack the filters under the table, so a toolbar above it carries the interval and a Filters toggle
       const lbEl = h('div.lb');
       const toolbar = h('div.row.lb-toolbar');
-      const intervalNote = 'PnL, ROI, Sharpe and drawdown follow the selected interval';
+      const intervalNote = 'PnL, volume, ROI, Sharpe and drawdown follow the selected interval; equity, positions, win rate and trading style do not';
       const renderToolbar = () => { const seg = UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'); seg.title = intervalNote; U.replace(toolbar, seg, h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters')); };
       const filtersCard = h('div.card.filters', filters);
       // one header row: what is shown, then (narrow screens) the interval and the filters toggle, then Update
@@ -70,7 +70,7 @@
       function rowsFiltered(data) {
         const iv = state.interval;
         const favs = new Set(U.favorites.list().map((f) => f.subaccountId));
-        const val = (r, k) => { const s = r.stats && r.stats[iv]; switch (k) { case 'equity': return r.equity; case 'volume': return s ? s.volume : 0; case 'pnl': return s ? s.pnl : 0; case 'roi': return s ? s.roi : null; case 'sharpe': return s ? s.sharpe : null; case 'ddPct': return s ? s.ddPct : null; case 'winRate': return r.winRate; case 'positions': return r.positionsCount; case 'style': return STYLES.indexOf(r.style); case 'account': return r.account; default: return null; } };
+        const val = (r, k) => { const s = r.stats && r.stats[iv]; switch (k) { case 'equity': return r.equity; case 'volume': return s ? s.volume : 0; case 'pnl': return s ? s.pnl : 0; case 'roi': return s ? s.roi : null; case 'sharpe': return s ? s.sharpe : null; case 'ddPct': return s ? s.ddPct : null; case 'winRate': return r.winRate; case 'positions': return r.positionsCount; case 'style': { const i = STYLES.indexOf(r.style); return i < 0 ? null : i; } case 'account': return r.account; default: return null; } };
         let rows = data.rows.slice();
         if (state.q) rows = rows.filter((r) => r.account.includes(state.q) || r.sid.includes(state.q));
         if (state.favOnly) rows = rows.filter((r) => favs.has(r.sid));
@@ -78,13 +78,15 @@
         for (const k of Object.keys(state.min)) rows = rows.filter((r) => { const v = val(r, k); return v != null && v >= state.min[k]; });
         for (const k of Object.keys(state.max)) rows = rows.filter((r) => { const v = val(r, k); return v != null && v <= state.max[k]; });
         rows = U.sortBy(rows, (r) => val(r, state.sort.key), state.sort.desc);
-        return { rows, val };
+        // a row's rank on the whole leaderboard in the same order, not its place in the filtered list
+        const rankOf = new Map(U.sortBy(data.rows, (r) => val(r, state.sort.key), state.sort.desc).map((r, i) => [r.sid, i + 1]));
+        return { rows, val, rankOf };
       }
 
       function renderTable() {
         const data = P.cache();
         if (!data || !data.rows) { U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'The leaderboard has not been built yet.'), h('button.btn.primary', { onclick: () => build(true) }, 'Build leaderboard'))); U.replace(summary, ''); return; }
-        const { rows } = rowsFiltered(data);
+        const { rows, rankOf } = rowsFiltered(data);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (state.page > pages) state.page = pages;
         const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
         const iv = state.interval;
@@ -93,8 +95,8 @@
         const tbl = UI.table({
           sort: state.sort, onSort,
           cols: [
-            { key: 'rank', label: '#', render: (r) => { const i = rows.indexOf(r) + 1; return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
-            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : !r.inactive && AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null) },
+            { key: 'rank', label: '#', render: (r) => { const i = rankOf.get(r.sid); return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
+            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
             { key: 'pnl', label: 'PnL', num: true, sortVal: 1, render: (r) => (s(r) ? U.pnlEl(s(r).pnl) : '—') },
             { key: 'volume', label: 'Volume', num: true, sortVal: 1, render: (r) => (s(r) ? U.fmtUsd(s(r).volume) : '—') },
@@ -147,8 +149,10 @@
           });
           await U.pLimit(tasks, 4);
           if (ctx.signal.aborted) return;
+          // a cancelled build is dropped: the snapshot already shown stays (home, favorites and the dashboard read the same cache)
+          if (cancel) { U.replace(progress); return; }
           const ok = rows.filter(Boolean);
-          const snapshot = { builtAt: Date.now(), rows: ok, partial: cancel || ok.length < subs.length };
+          const snapshot = { builtAt: Date.now(), rows: ok, partial: ok.length < subs.length };
           if (!U.storage.set(KEY, snapshot)) U.toast('Snapshot too large for local storage; shown for this session only');
           P._mem = snapshot;
           U.replace(progress);

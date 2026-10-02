@@ -152,15 +152,17 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
       return {
         kind: 'perps', address: r.account, period: 'All time', pnl: s.pnl || 0, roi: s.roi, curve,
         periodRange: curve ? range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : r.createdAt ? 'since ' + date(r.createdAt) : null,
-        stats: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', s.ddPct ? pct(s.ddPct, 1) : '—'], ['Volume', U.fmtUsd(r.volumeAll || s.volume || 0, { compact: true })], ['Positions', U.fmtNum(r.positionsCount || 0, 0)]],
-        statsHidden: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', s.ddPct ? pct(s.ddPct, 1) : '—'], ['Positions', U.fmtNum(r.positionsCount || 0, 0)], ['Style', r.style && r.style !== '—' ? r.style : '—']],
-        footRight: r.style && r.style !== '—' ? r.style + ' trader' + (r.createdAt ? ' · since ' + date(r.createdAt) : '') : r.createdAt ? 'On Meridian since ' + date(r.createdAt) : '',
+        stats: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', U.fmtDd(s.ddPct)], ['Volume', U.fmtUsd(r.volumeAll || s.volume || 0, { compact: true })], ['Positions', U.fmtNum(r.positionsCount || 0, 0)]],
+        statsHidden: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', U.fmtDd(s.ddPct)], ['Positions', U.fmtNum(r.positionsCount || 0, 0)], ['Style', r.style && r.style !== '—' ? r.style : '—']],
+        // the exchange's own account (row.exchange, set by AN.buildLeaderboardRow) is not a trader
+        footRight: r.exchange ? 'Exchange account' + (r.createdAt ? ' · since ' + date(r.createdAt) : '')
+          : r.style && r.style !== '—' ? r.style + ' trader' + (r.createdAt ? ' · since ' + date(r.createdAt) : '') : r.createdAt ? 'On Meridian since ' + date(r.createdAt) : '',
       };
     };
     const accountSvg = (r) => flexSvg(accountInput(r));
     const accountText = (r) => {
       const s = (r.stats && r.stats.all) || {};
-      const bits = [s.roi != null ? pct(s.roi, 1, true) + ' ROI' : null, U.fmtUsd(r.volumeAll || 0, { compact: true }) + ' volume', r.winRate != null ? pct(r.winRate, 0) + ' win rate' : null, s.ddPct ? pct(s.ddPct, 1) + ' max drawdown' : null, r.style && r.style !== '—' ? r.style + ' trader' : null].filter(Boolean);
+      const bits = [s.roi != null ? pct(s.roi, 1, true) + ' ROI' : null, U.fmtUsd(r.volumeAll || 0, { compact: true }) + ' volume', r.winRate != null ? pct(r.winRate, 0) + ' win rate' : null, s.ddPct > 0 ? U.fmtDd(s.ddPct) + ' max drawdown' : null, r.style && r.style !== '—' && !r.exchange ? r.style + ' trader' : null].filter(Boolean);
       return { title: `${short(r.account)} on Meridian: ${money(s.pnl || 0, true)} all-time PnL`, description: bits.join(' · ') + '. Live positions, performance, copyability and tax records on MeridianDataHub.' };
     };
 
@@ -221,7 +223,7 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
     // ---------------------------------------------------------------- the site card (home and every other page)
     const siteSvg = ({ lb, pr }) => {
       const rows = (lb && lb.rows) || []; const T = pr && pr.agg && pr.agg.totals;
-      const perpsVol = rows.reduce((a, r) => a + (Number(r.volumeAll) || 0), 0);
+      const perpsVol = rows.reduce((a, r) => a + (Number(r.volumeAll) || 0), 0) / 2;   // every fill counts once in its maker's account volume and once in its taker's
       const fig = (i, k, v) => label(64 + i * 268, 470, k) + t(64 + i * 268, 512, v, 34, { mono: true, w: 600 });
       return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <defs>

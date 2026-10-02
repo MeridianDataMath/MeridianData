@@ -81,7 +81,9 @@
       const roi = inp.roi == null || !Number.isFinite(inp.roi) ? null : U.fmtPct(inp.roi, { sign: true, dp: Math.abs(inp.roi) < 10 ? 1 : 0 });
       const when = (o.periods.find((p) => p.v === period) || {}).label || 'All time';
       const what = o.what === 'wallet' ? 'Meridian Predict' : 'Meridian';
-      const text = hide ? `My ${what} equity curve: ${roi || '—'} (${when.toLowerCase()})` : `My ${what} equity curve: ${K.money(inp.pnl, true)}${roi ? ' (' + roi + ' ROI)' : ''}, ${when.toLowerCase()}`;
+      // any visitor can flex any public account, so the draft names the address drawn on the card rather than saying "my"
+      const who = U.shortAddr(o.address, 4);
+      const text = hide ? `${who} · ${what} equity curve: ${roi || '—'} (${when.toLowerCase()})` : `${who} · ${what} equity curve: ${K.money(inp.pnl, true)}${roi ? ' (' + roi + ' ROI)' : ''}, ${when.toLowerCase()}`;
       // the share link unfurls into the all-time card with dollar amounts, so with amounts hidden (or no card behind a
       // share link) the post links the site
       const url = hide || !o.shareUrl ? MD.api.SITE_URL : o.shareUrl;
