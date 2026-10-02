@@ -58,10 +58,14 @@
     n.fairAtBet = ok ? fair : null;
     n.vig = ok && n.odds != null ? n.odds - fair : null;
     n.vigPct = ok && n.odds != null && fair ? (n.odds - fair) / fair : null;
-    // combos whose legs sit on the same Polymarket event are correlated, so "fair = product of the legs" understates fair
-    // and the measured vig includes the maker's correlation pricing; sameEvent is null when an event is unknown
+    // combos whose legs sit on the same match or asset are correlated, so "fair = product of the legs" is not the fair price
+    // and the measured vig includes the maker's correlation pricing; sameEvent is null when a leg's event is unknown.
+    // A leg's event is one or more match keys (build-snapshot.mjs: root event, gameId, asset and date), space-separated;
+    // legs sharing any key are on one match (an older bare event id is a single key)
     const evs = n.picks.map((k) => k.event);
-    n.sameEvent = n.picks.length < 2 ? false : evs.some((e) => !e) ? null : new Set(evs).size < evs.length;
+    if (n.picks.length < 2) n.sameEvent = false;
+    else if (evs.some((e) => !e)) n.sameEvent = null;
+    else { const seen = new Set(); n.sameEvent = evs.some((e) => { const ks = String(e).split(' '); const hit = ks.some((x) => seen.has(x)); ks.forEach((x) => seen.add(x)); return hit; }); }
     return n;
   };
 
@@ -76,7 +80,11 @@
    *  prediction once (0x3106…88d1: a single $1 against $1 at 50 %, settled ten minutes later), which is a test, not a
    *  market; such one-off counterparties are named apart from the makers (their results still count in the totals). */
   P.MAKER_MIN = 5;
-  P.splitMakers = (rows) => ({ makers: (rows || []).filter((m) => m.n >= P.MAKER_MIN), oneOff: (rows || []).filter((m) => !(m.n >= P.MAKER_MIN)) });
+  /** Whether a counterparty that took n predictions is a market maker (the Market makers page, a bettor page, its card). */
+  P.isMarketMaker = (n) => n >= P.MAKER_MIN;
+  P.splitMakers = (rows) => ({ makers: (rows || []).filter((m) => P.isMarketMaker(m.n)), oneOff: (rows || []).filter((m) => !P.isMarketMaker(m.n)) });
+  /** The category with the most predictions; a tie goes to the larger stake, then the name (it went to whichever tied category the wallet used last). */
+  P.topCategory = (cats, catW) => Object.keys(cats || {}).sort((a, b) => cats[b] - cats[a] || ((catW && catW[b]) || 0) - ((catW && catW[a]) || 0) || (a < b ? -1 : 1))[0] || null;
   const r4 =(x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
   const avg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
   const median = (arr) => { if (!arr.length) return null; const s = arr.slice().sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
@@ -94,6 +102,8 @@
     return { label: 'lost', tone: 'red', title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : null };
   };
 
+  /** ROI in percent on one base, for the snapshot's rows (P.aggregate) and a wallet page (P.bettorFigures): the PnL (secondary market included) over the stakes that have met their result, i.e. decided predictions' stakes plus the sold share of open ones (a sale books its result before the verdict, so its stake belongs in the base). Null with neither. */
+  P.roiOf = (pnl, decidedStake, soldOpenStake, anyDecided) => (anyDecided || soldOpenStake > 1e-9 ? (pnl / Math.max(1e-9, decidedStake + (soldOpenStake || 0))) * 100 : null);
   /**
    * A wallet's headline figures from its own loaded predictions (all of them: the page uses the snapshot aggregate when
    * they are not) and its history: exchange stats when live (P.account), else rebuilt from claims (P.historyFromPredictions).
@@ -101,20 +111,34 @@
    * market trades, while its won / lost counts move only at the claim. So live the PnL is the exchange's as it stands; the
    * claim-based fallback adds the decided-but-unclaimed results and the ledger's adjustment. Either way the record adds the
    * unclaimed predictions, and a won prediction whose tokens were sold is not this wallet's to claim.
+   * ROI is this PnL as the snapshot's rows count it (P.roiOf; soldOpen: the sold share of open stakes in its base). Avg
+   * odds and legs come from the wallet's own row for its role: a maker's are its bettors' odds, as on the Market makers page.
+   * Open counts the loaded predictions when they are all loaded; otherwise (truncated) the exchange's pending count, less
+   * the unclaimed ones and its self-matched ones still pending (selfPending: the site leaves a self-match out).
    */
-  P.bettorFigures = function ({ mine, hist, isMaker, live, ledger }) {
+  P.bettorFigures = function ({ mine, hist, isMaker, live, ledger, truncated, selfPending }) {
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
     const heldOf = (n) => { const bp = ledger && ledger.byPrediction[n.id]; return bp ? bp.held : 1; };
-    const s = P.bettorSummary(mine).stats || {};
+    // the wallet's own row: mine is one role of one wallet, so a maker's row is makers[0] (bettors[0] of the predictions a
+    // maker took is its most profitable counterparty, whose ROI and odds the page used to show)
+    const sm = P.bettorSummary(mine); const s = (isMaker ? (sm.makers || [])[0] : sm.stats) || {};
     const unclaimed = mine.filter((n) => n.unclaimed);
+    // live, the exchange's won / lost / pending follow the API's settled flag, which a claim sets on one prediction per
+    // token only (P.markTokenClaims): the others it paid are still pending there
+    const unflagged = live ? mine.filter((n) => n.unclaimed || n.viaToken) : unclaimed;
     const uWon = unclaimed.filter((n) => (isMaker ? n.lost : n.won));
     const uPnl = U.sum(unclaimed, (n) => (isMaker ? -n.pnl : n.pnl));
+    const pnl = live ? totals.pnl : totals.pnl + uPnl + (ledger ? ledger.adj : 0);
+    // the snapshot rows' ROI (P.roiOf): this PnL over decided stakes and the sold share of open ones
+    const stakeOf = (n) => (isMaker ? n.cp : n.stake);
+    const decided = mine.filter((n) => n.decided);
+    const soldOpen = U.sum(mine.filter((n) => !n.decided), (n) => stakeOf(n) * (1 - heldOf(n)));
     return {
-      pnl: live ? totals.pnl : totals.pnl + uPnl + (ledger ? ledger.adj : 0),
-      won: totals.won + uWon.length, lost: totals.lost + unclaimed.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
-      open: Math.max(0, totals.pending - unclaimed.length),
+      pnl,
+      won: totals.won + unflagged.filter((n) => (isMaker ? n.lost : n.won)).length, lost: totals.lost + unflagged.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
+      open: truncated ? Math.max(0, totals.pending - unflagged.length - (selfPending || 0)) : mine.filter((n) => !n.decided).length,
       unclaimedWon: uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: U.sum(uWon, (n) => n.pool * heldOf(n)),
-      roi: s.roi, avgOdds: s.avgOdds, avgLegs: s.avgLegs,
+      roi: P.roiOf(pnl, U.sum(decided, stakeOf), soldOpen, decided.length > 0), soldOpen, avgOdds: s.avgOdds, avgLegs: s.avgLegs,
     };
   };
 
@@ -157,7 +181,9 @@
    * null while open), dAt (decision time), sa (claim time)}.
    * Returns {events: [{t, pc, kind 'sale' | 'set' | 'verdict', pnl, tokens, cash, cost, claimAt}], pnl (realized, verdict
    * basis), replaced (the per-prediction results of the wallet's own decided predictions on those pick configurations),
-   * adj = pnl − replaced, byPrediction: {id: {pnl, held}}, open: {pc: {tokens, cost}}, trades (the wallet's, newest first)}.
+   * adj = pnl − replaced, byPrediction: {id: {pnl, held (the share of its side's tokens not sold; a matched set still
+   * holds them), decided, hedged (part of them matched with the other side)}}, open: {pc: {tokens, cost}}, trades (the
+   * wallet's, newest first)}.
    */
   P.ledger = function (norms, trades, addr) {
     addr = String(addr || '').toLowerCase();
@@ -185,7 +211,7 @@
       // short: tokens sold before the acquisition that supplied them shows up. The trade and prediction clocks differ by
       // seconds, and some wallets sell a bet's tokens the moment it is placed, so a sale can precede its own prediction;
       // its cost is charged when the tokens arrive (or at the verdict at their value, if they never do)
-      const hold = { P: { q: 0, c: 0, shorts: [] }, C: { q: 0, c: 0, shorts: [] } }; let pcPnl = 0;
+      const hold = { P: { q: 0, c: 0, shorts: [] }, C: { q: 0, c: 0, shorts: [] } }; let pcPnl = 0, setQ = 0;
       const book = (e) => { events.push(Object.assign({ pc: b.pc, q: b.q }, e)); pnl += e.pnl; pcPnl += e.pnl; return events[events.length - 1]; };
       for (const e of b.ev) {
         const hs = hold[e.side];
@@ -206,7 +232,7 @@
         const m = Math.min(hold.P.q, hold.C.q);
         if (m > EPS) {   // both sides held: m tokens pay m whatever happens
           const cP = hold.P.c * (m / hold.P.q), cC = hold.C.c * (m / hold.C.q);
-          hold.P.q -= m; hold.P.c -= cP; hold.C.q -= m; hold.C.c -= cC;
+          setQ += m; hold.P.q -= m; hold.P.c -= cP; hold.C.q -= m; hold.C.c -= cC;
           book({ t: e.t, kind: 'set', tokens: m, cash: m, cost: cP + cC, pnl: m - cP - cC });
         }
       }
@@ -225,8 +251,11 @@
         if (n.decided) replaced += (n.predictor === addr ? n.pnl : 0) + (n.counterparty === addr ? -n.pnl : 0);
         const side = n.predictor === addr ? 'P' : 'C'; const sidePool = side === 'P' ? ownPoolP : ownPoolC;
         // under a thousandth of a token left is rounding (the files keep stake and collateral to 4 decimals), not a holding
-        const heldTok = side === 'P' ? heldP : heldC;
-        byPrediction[n.id] = { pnl: ownPool > 0 ? pcPnl * (n.pool / ownPool) : 0, held: sidePool > 0 && heldTok >= 1e-3 ? Math.max(0, Math.min(1, heldTok / sidePool)) : 0, decided: b.vP != null };
+        const heldTok = (side === 'P' ? heldP : heldC) + setQ;   // a matched set still holds its tokens (it pays the same whatever the verdict): only a sale lowers held
+        const share = (tok) => (sidePool > 0 && tok >= 1e-3 ? Math.max(0, Math.min(1, tok / sidePool)) : 0);
+        // held: the share not sold (labels, claimability); atRisk: the share the verdict itself settles, a matched set's
+        // result already booked at the set (the tax center's settled-bets export multiplies the result by it)
+        byPrediction[n.id] = { pnl: ownPool > 0 ? pcPnl * (n.pool / ownPool) : 0, held: share(heldTok), atRisk: share(side === 'P' ? heldP : heldC), decided: b.vP != null, hedged: setQ > EPS };
       }
     }
     events.sort((a, b) => a.t - b.t);
@@ -235,6 +264,22 @@
 
   /** A prediction a wallet made against itself. */
   P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
+  /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are
+   *  shared by every prediction on the same picks), but the API flags only the prediction the claim went through as
+   *  settled; the wallet's other decided predictions on that token were paid by the same claim (checked on-chain:
+   *  2026-10-01, bettors' 251 such wins, $32.7K; 2026-10-02, the makers' 726 on 305 tokens; every token at 0). They are
+   *  marked claimed at that claim's time; viaToken says the API (and so the exchange's won / lost / pending counts) still
+   *  calls them unsettled. Returns how many were marked. */
+  P.markTokenClaims = function (norms) {
+    const key = (n) => (n.won ? n.predictor + '|' + n.tokP : n.counterparty + '|' + n.tokC);   // the winner's wallet and token
+    const at = new Map();
+    // the earliest claim: it redeemed the whole balance (every prediction on the token shares one verdict, so all were
+    // placed before it); a later claim on the same token redeemed nothing
+    for (const n of norms) if (n.settled && n.settledAt && !n.nd && (n.won ? n.tokP : n.tokC)) { const k2 = key(n); at.set(k2, Math.min(at.has(k2) ? at.get(k2) : Infinity, n.settledAt)); }
+    let k = 0;
+    for (const n of norms) { if (!n.unclaimed || n.nd || !(n.won ? n.tokP : n.tokC)) continue; const t = at.get(key(n)); if (t && t >= n.t) { n.settled = true; n.unclaimed = false; n.settledAt = t; n.viaToken = true; k++; } }
+    return k;
+  };
   /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
    *  tape (the newest tapeSize) and bigWins (every win whose net PnL is above P.BIG_WIN, latest verdict first) are slim records
    *  with every leg's question id, so a page can show and open each one. */
@@ -247,7 +292,7 @@
     const acc = (m, k, init) => m[k] || (m[k] = init());
     // decided = verdict in (claimed or not); settled = claimed; unclaimed = decided, not claimed (unclaimedWon / unclaimedPayout: money this side can collect)
     // (r*: the record against the odds, see finish; decided predictions with odds, not void)
-    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {}, rBets: [] });
+    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {}, catW: {}, rBets: [] });
     const bump = (s, n, asMaker) => {
       s.n++; s.wagered += asMaker ? n.cp : n.stake; s.legs += n.legs; if (n.combo) s.combos++;
       if (n.odds != null) { s.oddsSum += n.odds; s.oddsN++; }
@@ -259,10 +304,11 @@
       if (!asMaker && n.decided && !n.nd && n.odds > 0 && n.odds < 1) s.rBets.push({ id: n.id, t: n.t, p: n.odds, won: n.won, stake: n.stake, legs: n.picks.map((k) => k.id || 'q:' + k.q) });
       if (s.first == null || n.t < s.first) s.first = n.t; if (s.last == null || n.t > s.last) s.last = n.t;
       s.cats[n.cat] = (s.cats[n.cat] || 0) + 1;
+      s.catW[n.cat] = (s.catW[n.cat] || 0) + (asMaker ? n.cp : n.stake);
     };
-    const finish = (s, isBettor) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = s.decided ? (s.pnl / Math.max(1e-9, s.wagered - s.openWagered)) * 100 : null; s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = Object.keys(s.cats).sort((a, b) => s.cats[b] - s.cats[a])[0] || null;
+    const finish = (s, isBettor) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = P.roiOf(s.pnl, s.wagered - s.openWagered, s.soldOpen || 0, s.decided > 0); s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = P.topCategory(s.cats, s.catW);
       s.rec = isBettor && records ? recordOf(s.rBets) : null;
-      for (const k of ['oddsSum', 'oddsN', 'vigSum', 'vigN', 'legs', 'rBets']) delete s[k]; return s; };
+      for (const k of ['oddsSum', 'oddsN', 'vigSum', 'legs', 'rBets', 'catW', 'soldOpen']) delete s[k]; return s; };   // vigN stays: how many predictions avgVig covers
     // The record against the odds (bettors): rec = { n bets, of them won, expected wins (the sum of their locked chances),
     // luck, predictions }, luck = P.luckOf: how likely that many wins or more would be if every bet's true chance were
     // exactly its locked odds. Counted in wins, not money: one 50× long shot that hit weighs one win, not fifty.
@@ -285,9 +331,11 @@
         const rep = g.reduce((a, b) => (b.stake > a.stake || (b.stake === a.stake && b.t < a.t) ? b : a));   // the largest stake; the earliest of equal ones
         ps.push(rep.p); if (rep.won) won++;
       }
-      return { n: ps.length, won, expected: r4(U.sum(ps)), luck: Number(P.luckOf(ps, won).toPrecision(3)), predictions: bets.length };
+      // unrounded: the tiers compare it with 0.02 / 0.1 (0x7dbb…: 0.10017, rounded to 0.1, read as good); luckText formats it for display
+      return { n: ps.length, won, expected: r4(U.sum(ps)), luck: P.luckOf(ps, won), predictions: bets.length };
     }
-    // a defensible vig needs a defensible fair: singles and combos across different events; same-event legs are correlated
+    // a defensible vig needs a defensible fair: singles and combos with every leg on a different match; legs on the same
+    // match or asset are correlated
     const cleanVig = (n) => n.vig != null && n.sameEvent !== true;
     const vigAll = [], vigByCat = {};
     let totals = { n: 0, wagered: 0, cpCommitted: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedWonPayout: 0, unclaimedLost: 0, won: 0, lost: 0, bettorPnl: 0, open: 0, openWagered: 0, combos: 0 };
@@ -310,6 +358,7 @@
     const ledgerOf = Object.create(null);   // wallet → its ledger's byPrediction (the wallets that traded)
     if (trades && trades.length) {
       const tradedPc = new Set(trades.map((t) => t.pc).filter(Boolean));
+      const decidedBy = {}; for (const n of norms) if (n.decided) (decidedBy[n.predictor] || (decidedBy[n.predictor] = [])).push(n);   // each bettor's decided predictions (its best win)
       const byW = {}; for (const n of norms) if (n.pc && tradedPc.has(n.pc)) { (byW[n.predictor] || (byW[n.predictor] = [])).push(n); if (n.counterparty !== n.predictor) (byW[n.counterparty] || (byW[n.counterparty] = [])).push(n); }
       const wallets = new Set(); for (const t of trades) if (t.pc) { wallets.add(t.seller); wallets.add(t.buyer); }
       secondary = { trades: trades.length, mapped: trades.filter((t) => t.pc).length, volume: U.sum(trades, (t) => t.paid), toBettors: 0, toMakers: 0, toOthers: 0 };
@@ -322,6 +371,10 @@
         else secondary.toOthers += L.adj;
         // a won prediction whose tokens were sold is not this wallet's to claim any more
         if (row) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || !n.unclaimed) continue; const ownWin = row === b ? n.won : n.lost; if (ownWin && bp.held < 1) { row.unclaimedPayout -= n.pool * (1 - bp.held); if (bp.held < 1e-6) row.unclaimedWon--; } }
+        // a sale out of a still-open prediction is realized at the sale, so its stake joins the ROI base (finish, P.roiOf)
+        if (row) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || n.decided || !(bp.held < 1)) continue; if ((row === b ? n.predictor : n.counterparty) === w) row.soldOpen = (row.soldOpen || 0) + (row === b ? n.stake : n.cp) * (1 - bp.held); }
+        // the best win counts the bettor's own result where it traded the tokens (as big wins do): a win sold before the verdict is not its win
+        if (b) { let best = 0; for (const n of decidedBy[w] || []) { const bp = L.byPrediction[n.id]; const v = bp ? bp.pnl : n.pnl; if (v > best) best = v; } b.biggestWin = best; }
       }
     }
     const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a], m === bettors)));
@@ -331,8 +384,8 @@
       weighted: vigAll.length ? vigAll.reduce((a, n) => a + n.vig * n.stake, 0) / Math.max(1e-9, vigAll.reduce((a, n) => a + n.stake, 0)) : null,
       byCat: Object.keys(vigByCat).map((c) => Object.assign({ cat: c }, vigSummary(vigByCat[c]))).sort((a, b) => b.n - a.n),
       singles: vigSummary(vigAll.filter((n) => !n.combo).map((n) => n.vig)),
-      combosOnly: vigSummary(vigAll.filter((n) => n.combo).map((n) => n.vig)),                       // combos across different events (in the headline)
-      combosSameEvent: vigSummary(norms.filter((n) => n.vig != null && n.sameEvent === true).map((n) => n.vig)),   // legs on one Polymarket event: includes correlation pricing, kept out of the headline
+      combosOnly: vigSummary(vigAll.filter((n) => n.combo).map((n) => n.vig)),                       // combos with every leg on a different match (in the headline)
+      combosSameEvent: vigSummary(norms.filter((n) => n.vig != null && n.sameEvent === true).map((n) => n.vig)),   // legs on the same match or asset: includes correlation pricing, kept out of the headline
       combosUnknown: vigSummary(norms.filter((n) => n.vig != null && n.combo && n.sameEvent == null).map((n) => n.vig)),
       byOddsBucket: [[0, 0.1], [0.1, 0.25], [0.25, 0.5], [0.5, 0.75], [0.75, 0.9], [0.9, 1.01]].map(([a, b]) => Object.assign({ from: a, to: Math.min(1, b) }, vigSummary(vigAll.filter((n) => n.odds >= a && n.odds < b).map((n) => n.vig)))),
       weekly: Object.values(weeks).sort((a, b) => a.t - b.t).map((w) => ({ t: w.t, n: w.n, wagered: w.wagered, avg: avg(w.vig), median: median(w.vig) })),
@@ -432,12 +485,14 @@
    *  profit, and has won more of them than its locked odds implied. Its tier says how rarely luck alone gives that
    *  record: strong at strongLuck or rarer, good at goodLuck; when no winning bettor reaches good, the best record counts
    *  as good, so the list always has one to point at. (Plain thresholds, not a cut across every bettor tested: with some
-   *  140 bettors ranked by luck, a few of the good records are luck.) */
+   *  140 bettors ranked by luck, luck alone is expected to give up to a tenth of them a good record, so the tiers rank
+   *  records and do not establish skill.) */
   P.IDEAS = { minDecided: 10, strongLuck: 0.02, goodLuck: 0.1 };
   /** { bettors, ideas, tested }: every winning bettor, least likely by luck first, with its tier and the number of its
-   *  ideas; those ideas, the bettor's predictions that can still be placed at `now` (undecided, every leg before its
-   *  Meridian cutoff and not settled, the bettor still holding at least half its tokens), best record first, then newest;
-   *  tested = bettors with a record. agg: P.aggregate over the same norms (its bettor rows and soldOf). */
+   *  ideas; those ideas, the bettor's predictions the site still offers to copy at `now` (undecided, every leg before the
+   *  end time Meridian lists for it, a listed end and no betting cutoff, and not settled, the bettor still holding at
+   *  least half its tokens), best record first, then newest; tested = bettors with a record. agg: P.aggregate over the
+   *  same norms (its bettor rows and soldOf). */
   P.ideas = function (norms, agg, now = Date.now()) {
     const tested = agg.bettors.filter((b) => b.rec && b.rec.n >= P.IDEAS.minDecided);
     const tierOf = (luck) => (luck <= P.IDEAS.strongLuck ? 'strong' : luck <= P.IDEAS.goodLuck ? 'good' : null);

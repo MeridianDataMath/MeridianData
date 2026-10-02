@@ -627,7 +627,7 @@
     const dp = (v) => (Math.abs(U.num(v)) >= 100 ? { dp: 0 } : {});   // as on the Predict tab: whole dollars from $100
     const toTab = h('a.small', { href: U.accountUrl(st.addr, st.sa.id, 'predict'), title: 'Open the Predict tab', onclick: (e) => { if (st.showTab) { e.preventDefault(); st.showTab('predict'); } } }, 'Predict tab →');
     U.replace(slot, UI.chip('Predict', 'accent'),
-      h('span.small', h('span.dim', x.isMaker ? 'Maker PnL ' : 'Net PnL '), U.pnlEl(F.pnl, dp(F.pnl))), sep(),
+      h('span.small', h('span.dim', x.isMaker ? (x.marketMaker ? 'Maker PnL ' : 'Counterparty PnL ') : 'Net PnL '), U.pnlEl(F.pnl, dp(F.pnl))), sep(),
       h('span.small', `${U.fmtNum(n, 0)} prediction${n === 1 ? '' : 's'} · ${U.fmtNum(F.won || 0, 0)}W / ${U.fmtNum(F.lost || 0, 0)}L` + (F.open ? ` · ${U.fmtNum(F.open, 0)} open` : '')),
       F.unclaimedWon && !x.isMaker ? [sep(), h('span.small.pos', `${U.fmtUsd(F.unclaimedPayout, dp(F.unclaimedPayout))} to claim`)] : null,
       sep(), toTab);

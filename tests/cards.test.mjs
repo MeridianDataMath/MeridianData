@@ -52,15 +52,53 @@ const wei = (x) => (BigInt(Math.round(x * 1e6)) * 1000000000000n).toString();
 const pred = (id, stake, cp, verdict, t) => MD.predict.slim(MD.predict.norm({ predictionId: id, predictor: ME, counterparty: MAKER, predictorCollateral: wei(stake), counterpartyCollateral: wei(cp), settled: false, result: null,
   createdAt: new Date(t).toISOString(), settledAt: null, pickConfig: { pickConfigId: 'pc-' + id, resolved: !!verdict, result: verdict, picks: [{ conditionId: 'c' + id, predictedOutcome: 'YES', condition: { question: 'Q', endTime: Math.floor((t + 3600000) / 1000) } }] } }));
 
-test('a wallet\'s curve adds its decided results in time and ends at its PnL; a truncated file has none', () => {
+test('a wallet\'s curve adds its decided results in time and ends at its PnL; a truncated file\'s is the snapshot\'s', () => {
   const T = Date.UTC(2026, 7, 1), D = 86400000;
   const file = { address: ME, truncated: false, trades: [], predictions: [pred('w', 10, 30, 'PREDICTOR_WINS', T), pred('l', 5, 8, 'COUNTERPARTY_WINS', T + D), pred('o', 3, 4, null, T + 2 * D)] };
   const c = K.walletCurve(file, ME);
   assert.equal(c[c.length - 1][1], 30 - 5); assert.equal(c[0][1], 0); assert.ok(c.every((p, i) => !i || p[0] >= c[i - 1][0]), 'in time order');
   const maker = K.walletCurve(file, MAKER); assert.equal(maker[maker.length - 1][1], -(30 - 5), 'the maker\'s side is the mirror');
+  // a truncated file holds only its newest predictions: never a curve from them, the snapshot's from every prediction when it has one
   assert.equal(K.walletCurve(Object.assign({}, file, { truncated: true }), ME), null);
+  const full = [[1785000000, 0], [1785500000, -3360], [1786000000, 13368.5]];
+  assert.deepEqual(K.walletCurve(Object.assign({}, file, { truncated: true, curve: full }), ME), full);
   const svg = K.walletSvg({ address: ME, n: 3, won: 1, lost: 1, pnl: 25, roi: 166.7, wagered: 18, winRate: 50, avgOdds: 0.3, first: T, topCat: 'Sports' }, file, false); clean(svg);
-  assert.match(svg, /BETTOR · MERIDIAN PREDICT/); assert.match(svg, />1W \/ 1L</); assert.match(svg, /Mostly Sports/);
+  assert.match(svg, /BETTOR · MERIDIAN PREDICT/); assert.match(svg, />1W \/ 1L</); assert.match(svg, /Top category Sports/, 'a plurality, not "mostly"');
+  const row = { address: MAKER, n: 5565, won: 4049, lost: 1426, pnl: 13368.5, roi: 1, wagered: 1550834, winRate: 74, first: T };
+  const noCurve = K.walletSvg(row, Object.assign({}, file, { truncated: true }), true); clean(noCurve);
+  assert.match(noCurve, /Curve not drawn: over 600 predictions/, 'the reason, not "not enough history"'); assert.doesNotMatch(noCurve, /Not enough history/);
+  assert.doesNotMatch(K.walletSvg(row, Object.assign({}, file, { truncated: true, curve: full }), true), /Curve not drawn/);
+});
+
+test('a one-off counterparty (under P.MAKER_MIN predictions) is not called a market maker (0x3106…: one $1 test)', () => {
+  const T = Date.UTC(2026, 8, 29);
+  const one = { address: MAKER, n: 1, won: 0, lost: 1, pnl: -1, roi: -100, wagered: 1, winRate: 0, first: T };
+  const svg = K.walletSvg(one, null, true); clean(svg);
+  assert.match(svg, /COUNTERPARTY · MERIDIAN PREDICT/); assert.match(svg, /COUNTERPARTY PNL · ALL TIME/); assert.match(svg, /One-off counterparty since Sep 29, 2026/);
+  assert.doesNotMatch(svg, /MARKET MAKER|Market maker/);
+  const t = K.walletText(one, true);
+  assert.match(t.description, /^1 prediction taken · /); assert.match(t.title, / counterparty PnL$/);
+  const mm = Object.assign({}, one, { n: 16 });
+  assert.match(K.walletSvg(mm, null, true), /MARKET MAKER · MERIDIAN PREDICT/); assert.match(K.walletSvg(mm, null, true), /Market maker since/);
+  assert.match(K.walletText(mm, true).title, / maker PnL$/); assert.match(K.walletText(mm, true).description, /^16 predictions taken/);
+  assert.match(K.walletText({ address: ME, n: 1, won: 1, lost: 0, pnl: 25, wagered: 25, topCat: 'Sports' }, false).description, /^1 prediction · .* · top category Sports\./);
+});
+
+test('a long curve is thinned to 90 points and keeps its real high and low; one point per second', () => {
+  const T = Date.UTC(2026, 7, 1), H1 = 3600000;
+  // 200 results an hour apart swinging between $0 and $1, with a $51 high at the 60th and a −$40 low at the 150th
+  // (both fell between the evenly spaced samples, so the card's peak read $1), ending at $7
+  const v = Array.from({ length: 201 }, (_, j) => (j === 60 ? 51 : j === 150 ? -40 : j === 200 ? 7 : j % 2));
+  const preds = v.slice(1).map((y, i) => { const d = y - v[i]; return d > 0 ? pred('p' + i, 1, d, 'PREDICTOR_WINS', T + i * H1) : pred('p' + i, -d, 1, 'COUNTERPARTY_WINS', T + i * H1); });
+  const c = K.walletCurve({ address: ME, truncated: false, trades: [], predictions: preds }, ME);
+  assert.ok(c.length <= 90, String(c.length));
+  assert.equal(Math.max(...c.map((p) => p[1])), 51); assert.equal(Math.min(...c.map((p) => p[1])), -40);
+  assert.equal(c[c.length - 1][1], 7, 'ends at the total'); assert.equal(c[0][1], 0);
+  assert.ok(c.every((p, i) => !i || p[0] > c[i - 1][0]), 'in time order, one point per moment');
+  assert.match(K.walletSvg({ address: ME, n: 200, won: 100, lost: 100, pnl: 7, roi: 1, wagered: 200, winRate: 50, avgOdds: 0.5, first: T }, { truncated: false, trades: [], predictions: preds }, false), />peak \+\$51\.00</);
+  // two results settled in the same second have no order between them: one point, after both
+  const same = K.walletCurve({ address: ME, truncated: false, trades: [], predictions: [pred('s1', 10, 30, 'PREDICTOR_WINS', T), pred('s2', 5, 8, 'COUNTERPARTY_WINS', T)] }, ME);
+  assert.deepEqual(same.map((p) => p[1]), [0, 25]);
 });
 
 test('the share page carries the card for unfurlers and sends people on to the page', () => {
@@ -114,16 +152,53 @@ test('a slip card leads with the result: net PnL once won, the stake once lost, 
   const open = slip(5, 2.78, null, Date.now(), [['Will the price of Bitcoin be between $82,000 and $84,000 on September 30?', true]]);
   svg = K.slipSvg(open); clean(svg);
   assert.match(svg, />PAYS</); assert.match(svg, />\$7\.78</); assert.match(svg, />Live · Single</); assert.match(svg, /on a \$5\.00 stake, if it wins/);
-  assert.match(svg, />BETS CLOSE</); assert.match(svg, />Copy this slip in one click</);
+  // Meridian's end time is a listed end, not a betting cutoff: Meridian has taken bets after it
+  assert.match(svg, />LISTED END</); assert.doesNotMatch(svg, /BETS CLOS/); assert.match(svg, />Copy this slip on MeridianDataHub</); assert.doesNotMatch(svg, /one click/);
   assert.match(K.slipText(open).description, /^YES Will the price of Bitcoin.*Copy it on MeridianDataHub\.$/);
+  assert.match(K.slipText(open).description, /September 30\? Placed /, 'no "?." after a question'); assert.doesNotMatch(K.slipText(open).description, /\?\./);
+  // "pays" the payout: the dialog's "To win" is the profit, so the preview does not say "to win" for the payout
+  assert.equal(K.slipText(open).title, '$5.00 single at 1.56×: pays $7.78 if it wins · Meridian Predict');
 
-  const shut = slip(5, 2.78, null, Date.now() - 2 * 86400000, [['A?', true], ['B?', true]]);   // a leg past its cutoff, not decided yet
+  const shut = slip(5, 2.78, null, Date.now() - 2 * 86400000, [['A?', true], ['B?', true]]);   // a leg past its listed end, not decided yet
   svg = K.slipSvg(shut); clean(svg);
-  assert.match(svg, />BETS CLOSED</); assert.doesNotMatch(svg, /Copy this slip/); assert.doesNotMatch(K.slipText(shut).description, /Copy it/);
+  assert.match(svg, />LISTED END</); assert.doesNotMatch(svg, /BETS CLOS/); assert.match(svg, />Awaiting result · 2-leg combo</); assert.doesNotMatch(svg, />Live · /);
+  assert.doesNotMatch(svg, /Copy this slip/); assert.doesNotMatch(K.slipText(shut).description, /Copy it/);
 
   const many = slip(4, 4.72, 'PREDICTOR_WINS', T,Array.from({ length: 9 }, (_, i) => ['Question number ' + i + '?', i % 2 === 0]));
   svg = K.slipSvg(many); clean(svg);
   assert.match(svg, />\+ 5 more legs</, 'four legs shown, the rest counted'); assert.equal((svg.match(/>Question number \d\?</g) || []).length, 4);
+  assert.match(K.slipText(many).description, / · \+5 more\. Placed /, 'the full stop stays after the count');
+});
+
+test('a bettor who sold its tokens: the card and its link preview show its own result, as the slip page does', () => {
+  const T = Date.UTC(2026, 7, 3);
+  // 0xd3cccb0f…: $500 at 1.12×, all 561.98 tokens sold for $25 before the verdict, so the bettor made −$475 and the
+  // buyer collected the payout (the card said "Won +$61.98")
+  const won = Object.assign(slip(500, 61.9835, 'PREDICTOR_WINS', T, [['Strait of Hormuz traffic returns to normal by August 31?', false]]), { held: 0, tradedPnl: -475 });
+  let svg = K.slipSvg(won); clean(svg);
+  assert.match(svg, />-\$475</); assert.doesNotMatch(svg, />\+\$61\.98</);
+  assert.match(svg, />WON · BETTOR PNL INCL\. TOKEN SALE</); assert.match(svg, />\$562 paid on a \$500 stake to the token buyer</);
+  assert.match(svg, /<text [^>]*font-weight="700" font-size="\d+" fill="#ef454a">-\$475</, 'its own loss in red, though the slip won');
+  assert.match(K.slipText(won).title, /^\$500 single \(1\.12×\) won; the bettor sold its tokens: bettor PnL -\$475 · Meridian Predict$/);
+  // 0x31952f74…: lost, 96% of the tokens sold first, +$1.45 for the bettor
+  const lost = Object.assign(slip(9.4, 31.4, 'COUNTERPARTY_WINS', T, [['A?', true]]), { held: 0.0435, tradedPnl: 1.4501 });
+  svg = K.slipSvg(lost); clean(svg);
+  assert.match(svg, />\+\$1\.45</); assert.match(svg, />LOST · BETTOR PNL INCL\. TOKEN SALE</); assert.match(svg, /96% of its tokens</);
+  assert.doesNotMatch(svg, /token buyer/, 'a lost slip pays no buyer');
+  assert.match(K.slipText(lost).title, /: lost; the bettor sold 96% of its tokens: bettor PnL \+\$1\.45 · Meridian Predict$/);
+});
+
+test('a near-certain slip never reads 100% or 1.00×; a win Meridian has not settled the leg of is "paid as won"', () => {
+  // 0x5e598788…: $300 against $0.0228, odds 0.99992
+  const sure = slip(300, 0.0228, null, Date.now(), [['Q?', true]]);
+  const svg = K.slipSvg(sure); clean(svg);
+  assert.match(svg, />99\.9%</); assert.doesNotMatch(svg, />100%</); assert.match(svg, />1\.0001×</);
+  assert.match(K.slipText(sure).title, / at 1\.0001×: /);
+  // 0x73f05a88…: the $1 test against 0x3106…, paid as won while its question (Flamengo's title) is still open
+  const paid = slip(1, 1, 'PREDICTOR_WINS', Date.UTC(2026, 8, 29), [['Will Flamengo win Brazil Série A?', true]]);
+  assert.match(K.slipSvg(paid), />paid as won · Other</);
+  paid.picks[0].settled = true; paid.picks[0].resolvedToYes = true;
+  assert.match(K.slipSvg(paid), />won · Other</); assert.doesNotMatch(K.slipSvg(paid), /paid as won/);
 });
 
 test('the deploy makes cards for the slips people share', () => {
@@ -135,6 +210,9 @@ test('the deploy makes cards for the slips people share', () => {
   assert.equal(W({ won: true, pnl: 20, decidedAt: now - 20 * D }), true, 'a win of the last 30 days');
   assert.equal(W({ won: true, pnl: 20, decidedAt: now - 40 * D }), false);
   assert.equal(W({ won: true, pnl: 800, decidedAt: now - 90 * D }), true, 'a big win, however old');
+  // P.BIG_WIN is net PnL, a bettor's token sale included
+  assert.equal(W({ won: true, pnl: 20, tradedPnl: 600, decidedAt: now - 90 * D }), true, 'a big win of the bettor\'s own');
+  assert.equal(W({ won: true, pnl: 600, tradedPnl: 20, decidedAt: now - 90 * D }), false, 'payout − stake over $500, but the bettor sold first');
 });
 
 test('a slip\'s share page lives at /s/<prediction id> and opens the slip page', () => {
@@ -160,4 +238,14 @@ test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash rout
 test('the site card counts accounts and Predict activity', () => {
   const svg = K.siteSvg({ lb: { rows: [{ volumeAll: 1000 }, { volumeAll: 2500 }] }, pr: { agg: { totals: { bettors: 711, wagered: 350000 } } } }); clean(svg);
   assert.match(svg, />2</); assert.match(svg, />\$3,500</); assert.match(svg, />711</); assert.match(svg, />\$350\.0K</);
+});
+
+test('a self-matched slip (one wallet on both sides) says so on its card and in its link preview', () => {
+  const T = Date.UTC(2026, 6, 9);
+  const n = MD.predict.full(MD.predict.slim(MD.predict.norm({ predictionId: ID, predictor: ME, counterparty: ME, predictorCollateral: wei(0.5), counterpartyCollateral: wei(0.5), settled: false, result: null,
+    createdAt: new Date(T).toISOString(), settledAt: null, pickConfig: { pickConfigId: 'pc', resolved: true, result: 'PREDICTOR_WINS',
+      picks: [{ conditionId: 'c0', predictedOutcome: 'YES', condition: { question: 'Spain beats Belgium?', endTime: Math.floor((T + 86400000) / 1000) } }] } })));
+  const svg = K.slipSvg(n); clean(svg);
+  assert.match(svg, />WON · BETTOR SIDE</); assert.match(svg.replace(/<\/text><text[^>]*>/g, ' '), /self-matched: one wallet on both sides/, 'the sub-line (wrapped over two lines)');
+  assert.match(K.slipText(n).title, /self-matched \(one wallet on both sides\)$/);
 });

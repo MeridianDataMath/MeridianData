@@ -124,6 +124,7 @@ test('a record counts bets: predictions that share a question are one bet (0xec7
   assert.equal(rec.n, 2); assert.equal(rec.predictions, 9); assert.equal(rec.won, 1);
   near(assert, rec.expected, 0.12 + 0.055, 1e-4);
   near(assert, rec.luck, P.luckOf([0.12, 0.055], 1), 1e-3, 'not 0.12³: the split draw is one win');
+  assert.equal(rec.luck, P.luckOf([norms[0].odds, norms[3].odds], 1), 'unrounded: the tiers compare it with their cutoffs');
   // combos linked through a shared leg are one bet too: the largest-stake one, at its own odds and with its own result
   const combo = (id, legs, s, cp, verdict) => { const n = pred(id, s, cp, verdict, true); n.picks = legs.map((c) => Object.assign({}, n.picks[0], { id: c })); return n; };
   const linked = P.aggregate([combo('c1', ['m1', 'm2'], 30, 90, 'PREDICTOR_WINS'), combo('c2', ['m2', 'm3'], 10, 10, 'COUNTERPARTY_WINS'), combo('c3', ['m9'], 10, 30, 'COUNTERPARTY_WINS')]).bettors[0].rec;
@@ -141,6 +142,21 @@ test('record tiers: strong at 1 in 50 by luck, good at 1 in 10, and the best rec
   const none = P.ideas([], { bettors: rows([0.5, 0.25, 0.4]), soldOf: () => null }, Date.now());
   assert.deepEqual(none.bettors.map((b) => [b.luck, b.tier]), [[0.25, 'good'], [0.4, null], [0.5, null]], 'the best record counts as good');
   assert.deepEqual(P.ideas([], { bettors: [], soldOf: () => null }).bettors, []);
+  // the cutoff applies to the luck itself, not to a rounded one (0x7dbb…: 0.100174 is not good; it read as 0.1)
+  const edge = P.ideas([], { bettors: rows([0.100174, 0.0999]), soldOf: () => null }, Date.now());
+  assert.deepEqual(edge.bettors.map((b) => [b.luck, b.tier]), [[0.0999, 'good'], [0.100174, null]]);
+});
+
+test('top category: the most predictions; a tie goes to the larger stake, not the newest prediction (0xfdc7…: Crypto)', () => {
+  // newest first, as the snapshot builder passes them: Geopolitics 2 ($1,102), Economy & Finance 2 ($1,116), Crypto 2 ($2,002)
+  const cat = (id, stake, c) => Object.assign(pred(id, stake, stake, 'COUNTERPARTY_WINS', true), { cat: c });
+  const norms = [cat('g1', 551, 'Geopolitics'), cat('e1', 558, 'Economy & Finance'), cat('c1', 1001, 'Crypto'), cat('g2', 551, 'Geopolitics'), cat('e2', 558, 'Economy & Finance'), cat('c2', 1001, 'Crypto')];
+  const a = P.aggregate(norms);
+  assert.equal(a.bettors[0].topCat, 'Crypto'); assert.equal(a.makers[0].topCat, 'Crypto', 'a maker by the collateral it committed');
+  assert.equal('catW' in a.bettors[0], false, 'no new field on the snapshot row');
+  assert.equal(P.aggregate(norms.concat([cat('g3', 1, 'Geopolitics')])).bettors[0].topCat, 'Geopolitics', 'the count comes first');
+  assert.equal(P.topCategory({ Sports: 2, Crypto: 2 }, { Sports: 5, Crypto: 5 }), 'Crypto', 'then the name');
+  assert.equal(P.topCategory({}, {}), null);
 });
 
 test('the record against the odds, and the ideas from winning bettors: slips that can still be placed', () => {
@@ -203,6 +219,48 @@ test('headline figures: the exchange\'s PnL already counts unclaimed results, so
   assert.equal(offline.won, 2); assert.equal(offline.lost, 2);
 });
 
+test('a claim pays every prediction the wallet holds on that token: the API flags one, the others count as claimed with it', () => {
+  // position tokens are per pick configuration and side (the builder reads them from the API: predictorToken / counterpartyToken)
+  const tok = (n, p, c) => Object.assign(n, { tokP: p, tokC: c });
+  const claimed = tok(pred('a', 10, 30, 'PREDICTOR_WINS', true), '0xp1', '0xc1'); claimed.settledAt = T0 + 5 * DAY;
+  const twin = tok(pred('b', 5, 15, 'PREDICTOR_WINS', false), '0xp1', '0xc1');
+  const other = tok(pred('c', 5, 15, 'PREDICTOR_WINS', false), '0xp2', '0xc2');   // another pick configuration: its own token
+  const voidPaid = tok(pred('d', 5, 15, 'NON_DECISIVE', true), '0xp3', '0xc3'), voidOpen = tok(pred('e', 5, 15, 'NON_DECISIVE', false), '0xp3', '0xc3');
+  // the maker's side: a loss is the maker's to claim, on its token
+  const lossPaid = tok(pred('f', 5, 15, 'COUNTERPARTY_WINS', true), '0xp4', '0xc4'), lossTwin = tok(pred('g', 5, 15, 'COUNTERPARTY_WINS', false), '0xp4', '0xc4');
+  const norms = [claimed, twin, other, voidPaid, voidOpen, lossPaid, lossTwin];
+  assert.equal(P.markTokenClaims(norms), 2);
+  assert.equal(twin.settled, true); assert.equal(twin.unclaimed, false); assert.equal(twin.settledAt, T0 + 5 * DAY); assert.equal(twin.viaToken, true);
+  assert.equal(lossTwin.settled, true); assert.equal(lossTwin.settledAt, lossPaid.settledAt);
+  assert.equal(other.unclaimed, true, 'a win on another token is still to claim'); assert.equal(voidOpen.unclaimed, true, 'a void is left as it is');
+  assert.equal(claimed.viaToken, undefined, 'the claimed one is the API\'s own');
+  const s = JSON.parse(JSON.stringify(P.slim(twin))); assert.equal(s.st, 1); assert.equal(s.sa, T0 + 5 * DAY);
+  // live, the exchange's won / pending follow the API's flag: the twin is still pending there, so the record adds it back
+  const mine = [claimed, twin, other];
+  const live = P.bettorFigures({ mine, hist: [{ t: T0, pnl: 30 + 15 + 15, won: 1, lost: 0, pending: 2, nonDecisive: 0 }], isMaker: false, live: true });
+  assert.equal(live.won, 3); assert.equal(live.open, 0); assert.equal(live.unclaimedWon, 1, 'only the win on its own token'); near(assert, live.unclaimedPayout, 20, 1e-9);
+  // offline the history is rebuilt from claims, where the twin is now claimed: the same record
+  const offline = P.bettorFigures({ mine, hist: P.historyFromPredictions(mine, ME, false), isMaker: false, live: false });
+  assert.equal(offline.won, 3); assert.equal(offline.open, 0); assert.equal(offline.unclaimedWon, 1); near(assert, offline.pnl, 60, 1e-9);
+});
+
+test('combo legs on one match: a leg carries its match keys, and legs sharing any key are on one match', () => {
+  const combo = (...evs) => { const n = pred('m', 10, 30, null, false); n.picks = evs.map((e, i) => Object.assign({}, n.picks[0], { id: 'c' + i, event: e })); return P.applyAtBet(n, evs.map(() => 0.5)); };
+  assert.equal(combo('r1 g9', 'r2 g9').sameEvent, true, 'two events of one game (its gameId)');
+  assert.equal(combo('r1', 'r2').sameEvent, false, 'different matches');
+  assert.equal(combo('r5', 'r5 g3').sameEvent, true, 'a More Markets event under its main event (the root), only one carrying the gameId');
+  assert.equal(combo('r1', null).sameEvent, null, 'a leg without an event: unknown');
+  assert.equal(combo('787017', '787017').sameEvent, true, 'an older bare event id is a single key');
+  assert.equal(combo('r1 g9').sameEvent, false, 'a single');
+  // the keys survive the per-wallet files
+  const u = P.unslim(JSON.parse(JSON.stringify(P.slim(combo('r1 sbitcoin|august-20', 'r2 sbitcoin|august-20')))));
+  assert.equal(u.picks[0].event, 'r1 sbitcoin|august-20'); assert.equal(u.sameEvent, true, 'one asset at one date');
+  // such a combo stays out of the averages, and each row says how many predictions its average covers
+  const single = P.applyAtBet(pred('s', 10, 30, null, false), [0.2]);   // odds 25 % against 20 %: +5 pp
+  const row = P.aggregate([single, combo('r1 g9', 'r2 g9')]).bettors[0];
+  assert.equal(row.n, 2); assert.equal(row.vigN, 1); near(assert, row.avgVig, 0.05, 1e-9);
+});
+
 test('the aggregate mirrors bettors and makers without a secondary market', () => {
   const norms = [pred('a', 5, 10, 'PREDICTOR_WINS', true), pred('b', 2, 3, 'COUNTERPARTY_WINS', false), pred('c', 1, 1, null, false)];
   const a = P.aggregate(norms);
@@ -257,6 +315,15 @@ test('a result is dated when it settled on Meridian, never when its payout was c
 test('a one-off counterparty is not a market maker', () => {
   const { makers, oneOff } = P.splitMakers([{ address: 'a', n: 5558 }, { address: 'b', n: 16 }, { address: 'c', n: 1 }]);
   assert.deepEqual(makers.map((m) => m.address), ['a', 'b']); assert.deepEqual(oneOff.map((m) => m.address), ['c']);
+  assert.equal(P.isMarketMaker(P.MAKER_MIN), true); assert.equal(P.isMarketMaker(4), false); assert.equal(P.isMarketMaker(1), false);
+});
+test('open predictions: the loaded ones when they are all loaded, else the exchange\'s pending less the unclaimed and the self-matched', () => {
+  // 0xf069…: the exchange's pending also counts its self-match until claimed (6), while the site leaves it out (3 open)
+  const mine = [pred('o1', 1, 1, null, false), pred('o2', 1, 1, null, false), pred('o3', 1, 1, null, false), pred('u1', 1, 1, 'PREDICTOR_WINS', false), pred('u2', 1, 1, 'COUNTERPARTY_WINS', false)];
+  const hist = [{ t: T0, pnl: 0, won: 0, lost: 0, pending: 6, nonDecisive: 0 }];
+  assert.equal(P.bettorFigures({ mine, hist, isMaker: false, live: true }).open, 3, 'every prediction loaded: counted from them, whatever the exchange says');
+  assert.equal(P.bettorFigures({ mine, hist, isMaker: false, live: true, truncated: true, selfPending: 1 }).open, 3, 'not all loaded: 6 pending − 2 unclaimed − 1 self-match');
+  assert.equal(P.bettorFigures({ mine, hist, isMaker: false, live: true, truncated: true }).open, 4);
 });
 test('the realized interval allows for bets on the same question winning or losing together', () => {
   // 40 even-money singles on ONE question (they all win or all lose together) against 40 on 40 different questions

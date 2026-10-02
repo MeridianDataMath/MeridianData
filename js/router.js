@@ -65,4 +65,7 @@
     catch (e) { if (!(e && e.name === 'AbortError')) { console.error(e); U.replace(R.root, U.h('div.page', U.h('div.error', 'Failed to render page: ' + (e.message || e)))); } }
     finally { if (progress && R.ctx === ctx) progress.done(); }
   };
+  /** Mount the current page again (a Retry button, a newer snapshot): dispatch ignores an unchanged route, so a Retry
+   *  wired to dispatch did nothing. */
+  R.reload = () => { R.current = null; return R.dispatch(); };
 })();

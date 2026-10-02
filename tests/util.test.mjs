@@ -38,6 +38,11 @@ test('dates: schedules drop the current year', () => {
   assert.match(U.fmtWhen(new Date(now.getFullYear() - 1, 0, 2, 3, 4).getTime()), /^Jan 2, \d{4} 03:04$/);
 });
 
+test('dates: a per-day chart\'s bucket is named by its UTC day, whatever the local time zone', () => {
+  assert.equal(U.fmtDayUTC(Date.UTC(2026, 9, 1)), 'Oct 1, 2026 (UTC day)');
+  assert.equal(U.fmtDayUTC(Date.UTC(2026, 9, 1, 23, 59)), 'Oct 1, 2026 (UTC day)');
+});
+
 test('addresses and ids', () => {
   assert.equal(U.isAddress('0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2'), true);
   assert.equal(U.isAddress('0x2f46'), false);
@@ -53,6 +58,18 @@ test('router: paths, params, and a stray "%" in a pasted link does not throw', (
   assert.equal(R.parse('#/').name, 'home');
   assert.deepEqual(R.parse('#/tax?note=100%').params, { note: '100%' });
   assert.equal(R.url('/leaderboard', { interval: '7d', empty: '', none: null }), '#/leaderboard?interval=7d');
+});
+
+test('router: dispatch ignores an unchanged route, reload mounts the page again (a Retry button)', async () => {
+  globalThis.location = { hash: '#/retrytest' };
+  const prevRoot = R.root;
+  R.root = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, firstChild: null };
+  let mounts = 0; R.pages.retrytest = { mount: () => { mounts++; } };
+  try {
+    await R.dispatch(); assert.equal(mounts, 1);
+    await R.dispatch(); assert.equal(mounts, 1, 'same route: nothing');
+    await R.reload(); assert.equal(mounts, 2, 'reload mounts again');
+  } finally { delete globalThis.location; delete R.pages.retrytest; R.root = prevRoot; R.current = null; R.ctx = null; }
 });
 
 // just enough of a DOM for U.h: it records what gets written, so a refusal shows as a property left empty

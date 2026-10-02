@@ -132,7 +132,7 @@
         h('h1', 'Copy trading on Meridian'),
         h('p', 'A leaderboard tells you who made money. Copying needs a different question: what would a follower have kept, entering a minute later, at taker fees, at that size, against these books? Every wallet below is scored on exactly that, and the numbers behind each score are one click away.'),
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
-        h('p', 'Predict is copied by hand, one slip at a time: further down are the open slips of bettors whose record beats their own odds, each one click from Meridian Predict.'),
+        h('p', 'Predict is copied by hand, one slip at a time: further down are open slips of bettors whose record beats their own odds; each opens on Meridian Predict, where Add To Slip adds its picks to your slip.'),
         h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first'), h('span.grow'),
           ideas ? h('button.btn.sm', { type: 'button', onclick: () => ideas.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, U.icon('target'), 'Predict ideas') : null));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');

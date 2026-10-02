@@ -222,6 +222,8 @@
   /** Feed timestamps: clock time today, "Sep 17 21:06" for anything older, so a tape that spans days stays readable. */
   U.fmtFeedTime = (ms) => { const d = new Date(U.num(ms)); const now = new Date(); return d.toDateString() === now.toDateString() ? U.fmtTime(ms) : `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   U.fmtDateTime = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  /** A UTC day bucket ('Oct 1, 2026 (UTC day)'): the per-day charts group by UTC day, so a local time would shift the date west of UTC. */
+  U.fmtDayUTC = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()} (UTC day)`; };
   /** "Sep 22, 23:00" within the current year, "Sep 22, 2025 23:00" otherwise: for schedules where the year is noise */
   U.fmtWhen = (ms) => { const d = new Date(U.num(ms)); return d.getFullYear() === new Date().getFullYear() ? `${MON[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : U.fmtDateTime(ms); };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };

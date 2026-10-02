@@ -75,7 +75,9 @@
     if (live) {
       const [acct, raw, tf] = await Promise.all([P.account(addr, { interval: 'DAY', fromSec: Math.floor(start / 1000) - 86400, toSec: Math.floor(end / 1000), ttl: 60000 }), P.predictionsOf(addr, { maxPages: 40 }), P.snapshotFile('bettors/' + addr + '.json').catch(() => null)]);
       lastAll = acct.history.length ? acct.history[acct.history.length - 1] : null;
-      snapNorms = raw.map(P.norm).filter((n) => n.predictor === addr && !P.selfMatch(n));   // a bet against itself moves no money
+      // wins paid by a claim on a twin prediction (same token) count as claimed then, as in the snapshot (P.markTokenClaims)
+      const all = raw.map(P.norm); P.markTokenClaims(all);
+      snapNorms = all.filter((n) => n.predictor === addr && !P.selfMatch(n));   // a bet against itself moves no money
       truncated = !!raw.truncated; trades = (tf && tf.trades) || [];
     } else {
       const f = await P.snapshotFile('bettors/' + addr + '.json');
@@ -87,7 +89,7 @@
     // price minus the tokens' cost), holding both sides books the amount they pay on the day both are held, and the verdict
     // on what was still held is booked when it is claimed (or shown as decided, not claimed, until then).
     const L = P.ledger(snapNorms, trades, addr);
-    const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? bp.held : 1; };
+    const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? (bp.atRisk != null ? bp.atRisk : bp.held) : 1; };   // the share the verdict settles (a matched set's result is booked at the set)
     history = P.historyFromPredictions(snapNorms, addr, false);
     if (L.events.length || Object.keys(L.byPrediction).length) {
       const byDay = new Map(history.map((r) => [r.t, r]));

@@ -47,10 +47,10 @@
       }
       return d;
     };
-    function chart(pts, box, col, hide) {
+    function chart(pts, box, col, hide, emptyText) {
       const { x, y, w, h } = box;
       if (pts) pts = pts.filter((p, i) => i === pts.length - 1 || p[0] !== pts[i + 1][0]);   // one point per moment (a vertical tick otherwise)
-      if (!pts || pts.length < 2) return t(x + w / 2, y + h / 2, 'Not enough history for a curve yet', 20, { anchor: 'middle', fill: C.text3 });
+      if (!pts || pts.length < 2) return t(x + w / 2, y + h / 2, emptyText || 'Not enough history for a curve yet', 20, { anchor: 'middle', fill: C.text3 });
       const t0 = pts[0][0], t1 = pts[pts.length - 1][0]; const vs = pts.map((p) => p[1]);
       let lo = Math.min(0, ...vs), hi = Math.max(0, ...vs); if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
       const pad = (hi - lo) * 0.1; lo -= pad; hi += pad * 1.6;   // headroom above for the end-point halo
@@ -83,19 +83,20 @@ ${t(x + w, y + h + 30, date(t1 * 1000), 15, { fill: C.text3, anchor: 'end' })}`;
 
     // ---------------------------------------------------------------- the card
     /**
-     * o: { kind: 'perps' | 'bettor' | 'maker', address, period ('All time', '30 days', …), pnl, roi (percent), curve
-     * [[unix s, USD from 0], …] or null, stats [[label, value], …] (four), statsHidden (the four with dollar amounts
-     * hidden), hideAmounts, footRight, fontCss (a <style> body with @font-face rules; the browser embeds the fonts,
-     * resvg brings its own) }
+     * o: { kind: 'perps' | 'bettor' | 'maker' | 'counterparty' (a maker side under P.MAKER_MIN predictions), address,
+     * period ('All time', '30 days', …), pnl, roi (percent), curve [[unix s, USD from 0], …] or null, noCurveText (why
+     * there is no curve, where it is not a lack of history), stats [[label, value], …] (four), statsHidden (the four with
+     * dollar amounts hidden), hideAmounts, footRight, fontCss (a <style> body with @font-face rules; the browser embeds
+     * the fonts, resvg brings its own) }
      */
     function flexSvg(o) {
       const hide = !!o.hideAmounts;
       const pnl = Number(o.pnl) || 0, roi = o.roi == null || !Number.isFinite(o.roi) ? null : o.roi;
       const sign = roi != null && hide ? roi : pnl;
       const col = sign > 0.004 ? C.green : sign < -0.004 ? C.red : C.accent;
-      const kindLabel = o.kind === 'maker' ? 'Market maker · Meridian Predict' : o.kind === 'bettor' ? 'Bettor · Meridian Predict' : 'Perps · Meridian';
+      const kindLabel = o.kind === 'maker' ? 'Market maker · Meridian Predict' : o.kind === 'counterparty' ? 'Counterparty · Meridian Predict' : o.kind === 'bettor' ? 'Bettor · Meridian Predict' : 'Perps · Meridian';
       const hero = hide ? (roiTxt(roi) || '—') : money(pnl, true);
-      const heroLabel = (hide ? 'Return' : o.kind === 'maker' ? 'Maker PnL' : o.kind === 'bettor' ? 'Net PnL' : 'PnL') + ' · ' + (o.period || 'All time');
+      const heroLabel = (hide ? 'Return' : o.kind === 'maker' ? 'Maker PnL' : o.kind === 'counterparty' ? 'Counterparty PnL' : o.kind === 'bettor' ? 'Net PnL' : 'PnL') + ' · ' + (o.period || 'All time');
       const heroSize = fit(hero, 440, 96, 40);
       const pill = hide ? (o.periodRange || null) : roiTxt(roi) ? roiTxt(roi) + ' ROI' : null;
       const pillW = pill ? String(pill).length * (hide ? 10.6 : 13.2) + (hide ? 32 : 58) : 0;
@@ -108,7 +109,9 @@ ${t(x + w, y + h + 30, date(t1 * 1000), 15, { fill: C.text3, anchor: 'end' })}`;
         const cx = 64 + (i % 2) * 226, cy = 446 + Math.floor(i / 2) * 68;
         return label(cx, cy, k) + '\n' + t(cx, cy + 34, v, fit(v, 206, 30, 18), { mono: true, w: 600 });
       };
-      const pw = String('Equity curve · ' + (o.period || 'All time')).length * 9.6 + 40;
+      // the pill names the curve only when one is drawn (a card without one shows the period alone)
+      const pillTxt = (o.curve && o.curve.length >= 2 ? 'Equity curve · ' : '') + (o.period || 'All time');
+      const pw = pillTxt.length * 9.6 + 40;
       const box = { x: 572, y: 150, w: 532, h: 318 };
       return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <defs>
@@ -126,7 +129,7 @@ ${o.fontCss ? `<style>${o.fontCss}</style>` : ''}
 <g transform="translate(64 46) scale(0.28)"><path fill="${C.text}" fill-rule="evenodd" d="${LOGO}"/></g>
 <text x="116" y="70" font-family="${SANS}" font-weight="700" font-size="26" fill="${C.text}">Meridian<tspan fill="${C.accent}">DataHub</tspan></text>
 <rect x="${f1(W - 64 - pw)}" y="42" width="${f1(pw)}" height="38" rx="19" fill="${col}" fill-opacity="0.1" stroke="${col}" stroke-opacity="0.5" stroke-width="1.5"/>
-${t(W - 64 - pw / 2, 67, 'Equity curve · ' + (o.period || 'All time'), 16, { anchor: 'middle', w: 600, fill: col })}
+${t(W - 64 - pw / 2, 67, pillTxt, 16, { anchor: 'middle', w: 600, fill: col })}
 ${label(64, 142, kindLabel, { fill: C.text2 })}
 ${t(64, 184, short(o.address), 38, { mono: true, w: 600 })}
 ${label(64, 242, heroLabel)}
@@ -134,7 +137,7 @@ ${t(60, heroY, hero, heroSize, { mono: true, w: 700, fill: col })}
 ${pill ? `<rect x="64" y="${pillY}" width="${f1(pillW)}" height="38" rx="19" fill="${col}" fill-opacity="0.14"/>${arrow ? `<path d="${arrow}" fill="${col}"/>` : ''}${t(hide ? 64 + pillW / 2 : 110, pillY + 26, pill, hide ? 17 : 20, { anchor: hide ? 'middle' : null, w: 600, fill: hide ? C.text2 : col, mono: !hide })}` : ''}
 ${[0, 1, 2, 3].map(cell).join('\n')}
 <rect x="${box.x - 32}" y="${box.y - 50}" width="${box.w + 64}" height="${box.h + 112}" rx="22" fill="${C.panel}" fill-opacity="0.66" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
-${chart(o.curve, box, col, hide)}
+${chart(o.curve, box, col, hide, o.noCurveText)}
 <line x1="64" y1="578" x2="${W - 64}" y2="578" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
 ${t(64, 610, site.replace(/^https?:\/\//, ''), 19, { w: 600, fill: C.accent })}
 ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
@@ -177,17 +180,23 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
       if (!ev.length) return null;
       ev.sort((a, b) => a[0] - b[0]);
       const pts = [[Math.floor(ev[0][0] / 1000) - 3600, 0]]; let acc = 0;
-      for (const [tt, v] of ev) { acc += v; pts.push([Math.floor(tt / 1000), Math.round(acc * 100) / 100]); }
+      for (const [tt, v] of ev) { acc += v; const s = Math.floor(tt / 1000), y = Math.round(acc * 100) / 100; if (pts[pts.length - 1][0] === s) pts[pts.length - 1][1] = y; else pts.push([s, y]); }   // one point per second: events settled in the same second have no order between them
       return thin(pts, 90);
     };
-    const thin = (pts, max) => { if (pts.length <= max) return pts; const step = (pts.length - 1) / (max - 1); const out = []; for (let f = 0; f < pts.length - 1; f += step) out.push(pts[Math.round(f)]); out.push(pts[pts.length - 1]); return out; };
-    /** The same from a wallet's snapshot file; null when the file holds only the newest predictions. */
-    const walletCurve = (file, addr) => (!file || file.truncated || !Array.isArray(file.predictions) ? null : curveFromPredictions(file.predictions.map(P.unslim), file.trades, addr));
+    // at most max points, evenly spaced, plus the first, the last, the high and the low (evenly spaced samples alone dropped
+    // the real peak the card tags)
+    const thin = (pts, max) => { if (pts.length <= max) return pts; let hi = 0, lo = 0; pts.forEach((p, i) => { if (p[1] > pts[hi][1]) hi = i; if (p[1] < pts[lo][1]) lo = i; }); const keep = new Set([0, pts.length - 1, hi, lo]); const step = (pts.length - 1) / (max - 3); for (let f = 0; f < pts.length - 1; f += step) keep.add(Math.round(f)); return Array.from(keep).sort((a, b) => a - b).map((i) => pts[i]); };
+    /** The same from a wallet's snapshot file. A truncated file holds only its newest predictions (and older traded
+     *  ones), so its curve is the one the snapshot built from every prediction (file.curve); null in a file built before. */
+    const walletCurve = (file, addr) => (!file || !Array.isArray(file.predictions) ? null : file.truncated ? (Array.isArray(file.curve) && file.curve.length >= 2 ? file.curve : null) : curveFromPredictions(file.predictions.map(P.unslim), file.trades, addr));
+    /** A wallet's card input from its snapshot row; isMaker: the row is a counterparty's, a market maker from
+     *  P.MAKER_MIN predictions (fewer: a one-off counterparty, as on the Market makers page). */
     const walletInput = (row, curve, isMaker) => {
       const record = `${U.fmtNum(row.won || 0, 0)}W / ${U.fmtNum(row.lost || 0, 0)}L`;
       const n = U.fmtNum(row.n || 0, 0);
+      const mm = isMaker && P.isMarketMaker(row.n || 0);
       return {
-        kind: isMaker ? 'maker' : 'bettor', address: row.address, period: 'All time', pnl: row.pnl || 0, roi: row.roi, curve,
+        kind: isMaker ? (mm ? 'maker' : 'counterparty') : 'bettor', address: row.address, period: 'All time', pnl: row.pnl || 0, roi: row.roi, curve,
         periodRange: curve ? range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : row.first ? 'since ' + date(row.first) : null,
         stats: isMaker
           ? [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Committed', U.fmtUsd(row.wagered || 0, { compact: true })], ['Taken', n]]
@@ -195,13 +204,18 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
         statsHidden: isMaker
           ? [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Taken', n], ['Open', U.fmtNum(row.open || 0, 0)]]
           : [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Predictions', n], ['Avg odds', row.avgOdds == null ? '—' : pct(row.avgOdds * 100, 0)]],
-        footRight: isMaker ? 'Market maker' + (row.first ? ' since ' + date(row.first) : '') : (row.topCat ? 'Mostly ' + row.topCat : 'Meridian Predict') + (row.first ? ' · since ' + date(row.first) : ''),
+        // the top category is the one with the most predictions, often a plurality: not "mostly"
+        footRight: isMaker ? (mm ? 'Market maker' : 'One-off counterparty') + (row.first ? ' since ' + date(row.first) : '') : (row.topCat ? 'Top category ' + row.topCat : 'Meridian Predict') + (row.first ? ' · since ' + date(row.first) : ''),
       };
     };
-    const walletSvg = (row, file, isMaker) => flexSvg(walletInput(row, walletCurve(file, row.address), isMaker));
+    const walletSvg = (row, file, isMaker) => {
+      const c = walletCurve(file, row.address); const inp = walletInput(row, c, isMaker);
+      if (!c && file && file.truncated) inp.noCurveText = 'Curve not drawn: over 600 predictions';   // a file built before the snapshot wrote its curve
+      return flexSvg(inp);
+    };
     const walletText = (row, isMaker) => {
-      const bits = [`${U.fmtNum(row.n || 0, 0)} predictions${isMaker ? ' taken' : ''}`, `${U.fmtNum(row.won || 0, 0)}W / ${U.fmtNum(row.lost || 0, 0)}L`, row.roi != null ? pct(row.roi, 1, true) + ' ROI' : null, U.fmtUsd(row.wagered || 0, { compact: true }) + (isMaker ? ' committed' : ' wagered'), !isMaker && row.topCat ? 'mostly ' + row.topCat : null].filter(Boolean);
-      return { title: `${short(row.address)} on Meridian Predict: ${money(row.pnl || 0, true)} ${isMaker ? 'maker PnL' : 'net'}`, description: bits.join(' · ') + '. Every prediction, its legs and how each resolved, on MeridianDataHub.' };
+      const bits = [`${U.fmtNum(row.n || 0, 0)} prediction${row.n === 1 ? '' : 's'}${isMaker ? ' taken' : ''}`, `${U.fmtNum(row.won || 0, 0)}W / ${U.fmtNum(row.lost || 0, 0)}L`, row.roi != null ? pct(row.roi, 1, true) + ' ROI' : null, U.fmtUsd(row.wagered || 0, { compact: true }) + (isMaker ? ' committed' : ' wagered'), !isMaker && row.topCat ? 'top category ' + row.topCat : null].filter(Boolean);
+      return { title: `${short(row.address)} on Meridian Predict: ${money(row.pnl || 0, true)} ${isMaker ? (P.isMarketMaker(row.n || 0) ? 'maker PnL' : 'counterparty PnL') : 'net'}`, description: bits.join(' · ') + '. Every prediction, its legs and how each resolved, on MeridianDataHub.' };
     };
 
     // ---------------------------------------------------------------- the site card (home and every other page)
@@ -246,18 +260,29 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
     const cash = (v, sign) => { const n = Number(v) || 0; return Math.abs(n) >= 1e5 ? U.fmtUsd(n, { compact: true, sign }) : Math.abs(n) >= 100 ? U.fmtUsd(n, { dp: 0, sign }) : U.fmtUsd(n, { sign }); };
     /** Where one leg stands for the bettor, from the record alone (no live data: the image stays byte-identical until the
      *  prediction changes): won / lost / void (a 50/50 is a loss on Meridian) once Meridian has settled the question, every
-     *  leg of a won prediction won, otherwise open. */
-    const legState = (k, n) => (n.won ? 'won' : k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false) ? (k.nonDecisive ? 'void' : k.resolvedToYes === !!k.yes ? 'won' : 'lost') : 'open');
+     *  leg of a won prediction won, otherwise open. A won prediction's leg Meridian has not settled (0x73f05a88…, a $1
+     *  test paid while its question runs to December) was paid as won, with no result of its own. */
+    const legState = (k, n) => (n.won ? (k.settled || n.partial ? 'won' : 'paid as won') : k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false) ? (k.nonDecisive ? 'void' : k.resolvedToYes === !!k.yes ? 'won' : 'lost') : 'open');
     const slipState = (n) => (n.decided ? (n.won ? 'won' : n.nd ? 'void' : 'lost') : 'open');
-    /** Can the slip still be copied: undecided and no leg past its cutoff. (The one thing on a card that changes with time
-     *  alone: the image changes once, when the first leg closes.) */
+    /** Does the site still offer to copy the slip: undecided and no leg past the end time Meridian lists (no betting
+     *  cutoff: Meridian has taken bets after it). (The one thing on a card that changes with time alone: the image
+     *  changes once, when the first leg passes it.) */
     const slipCopyable = (n, now = Date.now()) => !n.decided && !n.picks.some((k) => k.endTime && k.endTime <= now);
     /** Whether the deploy makes a slip's card and share page (scripts/build-cards.mjs): what people share, which is a slip
-     *  still open, one decided in the last week, a win of the last 30 days or a big win. */
+     *  still open, one decided in the last week, a win of the last 30 days or a big win (P.BIG_WIN is net PnL, a bettor's
+     *  token sale included, as on the Overview). */
     const slipCardWanted = (n, now = Date.now()) => {
       if (!n.decided) return true;
       const age = now - (P.decidedAt(n) || 0), DAY = 864e5;
-      return age < 7 * DAY || (!!n.won && (age < 30 * DAY || (Number(n.pnl) || 0) > P.BIG_WIN));
+      return age < 7 * DAY || (!!n.won && (age < 30 * DAY || (Number(n.tradedPnl != null ? n.tradedPnl : n.pnl) || 0) > P.BIG_WIN));
+    };
+    // a bettor who traded its position tokens: the card shows its own result (as the slip page does), not payout − stake;
+    // note('sold' | 'has sold') says what it did with them (a bettor that only bought more of its own side sold none)
+    const ownOf = (n) => {
+      const own = n.decided && n.tradedPnl != null ? Number(n.tradedPnl) : null;
+      const held = n.held != null ? n.held : 1; const all = held < 1e-6, part = !all && held < 0.999;
+      const note = (verb) => (all ? `the bettor ${verb} its tokens` : part ? `the bettor ${verb} ${U.fmtPct((1 - held) * 100, { dp: 0 })} of its tokens` : own != null ? 'the bettor traded position tokens on these picks' : '');
+      return { own, held, all, part, note };
     };
     /** A Predict slip (a full record, P.full): the result or what it can win, and every leg with where it stands.
      *  o: { fontCss (the browser), now (the time it is judged at: can it still be copied?) } */
@@ -266,15 +291,26 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
       const col = st === 'won' ? C.green : st === 'lost' ? C.red : st === 'void' ? '#f5b64a' : C.accent;
       const combo = n.legs > 1 ? `${n.legs}-leg combo` : 'Single';
       const x = mult(n.multiple);
-      const hero = st === 'won' ? cash(n.pnl, true) : st === 'lost' ? cash(-n.stake, true) : st === 'void' ? cash(0) : cash(n.pool);
-      const heroLabel = st === 'won' ? 'Won' : st === 'lost' ? 'Lost' : st === 'void' ? 'Void' : 'Pays';
-      const sub = st === 'won' ? `${cash(n.pool)} paid on a ${cash(n.stake)} stake` : st === 'lost' ? `${cash(n.stake)} stake · would have paid ${cash(n.pool)}` : st === 'void' ? 'Stake returned' : `on a ${cash(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`;
+      const { own, held, all, part, note } = ownOf(n);
+      const hero = st === 'open' ? cash(n.pool) : own != null ? cash(own, true) : st === 'won' ? cash(n.pnl, true) : st === 'lost' ? cash(-n.stake, true) : cash(0);
+      // a self-match (one wallet on both sides) moves no money: shown as the bettor side only, and said so
+      const self = P.selfMatch(n);
+      const heroLabel = (st === 'won' ? 'Won' : st === 'lost' ? 'Lost' : st === 'void' ? 'Void' : 'Pays') + (self ? ' · bettor side' : own != null ? ' · bettor PnL incl. token ' + (all || part ? 'sale' : 'trades') : '');
+      // a sold-out winner's payout went to whoever bought its tokens; a loser's tokens paid nothing to anyone
+      const sub = (st === 'won' ? `${cash(n.pool)} paid on a ${cash(n.stake)} stake` + (all ? ' to the token buyer' : part ? ' · ' + note('sold') : '')
+        : st === 'lost' ? `${cash(n.stake)} stake · would have paid ${cash(n.pool)}` + (own != null ? ' · ' + note('sold') : '')
+          : st === 'void' ? 'Stake returned' : `on a ${cash(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}` + (held < 0.999 ? ' · ' + note('has sold') : '')) + (self ? ' · self-matched: one wallet on both sides' : '');
+      const subLines = wrapText(sub, 520, 22, false, 2);   // up to two lines under the hero, clear of the legs panel
       const heroSize = fit(hero, 460, 104, 44);
       const heroY = 250 + heroSize;
-      const pill = st === 'won' ? 'Won · ' + combo : st === 'lost' ? 'Lost · ' + combo : st === 'void' ? 'Void' : 'Live · ' + combo;
-      const pw = pill.length * 10.2 + 44;
+      // copyable decides the pill: past a leg's listed end the slip is not offered any more, but it is not decided either
       const closes = Math.min(...n.picks.map((k) => k.endTime || Infinity)), copyable = slipCopyable(n, o.now);
-      const stats = [['Stake', cash(n.stake)], ['Multiplier', x], ['Odds', n.odds == null ? '—' : pct(n.odds * 100, n.odds < 0.1 ? 1 : 0)], n.decided ? ['Settled', dateShort(P.decidedAt(n)) || '—'] : [copyable ? 'Bets close' : 'Bets closed', Number.isFinite(closes) ? dateShort(closes) : '—']];
+      const pill = st === 'won' ? 'Won · ' + combo : st === 'lost' ? 'Lost · ' + combo : st === 'void' ? 'Void' : (copyable ? 'Live · ' : 'Awaiting result · ') + combo;
+      const pw = pill.length * 10.2 + 44;
+      // locked odds below 1 never read 100% (as the resolution tracker's prices); Meridian's end time is a listed end,
+      // not a betting cutoff (it has taken bets after it)
+      const odds = n.odds == null ? '—' : n.odds > 0.99 && n.odds < 1 ? (Math.floor(n.odds * 1000 + 1e-6) / 10).toFixed(1) + '%' : pct(n.odds * 100, n.odds < 0.1 ? 1 : 0);
+      const stats = [['Stake', cash(n.stake)], ['Multiplier', x], ['Odds', odds], n.decided ? ['Settled', dateShort(P.decidedAt(n)) || '—'] : ['Listed end', Number.isFinite(closes) ? dateShort(closes) : '—']];
       const cell = (i) => { const [k, v] = stats[i]; const cx = 64 + i * 122; return label(cx, 496, k) + t(cx, 530, v, fit(v, 112, 26, 16), { mono: true, w: 600 }); };
       // the legs, right: side, question (wrapped: up to four lines for a single, fewer as the legs add up), and a mark
       // for where each stands; up to five legs, the rest counted
@@ -298,14 +334,14 @@ ${t(W - 64, 610, 'Leaderboard · dashboard · copy trading · tax center', 17, {
         const y = tops[i], ls = lines[i], h = pad * 2 + ls.length * lh + mh, mid = y + h / 2;
         const side = k.yes ? 'YES' : 'NO', sc = k.yes ? C.green : C.red;
         const s = legState(k, n);
-        const chance = s === 'open' && k.fairAtBet != null ? pct(k.fairAtBet * 100, 0) + ' at bet' : s === 'open' ? 'open' : s === 'void' ? '50/50 · a loss' : s;
+        const chance = s === 'open' && k.fairAtBet != null ? pct(k.fairAtBet * 100, 0) + ' at bet' : s === 'open' ? 'open' : s === 'void' ? '50/50 · a loss' : s;   // 'paid as won' says itself
         const q0 = y + pad + Math.round(fs * 0.95);   // the first line's baseline
         return (i ? `<line x1="${box.x + 24}" y1="${f1(y)}" x2="${box.x + box.w - 24}" y2="${f1(y)}" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>` : '')
           + `<rect x="${box.x + 24}" y="${f1(mid - 14)}" width="${side === 'YES' ? 52 : 44}" height="28" rx="7" fill="${sc}" fill-opacity="0.14"/>`
           + t(box.x + 24 + (side === 'YES' ? 26 : 22), mid + 6, side, 15, { anchor: 'middle', w: 700, fill: sc, ls: 0.8 })
           + ls.map((l, j) => t(box.x + 92, q0 + j * lh, l, fs, { w: 600 })).join('')
           + t(box.x + 92, q0 + (ls.length - 1) * lh + meta + (show.length === 1 ? 14 : 8), chance + (k.cat ? ' · ' + k.cat : ''), meta, { fill: C.text3 })
-          + mark(s, box.x + box.w - 38, mid);
+          + mark(s === 'paid as won' ? 'won' : s, box.x + box.w - 38, mid);
       };
       return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
 <defs>
@@ -325,8 +361,8 @@ ${t(W - 64 - pw / 2, 67, pill, 16, { anchor: 'middle', w: 600, fill: col })}
 ${label(64, 150, 'Predict slip · Meridian', { fill: C.text2 })}
 ${t(64, 188, 'by ' + short(n.predictor), 28, { mono: true, w: 600, fill: C.text2 })}
 ${label(64, 248, heroLabel)}
-${t(60, heroY, hero, heroSize, { mono: true, w: 700, fill: st === 'open' ? C.text : col })}
-${t(64, heroY + 44, sub, 22, { fill: C.text2, w: 500 })}
+${t(60, heroY, hero, heroSize, { mono: true, w: 700, fill: st === 'open' ? C.text : own != null ? (own > 0.005 ? C.green : own < -0.005 ? C.red : C.text) : col })}
+${subLines.map((l, j) => t(64, heroY + 44 + j * 28, l, 22, { fill: C.text2, w: 500 })).join('')}
 ${[0, 1, 2, 3].map(cell).join('\n')}
 <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" rx="22" fill="${C.panel}" fill-opacity="0.72" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5"/>
 ${label(box.x + 24, box.y + 34, n.legs > 1 ? n.legs + ' legs' : '1 leg')}
@@ -335,17 +371,25 @@ ${show.map(legRow).join('\n')}
 ${more ? t(box.x + 92, yy + 24, '+ ' + more + ' more leg' + (more > 1 ? 's' : ''), 17, { fill: C.text3, w: 600 }) : ''}
 <line x1="64" y1="578" x2="${W - 64}" y2="578" stroke="#ffffff" stroke-opacity="0.07" stroke-width="1.5"/>
 ${t(64, 610, site.replace(/^https?:\/\//, ''), 19, { w: 600, fill: C.accent })}
-${t(W - 64, 610, copyable ? 'Copy this slip in one click' : 'Meridian Predict · placed ' + (date(n.t) || ''), 17, { anchor: 'end', fill: C.text3 })}
+${t(W - 64, 610, copyable ? 'Copy this slip on MeridianDataHub' : 'Meridian Predict · placed ' + (date(n.t) || ''), 17, { anchor: 'end', fill: C.text3 })}
 </svg>`;
     }
-    /** The link preview's title and description for a slip. */
+    /** The link preview's title and description for a slip. A bettor who traded its tokens gets its own result, as on
+     *  the card; an open slip "pays" its payout (the dialog's "To win" is the profit, so "to win" is not used here). */
     const slipText = (n, now) => {
       const st = slipState(n), copyable = slipCopyable(n, now); const combo = n.legs > 1 ? `${n.legs}-leg combo` : 'single';
+      const { own, note } = ownOf(n);
       const legs = n.picks.slice(0, 4).map((k) => (k.yes ? 'YES ' : 'NO ') + k.q).join(' · ') + (n.picks.length > 4 ? ` · +${n.picks.length - 4} more` : '');
-      const title = st === 'won' ? `Won ${cash(n.pnl, true)} on a ${cash(n.stake)} ${combo} (${mult(n.multiple)})` : st === 'lost' ? `${cash(n.stake)} ${combo} at ${mult(n.multiple)}: lost` : st === 'void' ? `${cash(n.stake)} ${combo}: void` : `${cash(n.stake)} to win ${cash(n.pool)}: ${mult(n.multiple)} ${combo}`;
-      return { title: title + ' · Meridian Predict', description: legs + '. Placed ' + (date(n.t) || '') + ' by ' + short(n.predictor) + (copyable ? '. Copy it on MeridianDataHub.' : '.') };
+      const title = P.selfMatch(n) ? `A ${mult(n.multiple)} ${combo} on Meridian Predict, self-matched (one wallet on both sides)`
+        : st === 'won' ? (own != null ? `${cash(n.stake)} ${combo} (${mult(n.multiple)}) won; ${note('sold')}: bettor PnL ${cash(own, true)}` : `Won ${cash(n.pnl, true)} on a ${cash(n.stake)} ${combo} (${mult(n.multiple)})`)
+        : st === 'lost' ? `${cash(n.stake)} ${combo} at ${mult(n.multiple)}: lost` + (own != null ? `; ${note('sold')}: bettor PnL ${cash(own, true)}` : '')
+          : st === 'void' ? `${cash(n.stake)} ${combo}: void`
+            : `${cash(n.stake)} ${combo} at ${mult(n.multiple)}: pays ${cash(n.pool)} if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`;
+      // a question ending in "?" takes no full stop after it
+      return { title: P.selfMatch(n) ? title : title + ' · Meridian Predict', description: legs + (/[?.!…]$/.test(legs) ? ' ' : '. ') + 'Placed ' + (date(n.t) || '') + ' by ' + short(n.predictor) + (copyable ? '. Copy it on MeridianDataHub.' : '.') };
     };
-    const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m >= 100 ? 0 : 2) + '×');
+    // a near-certain slip keeps the digits that show it pays more than its stake (1.000076 reads 1.0001×, not 1.00×)
+    const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m < 1.01 ? 4 : m >= 100 ? 0 : 2) + '×');
 
     // ---------------------------------------------------------------- the page behind a share link
     /** kind 'a' (perps account: address), 'p' (Predict wallet: address) or 's' (Predict slip: id, a prediction id);

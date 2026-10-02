@@ -90,8 +90,12 @@ It is drawn in the browser from the page's own figures (`js/flex.js` rasterises 
 any account, not only those in the snapshot. The perps figures are the Overview tab's for the
 period; a Predict wallet's curve is the exchange's own history when the API is reachable, otherwise
 its predictions counted the snapshot's way (decided at the verdict, traded positions through the
-token ledger), so it ends at the headline figure; a wallet whose predictions are not all loaded gets
-the card without a curve rather than a partial one.
+token ledger), so it ends at the headline figure. A wallet whose predictions are not all in its
+file gets the curve the snapshot built from every prediction (the file's `curve`, also on its
+share card); a file built before carried one gets the card without a curve, saying why ("over 600
+predictions"), rather than a partial one. That curve has one point per second (results
+settled in the same second have no order between them) and is thinned to 90 points that always
+keep its high and low, so the card's *peak* tag is the real one.
 
 **Share links with preview cards.** Link unfurlers (Discord, X, Telegram, Slack…) never see the
 part of a URL after `#`, where the site's routes live, so a pasted `#/account?…` link showed only
@@ -106,9 +110,15 @@ the Open Graph and Twitter tags and sends people on to the page itself. Served a
 `https://meridian.thedatahub.xyz/a/<address>` and `/p/<address>` (wrangler's auto-trailing-slash
 drops the `.html`); the Share buttons on account and bettor pages copy these links. Predict slips
 get the same at `/s/<prediction id>` (`cards/s/<id>.png`, `s/<id>.html`): the hero is the result
-(net PnL once won, the stake once lost, the payout while open) beside the legs with a mark for
-each; cards are made for every open slip, every slip decided in the last 7 days, the wins of the
-last 30 days and every big win (net PnL over $500). The Share button on a slip opens a dialog
+(net PnL once won, the stake once lost, the payout while open; where the bettor sold or traded
+its position tokens, its own result with the sale, as on the slip page, so a win sold for $25
+on a $500 stake reads −$475 and the payout goes "to the token buyer") beside the legs with a mark
+for each. The pill reads *Live* until a leg is past the end time Meridian lists (a listed end,
+not a betting cutoff) and *Awaiting result* after, and the footer invites copying only before.
+The link preview's title says the same (an open slip "pays" its payout if it wins; "to win" is
+the dialog's word for the profit). Cards are made for every open slip, every slip decided in the
+last 7 days, the wins of the last 30 days and every big win (net PnL over $500, the bettor's own
+where it sold its tokens). The Share button on a slip opens a dialog
 that draws the same card in the browser (download, copy or share the image, post on X, copy the
 link). A wallet or slip without a page yet, or an address in mixed case, falls through to
 `index.html`, whose first script sends `/a/…`, `/p/…` and `/s/…` paths on to the hash route.
@@ -190,8 +200,13 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   ledger built from the same events, for stress-testing the report against a realistic
   return: `MDSim.install()` in the console, then open `#/tax?address=<its address>`.
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
-  * *Overview* – exchange-wide totals, wagered and count per day, a live prediction tape,
+  * *Overview* – exchange-wide totals, wagered and count per UTC day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
+    Everything on it comes from one snapshot: a newer one published while the page is open is
+    offered in the tape's header (*newer snapshot published · show it*) rather than mixed in,
+    and the snapshot's age line keeps counting. Where the aggregate has no secondary-market
+    trades (the browser build, a failed trades fetch), the tiles and notes that would count
+    them say they are not counted.
     **Big wins** sits beside the tape (stacked when the page is narrower than about 1240 px). It
     lists every bettor win whose net PnL (payout − stake) is above $500 (`P.BIG_WIN`), counted
     at the verdict, claimed or not. For a bettor who traded its position tokens, the net PnL is
@@ -227,12 +242,29 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       Polymarket's. Leg questions link to that question's dialog, and ⓘ opens the resolution
       details;
     - **Open bettor's account**;
-    - **Copy slip to Meridian** while the slip can still be placed, and **Slip** (the slip page).
+    - **Copy slip to Meridian** while the site still offers the slip (see Slips), and **Slip**
+      (the slip page).
 
     A loss dates from the first leg that went against the bettor: its other legs may run for
-    weeks. Where the bettor sold its tokens, the dialog shows its own result and who collects.
-    Slim legs carry Meridian's result for a settled question as a 9th element (1 YES, 0 NO,
-    2 50/50).
+    weeks. Where the bettor sold its tokens, the dialog shows its own result and who collects
+    (only a win has a payout for the token buyer). "Won" is never the payout: the sentence says
+    what was paid on what stake, as the slip page does. Slim legs carry Meridian's result for a
+    settled question as a 9th element (1 YES, 0 NO, 2 50/50).
+    - An undecided prediction whose legs already tell says so, as the question dialog does: *lost
+      · awaiting settlement* once a leg went against the bettor (Meridian's result, else
+      Polymarket's, 50/50 included), *won on Polymarket · awaiting settlement* once every leg went
+      its way. The dialog, the slip page and a bettor page's history all use it.
+    - A leg shows when Meridian settled it, or else the end time Meridian lists for it. That is a
+      listed end, not a betting cutoff: Meridian has taken bets after it (566 legs in 335
+      predictions by 2026-09-30, the latest on Sep 30).
+    - A won prediction's leg Meridian has not settled reads *paid as won*, not *won* (only the
+      $1 test against 0x3106…: paid ten minutes after the bet while its question runs to
+      December). A settlement time is never dated from a listed end before the bet.
+    - The self-matched prediction (one wallet on both sides) says so: *Wallet PnL* $0, no vig,
+      and a note that it is left out of the Predict figures.
+    - *Secondary market*: when only other wallets traded the tokens on these picks, it says this
+      bettor sold none; where the bettor's own trading is unknown (a maker's page), a lost
+      prediction claims no payout for a buyer.
   * *Dialogs.*
     - Dialogs stack, and Escape closes the top one.
     - Any page change closes them all: a link, Back or a notification.
@@ -251,42 +283,94 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     - The app keeps `?ref=` as its pending referral code (checked 2026-09-29), so a copied slip
       brings the visitor in under the site's code (`MD.api.REF`; every link to the app carries
       it).
-    - A slip cannot be copied once it is decided, or once any leg has stopped taking bets: past
-      its cutoff, settled on Meridian, or its Polymarket market closed.
+    - The page stops offering to copy a slip once it is decided, or once any leg is past the end
+      time Meridian lists for it, settled on Meridian, or its Polymarket market closed. The listed
+      end is the site's own line, not Meridian's betting cutoff (Meridian has taken bets after
+      it), so no text calls it one: such a slip reads *awaiting result*, and its card's pill says
+      the same.
+    - The chances are Polymarket's once it answers; until then (or if it fails) they are
+      Meridian's estimates from the snapshot, and the labels say so (*Estimate (snapshot)*).
+    - Locked odds below 1 never read 100% (99.9%, floored as the resolution tracker's prices),
+      and a multiplier below 1.01× keeps four decimals (1.0001×).
     - **Share slip** copies the page's link. `#/predict/p` without an id takes a pasted Meridian
       link.
     - The snapshot carries every prediction by id in `slips/<first two hex digits>.json`, about
       25 KB each today and growing with the count, so a slip link loads one small file. Where the
-      bettor traded its tokens, records carry `h` and `lp`, as big wins do.
+      bettor traded its tokens, records carry `h` and `lp`, as big wins do, and so do the records
+      in the question and wallet files: a prediction opened from a question or from its maker's
+      page shows the bettor's side as it stood (sold, the payout to the token buyer, its own PnL).
     - A slip file that cannot be read is reported as such (with a retry), not as a missing
       prediction.
   * *Snapshot compatibility.* Tape rows (`P.compact`) keep every field they always had and add
     the legs (`k`), so a page that has not reloaded still reads a new snapshot. `P.full` turns
-    any stored row back into a full record.
+    any stored row back into a full record. The snapshot is published before the page code
+    deploys, so its format only ever gains fields: the bettor and maker rows' `vigN` (how many
+    predictions their Avg vig covers), `recentFrom` in `predict.json` and `predict-status.json`
+    (how far back the Questions list's recently settled tail reaches), a wallet file's `newest`
+    (how many of its predictions are the newest; in a truncated file the rest are older ones on
+    traded positions), and in a truncated file `curve` (the cumulative PnL from every prediction,
+    `curveFromPredictions`) and `daily` (the stake per UTC day, `[day, USD]`), both for the role
+    its page counts.
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
-    average vig paid, best win and last activity; click through to a bettor page.
-  * *Questions* – only the questions people have bet on through Meridian (open interest now, open
-    predictions, and questions settled in the last 30 days; the exchange itself lists 85k):
+    average vig paid, best win and last bet; click through to a bettor page. The count line
+    says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
+    filtered board, and a full address is found whatever the filters.
+    - *ROI* (`P.roiOf`): net PnL, the secondary market included, ÷ the stakes of decided
+      predictions (claimed or not) plus the sold share of open ones (a sale books its result before
+      the verdict, so its stake joins the base). A bettor page counts it the same way, and a maker's
+      page reads the maker's own row (ROI on its committed collateral, Avg odds = its bettors' odds).
+    - *Best win*: the largest net result on one decided prediction; where the bettor traded the
+      tokens, its own result with the sale (as the Overview's big wins count it).
+    - *Top category*: the category with the most predictions; a tie goes to the larger stake, then
+      the name (`P.topCategory`).
+  * *Questions* – only the questions people have bet on through Meridian (those with money still
+    on them, open predictions or decided ones not yet claimed, then the questions of the most
+    recently settled predictions, about 1,200 in all; the footer says how far back that tail
+    reaches, `recentFrom`; the exchange itself lists 85k):
     search, category, open / ended-unsettled / settled / all (Open by default), sortable columns
-    (stake ever placed on Meridian first); implied probability, Meridian OI with the number of
-    open bets and stake, source volume, link to the mirrored source market. On an origin with live API access a link
+    (stake ever placed on Meridian first); probability, Meridian OI with the number of
+    open bets and stake, source volume, link to the mirrored source market. *Probability* is
+    Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors), loaded for the
+    rows on screen; until it has loaded, the `estimatedPrice` Meridian's API reported at the
+    snapshot, which stops following the market once a game starts. A settled question shows its
+    result instead, and the column sorts by what it shows. *Staked on Meridian* and Meridian OI
+    count a combo in full on every question it includes, so they overlap across rows and add up
+    to no total (the footer says so). Meridian OI is the
+    collateral still in escrow on the question, worked out from the predictions: stake + maker
+    collateral of every prediction on it not yet claimed (open, or decided and unclaimed), a combo
+    in full on each of its questions. That matches the API's `openInterest` on nearly every row
+    the API lists (125 of 133 on 2026-10-02), but the API reports 0 for unlisted questions and the
+    builder does not ask it about settled ones, so every row gets this figure. Self-matched
+    predictions are left out of the list's counts, its stakes and its question files, as
+    everywhere else. On an origin with live API access a link
     switches to the full explorer over every question. A **Resolution** column says when and
     how each question resolves: the Polymarket market's end (and the fixture time for sports,
-    which moves when a game is postponed), Meridian's own betting cutoff when it is earlier, and
+    which moves when a game is postponed), Meridian's own listed end time when it is earlier (a
+    listed end, not a betting cutoff: Meridian has taken bets after it), and
     the live position in Polymarket's UMA pipeline — *awaiting proposal*, *proposed X, challenge
     window ends 15:42*, *disputed*, *UMA vote*, *resolved on Polymarket, not settled on Meridian
     yet*. The ⓘ button opens the proposal / dispute details and the market's resolution rules.
     The same per-leg status sits on the open positions of every bettor page. Every question row
     opens a panel with the actual predictions on it: bettor, stake, odds, payout, maker, and every
     leg of the combo with its own state, since a combo pays only if all legs resolve for the bettor.
-    An ended question none of whose open predictions can still win (each has a leg resolved against
-    its bettor) is left out. The snapshot carries `questions/<conditionId>.json` per question for this.
+    On the Ended tab, an ended question none of whose open predictions can still win (each has a
+    leg resolved against its bettor, or 50/50, on Polymarket) is left out and counted under the
+    list; the other tabs list every question. The ended questions and every leg of their open
+    predictions are loaded for this, again on each 30-second tick, so a question that passes its
+    end while the page is open joins the tab and its count. The snapshot carries
+    `questions/<conditionId>.json` per question for this.
     Three cases that looked stuck and are not what they seem (investigated 2026-09-23):
     - *Polymarket's end date can be wrong.* "Another GTA VI trailer released by September 30?" was
-      listed with the Aug 31 market's end date (Sep 1), and Meridian copied it as its betting cutoff.
+      listed with the Aug 31 market's end date (Sep 1), and Meridian copied it as its listed end time.
       The rules go by the question, so a still-trading market whose title states a later deadline
       ("by / before / through / until <Month> <Day>") runs to 11:59 PM ET that day
-      (`R.titleDeadline`); the ⓘ panel shows both dates.
+      (`R.titleDeadline`; a title without a year takes the year nearest the listed end, so
+      "by December 31?" listed to end Jan 1 04:59 UTC is Dec 31 of the year before); the ⓘ panel
+      shows both dates. An open market's line names its date for what it is (*Polymarket end
+      date* or *Deadline in the question*), not as a resolution time: Polymarket resolves once
+      the outcome is known under its rules, before or after that date. A market still taking
+      orders past its listed end date with no outcome priced at 95 % or more reads *still trading*,
+      not *awaiting proposal* (Karen Bass: listed Jun 3, runoff Nov 3).
     - *Postponed games.* A sports market's end date is a placeholder (for CPBL and NPB, the
       scheduled start + 7 days). If a game is postponed, the rules keep the market open until the
       make-up game is played. If it is cancelled with no make-up game, the market resolves 50-50,
@@ -296,7 +380,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
          *cancelled*. Example: WTA Monterrey Bartunkova–Potapova on Aug 26. Polymarket resolved it
          50-50, Meridian's resolver recorded it non-decisive, and all three combos on it settled
          COUNTERPARTY_WINS, although their other two legs had won.
-      2. The fixture was re-dated past both the day in the market's slug and Meridian's cutoff.
+      2. The fixture was re-dated past both the day in the market's slug and Meridian's listed end
+         time.
          Example: MLS Seattle–Real Salt Lake, *postponed from Apr 12 · now Sep 24*.
       3. Some leagues' feeds never change: NPB and CPBL stay on `NS` whatever happens, and the
          original date stays listed. For these, a sports game `R.NO_RESULT_HOURS` (12) past its start
@@ -304,10 +389,12 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
          Polymarket's CLOB `prices-history`, CORS `*`).
          - A played game moves its odds: the winner reaches 99 % within hours, and a tie goes to
            50-50.
-         - Odds that stay at the pre-game level mean the game was not played. Example: NPB
+         - Median odds that stay within `R.MOVE` (10 points) of the pre-game level over the stretch
+           checked (at most the first 3 days after the start; the latest price the CLOB appends
+           past that window is left out) mean the game was most likely not played. Example: NPB
            Rakuten–SoftBank on Sep 21 (NPB: 中止, rained out) was 41 % before the start and a 38 %
-           median over the next 2½ days, reading *Postponed · not played on Sep 21*. The Sep 20
-           game went from 38 % to 99.95 % in three hours.
+           median over the next 2½ days, reading *Probably postponed · no sign it was played on
+           Sep 21*. The Sep 20 game went from 38 % to 99.95 % in three hours.
          - Odds that moved without producing a winner read *no result · Nd* (an abandoned or
            unfinished game resolves 50-50).
 
@@ -317,7 +404,7 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       made up Sep 22) is still listed on Jul 10. Only Polymarket's whitelisted proposers (339
       addresses on the managed oracle) can propose, and stale listings like this one have waited
       weeks for one.
-    - *Unlisted questions are never relayed to Meridian.* Meridian learns an outcome only when
+    - *Meridian's bot does not relay unlisted questions.* Meridian learns an outcome only when
       someone calls `requestResolution(conditionId)` on the Polygon reader
       `0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98`, which pays a LayerZero fee of about 3 POL. That
       reader reads Polymarket's ConditionalTokens payout and sends it to the resolver
@@ -325,8 +412,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       `0xe32b714fc552aeab6ac9144d70f2a61b26bebef2` sends these for listed questions, typically within
       minutes of Polymarket resolving. Its query (Sapience's `polymarket-keeper`) selects
       `public: true` and open interest above zero, so unlisted questions (`isPublic: false`) are
-      skipped. Such questions still reach combos, and they then stay unsettled forever, together with
-      every prediction on them. As of 2026-09-23 that is 1,011 bet-on questions and 26 blocked
+      skipped. Such questions still reach combos, and they then stay unsettled until someone sends
+      the relay by hand, together with every prediction on them. As of 2026-09-23 that is 1,011
+      bet-on questions and 26 blocked
       predictions ($1,587 locked): 5 predictions are owed to bettors, and 21 are losses the maker
       cannot collect. Anyone can send the relay, for example with a wallet on Polygon. Two unlisted legs
       unblocked that way on Sep 3 were claimed within hours. The snapshot now carries `pub` per
@@ -337,10 +425,19 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     Meridian and the verdict is recorded (`pickConfig.resolved` / `result`); it is **claimed**
     (paid out) only when the winner collects, which most do late or never (roughly 1,000 of 1,300
     unclaimed predictions are settled). In the code, `n.decided` is the verdict and `n.settled` /
-    `n.settledAt` the claim, as the API names them. Results, win rates, PnL and the ex-post vig
-    count from the settlement, and so does every date the site shows for a result (Big wins, slip
-    pages and cards, curves, the Questions page's last 30 days): claiming changes none of them.
-    The tax center is the one exception: it books Predict results on the claim date, when the
+    `n.settledAt` the claim, as the API names them. A claim redeems the wallet's whole balance of
+    a position token (one pick configuration and side, shared by every prediction on the same
+    picks), but the API flags only the prediction the claim went through. So the wallet's other
+    decided predictions on that token count as claimed at the same time (`P.markTokenClaims`, in
+    the snapshot builder and on a live bettor page). Checked on-chain: on 2026-10-01 the bettors'
+    251 such wins ($32.7K), on 2026-10-02 the makers' 726 (on 305 tokens), every token at 0. With
+    them the snapshot's decided-but-unclaimed predictions fell from 1,120 to 143, and the bettors'
+    unclaimed wins from 393 ($38.1K) to 142 ($5.5K). Live, the exchange's own won / lost /
+    pending counts still follow the API's flag, and a bettor page's record allows for that
+    (`P.bettorFigures`: `viaToken`). Results, win rates, PnL and the ex-post vig count from the
+    settlement, and so does every date the site shows for a result (Big wins, slip pages and
+    cards, curves, the Questions page's most recently settled predictions): claiming changes none
+    of them. The tax center is the one exception: it books Predict results on the claim date, when the
     cash arrives.
     - *Settlement time.* The API keeps none for a prediction, but each leg's condition carries
       Meridian's `settledAt`. `P.legVerdictAt` dates a win when its last leg settled and a loss
@@ -349,13 +446,18 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       (unix seconds), which older readers ignore. Without leg times (older records) the builder's
       Polymarket resolution times for big wins, then an estimate from the listed ends, stand in,
       never after the claim. The user's example: 0x4a72… settled Sep 13 and was claimed Sep 29;
-      it is dated Sep 13 everywhere. As of 2026-09-23 that is 1,102 decided predictions left
-    unclaimed: 389 bettor wins and 713 maker wins. The Overview mentions the count only in its
+      it is dated Sep 13 everywhere. As of 2026-09-23 the API flagged 1,102 decided predictions as
+    unclaimed: 389 bettor wins and 713 maker wins (most of them, it turned out, paid by a claim on
+    the same token; see above). The Overview mentions the count only in its
     footnote. A bettor page shows an *Unclaimed winnings* tile (money that bettor can collect). A
-    maker page doesn't, because makers leave hundreds uncollected. Offline, a wallet page's
+    maker page doesn't (a maker's wins left to collect change none of its figures). Offline, a wallet page's
     *Cumulative PnL* chart is drawn from the verdicts too (`curveFromPredictions`). The old
     claim-based chart ended at +$508 for maker 0xdd9b…, whose PnL is +$1,500. When the file holds
-    only the newest predictions, the chart's window ends at the all-time figure.
+    only the newest predictions (and older ones on traded positions), the chart and the *Daily
+    volume* bars are the snapshot's, built from every prediction (the file's `curve` and `daily`):
+    0x79cb…'s curve is negative through mid-August and ends at its all-time PnL, and its bars add
+    up to its Volume tile. A file built before carried them gets no curve (it says why) and the
+    bars of its newest predictions only, captioned, never a curve shifted to end at the headline.
     A combo lost on its first leg is settled while a later leg is still open. A result chip reads from the side of the page it is on (the maker's on a maker's page)
     and says *unclaimed* only where that side has something to collect: a decided loss is simply
     *lost*, whether or not the winner has claimed. Checked against the exchange: an account's
@@ -363,8 +465,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     prediction's result, claimed or not) while its won / lost counts move only at the claim, so a
     bettor page takes the PnL as the exchange reports it and adds only the decided-but-unclaimed
     predictions to the record. The page loads a wallet's newest 300 predictions (600 in a snapshot
-    file); beyond that (every market maker, heavy bettors) the record, win rate, ROI, open count and
-    unclaimed winnings come from the snapshot's aggregate for the wallet, which covers all of them.
+    file); beyond that (every market maker, heavy bettors) the record, win rate, ROI, open count,
+    open stake (less the open positions it sold out of, all of which the file holds) and unclaimed
+    winnings come from the snapshot's aggregate for the wallet, which covers all of them; the
+    status line says which predictions the tables show, and the *Open positions* header why rows
+    are missing (sold on the secondary market, or older ones not loaded). Live, the exchange's
+    figures count a self-match (both sides in its volume, pending until claimed) and its daily
+    volume counts the wallet's secondary-market trades: the page takes both out, so the bars add
+    up to the Volume tile and Open counts the loaded predictions when they are all loaded.
     *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
     not resolved although Polymarket has (unlisted questions, see above); those are listed first on the Ended tab. The tax center
     stays on a cash basis (claimed).
@@ -400,7 +508,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     side an average cost (own predictions add the pool at their collateral, purchases what was
     paid); a sale books its price minus the cost of the tokens sold, at the sale; holding both
     sides books the matched amount (it pays for sure), at that moment; what is still held settles
-    at the verdict. Checked on 2026-09-22 against the exchange's own account PnL for every one of
+    at the verdict. Only a sale lowers the share a prediction still holds (`held`): a matched set
+    keeps its tokens (`hedged`), so a maker that bought back its bettor's side is not marked sold. Checked on 2026-09-22 against the exchange's own account PnL for every one of
     the 82 wallets that ever traded: 80 match to the cent, open positions included (the other two
     differ by $0.50 / $0.35 on predictions they never traded). Some wallets sell a bet's tokens
     seconds before its prediction is timestamped; such a sale is covered by the next acquisition.
@@ -409,14 +518,23 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     outcome, the sale's result against its cost), and no longer lists a sold winner as the
     seller's unclaimed winnings; the tax center books a sale as a disposal on its date and the
     held share on its claim, with a trades CSV.
-  * *Market makers* – who takes the other side of the RFQ auctions: share of flow, collateral
-    committed, open exposure, PnL, win rate, vig captured. A counterparty counts as a market maker
+  * *Market makers* – who takes the other side of the RFQ auctions: share of predictions,
+    collateral committed, open collateral, PnL, win rate, average quoted vig (the Overview's
+    makers table uses the same columns, `makerCols`). A counterparty counts as a market maker
     from its fifth prediction (`P.MAKER_MIN`). Anyone can take the other side once:
     0x3106…88d1 took a single $1 against $1 at 50 % on Sep 29, settled ten minutes later, which is
     a test, not a market. Such one-off counterparties are named under the table and left out of
-    the lists, the counts and the chart; their results still count in the Maker PnL total. Since
-    Sep 30, 0xea41…5250 (a plain wallet, no contract, quoting priced odds on crypto, weather and
-    sports questions) is a third market maker beside 0x79cb… and 0xdd9b….
+    the lists, the counts and the chart; they still count in the tiles (collateral, PnL, win rate
+    and vig). Their bettor page and share card call them that (*one-off counterparty*,
+    *Counterparty PnL*), and a prediction's dialog names them *Counterparty* (`P.isMarketMaker`).
+    A maker's page reads from its side: *Maker win rate* and *Maker PnL* in its category and
+    singles-vs-combos tables (which add up to its headline), *Collateral committed* by category,
+    and the bettors' odds labelled as such (*Avg bettor odds*, *Bettor odds*). Since Sep 30, 0xea41…5250 (a plain wallet, no contract, quoting priced odds on
+    crypto, weather and sports questions) is a third market maker beside 0x79cb… and 0xdd9b….
+    - The Maker PnL tile states its secondary-market part, and a note under the table works out
+      how it meets the Overview's bettor net result: each prediction is zero-sum, so the two
+      differ only by the secondary market (what wallets that never bet made there, and results
+      booked before the verdict: sales, and both sides held).
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at
     the moment of the bet**, overall, per category, per odds bucket, singles vs combos, and per
     week. The Predict API only exposes a question's source probability as it is now, so the
@@ -428,9 +546,15 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     long"), so a question's bets are fetched in runs of at most 13 days. Until 2026-10-01 they
     went in one window per question, and 549 predictions on questions bet on over more than 15
     days stayed unpriced (the page called them "without Polymarket history", which was wrong);
-    the builder retries them. Combos multiply the legs, so combos with legs sharing a
-    Polymarket event (correlated: the product understates fair for legs that go together and
-    overstates it for a range) are shown separately and kept out of the headline. The page's
+    the builder retries them. Combos multiply the legs, so combos with legs on the same match or
+    asset (correlated: the product understates fair for legs that go together and overstates it
+    for a range) are shown separately and kept out of the headline. Polymarket files one match
+    under several events: a game's More Markets, Exact Score and player-prop events are children
+    of its main event (`parentEventId`), and not every child carries the game's `gameId`; an
+    asset's "above ___ on <date>" and "price on <date>" events are separate events for one price
+    at one time. So the builder gives each leg its match keys (the root event, the `gameId`, the
+    asset and date), and two legs that share any key are on one match. Until 2026-10-02 legs were
+    keyed by their own event, and 473 combos on one match counted as independent. The page's
     second half is the ex-post view, *Quote-implied vs realized*: on settled bets, the locked
     odds against the realized hit rate and bettor ROI (each bet's result ÷ stake, as if held to
     the verdict, before secondary-market trades), overall, by bet type, by odds bucket and by
@@ -448,12 +572,22 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       negative return (with their wins against the wins their odds implied) and each bet type's
       pooled return. It names no positive odds range, because a pooled positive return can rest
       on a single wallet.
-  * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the source now,
+  * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the chance now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center gains a Predict block with realized PnL, monthly table
     and two CSV exports.
+    - *Chance now*: the legs multiplied (as independent), a leg Meridian has settled counting as
+      won or lost (its estimatedPrice freezes before the settlement), an open one at Polymarket's
+      price once loaded, else Meridian's estimate from the snapshot, marked. A Meridian-settled leg
+      reads *Settled on Meridian* in the Resolution column, and a position with a leg settled
+      against the bettor leaves the table like one lost on Polymarket.
+    - *History*: an open row has no PnL yet (—); *sold* marks a sale, *hedged* a position whose
+      other side the wallet also bought (the matched amount is booked when both are held).
+    - A wallet that only trades tokens shows what it *Traded* on the secondary market instead of a
+      $0 Volume, and has no share card of its own (its flex card links the site).
   **How the Predict data gets there.** The Predict API refuses datacenter IPs (GitHub's
-  runners get 403) and only allows browsers from Meridian's own origins (CORS allowlist), so:
+  runners get 403) and answers browsers only from an allowlist of origins (Meridian's and
+  Sapience's domains, localhost), which this site is not on, so:
   `scripts/Update-PredictSnapshot.ps1` runs on a normal PC (portable Node in `../tools/node`
   or any `node` on PATH), pulls every prediction since launch paced under the API's 200
   requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
@@ -486,8 +620,11 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   in resolution, reads the UMA CTF adapter (`getQuestion`) and the optimistic oracle
   (`getRequest`) on Polygon through a public RPC (`polygon-bor-rpc.publicnode.com`, fallback
   `1rpc.io`). That gives the proposer, the proposed outcome, the exact end of the challenge
-  window and any disputer. Neg-risk (multi-outcome) markets use a different adapter that keys
-  questions differently, so for those only Polymarket's coarse status is shown.
+  window and any disputer. Neg-risk (multi-outcome) markets use a different adapter
+  (`0x69c47De9…`) that keys its request by Gamma's `negRiskRequestID` rather than `questionID`,
+  so they are read through that id. Before the oracle has been read (or where it is never read,
+  as on a slip page) a market Gamma marks *proposed* reads *Outcome proposed on UMA* with no time:
+  Gamma's `updatedAt` is a batch-refresh stamp, not the proposal time.
 * **Copy trading** (`#/copytrade`, leaders) – every trading wallet scored for **copyability**, the
   question a copier actually has: not "who made money" but "what would a follower have kept,
   entering a minute later, at taker fees, at that size, against these books?". The snapshot
@@ -528,13 +665,17 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   - *The record* (`rec` on every bettor row of the snapshot). Its figures:
     - bets, wins, and expected wins (the sum of the locked chances);
     - `luck`: the exact chance of that many wins or more if every bet had exactly the chance its
-      odds priced (`P.luckOf`, the Poisson-binomial upper tail).
+      odds priced (`P.luckOf`, the Poisson-binomial upper tail). It is stored unrounded, because
+      the tiers compare it with their cutoffs (0.10017 rounded to 0.1 read as a good record).
     - The calculation is exact at any size: a bin that absorbs the tail keeps the work at bets ×
       wins.
   - *Bets, not predictions:* luck needs independent trials, but predictions that share a question
     share their fate.
     - Example: the same pick placed again; 0xec7a… had 11 predictions on 3 outcomes.
-    - Predictions linked through shared questions (union-find over leg ids) are one bet.
+    - Predictions linked through shared questions (union-find over leg ids) are one bet. The link
+      runs through chains: overlapping combos over a round of fixtures can make one bet of many
+      predictions over several days (0x59e7…'s largest is 70 predictions on 148 questions), and
+      the card's footer, the Record title and the record tooltip say so.
     - That bet is one real event: its largest-stake prediction, at that prediction's own odds and
       with its own result.
     - Averaging a group's odds while counting it won on most of its stake mixed a chance and an
@@ -547,29 +688,41 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       (`P.bettorSummary`); the snapshot's is the one.
   - *Why wins, not money:* a long shot's payout is so skewed that a money-weighted z-score read
     one 49× hit among nine losses as a "5-sigma" record. Counted in wins, that bettor won 1
-    where the odds implied 4.5, so it has no record at all.
+    where the odds implied 4.5, so it has no record at all. A long shot that hit still counts as
+    one win, however much it paid, so a record of long shots can reach a tier on a few hits
+    (0x7dbb…: 3 wins in 12 bets at 4.5–18%), and the page does not claim otherwise.
   - *Tiers:*
     - Strong at luck 1 in 50 or rarer and good at 1 in 10 (`P.IDEAS.strongLuck` / `goodLuck`).
     - When no winning bettor reaches good, the best record counts as good, so the list always has
       one to point at (the site owner's call, 2026-09-30).
     - Below good, the chip shows the figure ("luck 1 in 9").
     - These are plain thresholds: with some 140 bettors ranked by luck, luck alone gives about a
-      tenth of them a "1 in 10" record.
+      tenth of them a "1 in 10" record. The card's footer says so with the snapshot's count
+      (`tested` in `predict-ideas.json`): by luck alone, on average at most about tested × 0.1
+      records at 1 in 10 and tested × 0.02 at 1 in 50, so a tier ranks records and does not show
+      skill.
     - A stricter cut across all of them (Benjamini–Hochberg) left no one on 2026-09-30. The best
       was 17 of 24 bets won where 11.3 were implied, 1 in 105.
-  - *An idea:* one of their predictions that can still be placed: undecided, every leg before its
-    Meridian cutoff and unsettled, and the bettor still holding at least half its tokens. The
-    same picks placed again count once, with the count (×4).
-  - *Ranking:* newest first by default, or by the bettor's record, or by closing time.
+  - *An idea:* one of their predictions the site still offers to copy: undecided, every leg
+    before the end time Meridian lists for it (a listed end, not a betting cutoff: Meridian has
+    taken bets after it) and unsettled, and the bettor still holding at least half its tokens.
+    The same picks placed again count once, with the count (×4). The page also leaves out a slip
+    whose market has closed on Polymarket, or one on a game that has finished (Polymarket's game
+    feed, `ended` on the market's event): its result is known, though Meridian may still take
+    bets until the market resolves (on Oct 1 at 21:30 UTC, six of the seven slips listed were on
+    Nations League games that had already finished; their listed end was 21:44).
+  - *Ranking:* newest first by default, or by the bettor's record, or by the earliest listed end
+    (*Ending soon*).
   - *No referral wording:* the page never mentions the referral code; every link to Meridian just
     carries it.
   - *Each idea shows:*
     - the bettor and its record;
-    - the legs and time to the first cutoff;
+    - the legs and the time to the earliest listed end among them;
     - the bettor's odds and stake;
     - Polymarket's chance for the whole slip now, and how far it moved since the bet. That is
       measured against Polymarket's chance at the bet, not the locked odds, which include the
-      maker's margin; `≈` marks legs on one event;
+      maker's margin; `≈` marks legs on one match or asset. Until Polymarket answers (or if it
+      fails) the figure is Meridian's estimate from the snapshot, dimmed and marked *(snapshot)*;
     - **Copy to Meridian** (Meridian's page for the prediction with the referral code; see
       Slips) and **Slip**.
   - *Winning bettors* view: the list itself, with record, luck, PnL, ROI, wagered, open slips and
@@ -577,7 +730,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   - *Snapshot:* it writes `predict-ideas.json` (bettors and ideas, a few tens of KB), so the page
     does not load the Predict snapshot.
   - *Supply:* there are few ideas at any moment. Most winning bettors have not bet for weeks, so
-    the card shows how many winning bettors there are when none has an open slip.
+    the card shows how many winning bettors there are when none has an open slip. A new slip
+    appears with the first Predict snapshot built after it is placed (published every 30
+    minutes), not within a set time.
 * **Copy simulator** (`#/copytrade/sim?address=…&sub=…`, the Simulate button on every leader)
   – replays a leader's positions as a follower with a chosen size (fixed dollars per position,
   or a percentage of the leader's quantity), delay (instant … 120 s), slippage (from today's

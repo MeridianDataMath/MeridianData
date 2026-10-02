@@ -45,7 +45,7 @@
 
   /**
    * o: { address, periods: [{ v, label }], period (initial v), build: async (v) → card input (js/cards.js flexSvg without
-   *      hideAmounts / fontCss), shareUrl, what ('account' | 'wallet') }
+   *      hideAmounts / fontCss), shareUrl (null: no card behind a share link), what ('account' | 'wallet') }
    */
   FX.open = function (o) {
     const K = MD.cards.make({ U, P: MD.predict });
@@ -82,8 +82,9 @@
       const when = (o.periods.find((p) => p.v === period) || {}).label || 'All time';
       const what = o.what === 'wallet' ? 'Meridian Predict' : 'Meridian';
       const text = hide ? `My ${what} equity curve: ${roi || '—'} (${when.toLowerCase()})` : `My ${what} equity curve: ${K.money(inp.pnl, true)}${roi ? ' (' + roi + ' ROI)' : ''}, ${when.toLowerCase()}`;
-      // the share link unfurls into the all-time card with dollar amounts, so with amounts hidden the post links the site
-      const url = hide ? MD.api.SITE_URL : o.shareUrl;
+      // the share link unfurls into the all-time card with dollar amounts, so with amounts hidden (or no card behind a
+      // share link) the post links the site
+      const url = hide || !o.shareUrl ? MD.api.SITE_URL : o.shareUrl;
       window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url), '_blank', 'noopener');
     } }, U.icon('external'), 'Post on X');
     const btnLink = o.shareUrl ? h('button.btn.ghost', { onclick: () => { U.copyText(o.shareUrl); U.toast('Share link copied · it shows the all-time card'); } }, U.icon('copy'), 'Copy share link') : null;
@@ -91,7 +92,7 @@
       h('div.row.wrap', { style: { gap: '10px', marginBottom: '12px' } }, periodSeg, hideBox, h('span.grow'), status),
       frame,
       h('div.row.wrap', { style: { gap: '8px', marginTop: '14px' } }, btnDl, btnShare, btnCopy, btnX, h('span.grow'), btnLink),
-      h('p.dim.xs', { style: { margin: '12px 0 0' } }, 'Made in your browser from the figures on this page; nothing is uploaded. "Post on X" opens a draft: attach the downloaded image to it. The share link shows the all-time card.'));
+      h('p.dim.xs', { style: { margin: '12px 0 0' } }, 'Made in your browser from the figures on this page; nothing is uploaded. "Post on X" opens a draft: attach the downloaded image to it.' + (o.shareUrl ? ' The share link shows the all-time card.' : '')));
     const modal = MD.ui.modal({ title: 'Equity curve flex', body, wide: true });
     const show = (s) => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = URL.createObjectURL(new Blob([s], { type: 'image/svg+xml' })); img.src = previewUrl; };
     async function render() {
@@ -149,7 +150,7 @@
       ready = ok;
       note.textContent = ok ? 'Paste the link in Discord, X, Telegram or anywhere else: it shows this card, no click needed. The image is made in your browser.'
         : o.expected ? 'The link opens this slip; its preview card is added with the next site update, within the hour. Until then, share the image.'
-          : 'The link opens this slip. Preview cards are made for open slips, the last week\'s and the wins: share the image for this one.';
+          : 'The link opens this slip. Preview cards are made for open slips, slips settled in the last week, wins of the last 30 days and wins of more than $500 net: share the image for this one.';   // js/cards.js slipCardWanted (P.BIG_WIN)
     });
     (async () => {
       try {

@@ -4,7 +4,8 @@
  *   data/leaderboard.json — perps leaderboard (every subaccount, all intervals)
  *   data/predict.json     — Meridian Predict aggregates (bettors, makers, vig, categories, combos, daily series, tape, big wins)
  *                           plus bettors/<address>.json, questions/<conditionId>.json and slips/<2 hex>.json (every prediction by id)
- *   data/predict-ideas.json — winning bettors and their slips that can still be placed (the Copy trading page)
+ *   data/predict-ideas.json — winning bettors and their slips the site still offers to copy (undecided, no leg past its
+ *     listed end, settled or closed; the Copy trading page)
  * Reuses the site's own browser modules so the numbers match a local build.
  * Runs in GitHub Actions (see .github/workflows/pages.yml). Needs Node 18+ (global fetch).
  *
@@ -28,11 +29,12 @@ const doPerps = flag('perps') || !flag('predict');
 // minimal browser shims for the classic-script modules
 globalThis.window = globalThis;
 globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
-for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/predict/api.js', 'js/predict/analytics.js']) {
+for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/predict/api.js', 'js/predict/analytics.js', 'js/cards.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f });
 }
 const { MD } = globalThis;
 const A = MD.api, AN = MD.analytics, U = MD.util, P = MD.predict;
+const KC = MD.cards.make({ U, P });   // the wallet curve the pages draw (curveFromPredictions), for the truncated wallet files
 fs.mkdirSync(outDir, { recursive: true });
 
 // Wallet addresses and condition ids come from the Predict API and become file names (bettors/<address>.json,
@@ -76,23 +78,35 @@ async function attachPricesAtBet(norms) {
   const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || (c.w && now - c.at < 3 * 86400000))); });
   console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up`);
   // 2. YES-token ids from Gamma for the conditions involved (closed markets need a second pass with closed=true)
-  // (also the Polymarket event each market belongs to, so combos with legs on the same event can be told apart)
+  // (also the match each market belongs to, so combos with legs on the same match can be told apart; evv 2: the match
+  // keys below, so a token cached with the older bare event id is looked up once more)
   const condIds = Array.from(new Set(norms.flatMap((n) => n.picks.map((k) => k.id)).filter(isCond)));   // they go into the URL as they are
-  const needTok = condIds.filter((id) => { const t = cache.tokens[id]; return !t || t.ev === undefined || (!t.yes && now - t.at > 7 * 86400000); });
-  for (let i = 0; i < needTok.length; i += 40) {
+  const needTok = condIds.filter((id) => { const t = cache.tokens[id]; return !t || t.evv !== 2 || (!t.yes && now - t.at > 7 * 86400000); });
+  // a failed request stops the lookups for this run and keeps what came back: the rest is asked again next run, and the
+  // prices below still apply (a throw here would leave every prediction without its vig)
+  let tokFailed = false;
+  for (let i = 0; i < needTok.length && !tokFailed; i += 40) {
     const chunk = needTok.slice(i, i + 40); const seen = new Set();
     for (const closed of [false, true]) {
       const rest = chunk.filter((id) => !seen.has(id)); if (!rest.length) break;
-      const arr = await getJson(GAMMA + '?limit=' + rest.length + (closed ? '&closed=true' : '') + '&' + rest.map((id) => 'condition_ids=' + id).join('&'));
+      let arr = null;
+      try { arr = await getJson(GAMMA + '?limit=' + rest.length + (closed ? '&closed=true' : '') + '&' + rest.map((id) => 'condition_ids=' + id).join('&')); }
+      catch (e) { console.warn('  predict: Gamma market lookup failed, the rest is asked again next run:', e.message); tokFailed = true; break; }
       for (const m of Array.isArray(arr) ? arr : []) {
         let toks = []; try { toks = JSON.parse(m.clobTokenIds || '[]'); } catch (_) {}
         const id = String(m.conditionId || '').toLowerCase(); if (!isCond(id)) continue; seen.add(id);
-        const ev = (m.events && m.events[0] && (m.events[0].id || m.events[0].slug)) || null;
-        cache.tokens[id] = Object.assign({}, cache.tokens[id], { yes: toks[0] || null, outcomes: (() => { try { return JSON.parse(m.outcomes || '[]'); } catch (_) { return []; } })(), ev: ev == null ? null : String(ev), at: now });
+        const e0 = m.events && m.events[0];
+        // one match, not one Polymarket event: a game's More Markets / Exact Score / player-prop events are children of its
+        // main event (parentEventId) and not every child carries the game's gameId; an asset's "above ___ on <date>" and
+        // "price on <date>" events are one price at one time. Two legs sharing any of these keys are on one match
+        const root = e0 ? (e0.parentEventId || e0.id || e0.slug) : null;
+        const sm = e0 && String(e0.slug || '').match(/^([a-z0-9]+)-(?:above|price)-on-(.+)$/);
+        const ev = root == null ? null : ['r' + root].concat(e0.gameId ? ['g' + e0.gameId] : [], sm ? ['s' + sm[1] + '|' + sm[2]] : []).join(' ');
+        cache.tokens[id] = Object.assign({}, cache.tokens[id], { yes: toks[0] || null, outcomes: (() => { try { return JSON.parse(m.outcomes || '[]'); } catch (_) { return []; } })(), ev, evv: 2, at: now });
       }
       await sleep(150);
     }
-    for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, at: now });
+    if (!tokFailed) for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, evv: 2, at: now });
   }
   for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
   if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); fs.writeFileSync(cacheFile, JSON.stringify(cache)); return; }
@@ -237,6 +251,9 @@ async function buildPredict() {
   const all = (limit ? raw.slice(0, limit) : raw).map(P.norm);
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
+  // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
+  // (before attachDecidedAt, whose dates are never after the claim)
+  console.log('  predict: ' + P.markTokenClaims(norms) + ' decided predictions paid by a claim on the same token');
   try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
   try { await attachDecidedAt(norms); } catch (e) { console.warn('predict: settlement times failed, the page estimates them:', e.message); }
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
@@ -259,8 +276,9 @@ async function buildPredict() {
   const withOi = questions.filter((q) => q.oi > 0 && keepCond(q.id));
   // Meridian activity per question from the predictions themselves: n = predictions ever, b = open predictions (not yet
   // decided), s = bettor stake in those, u = decided but unclaimed, l = last prediction. The explorer shows only questions with bets.
+  const qNorms = norms.filter((n) => !P.selfMatch(n));   // a bet against itself moves no money: left out of every figure, the Questions page included
   const act = dict();
-  for (const n of norms) {
+  for (const n of qNorms) {
     for (const k of n.picks) {
       const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0, u: 0, sw: 0 });
       a.n++; a.sw += n.stake; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (!n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
@@ -270,43 +288,57 @@ async function buildPredict() {
   const rowOf = (k) => ({ id: k.id, q: k.q, short: k.short, cat: k.cat, slug: k.catSlug, tags: k.tags.slice(0, 6), ep: k.ep, oi: 0, v24: 0, v7: 0, end: k.endTime, created: null, settled: k.settled, yes: k.resolvedToYes, nd: k.nonDecisive, pub: k.pub, src: null });
   // plus the questions behind open predictions (a leg can be stuck in resolution) …
   const seenQ = new Set(withOi.map((q) => q.id));
-  for (const n of norms) {
+  for (const n of qNorms) {
     if (n.decided && n.settled) continue;   // open, or decided and not yet claimed: still someone's money
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); if (keepCond(k.id)) withOi.push(rowOf(k)); } }
   }
-  const questionsLive = withOi.length;   // questions with money still on them; the rest of the list is the most recently settled
-  // … and the questions of predictions settled (decided) in the last 30 days, newest settlement first and capped, so
-  // "Settled" shows what people bet on; dated by the settlement, not by when a winner claimed
+  const questionsLive = withOi.length;   // questions with money still on them; the rest of the list is the questions of the most recently settled predictions
+  // … and the questions of predictions settled (decided) in the last 30 days, newest settlement first, up to 1,200 rows
+  // in all, so "Settled" shows what people bet on; dated by the settlement, not by when a winner claimed. The cap usually
+  // cuts the 30-day window to a few days: recentFrom says how far back it reaches (the settlement of the last prediction
+  // taken, or the window's start when the cap was not reached)
   const settledAt = (n) => P.decidedAt(n) || 0;
-  const recent = norms.filter((n) => n.decided && settledAt(n) > Date.now() - 30 * 86400000).sort((a, b) => settledAt(b) - settledAt(a));
+  const cutoff30 = Date.now() - 30 * 86400000;
+  const recent = qNorms.filter((n) => n.decided && settledAt(n) > cutoff30).sort((a, b) => settledAt(b) - settledAt(a));
+  let recentFrom = null;
   for (const n of recent) {
     if (withOi.length >= 1200) break;
+    recentFrom = settledAt(n);
     for (const k of n.picks) { if (!seenQ.has(k.id)) { seenQ.add(k.id); if (keepCond(k.id)) withOi.push(rowOf(k)); } }
   }
+  if (withOi.length < 1200) recentFrom = cutoff30;   // the 30-day window, not the cap, set the limit
   for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; q.u = a ? a.u : 0; q.sw = a ? r2(a.sw) : 0; }   // sw: bettor stake ever placed on the question
+  // Meridian OI from the predictions: stake + maker collateral of every prediction on the question not yet claimed (a
+  // combo counts in full on each of its questions). It matches the API's openInterest on nearly every row the API lists
+  // (125 of 133 on 2026-10-02); the API reports 0 for unlisted questions and is not asked about settled ones, so every
+  // row gets this figure
+  const escrow = dict();
+  for (const n of qNorms) { if (n.settled) continue; for (const id of new Set(n.picks.map((k) => k.id))) escrow[id] = (escrow[id] || 0) + n.pool; }
+  for (const q of withOi) q.oi = r2(escrow[q.id] || 0);
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   const openBy = dict();
-  for (const n of norms) { if (n.decided) continue; for (const k of n.picks) { if (!isCond(k.id)) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
+  for (const n of qNorms) { if (n.decided) continue; for (const k of n.picks) { if (!isCond(k.id)) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
   for (const q of withOi) if (openBy[q.id]) q.op = openBy[q.id];
   // one file per question with all its predictions, legs keeping their ids (the bettor files drop ids of settled legs)
   const qdir = path.join(outDir, 'questions'); fs.mkdirSync(qdir, { recursive: true });
   const byQ = dict();
-  for (const n of norms) for (const k of n.picks) if (isCond(k.id)) (byQ[k.id] || (byQ[k.id] = [])).push(n);
+  for (const n of qNorms) for (const k of n.picks) if (isCond(k.id)) (byQ[k.id] || (byQ[k.id] = [])).push(n);
   let qfiles = 0;
   for (const q of withOi) {
     const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t);
-    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => P.slim(n, { ids: true })) }));
+    // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do
+    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
-  // the Copy trading page's ideas: winning bettors and their slips that can still be placed (a few KB, read on its own)
+  // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);
   fs.writeFileSync(path.join(outDir, 'predict-ideas.json'), JSON.stringify(Object.assign({ builtAt: out.builtAt, criteria: P.IDEAS }, ideas)));
   console.log(`  predict: ${ideas.bettors.length} winning bettors, ${ideas.ideas.length} open ideas`);
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
-  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: P.splitMakers(agg.makers).makers.length, questions: withOi.length, questionsLive, vigCoverage: agg.vig.coverage.withAtBet, vigTotal: agg.vig.coverage.total, vigClean: agg.vig.coverage.clean, vigSameEvent: agg.vig.coverage.sameEvent, selfMatched: agg.totals.selfMatched || 0, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: P.splitMakers(agg.makers).makers.length, questions: withOi.length, questionsLive, recentFrom, vigCoverage: agg.vig.coverage.withAtBet, vigTotal: agg.vig.coverage.total, vigClean: agg.vig.coverage.clean, vigSameEvent: agg.vig.coverage.sameEvent, selfMatched: agg.totals.selfMatched || 0, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = dict();
   for (const n of norms) for (const a of [n.predictor, n.counterparty]) if (keepWallet(a)) (byWallet[a] || (byWallet[a] = [])).push(n);
@@ -320,7 +352,17 @@ async function buildPredict() {
     const truncated = list.length > 600;
     // a truncated file still carries every prediction on a pick configuration the wallet traded, so its ledger is whole
     const kept = truncated ? list.slice(0, 600).concat(list.slice(600).filter((n) => n.pcTraded && (tradesOf[addr] || []).some((t) => t.pc === n.pc))) : list;
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, predictions: kept.map(P.slim), trades: tradesOf[addr] || undefined }));
+    // a truncated file holds the newest 600 and older traded ones only, so what needs every prediction is written here,
+    // for the role the page counts (loadBettor: the side with more predictions in the file): its curve and its stake per
+    // UTC day. newest: how many of the file's predictions are the newest (the rest are the older traded ones)
+    const own = list.filter((n) => !P.selfMatch(n)), keptOwn = kept.filter((n) => !P.selfMatch(n));
+    const mk = keptOwn.filter((n) => n.counterparty === addr).length > keptOwn.filter((n) => n.predictor === addr).length;
+    const role = own.filter((n) => (mk ? n.counterparty : n.predictor) === addr);
+    const curve = truncated ? KC.curveFromPredictions(role, tradesOf[addr] || [], addr) : null;
+    const daily = truncated ? (() => { const d = {}; for (const n of role) { const k = Math.floor(n.t / 864e5) * 864e5; d[k] = (d[k] || 0) + (mk ? n.cp : n.stake); } return Object.entries(d).map(([t, v]) => [Number(t), r2(v)]).sort((a, b) => a[0] - b[0]); })() : undefined;
+    // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do, so
+    // its prediction opened from the maker's page shows the bettor's side as it stood
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n), agg.soldOf(n))), trades: tradesOf[addr] || undefined }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id

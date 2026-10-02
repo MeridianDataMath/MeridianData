@@ -54,7 +54,8 @@
   C.destroy = (canvas) => { if (canvas && canvas.__chart) { try { canvas.__chart.destroy(); } catch (_) {} canvas.__chart = null; } };
 
   /**
-   * line/bar chart of time series. opts: {points:[{x,y}], color, type:'line'|'bar', yFmt, tooltipLabel, zero:true}
+   * line/bar chart of time series. opts: {points:[{x,y}], color, type:'line'|'bar', yFmt, tooltipLabel, zero:true,
+   * titleFmt (the tooltip's title from x; a local date and time unless given, U.fmtDayUTC for per-UTC-day buckets)}
    */
   C.timeSeries = function (canvas, opts) {
     if (!window.Chart) return null;
@@ -94,7 +95,7 @@
           tooltip: {
             backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, titleColor: '#a1a1a8', bodyColor: '#ececee', padding: 10, displayColors: !!opts.series,
             callbacks: {
-              title: (items) => (items[0] ? U.fmtDateTime(items[0].raw.x) : ''),
+              title: (items) => (items[0] ? (opts.titleFmt || U.fmtDateTime)(items[0].raw.x) : ''),
               label: (item) => (opts.tooltipLabel ? opts.tooltipLabel(item.raw, item.dataset) : (item.dataset.label || opts.label || '') + ' ' + (opts.tipFmt || U.fmtUsd)(item.raw.y)),
             },
           },
