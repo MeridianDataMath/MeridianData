@@ -175,3 +175,65 @@ test('a twin prediction paid by a claim on the same token is dated to the claim 
   assert.equal(P.markTokenClaims([a, b, c]), 1);
   assert.equal(c.unclaimed, false); assert.equal(c.settledAt, T0 + 3 * DAY); assert.equal(c.viaToken, true);
 });
+// ---- own redemptions (B08): the snapshot's rd {'<pc>|<P|C>': ms} from the wallet's own burns ----
+const verdictOf = (L) => L.events.find((e) => e.kind === 'verdict');
+
+test('a winning token still held is cash when this wallet redeems it, not at another wallet\'s claim (0xba3b…)', () => {
+  // a pure buyer of the bettor side of a win; the bettor claimed its own prediction on day 3 (the trades' sa)
+  const n = pred({ id: 'rd1', stake: 10, cp: 30, result: 'PREDICTOR_WINS', settled: true, settledAt: T0 + 3 * DAY });
+  const t = trade({ t: T0 + DAY, seller: BETTOR, buyer: BUYER, tokens: 20, paid: 9, n });
+  assert.equal(verdictOf(P.ledger([], [t], BUYER)).claimAt, T0 + 3 * DAY, 'an older snapshot (no rd): the latest claim by anyone, as before');
+  assert.equal(verdictOf(P.ledger([], [t], BUYER, {})).claimAt, null, 'rd without this token: never redeemed (decided, not claimed)');
+  const v = verdictOf(P.ledger([], [t], BUYER, { 'pc-rd1|P': T0 + 7 * DAY }));
+  assert.equal(v.claimAt, T0 + 7 * DAY, 'its own burn');
+  assert.equal(v.side, 'P'); near(assert, v.heldP, 20, 1e-9); near(assert, v.heldC, 0, 1e-9); near(assert, v.cash, 20, 1e-9); near(assert, v.pnl, 11, 1e-9);
+});
+
+test('worthless tokens have nothing to redeem: booked when the winners claim, with rd or without', () => {
+  const n = pred({ id: 'rd2', stake: 10, cp: 30, result: 'COUNTERPARTY_WINS', settled: true, settledAt: T0 + 4 * DAY });
+  const t = trade({ t: T0 + DAY, seller: BETTOR, buyer: BUYER, tokens: 20, paid: 2, n });
+  for (const rd of [undefined, {}, { 'pc-rd2|P': T0 + 9 * DAY }]) {
+    const v = verdictOf(P.ledger([], [t], BUYER, rd));
+    assert.equal(v.claimAt, T0 + 4 * DAY); near(assert, v.pnl, -2, 1e-9); near(assert, v.cash, 0, 1e-12);
+  }
+});
+
+test('held winnings date from the wallet\'s earliest own claim on that side: that claim redeemed the whole balance (0xc1ce…)', () => {
+  const a = pred({ id: 'oc1', pc: 'oc', stake: 10, cp: 10, result: 'PREDICTOR_WINS', settled: true, settledAt: T0 + 5 * DAY });
+  const b = pred({ id: 'oc2', pc: 'oc', stake: 10, cp: 10, result: 'PREDICTOR_WINS', settled: true, settledAt: T0 + 2 * DAY });
+  const t = trade({ t: T0 + DAY / 2, seller: BETTOR, buyer: BUYER, tokens: 5, paid: 4, n: a });
+  assert.equal(verdictOf(P.ledger([a, b], [t], BETTOR)).claimAt, T0 + 2 * DAY, 'not the later claim, which redeemed nothing');
+  assert.equal(verdictOf(P.ledger([a, b], [t], BETTOR, {})).claimAt, T0 + 2 * DAY, 'an own claim counts with rd too');
+  assert.equal(verdictOf(P.ledger([a, b], [t], BETTOR, { 'oc|P': T0 + DAY })).claimAt, T0 + DAY, 'the burn first');
+});
+
+test('a verdict carries when the source market resolved: an own prediction\'s legs, else the trades\' vt, else the decision', () => {
+  const n = pred({ id: 'vt1', stake: 10, cp: 30, result: 'PREDICTOR_WINS' });
+  const t = trade({ t: T0 + DAY / 4, seller: BETTOR, buyer: BUYER, tokens: 20, paid: 9, n });
+  const dec = P.decidedAt(n);
+  const plain = verdictOf(P.ledger([], [t], BUYER));
+  assert.equal(plain.vt, dec); assert.equal(plain.vtExact, false);
+  const withVt = verdictOf(P.ledger([], [Object.assign({}, t, { vt: dec - 3600000 })], BUYER));
+  assert.equal(withVt.vt, dec - 3600000); assert.equal(withVt.vtExact, true);
+  n.picks[0].verdictAt = dec - 7200000;   // the bettor's own prediction: its leg's source time
+  const own = verdictOf(P.ledger([n], [t], BETTOR));
+  assert.equal(own.vt, dec - 7200000); assert.equal(own.vtExact, true);
+});
+
+test('P.redemptionTimes: the burn at which the tokens burned reach the tokens held', () => {
+  const byTok = { '0xta': 'pc1|P', '0xtb': 'pc2|C' };
+  const held = { 'pc1|P': { tokens: 30, after: T0 }, 'pc2|C': 5, 'pc3|P': 1 };
+  const logs = [
+    { token: '0xTA', amount: 10, t: T0 + 2 * DAY },     // token case does not matter
+    { token: '0xta', amount: 20, t: T0 + 3 * DAY },     // reaches 30
+    { token: '0xta', amount: 5, t: T0 + 4 * DAY },      // after that: another redemption
+    { token: '0xta', amount: 99, t: T0 - 3 * DAY },     // more than a day before the verdict: not this one
+    { token: '0xtb', amount: 4.99995, t: T0 + DAY },    // short by rounding only (the files keep 4 decimals)
+    { token: '0xzz', amount: 1, t: T0 },                // a token of nothing held
+  ];
+  assert.deepEqual(P.redemptionTimes(logs, byTok, held), { 'pc1|P': T0 + 3 * DAY, 'pc2|C': T0 + DAY });
+  // fewer tokens burned than the ledger counts (some left the wallet otherwise): its last burn; a Map works too
+  assert.deepEqual(P.redemptionTimes([{ token: '0xta', amount: 3, t: T0 + DAY }, { token: '0xta', amount: 4, t: T0 + 2 * DAY }], new Map([['0xta', 'pc1|P']]), { 'pc1|P': 30 }), { 'pc1|P': T0 + 2 * DAY });
+  assert.deepEqual(P.redemptionTimes([], byTok, held), {});
+  assert.deepEqual(P.redemptionTimes([{ token: '0xta', amount: 0, t: T0 }], byTok, held), {}, 'a zero transfer is no burn');
+});

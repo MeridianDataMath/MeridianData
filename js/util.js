@@ -313,10 +313,12 @@
     catch (_) { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); U.toast('Copied'); } catch (e) {} ta.remove(); }
   };
   let toastEl, toastT;
-  U.toast = (msg) => {
-    if (!toastEl) { toastEl = U.h('div.toast'); document.body.appendChild(toastEl); }
+  /** A short message at the bottom of the screen, read out by screen readers (a polite live region); ms: how long it
+   *  stays (1.6 s by default; longer for a warning that must be read). */
+  U.toast = (msg, ms) => {
+    if (!toastEl) { toastEl = U.h('div.toast', { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }); document.body.appendChild(toastEl); }
     toastEl.textContent = msg; toastEl.classList.add('show');
-    clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 1600);
+    clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), ms > 0 ? ms : 1600);
   };
   U.copyBtn = (text) => U.h('span.copy', { title: 'Copy', onclick: (e) => { e.preventDefault(); e.stopPropagation(); U.copyText(text); } }, U.icon('copy'));
   U.sum = (arr, f) => arr.reduce((a, x) => a + (f ? f(x) : x), 0);

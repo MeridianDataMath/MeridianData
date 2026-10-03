@@ -145,6 +145,12 @@ test('the CSP in _headers allows index.html\'s inline script by its hash, and no
   assert.doesNotMatch(csp[0], /unsafe-inline|unsafe-eval/);
   assert.doesNotMatch(index, /\sstyle=|\son[a-z]+=/i, 'no inline style or handler in index.html');
   assert.deepEqual(dir['object-src'], ["'none'"]); assert.deepEqual(dir['base-uri'], ["'none'"]);
+  // every host the Tax center's rates and USDe price read from the page is named, not only allowed by 'https:'
+  // (Start-MeridianData.ps1 reads this same /* block from _headers when it starts, so the local copy sends it too)
+  const hosts = [...new Set([...fs.readFileSync(path.join(root, 'js/tax/fx.js'), 'utf8').matchAll(/https:\/\/([a-z0-9.-]+)/g)].map((m) => 'https://' + m[1]))];
+  assert.deepEqual(hosts, ['https://api.frankfurter.dev', 'https://coins.llama.fi']);
+  for (const x of hosts) assert.ok(dir['connect-src'].includes(x), x + ' in connect-src');
+  assert.match(fs.readFileSync(path.join(root, 'Start-MeridianData.ps1'), 'utf8'), /\$headersFile = Join-Path \$root '_headers'/);
 });
 
 // a prediction as the slip files carry it (P.slim), legs [question, YES?] each

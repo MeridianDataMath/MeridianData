@@ -169,16 +169,21 @@ async function attachDecidedAt(norms) {
   // exception
   const wins = norms.filter((n) => n.won && n.pool > P.BIG_WIN && !n.decidedAt);
   const lc = (id) => String(id || '').toLowerCase();
-  const ids = Array.from(new Set(wins.flatMap((n) => n.picks.map((k) => lc(k.id))).filter(isCond)));
+  // and every leg of every decided prediction, for the tax center's verdict date basis (when the source market resolved,
+  // P.sourceVerdictAt: slim leg element 11, vt, in the wallet files): the big wins' legs first, then the rest, at most
+  // about 150 requests a run, so the first runs fill the cache over a few builds and later ones ask only for new legs
+  const winIds = wins.flatMap((n) => n.picks.map((k) => lc(k.id)));
+  const legIds = norms.filter((n) => n.decided).flatMap((n) => n.picks.map((k) => lc(k.id)));
+  const ids = Array.from(new Set(winIds.concat(legIds).filter(isCond)));
   const need = ids.filter((id) => { const r = resolved[id]; return !r || (r.t == null && now - r.at > 86400000); });   // no time yet: asked again after a day
   // two passes like the token lookup: Gamma leaves closed markets out unless asked, and a market UMA has resolved may not
   // be marked closed yet
-  let failed = false;
-  for (let i = 0; i < need.length && !failed; i += 40) {
+  let failed = false, requests = 0;
+  for (let i = 0; i < need.length && !failed && requests < 150; i += 40) {
     const chunk = need.slice(i, i + 40); const seen = new Set();
     for (const closed of [true, false]) {
       const rest = chunk.filter((id) => !seen.has(id)); if (!rest.length) break;
-      let arr = null;
+      let arr = null; requests++;
       try { arr = await getJson(GAMMA + '?limit=' + rest.length + (closed ? '&closed=true' : '') + '&' + rest.map((id) => 'condition_ids=' + id).join('&')); }
       catch (e) { console.warn('  predict: resolution times failed, the page dates these big wins itself for now:', e.message); failed = true; break; }
       for (const m of Array.isArray(arr) ? arr : []) { const id = lc(m.conditionId); if (!isCond(id)) continue; const t = gammaTime(m.umaEndDate) || (m.closed ? gammaTime(m.closedTime) : null); if (t) { seen.add(id); resolved[id] = { t, at: now }; } }
@@ -196,9 +201,13 @@ async function attachDecidedAt(norms) {
     if (unknown && !n.settledAt) continue;
     n.decidedAt = Math.min(at, n.settledAt || Infinity, now); dated++;
   }
+  // each decided leg's source-market resolution (null where Polymarket has none, or it is not looked up yet)
+  let withVt = 0;
+  try { for (const n of norms) if (n.decided) for (const k of n.picks) { const r = resolved[lc(k.id)]; k.verdictAt = r && r.t ? r.t : null; if (k.verdictAt) withVt++; } }
+  catch (e) { console.warn('  predict: source resolution times not attached:', e.message); }
   try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.resolved = resolved; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
   catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ resolved })); }
-  console.log(`  predict: ${fromLegs} decided predictions dated from Meridian's leg settlement times; big wins without them dated ${dated} of ${wins.length} (${need.length} resolution times looked up, ${Object.keys(resolved).length} cached)`);
+  console.log(`  predict: ${fromLegs} decided predictions dated from Meridian's leg settlement times; big wins without them dated ${dated} of ${wins.length} (${need.length} resolution times to look up, ${requests} requests this run, ${Object.keys(resolved).length} cached, ${withVt} decided legs with a source time)`);
 }
 
 // ---------------------------------------------------------------- secondary market
@@ -219,13 +228,80 @@ async function buildTrades(norms) {
     const pool = list.reduce((a, n) => a + n.pool, 0), stake = list.reduce((a, n) => a + n.stake, 0), cp = list.reduce((a, n) => a + n.cp, 0);
     const claims = list.filter((n) => n.settled && n.settledAt).map((n) => n.settledAt);
     for (const n of list) n.pcTraded = true;
+    // vt: when the source markets resolved the picks (P.sourceVerdictAt), only where every leg's time is known: a buyer
+    // with no prediction of its own on them dates its verdict by it on the tax center's verdict basis
+    let vt; try { const v = dec ? P.sourceVerdictAt(dec) : null; vt = v && v.exact ? v.t : undefined; } catch (_) { vt = undefined; }
     return Object.assign(t, { token, pc: n0.pc, side: m.side, pid: n0.id, q: n0.picks[0] ? n0.picks[0].q : '', legs: n0.legs,
       vP: dec ? (dec.nd ? stake / pool : dec.won ? 1 : 0) : null, vC: dec ? (dec.nd ? cp / pool : dec.won ? 0 : 1) : null,
-      dAt: dec ? Math.max(...list.map(P.decidedAt)) : null, sa: claims.length ? Math.max(...claims) : null });
+      dAt: dec ? Math.max(...list.map(P.decidedAt)) : null, sa: claims.length ? Math.max(...claims) : null, vt });
   }).sort((a, b) => b.t - a.t);
   if (unmapped) console.warn(`  predict: ${unmapped} of ${raw.length} trades have a token no prediction carries`);
   out.total = raw.length;
   return out;
+}
+
+// ---------------------------------------------------------------- own redemptions (the tax center's claim dates)
+// A claim burns the wallet's whole balance of a position token (Transfer wallet → 0x0, emitted by the token). The API
+// flags only the prediction a claim went through, and a buyer has no prediction to flag, so for the tokens a trading
+// wallet's ledger still held at a verdict that pays, its own burns say when it redeemed them (P.redemptionTimes).
+// scripts/burns.mjs reads them from Robinhood Chain with eth_getLogs one token at a time (the RPC spans 10M blocks for
+// one address but only 30 000 without one, which it refused every run when this read whole wallets), from the first
+// placement on the token's pick configuration, paced (the RPC answers bursts with 429), at most 10 calls per request
+// and BURN_CAP a run. Each token's progress, width and burns are kept under 'burnRead' in the price cache, so a later
+// run reads only new blocks and a token whose every holder has redeemed is not read again. A wallet gets rd in its file
+// only once every position it held at a paying verdict is redeemed or read to the chain head; until then the page keeps
+// the older rule (its own claim on that side, else the latest claim on the pick configuration) and says so.
+const RH_RPC = 'https://rpc.mainnet.chain.robinhood.com';
+const BURN_CAP = args.includes('--burn-cap') ? Number(args[args.indexOf('--burn-cap') + 1]) : 300;
+async function rpcBatch(calls) {
+  const body = JSON.stringify(calls.map((c, i) => ({ jsonrpc: '2.0', id: i, method: c.method, params: c.params })));
+  for (let i = 0; ; i++) {
+    try {
+      const r = await fetch(RH_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json(); const arr = Array.isArray(j) ? j : [j];
+      const byId = new Map(arr.map((x) => [x && x.id, x]));
+      return calls.map((_, k) => byId.get(k) || { error: { message: 'no answer' } });
+    } catch (e) { if (i >= 2) throw e; await sleep(2000 * (i + 1)); }
+  }
+}
+async function attachRedemptions(norms, trades) {
+  // the reader is loaded here, inside the caller's try: if it fails, the files go out without rd, never without a snapshot
+  const B = await import('./burns.mjs');
+  // what each trading wallet held at a verdict that pays, per pick configuration and side (its ledger, as P.aggregate
+  // builds it: its own predictions on the traded pick configurations, self-matches left out)
+  const tradedPc = new Set(trades.map((t) => t.pc).filter(Boolean));
+  const byW = dict();
+  for (const n of norms) if (n.pc && tradedPc.has(n.pc) && !P.selfMatch(n)) for (const a of new Set([n.predictor, n.counterparty])) (byW[a] || (byW[a] = [])).push(n);
+  const wallets = new Set(); for (const t of trades) if (t.pc) for (const a of [t.seller, t.buyer]) if (isAddr(a)) wallets.add(a);
+  const held = dict();
+  for (const w of wallets) {
+    const L = P.ledger(byW[w] || [], trades, w);
+    for (const e of L.events) if (e.kind === 'verdict' && e.cash > 1e-9) (held[w] || (held[w] = dict()))[e.pc + '|' + e.side] = { tokens: e.side === 'P' ? e.heldP : e.heldC, after: e.t };
+  }
+  // each side's token, and the first placement on each pick configuration (its tokens' first block)
+  const byTok = dict(), tokOf = dict(), first = dict();
+  for (const n of norms) {
+    if (n.tokP) { byTok[n.tokP] = n.pc + '|P'; tokOf[n.pc + '|P'] = n.tokP; }
+    if (n.tokC) { byTok[n.tokC] = n.pc + '|C'; tokOf[n.pc + '|C'] = n.tokC; }
+    if (n.pc && n.tx && !(first[n.pc] && first[n.pc].t <= n.t)) first[n.pc] = { t: n.t, tx: n.tx };
+  }
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const state = cache.burnRead && cache.burnRead.t ? cache.burnRead : { t: {} };
+  const head = parseInt((await rpcBatch([{ method: 'eth_blockNumber', params: [] }]))[0].result, 16);
+  if (!(head > 0)) throw new Error('no chain head');
+  const args0 = { held, tokOf, byTok, state, head, redemptionTimes: P.redemptionTimes };
+  const want = Array.from(B.redemptions(args0).open).map((token) => { const f = first[byTok[token].split('|')[0]]; return { token, tx: f ? f.tx : null }; });
+  const r = await B.readBurns({ rpc: rpcBatch, state, want, head, cap: BURN_CAP, batch: 10, pause: 300, sleep, log: (s) => console.warn(s) });
+  // 'burns' was the whole-wallet reader's progress, never advanced: replaced
+  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.burnRead = state; delete cur.burns; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
+  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ burnRead: state })); }
+  const { rd } = B.redemptions(args0);
+  const found = Object.values(rd).reduce((a, x) => a + Object.keys(x).length, 0);
+  const blind = Object.values(held).reduce((a, h) => a + Object.keys(h).filter((k) => !tokOf[k]).length, 0);
+  console.log(`  predict: own redemptions for ${Object.keys(rd).length} of ${Object.keys(held).length} wallets holding tokens at a verdict that pays (${found} redeemed; ${r.calls} RPC calls this run, ${r.refused} refused, ${r.read} of ${want.length} tokens to read now at the head ${head}${blind ? `; ${blind} positions without a known token` : ''})`);
+  return rd;
 }
 
 // ---------------------------------------------------------------- Predict
@@ -259,6 +335,9 @@ async function buildPredict() {
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
   // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
   const trades = await buildTrades(norms);
+  // when each trading wallet redeemed the tokens it still held at a verdict (rd in its file; the tax center's claim dates)
+  let rdOf = dict();
+  try { rdOf = await attachRedemptions(norms, trades); } catch (e) { console.warn('predict: own redemptions failed, the tax center keeps the latest claim for now:', e.message); }
   const agg = P.aggregate(norms, { tapeSize: 25, trades });   // the Overview's tape shows 25
   if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
@@ -360,9 +439,17 @@ async function buildPredict() {
     const role = own.filter((n) => (mk ? n.counterparty : n.predictor) === addr);
     const curve = truncated ? KC.curveFromPredictions(role, tradesOf[addr] || [], addr) : null;
     const daily = truncated ? (() => { const d = {}; for (const n of role) { const k = Math.floor(n.t / 864e5) * 864e5; d[k] = (d[k] || 0) + (mk ? n.cp : n.stake); } return Object.entries(d).map(([t, v]) => [Number(t), r2(v)]).sort((a, b) => a[0] - b[0]); })() : undefined;
+    // the tax center: each prediction's claim transaction and its legs' source-market resolution (stx, vt), the wallet's
+    // own redemptions (rd), and in a truncated file a compact row for every prediction of the wallet (rows, rowsFmt), so
+    // its period figures are whole
+    let rows;
+    if (truncated) {
+      try { const myPcs = new Set((tradesOf[addr] || []).map((t) => t.pc).filter(Boolean)); rows = P.taxRows(list, addr, (n) => !!(n.pcTraded && myPcs.has(n.pc))); }
+      catch (e) { rows = undefined; console.warn('  predict: tax rows failed for', addr, e.message); }
+    }
     // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do, so
     // its prediction opened from the maker's page shows the bettor's side as it stood
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n), agg.soldOf(n))), trades: tradesOf[addr] || undefined }));
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id

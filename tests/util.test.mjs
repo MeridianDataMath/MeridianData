@@ -134,3 +134,22 @@ test('ntfy: generated topics are long and random, guessable ones are flagged, se
   for (const s of ['https://ntfy.sh', 'https://push.example.org/', 'http://localhost:8080', 'http://127.0.0.1']) assert.equal(AL.serverOk(s), true, s);
   for (const s of ['http://ntfy.sh', 'http://192.168.1.5', 'ntfy.sh', 'javascript:alert(1)', '']) assert.equal(AL.serverOk(s), false, s);
 });
+
+test('toast: a polite live region screen readers read out, shown 1.6 s by default and as long as asked (B41)', (t) => {
+  // a DOM just big enough for U.h and U.toast
+  class El { constructor(tag) { this.tagName = tag; this.attrs = {}; this.cls = new Set(); this.style = {}; this.dataset = {}; this.kids = []; this.textContent = ''; this.classList = { add: (k) => this.cls.add(k), remove: (k) => this.cls.delete(k) }; } setAttribute(k, v) { this.attrs[k] = String(v); } appendChild(x) { this.kids.push(x); return x; } addEventListener() {} }
+  const saved = { document: globalThis.document, Node: globalThis.Node };
+  globalThis.Node = El; globalThis.document = { createElement: (tag) => new El(tag), createTextNode: (s) => s, body: new El('body') };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    U.toast('Copied');
+    const el = globalThis.document.body.kids[0];
+    assert.ok(el.cls.has('toast') && el.cls.has('show'));
+    assert.deepEqual([el.attrs.role, el.attrs['aria-live'], el.attrs['aria-atomic']], ['status', 'polite', 'true']);
+    t.mock.timers.tick(1599); assert.ok(el.cls.has('show')); t.mock.timers.tick(1); assert.ok(!el.cls.has('show'), 'gone after 1.6 s');
+    // a warning stays about six seconds; a new message replaces the old one and restarts the clock
+    U.toast('incomplete · Downloaded x-INCOMPLETE.csv', 6000);
+    assert.equal(el.textContent, 'incomplete · Downloaded x-INCOMPLETE.csv'); assert.equal(globalThis.document.body.kids.length, 1, 'one element, reused');
+    t.mock.timers.tick(5999); assert.ok(el.cls.has('show')); t.mock.timers.tick(1); assert.ok(!el.cls.has('show'));
+  } finally { Object.assign(globalThis, saved); }
+});

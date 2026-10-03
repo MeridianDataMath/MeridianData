@@ -2,7 +2,11 @@
    Not loaded by index.html. Inject it in a browser console (or a test script) and call MDSim.install():
    it patches MD.api / MD.predict so the Tax center sees a busy account (hundreds of positions over two years,
    deposits, withdrawals, conversions, liquidations, long-term holds, thousands of fills, Predict activity)
-   whose daily ledger is built from the same events, so the report must reconcile to the cent. */
+   whose daily and hourly ledger is built from the same events, so the report must reconcile to the cent and every
+   position must replay to its totals. One position per market at a time, as on the exchange; its own fill list
+   (liquidation fills included) is answered here; there are no hourly funding charges, so funding is netted per UTC day,
+   as the page does when the exchange's charges cannot be read. Nothing about the simulated account is sent to the
+   exchange. */
 (function () {
   const MD = window.MD; const A = MD.api; const U = MD.util; const P = MD.predict;
   const DAY = 86400000;
@@ -34,40 +38,62 @@
       // deposits / withdrawals through the years
       for (let t = created + 30 * DAY; t < now; t += (20 + r() * 40) * DAY) { if (r() < 0.55) deposit(t, Math.round(2000 + r() * 30000)); else withdraw(t, Math.round(500 + r() * 15000)); }
 
-      // ---- positions
-      const positions = []; const fills = [];
+      // ---- positions: one per market at a time (the exchange opens a new position rather than overlapping one, and the
+      // Tax center replays each position from its fills), each opening after the one before it on that market closed
+      const positions = []; const fills = []; const posFills = new Map();
       const nPos = opts.positions || 640;
-      for (let i = 0; i < nPos; i++) {
-        const p = products[Math.floor(r() * products.length)]; const quote = quoteOf(p);
-        const open = created + r() * (now - created - DAY);
+      const plan = [];
+      for (let k = 0; k < nPos; k++) {
+        const p = products[Math.floor(r() * products.length)];
         // holds: mostly hours to days, some weeks, a few over a year
         const holdMs = r() < 0.03 ? (370 + r() * 200) * DAY : r() < 0.15 ? (7 + r() * 60) * DAY : r() < 0.6 ? (1 + r() * 48) * 3600000 : (2 + r() * 6) * DAY;
+        plan.push({ p, open: created + r() * (now - created - DAY), holdMs });
+      }
+      plan.sort((a, b) => a.open - b.open);
+      const free = new Map();   // market → when its last position closed (Infinity: still open)
+      let i = -1;
+      for (const x of plan) {
+        const p = x.p, holdMs = x.holdMs, quote = quoteOf(p);
+        const open = Math.max(x.open, (free.get(p.id) || 0) + 60000);
+        if (open >= now - DAY) continue;
+        i++;
         const close = open + holdMs;
         const isOpen = close > now;
+        free.set(p.id, isOpen ? Infinity : close);
         const px = mark(p); const size = +(r() * (px > 1000 ? 2 : px > 100 ? 40 : 400) + (px > 1000 ? 0.05 : 1)).toFixed(4);
         const long = r() < 0.55; const entry = px * (0.85 + r() * 0.3);
         const move = (r() - 0.47) * 0.12 * (holdMs > 30 * DAY ? 3 : 1);   // slight bettor edge, bigger moves on long holds
         const liq = !isOpen && r() < 0.04; const adl = !isOpen && !liq && r() < 0.01;
         const exit = liq ? entry * (long ? 0.9 : 1.1) : entry * (1 + move);
         const cost = size * entry, proceeds = size * exit;
-        const gross = isOpen ? 0 : +((long ? proceeds - cost : cost - proceeds)).toFixed(6);
         const takerFee = U.num(p.takerFee) || 0.0003;
-        // position fees: the real exchange charges them on some mPerp positions at some moment while they are open (not at open, not at close)
+        // position fees: charged on some mPerp positions while they are open, and settled into the balance at a fill of the
+        // position (here its close, or its opening fill while it is still open), as the real exchange does
         const pfees = quote === 'USD' || r() > 0.3 ? 0 : +((cost + (isOpen ? 0 : proceeds)) * 0.00017).toFixed(6);
         const fundingPaid = +(((isOpen ? now : close) - open) / 3600000 * cost * 0.00001 * (r() - 0.45)).toFixed(6);   // signed: + = paid
         const upnl = isOpen ? +(cost * (r() - 0.5) * 0.08).toFixed(4) : 0;
-        const pos = { id: 'pos-' + i, productId: p.id, side: long ? '0' : '1', size: isOpen ? String(size) : '0', totalIncreaseQuantity: String(size), totalDecreaseQuantity: isOpen ? '0' : String(size), totalIncreaseNotional: String(cost), totalDecreaseNotional: isOpen ? '0' : String(proceeds), feesAccruedUsd: '0', positionFeeAccruedUsd: String(pfees), fundingAccruedUsd: String(fundingPaid), realizedPnl: String(gross), unrealizedPnl: String(upnl), cost: String(cost), createdAt: Math.round(open), updatedAt: Math.round(isOpen ? open + r() * (now - open) : close), isLiquidated: liq, wasDeleveraged: adl }; positions.push(pos);
-        // fills: opening fills (1-3) and closing fills (1-3); every fill charges its fee at fill time (maker half price), the position's fee total is their sum
-        let fees = 0; const fill = (q, price, t, makerP, reduce, type) => { const maker = r() < makerP; const fee = +(q * price * takerFee * (maker ? 0.5 : 1)).toFixed(6); fees += fee; events.push({ t, token: quote, kind: 'fee', amount: -fee }); fills.push({ id: 'fill-' + fills.length, orderId: 'ord-' + i + '-' + fills.length, createdAt: Math.round(t), productId: p.id, side: reduce ? (long ? 1 : 0) : (long ? 0 : 1), type, filled: String(q), price: String(price), feeUsd: String(fee), isMaker: maker, reduceOnly: reduce }); };
+        const pos = { id: 'pos-' + i, productId: p.id, side: long ? '0' : '1', size: isOpen ? String(size) : '0', totalIncreaseQuantity: String(size), totalDecreaseQuantity: isOpen ? '0' : String(size), totalIncreaseNotional: '0', totalDecreaseNotional: isOpen ? '0' : String(proceeds), feesAccruedUsd: '0', positionFeeAccruedUsd: String(pfees), fundingAccruedUsd: String(fundingPaid), realizedPnl: '0', unrealizedPnl: String(upnl), cost: String(cost), createdAt: Math.round(open), updatedAt: Math.round(isOpen ? open + r() * (now - open) : close), isLiquidated: liq, wasDeleveraged: adl }; positions.push(pos);
+        // fills: opening fills (1-3) and closing fills (1-3), each charging its fee at fill time (maker half price) and each
+        // closing fill booking its own realized PnL; a liquidated position's closing fills exist only on its own fill list
+        // (/v1/position/fill, type LIQUIDATION), as on the exchange, which also gives every fill's realized PnL there
+        let fees = 0, gross = 0, incN = 0; const own = []; posFills.set(pos.id, own);
+        const fill = (q, price, t, makerP, reduce, type) => {
+          const maker = r() < makerP; const fee = +(q * price * takerFee * (maker ? 0.5 : 1)).toFixed(6); fees += fee;
+          const pnl = reduce ? (price - entry) * q * (long ? 1 : -1) : 0; gross += pnl; if (!reduce) incN += q * price;
+          events.push({ t, token: quote, kind: 'fee', amount: -fee }); if (reduce) events.push({ t, token: quote, kind: 'pnl', amount: pnl });
+          const row = { id: 'fill-' + i + '-' + own.length, orderId: 'ord-' + i + '-' + own.length, createdAt: Math.round(t), productId: p.id, side: reduce ? (long ? 1 : 0) : (long ? 0 : 1), type, filled: String(q), price: String(price), feeUsd: String(fee), isMaker: maker, reduceOnly: reduce };
+          own.push(Object.assign({}, row, { realizedPnl: String(pnl) }));
+          if (type !== 'LIQUIDATION') fills.push(row);
+        };
         const nOpen = 1 + Math.floor(r() * 3); let left = size;
         for (let k = 0; k < nOpen; k++) { const q = k === nOpen - 1 ? left : +(left * (0.3 + r() * 0.4)).toFixed(4); left = +(left - q).toFixed(4); fill(q, entry, open + k * 60000, 0.4, false, r() < 0.5 ? 'LIMIT' : 'MARKET'); }
-        if (!isOpen) { const nClose = 1 + Math.floor(r() * 3); left = size; for (let k = 0; k < nClose; k++) { const q = k === nClose - 1 ? left : +(left * (0.3 + r() * 0.4)).toFixed(4); left = +(left - q).toFixed(4); fill(q, exit, close - (nClose - 1 - k) * 60000, liq ? 0 : 0.3, true, liq ? 'MARKET' : 'LIMIT'); } }
-        pos.feesAccruedUsd = String(+fees.toFixed(6));
-        // ledger events: realized at close, funding spread daily while open
+        if (!isOpen) { const nClose = 1 + Math.floor(r() * 3); left = size; for (let k = 0; k < nClose; k++) { const q = k === nClose - 1 ? left : +(left * (0.3 + r() * 0.4)).toFixed(4); left = +(left - q).toFixed(4); fill(q, exit, close - (nClose - 1 - k) * 60000, liq ? 0 : 0.3, true, liq ? 'LIQUIDATION' : 'LIMIT'); } }
+        pos.feesAccruedUsd = String(+fees.toFixed(6)); pos.realizedPnl = String(gross); pos.totalIncreaseNotional = String(incN);
+        // ledger events: position fees when settled, funding spread daily while open (no hourly charges: the Tax center nets
+        // the simulated funding per day, as it does when the exchange's charges cannot be read)
         const endT = isOpen ? now : close; const nDays = Math.max(1, Math.round((endT - open) / DAY));
-        if (pfees) events.push({ t: open + r() * (endT - open), token: quote, kind: 'pfee', amount: -pfees });
+        if (pfees) { r(); events.push({ t: isOpen ? open : close, token: quote, kind: 'pfee', amount: -pfees }); }
         for (let d = 0; d < nDays; d++) events.push({ t: open + d * DAY + 3600000, token: quote, kind: 'funding', amount: -fundingPaid / nDays });
-        if (!isOpen) events.push({ t: close, token: quote, kind: 'pnl', amount: gross });
       }
       positions.sort((a, b) => b.updatedAt - a.updatedAt); fills.sort((a, b) => b.createdAt - a.createdAt); transfers.sort((a, b) => b.createdAt - a.createdAt);
       // one unexplained credit, like the real exchange produced once, so the per-pool detail is exercised
@@ -75,23 +101,37 @@
 
       // ---- daily ledger per token: cumulative fields like the archive; balance carries every event incl. position fees
       const tokList = Object.keys(TOKENS);
-      const cum = {}; for (const tok of tokList) cum[tok] = { deposit: 0, withdrawal: 0, withdrawalFee: 0, depositFee: 0, conversionIn: 0, conversionOut: 0, realizedPnl: 0, tradingFee: 0, realizedFunding: 0, balance: 0 };
+      const zero = () => ({ deposit: 0, withdrawal: 0, withdrawalFee: 0, depositFee: 0, conversionIn: 0, conversionOut: 0, realizedPnl: 0, tradingFee: 0, realizedFunding: 0, balance: 0 });
+      const apply = (c, e) => {
+        if (e.kind === 'deposit') c.deposit += e.amount; else if (e.kind === 'withdrawal') { c.withdrawal += e.amount; c.withdrawalFee += e.fee; } else if (e.kind === 'convIn') c.conversionIn += e.amount; else if (e.kind === 'convOut') c.conversionOut += e.amount; else if (e.kind === 'pnl') c.realizedPnl += e.amount; else if (e.kind === 'fee') c.tradingFee += e.amount; else if (e.kind === 'funding') c.realizedFunding += e.amount;
+        c.balance += e.amount + (e.kind === 'withdrawal' ? e.fee : 0);   // pfee and glitch move the balance without a ledger field
+      };
+      const cum = {}; for (const tok of tokList) cum[tok] = zero();
       events.sort((a, b) => a.t - b.t);
       const firstDay = dayKey(created), lastDay = dayKey(now);
       const rows = { balance: [], volume: [] };
       let ei = 0;
       for (let d = firstDay; d <= lastDay; d += DAY) {
-        while (ei < events.length && events[ei].t < d + DAY) {
-          const e = events[ei++]; const c = cum[e.token];
-          if (e.kind === 'deposit') c.deposit += e.amount; else if (e.kind === 'withdrawal') { c.withdrawal += e.amount; c.withdrawalFee += e.fee; } else if (e.kind === 'convIn') c.conversionIn += e.amount; else if (e.kind === 'convOut') c.conversionOut += e.amount; else if (e.kind === 'pnl') c.realizedPnl += e.amount; else if (e.kind === 'fee') c.tradingFee += e.amount; else if (e.kind === 'funding') c.realizedFunding += e.amount;
-          c.balance += e.amount + (e.kind === 'withdrawal' ? e.fee : 0);   // pfee and glitch move the balance without a ledger field
-        }
+        while (ei < events.length && events[ei].t < d + DAY) { const e = events[ei++]; apply(cum[e.token], e); }
         for (const tok of tokList) { const c = cum[tok]; rows.balance.push(Object.assign({ time: d, tokenId: TOKENS[tok] }, Object.fromEntries(Object.entries(c).map(([k, v]) => [k, String(v)])))); }
         rows.volume.push({ time: d, volumeUsd: '0' });
       }
       // volume per day from fills
       const volByDay = {}; for (const f of fills) { const k = dayKey(f.createdAt); volByDay[k] = (volByDay[k] || 0) + U.num(f.filled) * U.num(f.price); }
       for (const vr of rows.volume) vr.volumeUsd = String(volByDay[vr.time] || 0);
+      // hourly rows on request, from the same events (the Tax center reads them for the UTC days a local boundary cuts)
+      const HOUR = 3600000;
+      const volByHour = {}; for (const f of fills) { const k = Math.floor(f.createdAt / HOUR) * HOUR; volByHour[k] = (volByHour[k] || 0) + U.num(f.filled) * U.num(f.price); }
+      const hourly = (kind, start, end) => {
+        const out = [], c = {}; for (const tok of tokList) c[tok] = zero();
+        let i = 0;
+        for (let b = Math.floor(start / HOUR) * HOUR; b < end; b += HOUR) {
+          while (i < events.length && events[i].t < b + HOUR) { const e = events[i++]; apply(c[e.token], e); }
+          if (kind === 'volume') out.push({ time: b, volumeUsd: String(volByHour[b] || 0) });
+          else for (const tok of tokList) out.push(Object.assign({ time: b, tokenId: TOKENS[tok] }, Object.fromEntries(Object.entries(c[tok]).map(([k, v]) => [k, String(v)]))));
+        }
+        return out;
+      };
       const balancesNow = tokList.map((tok) => ({ tokenAddress: TOKEN_ADDR[tok], tokenName: tok, amount: String(cum[tok].balance), available: String(cum[tok].balance), totalUsed: '0' }));
 
       // ---- Predict: 400 predictions over the period, most decided, some unclaimed, some open
@@ -103,12 +143,19 @@
       }
 
       // ---- patch the API surface the Tax center (and the account picker) touch
-      const orig = { subaccountsOf: A.subaccountsOf, subaccount: A.subaccount, history: A.history, positions: A.positions, page: A.page, balances: A.balances, openPositions: A.openPositions, live: P.live, snapshotFile: P.snapshotFile };
+      const orig = { subaccountsOf: A.subaccountsOf, subaccount: A.subaccount, history: A.history, positions: A.positions, page: A.page, balances: A.balances, openPositions: A.openPositions, positionFills: A.positionFills, fundingCharges: A.fundingCharges, live: P.live, snapshotFile: P.snapshotFile };
       const sub = { id: SID, account: ADDR, name: '0x7369' + '6d'.repeat(1) + '0'.repeat(56), createdAt: created };
       A.subaccountsOf = async (addr) => (String(addr).toLowerCase() === ADDR ? [sub] : orig.subaccountsOf(addr));
       A.subaccount = async (id) => (id === SID ? sub : orig.subaccount(id));
-      A.history = async (kind, sid, o) => { if (sid !== SID) return orig.history(kind, sid, o); const src = kind === 'balance' ? rows.balance : kind === 'volume' ? rows.volume : []; return src.filter((x) => x.time >= (o.start || 0) && x.time < (o.end || Infinity)); };
+      A.history = async (kind, sid, o) => {
+        if (sid !== SID) return orig.history(kind, sid, o);
+        if (o.resolution === 'hour1') return kind === 'balance' || kind === 'volume' ? hourly(kind, o.start || 0, Math.min(o.end || now, now)) : [];
+        const src = kind === 'balance' ? rows.balance : kind === 'volume' ? rows.volume : []; return src.filter((x) => x.time >= (o.start || 0) && x.time < (o.end || Infinity));
+      };
       A.positions = async (sid, o) => { if (sid !== SID) return orig.positions(sid, o); const out = positions.slice(); out.truncated = false; return out; };
+      // a simulated position's own fills, and no hourly funding charges: nothing about the simulated account goes to the exchange
+      A.positionFills = async (id, o) => (posFills.has(id) ? Object.assign(posFills.get(id).slice(), { truncated: false }) : orig.positionFills(id, o));
+      A.fundingCharges = async (sid, start, o) => (sid === SID ? null : orig.fundingCharges(sid, start, o));
       A.openPositions = async (sid, o) => (sid === SID ? positions.filter((p) => U.num(p.size) !== 0) : orig.openPositions(sid, o));
       A.balances = async (sid, o) => (sid === SID ? balancesNow : orig.balances(sid, o));
       A.page = async (base, path, params, o) => {

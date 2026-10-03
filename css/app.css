@@ -508,6 +508,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-5); border: 1px solid var(--border-3); border-radius: 8px; padding: 8px 14px; font-size: 13px; z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
+.toast { max-width: min(680px, calc(100vw - 32px)); text-align: center; }   /* a warning toast is a sentence or two */
 
 
 /* Predict */
@@ -589,6 +590,15 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 .note-grid .it { background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .note-grid .it .t { font-weight: 600; font-size: 13px; }
 .note-grid .it .d { font-size: 12px; color: var(--text-3); }
+/* Tax center: a disposal's flags (partial, LIQ, ADL, held > 1 yr) side by side, never wrapped under each other */
+.tax-flags { display: inline-flex; gap: 4px; white-space: nowrap; }
+/* Tax center: a line that repeats folded columns under a row's name, shown on a phone only (see .tax-fold below) */
+.tax-fold-only { display: none; }
+/* Tax center: the report's methodology, one key and value per row (on screen in the notes card, and the print block) */
+.tax-meth { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12px; }
+.tax-meth dt { color: var(--text-3); font-weight: 600; }
+.tax-meth dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.print-only { display: none; }
 /* copyability: the score pill, the part bars of the breakdown, the hold-time strip */
 .score { display: inline-block; min-width: 34px; text-align: center; font-family: var(--mono); font-weight: 700; font-size: 14px; line-height: 24px; padding: 0 7px; border-radius: 6px; background: var(--bg-4); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .score.green { background: var(--green-dim); color: var(--green); }
@@ -617,11 +627,23 @@ textarea.input:focus { border-color: var(--accent); }
   :root { --bg-0: #fff; --bg-1: #fff; --bg-2: #fff; --bg-3: #f4f4f5; --bg-4: #f4f4f5; --bg-5: #ececee; --bg-6: #e4e4e7; --border-1: #ddd; --border-2: #ddd; --border-3: #ccc; --text-1: #111; --text-2: #333; --text-3: #666; --green: #0f8a52; --red: #c22a2f; --accent: #0b8f7e; }
   body { overflow: visible; }
   .app { display: block; height: auto; }
-  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg, .no-print { display: none !important; }
+  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg, .no-print, a.defs { display: none !important; }
   .footer-note.print-keep { display: block !important; }   /* a disclaimer or basis note the printed report needs */
+  .print-only { display: block !important; }   /* the report's identity and methodology, printed only */
+  span.print-only { display: inline !important; }   /* a full address or a select's value, inside its line */
+  .tax-meth { grid-template-columns: 180px minmax(0, 1fr); font-size: 10.5px; }
   .card-head .dim, .stat .sub { color: #555; }
   .tbl-wrap { overflow: visible; }
-  table.tbl { font-size: 11px; }
+  /* every table fits the page (A4 leaves about 718 CSS px): the card no longer clips its table, text cells wrap at 9px,
+     amounts stay on one line */
+  .card.tight { overflow: visible; }
+  table.tbl { font-size: 9px; }
+  table.tbl th, table.tbl td { white-space: normal; padding: 4px 5px; }
+  table.tbl td.num { white-space: nowrap; }
+  table.tbl th { font-size: 8px; }   /* headings under the 9px figures (11.5px on screen) */
+  table.tbl .chip { font-size: 8px; padding: 0 4px; }
+  table.tbl .small, table.tbl .xs { font-size: 8px; }   /* a note in a cell stays under the 9px text it explains */
+  .tax-flags { flex-wrap: wrap; }   /* a disposal's flags stack rather than widen the table */
   .frame { display: block; height: auto; }
   .main { overflow: visible; padding: 0; height: auto; }
   .main > .page { max-width: none; }
@@ -662,7 +684,8 @@ textarea.input:focus { border-color: var(--accent); }
   .grid.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 720px) {
+/* screens only: an A4 page is about 718 CSS px wide as well, and print has its own block above */
+@media screen and (max-width: 720px) {
   :root { --rail: 0px; }
   .app, .app.rail-collapsed { grid-template-columns: 1fr; grid-template-rows: 1fr; }
   .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; flex-direction: row; justify-content: flex-start; align-items: center; gap: 2px; padding: 6px 8px; border-right: 0; border-top: 1px solid var(--border-2); z-index: 40; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
@@ -709,6 +732,26 @@ textarea.input:focus { border-color: var(--accent); }
   .acct-head-slot .acct-head .since { flex-basis: 100%; }
   /* toasts clear the bottom navigation bar */
   .toast { bottom: 72px; }
+  .tax-meth { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .tax-meth dd { margin-bottom: 6px; }
+  /* tables whose text can wrap (the Tax center's results, reconciliation, quarterly, class and holdings tables): text
+     cells and headings wrap so the amounts stay in view, amounts stay on one line; the monthly table keeps scrolling */
+  .wrap-cells table.tbl th, .wrap-cells table.tbl td:not(.num) { white-space: normal; }
+  .wrap-cells table.tbl th, .wrap-cells table.tbl td { padding: 8px 6px; }
+  .wrap-cells td.num .num-sub { display: block; white-space: normal; }   /* a count beside an amount goes under it */
+  .wrap-cells td.num .num-sep { display: none; }
+  .wrap-cells td.num .num-note { white-space: normal; }   /* words in a number cell ("not recorded"), never an amount */
+  /* the class tables (Gains and losses by class and its Other sections): Proceeds and Costs fold into a line under the
+     name, and each row is a grid with its name on a line of its own above its figures, so Disposals, Gains, Losses and
+     Net fit side by side (five columns of four-digit amounts do not fit 375 px); view-perps gives the table its roles,
+     which a grid row would lose for a screen reader */
+  .tax-classes table.tbl .tax-fold { display: none; }
+  .tax-classes .tax-fold-only { display: block; }
+  .tax-classes table.tbl tr { display: grid; grid-template-columns: 19% repeat(3, 27%); }
+  .tax-classes table.tbl tr > :first-child { grid-column: 1 / -1; }
+  .tax-classes table.tbl td:first-child { border-bottom: 0; padding-bottom: 0; }
+  .tax-classes table.tbl th, .tax-classes table.tbl td { padding-left: 4px; padding-right: 4px; }
+  .tax-classes table.tbl td.num { font-size: 12px; }
   /* stat tiles: two per row, an odd last one spans the row */
   .stats, .stats.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stats > :last-child:nth-child(odd) { grid-column: 1 / -1; }

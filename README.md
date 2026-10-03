@@ -32,7 +32,9 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 
 `.github/workflows/pages.yml` runs on every push, every 30 minutes and on demand. It builds the
 perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the `snapshots` branch,
-assembles `dist/` and deploys it:
+reads the Tax center's official exchange rates and the USDe/USD price (`data/fx/`, see the Tax center
+below), assembles
+`dist/` and deploys it:
 
 * **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
   named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
@@ -64,23 +66,85 @@ The Predict snapshot is produced on a PC (see the Predict section below) whichev
 - Scripts may come only from the site itself, plus `index.html`'s one inline script, allowed by its
   sha256. Recompute the hash when that script changes; `tests/cards.test.mjs` fails when they
   disagree.
-- `connect-src` lists the APIs the site calls, plus `https:` for a self-hosted ntfy server.
+- `connect-src` lists the APIs the site calls (the Tax center's rate and USDe price fallbacks, frankfurter.dev and
+  DefiLlama's coins.llama.fi, included; `tests/cards.test.mjs` checks every host `js/tax/fx.js` calls is named), plus
+  `https:` for a self-hosted ntfy server. `Start-MeridianData.ps1` reads the same block from `_headers` when it starts.
 - The share pages under `/a/` and `/p/` redirect through `js/share.js`. They avoid a meta refresh,
   because Facebook's crawler would follow it to the home page's card.
 - User-supplied links (`href`/`src`) must be relative or http(s). `U.h` never writes raw HTML, and
   it turns objects in a text position into plain text.
 
-**Tests.** `node --test "tests/*.test.mjs"` (Node 22+, no dependencies, no network, well under a
-second) runs before anything else in the workflow; a failure stops the job, so nothing is
+**Tests.** `node --test "tests/*.test.mjs"` (Node 22+, no dependencies, no network, a few
+seconds) runs before anything else in the workflow; a failure stops the job, so nothing is
 deployed. They load the site's own scripts the way the snapshot builder does and cover the money
 math: the Predict secondary-market ledger with the cases checked against the exchange
-(`predict-ledger`), prediction semantics, result chips and a bettor page's headline figures
+(`predict-ledger`), the snapshot builder's reader of position-token burns against a fake RPC
+that refuses wide ranges (`predict-burns`: the width the refusal names kept across runs, every
+token read once to the head under each run's cap, a wallet's `rd` only once each position it held
+at a paying verdict is accounted for), prediction semantics, result chips and a bettor page's headline figures
 (`predict-analytics`), the copy simulator's and paper copy's sizing, cap, reductions, funding
 share, position records and cost basis (`copy-engines`), the copy agent's decisions (`agent`:
 the lines between `@pure-begin` and `@pure-end` in `agent/copy-agent.mjs`, loaded on their own
 since the agent needs ethers and a key), account analytics, the copy profile and the
 copyability caps (`analytics`), formatting and routing (`util`), the bar chart's value-axis
-formatter (`charts`).
+formatter (`charts`), the Tax center's time zones, periods and archive ledger (`tax-tz`,
+`tax-periods`, `tax-ledger`: also each pool's level at the period's instants, the part of a split
+day after the end left out), its exchange rates (`tax-fx`: each currency's source and
+convention, the fallbacks, the session cache, the rate and rate date on every converted amount)
+and the deploy-time rate builder (`fx-build`: parsers and checks on answers captured once from
+the ECB, NBP, the Bank of Canada and DefiLlama's USDe price, in `tests/fixtures/fx/`), and its per-fill core
+(`tax-fills`, `tax-funding`): fills to positions at a close/open tie, the replay at average entry
+against the exchange's own per-fill realized PnL, every UTC day's disposals against the archive,
+the liquidation fill as a disposal of its own, the holding period in calendar dates (and Form 8949's
+Rev. Rul. 66-7 month-end reading), funding
+received and paid per settlement with the per-day fallback, what is charged and not yet settled,
+mPerp position fees split hour by hour, both readings of funding and position fees, the
+Disposals and Funding settlements files, and the event loader (reading to the end of the hour an India period
+ends in, which the ledger counts whole; `load.span` not reading again what another read of the tab covers, done
+or still running, so the USDe lots' whole history after the period's trade detail asks only for the rest, while a
+failed, cancelled or truncated read, or an open one for transfers, is read afresh; `load.detailSize`, the size above
+which the trade detail waits to be asked for), on three real subaccounts captured
+once with GET requests (`tests/fixtures/tax/`: a market maker with many partial closes, a
+liquidated account, an XAU short with position fees). Its Predict record (`tax-predict`: both
+roles, the three date bases, the gross split, the decided-not-claimed tail and, at a period
+boundary, the booked-not-yet-claimed one by each basis's own booking, the record's statuses (a
+traded prediction's from its tokens) and dates, the claim basis's words without redemption
+times, the itemised secondary market, the daily ledger's in-period cumulative, the tile's
+words) and its exports (`tax-exports`: the registry, a report's methodology rows against a tool
+file's bare header, the perps daily ledger from its first active day, blank converted cells,
+and the Predict files on four wallets' snapshot files kept in `tests/fixtures/tax/predict-*`,
+where the record plus the secondary-market file give the Realized PnL tile under every basis,
+period and zone, in USD and EUR; the Koinly and CoinTracking files' exact headers, tags, UTC times
+and order, their sums against the ledger with the real transfers of 0x2f46… in
+`tests/fixtures/tax/transfers-0x2f46.json`, the daily rows at 10:00 UTC, a deposit in the hour an India
+period's end cuts (in the check, not the file), merged exact duplicates and
+the Predict files against the tile; the Form 8949 statement's columns, MM/DD/YYYY dates, Part I and
+II on and after the anniversary (28 Feb before a leap year Part I on 29 Feb), its label as one reading, totals that are the rows' sums and its check against the ledger;
+the closed positions' report-currency columns at the close date and their whole-life note; the exports card's text; every
+file's first row; the download toast). Its methodology, ZIP and summary (`tax-methodology`: the
+record and a file's rows, the summary's parts gathered with the perps part (and its trade detail) before the holdings, methodology.txt and .json, the ZIP's central directory read back with
+every CRC checked against zlib's, the classes' cash flows and totals on the three subaccounts,
+Predict as a class under every basis, the summary file's Predict rows: every basis, the gross
+split adding up to the realized row in USD and EUR, each basis's tail, the months' payouts), and the toast's live region
+(`util`). Its USDe lots (`tax-lots`: FIFO, LIFO and the moving average,
+the UK's same-day, 30-day and s104 matching on a worked example in London dates and with one pool
+for everything only (a move out of a pool and a spend from it on one day never come up short), the
+three scopes and both deposit readings (a conversion between pools a move of lots in each, never a
+disposal), opening lots and what no lot covers, the events of a real account with position fees and
+of the Predict wallets, the USDe/USD price, the files with the Form 1040 fact line at their head and
+in the summary file, and 50,000 events in well under a second per run). Its holdings at an instant (`tax-holdings`: which archive bucket holds the
+levels at a UTC midnight, a local midnight, a boundary inside an hour, a day the ledger kept whole
+and now; cash per pool as the reconciliation has it, equity both ways, the funding not settled per
+position and pool, equity now as the account page has it, the change in equity identity, the
+positions open at an instant from the replay against the positions list on a real subaccount,
+Predict at an instant on a worked book and four real wallets, the rate of the local day before the
+instant, the B20 tile line, the summary rows and the Holdings file). Its wording, print and phone
+rules (`tax-print`: the results, costs and transfers lines on three real subaccounts, each typed as
+a trading result, funding, a fee or a transfer and together the balance change, before and after
+the trade detail; the printed identity line in full with the period's UTC instants; no page text,
+comment or README line stating a treatment; the disclaimer in every card that prints on its own;
+the print block's A4 rules and the phone block's wrapping tables, the class tables folding Proceeds and Costs;
+every export button with its spinner and failure toast; the neutral *held > 1 yr* chip, left out of a UK report).
 
 **Equity curve flex.** The **Flex** button on an account page and **Equity curve flex** on a
 bettor page open the account's or wallet's PnL card: headline PnL and ROI, the equity curve,
@@ -198,36 +262,510 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   live trade tape (taker/maker links to the accounts); liquidation feed; funding table (rate
   charged at the last hourly funding, projected next charge, cumulative funding per unit of
   the base asset).
-* **Tax center** – a full tax report per subaccount: fiscal-year presets (calendar, UK, Australia,
-  New Zealand, India, South Africa, Pakistan) or a custom UTC range; a reporting currency
-  (28 currencies at ECB daily reference rates via frankfurter.dev, USD kept in every export);
-  net result, realized PnL, gains and losses, fees, funding received / paid, deposits,
-  withdrawals, long-term positions (held over a year), open positions at period end; an income
-  vs expenses table with classification hints; monthly, fiscal-quarter and per-market
-  breakdowns; a closed-positions ledger with holding periods; a full transaction ledger (fills,
-  transfers, position closes, daily funding) with type filters; and nine CSV exports: summary
-  with monthly and quarterly tables, capital gains (Form 8949-style), closed positions, daily
-  ledger, all transactions, fills, transfers, Koinly universal, CoinTracking. The Predict
-  section reports on a cash (claimed) basis with the decided-but-unclaimed tail shown apart,
-  placed in the period its questions were decided in. Print-friendly. Records only, not tax advice.
-  Accounting rules worth knowing: the period totals come from the exchange's daily ledger
-  (realized PnL, trading fees, funding, transfers); mPerp position fees are missing from that
-  ledger, so they are taken from the positions and spread over each position's holding time
-  (a position straddling two years is split between them); fiscal quarters run from the fiscal
-  year's first day in three-month steps (UK: 6 Apr – 5 Jul, …); "open at period end" is
-  computed from open/close times for past periods too; every figure is shown in cents; the
-  balance reconciliation (opening + deposits − withdrawals + result = closing) names any pool
-  the ledger cannot explain; the transaction ledger's cash-effect column does not add up to the
-  balance change (it has no row for PnL booked on partial closes of positions still open, carries
-  each closed position's whole result and position fee at its close, and lists only order fills,
-  not liquidation fills), so the reconciliation is the check; the realized PnL that the closed
-  positions do not explain (booked on positions open at the period end, less what the closed ones
-  booked before the period) is its own line; funding received / paid is split by the sign of each
-  UTC day's net, not per hourly payment; the unrealized PnL of open positions is net of unsettled
-  funding and position fees, as on the account page, and is in no total; printing lists every row
-  of the closed-positions and transaction tables. `js/dev/sim-tax.js` (not loaded by the site) fakes a busy two-year account with a
-  ledger built from the same events, for stress-testing the report against a realistic
-  return: `MDSim.install()` in the console, then open `#/tax?address=<its address>`.
+* **Tax center** (`#/tax?address=0x…`; the page is `js/pages/tax.js`, its parts `js/tax/*.js` under `MD.tax`) – tax
+  records for one wallet: its Meridian perps subaccount and its Meridian Predict activity, for a fiscal year or any
+  range of local dates, in the time zone and the reporting currency the reader picks. Everything is computed in the
+  visitor's browser from the exchange's public data (GET requests only) and the published Predict snapshot. Records,
+  not advice: no tax is computed, and where the rules are unsettled (funding inside a result or apart from it, the
+  date a Predict result counts at, whether a deposit is a disposal, which Form 8949 box) every reading is computed
+  and shown side by side, none marked as the one that applies. **MeridianDataHub is not a tax adviser**: the
+  statement (`MD.tax.DISCLAIMER`, quoted under *Not a tax adviser* below) is on the page, in print and in every
+  file's methodology.
+  * *Using it* – an address in the picker (or **Tax** on an account page); a wallet with several subaccounts gets a
+    select, and a report covers one subaccount plus the wallet's Predict wallet. Everything is in the link, so a
+    shared link reproduces the report:
+
+    | Link parameter | What it sets | Default |
+    |---|---|---|
+    | `address`, `sub` | wallet; subaccount when there are several | the last account viewed; its first subaccount |
+    | `fy` | fiscal-year preset: `uk`, `au`, `nz`, `in`, `za`, `pk` | calendar year (left out of the link) |
+    | `year` | the calendar year the fiscal year starts in | the newest year with activity |
+    | `from`, `to` | a custom range of local dates, both included | none (the fiscal year) |
+    | `tz` | IANA time zone | from the preset (below), written into the link silently |
+    | `ccy`, `src` | report currency; `src=ecb` takes the ECB's rates for PLN or CAD | USD, or the last one chosen in this browser |
+    | `pdate` | Predict date basis: `claimable`, `verdict` | claim (left out of the link) |
+    | `lot`, `lscope`, `px`, `dep` | USDe lots: method, scope (`global` whenever `lot=uk`), `market` valuation, `disposal` deposit reading | none chosen (the lots are built on request) |
+
+    The page, top to bottom: the controls (preset, year chips, custom from / to in local dates, time zone, report
+    currency, rate source for PLN and CAD; every control named for screen readers by the text it shows); notices (a
+    refused range, a year with no activity, a rate source stepped down); the perps card (period line in local time
+    and UTC, tiles, the rate line, the trade detail's progress and checks, the balance reconciliation); *Results,
+    costs and transfers*; *Gains and losses by class*; *Holdings at period start and end*; net result by month, the
+    quarterly and monthly tables; *By market*; *Disposals*; *Closed positions*; *All transactions*; *Exports*;
+    *Meridian Predict*; *USDe lots*; *What counts on Meridian* (notes, the disclaimer, the methodology on request);
+    and a print-only *Report identity and methodology* block. A wallet with no perps subaccount gets the controls, a
+    note saying so with the period and rate lines, the Predict card, the USDe lots, the holdings, an exports card
+    (summary, classes, import notes, ZIP), the disclaimer and the methodology.
+  * *Periods and time zones* (`tz.js`, `periods.js`) – every instant stays UTC; only its reading is local, from the
+    browser's own zone data (no DST rule is hard-coded). The **Time zone** select offers UTC and every IANA zone the
+    browser knows. Its default follows the preset: the browser's own zone when it belongs to that country (any
+    `Australia/*` zone for Australia, Auckland or Chatham for New Zealand), else the country's zone (Europe/London,
+    Australia/Sydney, Pacific/Auckland, Asia/Kolkata, Africa/Johannesburg, Asia/Karachi); the calendar year takes
+    the browser's zone. A period runs from 00:00 local on its first day (the first instant of that day where a DST
+    change skips midnight, as in America/Santiago) to 00:00 on the day after its last; a fiscal year still running
+    ends now. Months and quarters are cut at local midnight too: a fiscal year's quarters run from its first day in
+    three-month steps (UK: 6 Apr – 5 Jul, …), a custom range has calendar quarters. Years carry their country's name
+    (2026/27 for the UK, Australia and India; 2027 for a year named by its end: South Africa, New Zealand,
+    Pakistan), while `year=` stays the calendar year the period starts in, so old links keep working. The year list
+    starts at the subaccount's creation or Meridian Predict's launch (29 Jun 2026), whichever is earlier. A `year=`
+    with no activity shows the newest year with a note; a custom range that is not a real, ordered pair of days
+    (2026-02-30, a start after the end) falls back to the fiscal year with a note. The period line reads like `6 Apr
+    2026 00:00 Europe/London (2026-04-05 23:00 UTC) → …`.
+  * *Dates and times* – fills, settlements, transfers, closes and Predict placements, claims and sales count by
+    their exact instant against the local start and end, and their days and months are local dates. Event tables
+    show local time (UTC in a tooltip); event files carry `Time (UTC)` and `Time (<zone>)` side by side (one column
+    in UTC). The perps daily ledger keeps the exchange's UTC days. Form 8949 dates are local dates as MM/DD/YYYY.
+    The tax-tool files are UTC only.
+  * *Currency and rates* (`fx.js`, `scripts/build-fx.mjs`) – each amount converts at the rate of its own local date
+    in the report's zone, never one rate for a period, from the source set for its currency:
+    * **PLN**: NBP table A average (mid) rate of the last table published *before* the date (the convention of art.
+      11a of the Polish PIT Act); the rate-date cell carries the table number (`2026-09-25 (187/A/NBP/2026)` for an
+      event on Monday 28 Sep).
+    * **CAD**: the Bank of Canada's daily rate (Valet `FXUSDCAD`) of that date, or of the closest preceding day it
+      published one (CRA Folio S5-F4-C1 ¶1.4).
+    * **Every other currency**: the ECB's euro reference rates crossed through the euro at full precision (USD→X = X
+      per EUR ÷ USD per EUR; EUR = 1 ÷ USD per EUR), that date or the last ECB business day before it (weekends and
+      TARGET closing days).
+    * A **Rate source** select (`src=ecb`) appears for PLN and CAD only. 30 currencies: USD plus the 29 the ECB
+      publishes (RON and ISK included; ISK, JPY, KRW and IDR show no decimals). PKR and EGP are not offered (no such
+      rate): the page says to use the USD columns for those, and for any rule it does not implement (India's Rule
+      115, the SBI telegraphic-transfer buying rate, for one).
+    * **Where the rates come from.** Most central banks cannot be read from a visitor's browser (no CORS), so the
+      deploy runs `node scripts/build-fx.mjs --out data/fx` (workflow step *Official exchange rates (data/fx)*,
+      `continue-on-error`, so a central bank that is down never blocks a deploy): one GET of the ECB's SDMX API for
+      every currency from 2026-06-01 (`EXR/D..EUR.SP00.A`, csvdata), NBP's table A for USD in pieces of at most 367
+      days (with each table's number), the Bank of Canada's Valet series, and DefiLlama's daily USDe/USD price (the
+      USDe lots' market valuation, not an exchange rate); a 15 s timeout and two retries each, from fixed start
+      dates so the URLs stay the same between runs. Each series is checked (real ascending dates, positive values,
+      no gap over 10 days, no day-to-day move over 20 %) and a source that fails is left out with a warning while
+      the others are written atomically; `data/fx/index.json` lists each file's range, URL and fetch time. `data/`
+      is not committed and `/data/*` is served with `no-cache`.
+    * **Fallbacks**, each named in a notice at the top: the NBP or Bank of Canada file missing, starting too late or
+      older than the period needs → the ECB's rates; the ECB file missing or without the currency → frankfurter.dev
+      (EUR base, the same cross); the ECB file older than the period or today needs → its newest days from
+      frankfurter.dev; nothing readable → USD with a red note. The page counts a file only when it answers as JSON
+      (Cloudflare answers a missing path with `index.html`). frankfurter answers are kept in `sessionStorage` as
+      `{at, raw}`, and one that reaches today without today's rate is read again after 15 minutes with `cache:
+      'no-cache'`. Locally (no `data/fx/`) the page uses frankfurter.dev, and the USDe price DefiLlama directly
+      (kept for an hour). A date whose rate is not out yet (the ECB around 16:00 CET, NBP around noon in Warsaw, the
+      Bank of Canada by 16:30 in Ottawa) takes the rate before until the next deploy.
+    * **On the page and in the files**: the line under the tiles names the source, its rule and the zone, with the
+      latest rate (the *last rate in period* for a period that has ended), and says that a change in USDe's own
+      value in the report currency between receiving and spending it is not in these figures (the USDe lots compute
+      it on request). Every converted CSV amount has `<name> <CCY>`, `USD→<CCY> rate` (twelve significant digits)
+      and `Rate date (<source>)` beside it. Dated amounts convert at their own date (a fill, settlement or transfer
+      at its own instant, a closed position at its close, never the notional at the open date; a Predict result at
+      the date of the basis chosen); amounts of right now (claimable, unrealized now) at the latest rate, named in
+      the tile; values at an instant (the holdings, the unrealized PnL at a past period's end) at the rate of the
+      local day before it. Amounts show in cents in every currency (whole units for ISK, JPY, KRW, IDR); compact ones
+      follow the USD format (B, M and K steps, whole units from 1,000).
+    * **A disposal's parts at their own dates** (`fills.js` replay, as UK CG78310 and German §20 Abs. 4 S. 1 EStG
+      read it, labelled a reading): its result, closing fee and notional legs convert at the disposal date (the rate
+      column); its opening-fee share (each increase's fee at the date paid, shared by quantity like the USD one) and
+      the funding and position fees carried into it (each settlement at its own date) at the dates they were paid;
+      its nets, proceeds and cost are built from those parts (`openFeeC`, `fundingInC`, `posFeeInC`, `netC`,
+      `netAllC`, `proceedsC`, `costC`), so proceeds − cost = net in both currencies. The Disposals file, the Form
+      8949 report-currency columns and totals, the disposals and by-market tables and the by-class figures use them;
+      the files say so in their methodology rows.
+    * **Totals from the same events.** Until the trade detail is in, the perps ledger figures convert each UTC day (or
+      part of a split day) whole at the rate of the local date holding its middle. Once it is in, every report-currency
+      total (realized PnL, trading and position fees, funding received, paid and net, deposits, withdrawals and their
+      fees; the tiles, by type, monthly, quarterly, the summary and the holdings' change in equity) is recast from the
+      events, each fill, settlement and transfer at its own local date (`fills.js` `F.ledgerC`, `ledger.js`
+      `L.recast`), so the figures of one file agree (the net result is the by-class total when every position opened
+      and closed in the period; funding net = received − paid). A UTC day whose events of one kind do not add up to
+      the exchange's ledger keeps that kind converted whole, and the Rate rule names it; the traded volume always
+      converts whole; the daily ledger file gives each day's net both ways.
+    * **Rates reach back to the wallet's first activity, never clamped.** The page loads rates from the wallet's
+      first possible activity (the subaccount's creation or Meridian Predict's launch, whichever is first:
+      `FX.fromKey`), whatever the period, since the USDe lots and the Predict record convert amounts dated before
+      it. A date before the first published rate has none (`no rate (before the first published rate)`): the
+      amount stays unconverted, its converted and rate cells are blank and the rate-date cell says so, the Rate notes
+      name such dates, and the holdings at such an instant show "no rate" with the USD value; it never takes a later
+      rate in its place. An opening USDe lot dated before it is the one exception the lots need a figure for: its
+      cost's other currency is at the first published rate, and the lots card and their methodology name it.
+  * *Perps ledger and reconciliation* (`ledger.js`) – the period totals come from the exchange's archive, kept per
+    UTC day as running totals per margin pool. Whole UTC days come from its daily rows; each UTC day that a local
+    boundary cuts (the period's start and end, local month and quarter starts: about 14 a year, none in UTC) is
+    split hour by hour from its hourly rows, read from the hour before that day; a split day on which nothing moved
+    is not read at all. An hour that a boundary cuts in its middle (a zone a half or quarter hour off UTC: India,
+    Adelaide, Newfoundland) counts in the period it starts in, as the page says. The hours must add up to the day's
+    own row, pool by pool; a day whose hours do not (or cannot be read) is kept whole on the side holding most of
+    it, and named. The archive's `endTime` is inclusive, so rows at or after the end are dropped. mPerp position
+    fees have no field in the archive: they are the balance change of an mPerp pool (a token that cannot be
+    deposited and is some product's quote token) that no other entry explains, booked when the exchange settles them
+    (at a fill of the position); the USD pool's own residual stays a reconciliation difference instead, and an mPerp
+    residual that is a credit or comes on a day without a fill is named. Opening and closing balances are the pools'
+    levels at the period's instants, so the **balance reconciliation** (opening + deposits − withdrawals + result =
+    closing) is exact unless the exchange changed a non-mPerp pool without an entry, which it names.
+  * *Trade detail* (`load.js`) – loads on its own once the ledger figures are on screen when the period is of
+    ordinary size (`load.detailSize`: at most 250 positions to replay, fills and funding charges reaching back at
+    most 400 days from the period's end, a position list read whole; the largest account checked, 218 positions in
+    2026, loads on its own in about 4 s). A bigger period waits: the perps card says why and offers **Load trade
+    detail**, the parts that need it (the Holdings card's funding not settled at a past instant too) say it is not
+    loaded yet, and an export that needs it (the summary, the ZIP, the per-fill files) starts it; the summary files
+    build their holdings rows only once it is in. Once started it runs with a progress line
+    (`Loading trade detail: fills n pages · positions i/N · funding j/M`) and **Cancel**, GET only and paced (pages
+    one after another, everything else four at a time; a 429 is waited out): the positions (up to 100 pages); every
+    order fill from the opening of the earliest position the period touches (opened before its end, open or changed
+    since its start) to the end of the hour the period ends in (up to 500 pages: each position replays from its
+    first fill, and the ledger's last hour is whole); the period's transfers and the hourly funding charges of the
+    same range; `/v1/position/fill` four at a time for liquidated and deleveraged positions (their LIQUIDATION and
+    DELEVERAGE fills are not order fills) and for any position whose replay does not give the exchange's totals; the
+    daily ledger before the period when an mPerp position opened before it; and the hourly ledger only of the UTC
+    days on which two or more positions of one mPerp pool were filled. Kept for the tab (`MD.tax.cache`): a range
+    whose last hour ended more than 5 minutes ago is reused, one still running is extended with what happened since.
+    Every export that needs it waits on the same load, with its button's spinner. If it is cancelled or fails, the
+    ledger figures stay, the parts that need it say so, funding falls back to each day's net, and **Load again**
+    retries.
+  * *Disposals* (`fills.js`) – every fill goes to its position: a sweep per market over the positions sorted by
+    opening (positions on one market never overlap, except at the instant one closes and the next opens; there a
+    fill closes the old one up to what it still holds and opens the new one with the rest, its fee split pro rata).
+    Each position is replayed from its first fill at **average entry**, the exchange's own method: an increase moves
+    the average, a reduction books (exit − average) × quantity, sign flipped for a short. One **disposal** per
+    reducing fill (a reduction, partial close, liquidation or auto-deleverage), on its own date: quantity, average
+    entry, exit, gross (the exchange's own per-fill figure where read), the opening-fee share (the fees of the
+    increases still open, shared by quantity closed) and the closing fee, net, the funding and position fees settled
+    at that fill and those carried in (below), proceeds and cost (a labelled notional convention: a long's cost is
+    its entry notional plus its opening-fee share, a short's proceeds its entry notional less it; proceeds − cost =
+    net either way), the date acquired (the local date of the increases it is averaged over, or VARIOUS), held over
+    a year, and partial, LIQ and ADL flags. **Gains** and **Losses** are the period's positive and negative gross;
+    **Realized PnL** stays the ledger's figure, and the difference, if any, shows as *Realized PnL outside the
+    disposals* (0.01 or more), with the UTC days that do not reconcile and what the hour a boundary cuts moves. *By
+    market* comes from the disposals; *Closed positions* stays a whole-life summary per position fully closed in the
+    period. FIFO or LIFO inside a position would split a result differently between periods: the page says it uses
+    the exchange's average entry, and the fills file lists every fill.
+  * *Funding and position fees* (`funding.js`) – Meridian charges funding every hour and moves it into the balance
+    at the position's next fill. Each hourly charge settles at the position's first fill at or after it (the close,
+    when no loaded fill follows; an open position keeps its charges unsettled), so the charges between two fills
+    settle as one amount, received or paid. **Received** and **paid** are the sums of those settlements, per
+    position, never netted across positions or days (0x2f46…, Aug–Sep 2026: 233.89 received and 589.60 paid, where
+    netting per UTC day gave 36.32 and 392.03). Each UTC day's settlements are checked against the archive's settled
+    funding; a day that does not add up (unreadable or missing charges) falls back to its own net and the page says
+    `n days netted per day: settlement detail unavailable`. Two lines for information, in no total: funding charged
+    in the period, and the part of it settled after it (or not yet). mPerp **position fees**: each bucket's residual
+    in an mPerp pool goes to that pool's fills in it, by notional (from the hourly ledger where two positions of a
+    pool were filled the same UTC day). **Both readings, side by side**, neither marked as the one that applies:
+    funding and position fees as separate items on their settlement dates (the tiles, the results table, the funding
+    settlements file), or inside each disposal's result (those settled since the position opened, shared by quantity
+    closed: the *Net, inside* columns).
+  * *Results, costs and transfers* (`summary.js` `byType`) – each line with a **Type** that says what it is (trading
+    result, funding, fee, transfer), never how it is taxed: trading gains and losses, realized PnL outside the
+    disposals (only when there is any), funding received and paid, trading fees, position fees, withdrawal and
+    deposit fees, deposits, withdrawals. With every amount known they add up to the balance change (deposits −
+    withdrawals + net result). Below it, for information: funding charged in the period and its part settled later,
+    and the opening fees on positions still open at the end (in the report currency each at the date it was paid).
+  * *Gains and losses by class* (`summary.js`) – classes by the market's base token: BTC, ETH, SOL and HYPE are
+    crypto perps; XAU and XAG commodity mPerps; SPY and QQQ equity-ETF mPerps; any other market `Other · <ticker>`.
+    Per class: disposals (with a gain / with a loss), proceeds, costs, gains (the sum of the positive results),
+    losses (of the negative ones) and net, in USD and the report currency (each disposal's parts at their own dates),
+    and the perps total; one table per reading of funding and position fees. Each disposal counts on its own cash
+    flows, not notional: credits are a positive result (and, inside, funding received), debits a negative result and
+    its trading fees (and, inside, funding paid and position fees). Meridian Predict (each date basis) and the USDe
+    lots (each deposit reading) are rows of their own, never summed with perps or with each other. Which box or line
+    a class goes in is not said. 0x8ddb…, 2026, inside reading: commodity gains +$555.68 and losses −$180.05,
+    equity-ETF −$104.60, net +$271.03.
+  * *Holdings at period start and end* (`holdings.js`, card `view-holdings.js`) – what the wallet held at the
+    period's start and its end (now, for a period still running), for rules that ask for values at a date. Values,
+    not results: none is in Net result or any total, and the card says so.
+    * **Which archive bucket**: the archive files a bucket's end level under the bucket's start and its `endTime` is
+      inclusive. A UTC midnight reads the daily bucket of the day before; any other instant the hour it falls in,
+      rounded up as the ledger rounds a boundary inside an hour (India's 18:30 UTC reads the bucket ending 19:00); a
+      UTC day the ledger kept whole, its edge on the side the ledger put it; now, the newest hourly bucket. One
+      small unrealized-PnL read per instant (`load.upnl`); a read that fails leaves that instant without equity,
+      said so.
+    * **Perps, per margin pool and in total**: the cash balance (the ledger's own levels at the instant, so the
+      reconciliation's balances); the unrealized PnL, price only (the archive's figure); the funding charged and not
+      settled (from the trade detail's charges; now, the exchange's own `fundingUsd`); the position fees accrued and
+      not settled, now only (the archive keeps no field for them); equity = cash + unrealized, and equity net of the
+      unsettled funding (and now of those fees: the account page's equity); the positions open (held just before the
+      instant), with size, average entry and opening date from the replay.
+    * **Change in perps equity, deposits and withdrawals taken out**: equity at the end − equity at the start −
+      deposits + withdrawals, price only and net of unsettled funding; in USD it equals the net result + the change
+      in unrealized PnL + any balance change the ledger has no entry for (0x2f46…, 20–28 Sep 2026: −$7,507.96 =
+      −$6,425.92 − $1,082.04).
+    * **Meridian Predict at the instant**, at cost, from what happened before it: own predictions placed and not
+      decided (stake or collateral), position tokens on undecided pick configurations at the ledger's average cost,
+      results decided and not claimed (wins' payouts, voids' refunds, losses counted, tokens held to a verdict and
+      not redeemed). What an open prediction is worth is not known here, and the card says so.
+    * **USDe lots held**, once the lots are built: units and their cost under both deposit readings.
+    * The *Open at period end* tile of a period that has ended takes the archive's unrealized PnL at the end ("price
+      only, before unsettled funding and position fees · not included in Net result or Realized PnL").
+    * Not here: country rate profiles, a 31 Dec 2025 step-up or prior-year value (Meridian started in 2026), marks
+      per position from the oracle candles, mark-to-market worksheets.
+  * *Meridian Predict* (`predict.js`, card `view-predict.js`) – the wallet's Predict wallet (the smart account the
+    address owns), from the API where it answers this site, else the published snapshot (its file also brings the
+    secondary market, the wallet's own redemptions, each leg's source-market resolution time and, for a big maker, a
+    compact row for every prediction). Live, the claims the snapshot saw through another wallet's twin prediction
+    and the source times are merged in from the file, so live and snapshot give the same claim-basis total.
+    * **Both sides.** Every prediction the wallet is part of counts from its own side (a bet against itself is left
+      out: it moves no money). As the bettor, its stake against the maker's collateral; as the market maker, its
+      collateral against the bettor's stake. Wagered is the wallet's own collateral; tiles, tail and files are
+      signed for its role.
+    * **Date basis** (a select in the card, `pdate=`): *claim* (the default): a win or a void's refund when this
+      wallet claims it, a loss when the counterparty claims the pool (a note says that claim is the other side's
+      transaction and moves none of this wallet's money), tokens held to the verdict when this wallet redeems them
+      (its own burn, from the snapshot's `rd`; while its file has no `rd`, its own claim on that side, else the
+      latest claim on that pick configuration by any wallet, which the card's line, its note and the methodology
+      say);
+      *claimable*: when Meridian settled the result (`P.decidedAt`, exact or estimated, flagged); *verdict*: when
+      the source market resolved it (`P.sourceVerdictAt`, a leg without that time at its Meridian settlement,
+      flagged). Sales and matched sets are booked on their own dates under every basis. A line gives the period's
+      realized PnL under all three; none is marked as the one that applies. Words: *decided (settled on Meridian)*,
+      *claimed (paid out)*, *source market resolved*; never a bare "settled".
+    * **Tiles**: Realized PnL (with what it is made of: claimed predictions, secondary-market sales, matched sets,
+      bought tokens redeemed), winnings (payout − stake of won predictions), payouts, lost stakes, wagered,
+      predictions placed and won · lost · void booked, the results not claimed by the period's end (under claim,
+      those decided in the period, outside the total; under the other two, *Booked, not yet claimed*: those the
+      basis books in the period, inside it, so a result resolved at the source just before the period and decided
+      on Meridian in it is the previous period's under the verdict basis; each listed at its decision), the secondary
+      market (sales, proceeds, purchases), and *Claimable now* / *In open positions* (live) or *Open stakes now* at
+      cost (snapshot). Winnings − lost stakes + ledger gains + ledger losses = realized PnL, in USD and the report
+      currency. A monthly table by local month follows. In 2026 on the claim basis: 0xc1ce… +$36.78 (19 Koinly rows,
+      the record and the secondary-market file adding up to it); 0xba3b…, which only buys tokens (0 predictions, 81
+      purchases), +$743.12, all of it in the secondary-market file and read as *bought position tokens redeemed*;
+      0x79cb…, a maker with 5,690 predictions, +$14,465.09 from its compact rows.
+    * **Big makers**: a wallet file keeps the newest 600 predictions (and older ones on pick configurations it
+      traded); its `rows` hold one compact row for every prediction, so the period figures stay whole, and only the
+      per-prediction record is limited to the loaded predictions (said in an amber note and in that file, whose name
+      then ends in `-INCOMPLETE`). Without rows the figures are incomplete, said on the card and in every Predict
+      file.
+  * *USDe lots* (`lots.js`, card `view-lots.js`; on request, after the Predict card) – perps balances are
+    MeridianUSD, which the exchange mints 1:1 when USDe is deposited and burns when it is withdrawn; Predict settles
+    in USDe. If the reader's rules treat USDe as a cryptoasset rather than money, spending it can itself give a gain
+    or loss in the report currency, and receiving it is an acquisition at its value. The card says so in those words
+    (a reading, not a statement of the law) and computes that part, for Meridian activity and the opening lots
+    entered only.
+    * **Choices, none preselected**: a method (FIFO; LIFO; a moving average, holding periods counted first in, first
+      out; UK pooling: same local day first (s105), then the next 30 days, earliest first (s106A), then the s104
+      pool) and a scope (per pool: each margin pool, the Predict wallet and the wallet outside Meridian apart; per
+      wallet: the subaccount's pools together; or one pool for everything); the card says the choice is the reader's
+      and recommends none. UK pooling runs with one pool for everything only (`lots.scopesFor`): the page reads the
+      s104 pool as one per person for each asset, not one per wallet or margin pool, so with it the other scopes are
+      greyed out, a link asking for one of them gets one pool, and the card, the lots' methodology and the files say
+      so. Valuation: at par (1 USDe = 1 USD, first) or at market (DefiLlama's daily USDe/USD price at 00:00 UTC of
+      each local date), then in the report currency at the local date's rate.
+    * **Events** (`lots.usdeEvents`): perps, in the pool of each market's quote token: the gross of every disposal
+      fill, every fill's fee, each funding and position-fee settlement and transfer fee; deposits, withdrawals and
+      conversions as moves. Predict (`predict.cash`), in the Predict wallet: every placement's stake or collateral
+      out, a win's payout and a void's refund in when this wallet claims them, token sales in and purchases out,
+      tokens held to the verdict in when this wallet redeems them (as the claim basis dates them); a loss pays nothing, and what is
+      decided and not claimed is not USDe yet. Each perps pool's events must add up to the exchange's balance of it,
+      which the card states (or names the pools that do not).
+    * **Both readings of deposits and withdrawals**, side by side: as transfers (lots move in and out, no gain), or
+      wrapping as a disposal plus an acquisition at its value. Conversions between pools move no token on chain (the
+      pools are internal balances of the same MeridianUSD), so the lots read them as moves under both readings and in
+      every scope, never as disposals: their units keep their lots, acquisition dates and cost (in the per-pool scope
+      they move to the other pool; elsewhere both pools share one set of lots). The card, the info card and the
+      lots' methodology (`Conversions between pools`) state this as the page's reading.
+    * **Opening lots**: USDe acquired before it reached Meridian (where held: outside Meridian or in the Predict
+      wallet; date; units; total cost in the report currency or USD), entered in the card and kept in this browser
+      only (`localStorage` `md.tax.lots.<address>`, never sent anywhere). What they do not cover enters at its value
+      and is said so.
+    * **Results**: the fact line `USDe disposed of in the period: yes/no (N fee payments, M other)` (deposits and
+      withdrawals counted apart, conversions not at all), for the US Form 1040 digital-asset question and stated
+      as a fact of Meridian activity, never as its answer: on the card, as a row right after the period in the
+      lots' methodology rows that head both lots files (`lots.factRow`), and in the summary file before the USDe
+      lots rows; the period's disposals, proceeds, cost, gains and losses under both readings; per fiscal year and
+      scope; every disposal with the rule that matched it, the dates acquired and days held; what is held at the
+      end. A disposal or move that finds fewer units in its scope's lots than its flows put there is costed at its
+      value and named as a gap in the matching, not in the data (data that starts late is the 'not covered' note).
+      With UK pooling the events are read to 30 days after the period, and until those days have passed a disposal
+      its own day does not cover whole is marked provisional. The whole history is read once (`load.lifetime`, with
+      the same progress, Cancel, pacing and cache); its fills and transfers go through `load.span`, which reuses
+      what the period's trade detail read (done or still running) and reads only the months outside it, with the
+      request cache on every closed part. The engine uses heaps and pointers only.
+  * *Exports* (`exports.js`, one registry for the buttons, the ZIP and the exports card's text) – each file is one
+    of the site's own **reports** (the report's methodology as key, value rows, a blank line, then its tables; with
+    a byte-order mark, so a spreadsheet reads UTF-8) or a tax tool's **import file** (exactly the tool's header as
+    its first row and nothing else, no byte-order mark; its methodology is in **Import notes (methodology.txt)** and
+    the ZIP). A file that cannot be whole (truncated reads, unreadable charges, a position or UTC day that does not
+    reconcile, a day as a daily total, an incomplete Predict file) ends in `-INCOMPLETE`; a report says why in its
+    `Completeness` row, a tool file in the download's notice (about 6 s, a polite live region) and the import notes.
+    In another currency, "+ CCY" below means each amount also as `<name> <CCY>` with `USD→<CCY> rate` and the rate
+    date, at the row's own date.
+
+    | File | Kind | One row per | Columns |
+    |---|---|---|---|
+    | Summary | report | period | the period (local and UTC); every perps total (net result, realized PnL, gains, losses, disposals, fees, position fees, transfer fees, funding received, paid and net, funding charged and settled later, deposits, withdrawals, volume, opening and closing balance, closed / winning / losing positions, liquidation and ADL disposals, held over a year, open positions, reconciliation difference); the holdings at both instants; Predict realized PnL under every basis, its gross split under the report's basis (winnings, payouts of won predictions, lost stakes, void refunds, ledger gains, ledger losses, wagered; winnings − lost stakes + ledger gains + ledger losses = its realized row) and, per basis, the results not claimed by the end (decided in the period under claim, booked in it under the others); the USDe lots' Form 1040 fact line (USDe disposed of in the period: yes/no, Meridian activity only, a fact and not an answer) and their totals under both readings (or "not computed"); then the classes, perps by month and by quarter, Predict by month (realized PnL, winnings, payouts, lost stakes, ledger gains and losses, wagered; USD + CCY) |
+    | Gains and losses by class | report | class × reading | section, class, reading or date basis, disposals (with a gain / a loss), proceeds, costs, gains, losses, net (USD + CCY) |
+    | Disposals | report | reducing fill | position, market, class, side, fill no., times, quantity, average entry, exit, entry and exit notional, gross, opening-fee share, closing fee, net (separate), funding and position fees settled at the fill and carried in, net (inside), proceeds and cost (notional convention), date acquired, held over a year, partial, liquidation, ADL, position ID (+ CCY: gross at the disposal date; the opening-fee share, closing fee and the funding and position fees carried in each at the date paid; nets, proceeds and cost built from those parts) |
+    | Funding settlements | report | position × settlement | status (settled; netted per UTC day; charged, not settled by the period end), settled time, UTC day, market, side, position, charged from / to, hourly charges, received, paid (+ CCY) |
+    | Form 8949 statement | report | disposal | for the reading that reports each perp disposal as a capital gain or loss on Form 8949 and Schedule D (the IRS has issued no guidance on perpetual futures, and other readings, a swap / notional principal contract or a trader's mark-to-market election, report them elsewhere): Part (I / II by the anniversary rule, with Rev. Rul. 66-7 at a month's end, from the last increase), the box if a digital asset (I, L) and if not (C, F) side by side, (a) to (h) with MM/DD/YYYY dates, funding and position fees inside and (h) under that reading, time sold (UTC) (+ CCY for (d), (e), (h), built from the parts at their own dates); then totals per Part under both readings (Schedule D lines 3 and 10), the Exception 2 summary rows (code M) and a check against the ledger |
+    | Closed positions | report | position | closed and opened times, market, side, size, average entry and exit, entry and exit notional, realized PnL, trading and position fees, funding (net, received, paid), net, held hours, held more than a year, liquidated, deleveraged, ID (+ CCY at the close date); each row the position's whole-life result dated at the final close (PnL, fees and funding of earlier partial closes included, before the period too), which its own methodology row says: not the period's figure, which is in Disposals and Form 8949 |
+    | Daily ledger | report | UTC day (a split day in parts) | date, part, realized PnL, trading fees, funding (net, received, paid, detail), net, position fees, deposits, withdrawals, transfer fees, volume, balance at end (+ CCY for the net at the rate of the day's middle, and the net as the totals have it, each event at its own local date); from the first day with a balance or any flow |
+    | All transactions | report | event | times, type (fill, funding, position fee, transfer, close), what, cash effect, fee, notional, realized PnL (+ CCY for the cash effect), detail, tx, ID; oldest first; the cash effects add up to the balance change |
+    | Fills (trades) | report | fill | times, market, side, order type, quantity, price, notional, fee, realized PnL, maker, reduce only, position, order and fill IDs (liquidation and ADL fills included; no CCY) |
+    | Deposits, withdrawals & conversions | report | transfer | times, type, token, to token, amount, fee, status, initiated and finalized tx, ID (token units) |
+    | Perps: Koinly universal CSV | tool | event | `Date, Sent Amount, Sent Currency, Received Amount, Received Currency, Fee Amount, Fee Currency, Net Worth Amount, Net Worth Currency, Tag, Description, TxHash` |
+    | Perps: CoinTracking CSV | tool | event | `Type, Buy Amount, Buy Cur., Sell Amount, Sell Cur., Fee, Fee Cur., Exchange, Trade-Group, Comment, Date` |
+    | Predict daily ledger | report | local day | date, basis, realized PnL, winnings, payouts, lost stakes, void refunds, ledger gains and losses, secondary market, cumulative in the period (the last row is the tile), wagered, placed, won / lost / void booked, token positions held to the verdict (+ CCY) |
+    | Predict record (all statuses) | report | prediction | side, placed, decided (exact or estimated), source resolved (flag), claimed and by whom, booked, basis, status at the period end (open, decided not claimed, claimed, sold; a traded prediction's from its tokens, as its booked date: tokens redeemed, decided redemption not confirmed (dated by another wallet's claim), decided tokens not redeemed), picks, legs, category, own and counterparty collateral, odds, result, share held, payout, cost, net, where its PnL is booked, whether in the period's total, the net at each of the three dates (+ CCY each), prediction and pick configuration IDs, placement and claim tx |
+    | Predict secondary market | report | trade, set or held position | times, kind (bought, sold, held to verdict, both sides held), dated by, prediction, side, counterparty, tokens, price, amount, average cost, realized PnL (+ CCY), IDs, tx; no total rows |
+    | Predict decided, not claimed (*booked, not yet claimed* under the other bases: what the basis books in the period) | report | result | decided (exact or estimated), booked (the other bases), placed, picks, source, side, tokens, cost, claimable, result, PnL at the decision (+ CCY), claimed after the period, whether in the period's total, basis, ID |
+    | Predict · Koinly universal CSV, Predict · CoinTracking CSV | tool | result, sale or set | the tools' headers as above |
+    | Holdings at period start and end | report | value × instant | instant, times, item, detail, count, USD, CCY with the rate of the local day before, note; the positions open at each instant; the change in equity and what it is made of |
+    | USDe disposals (lots) | report | disposal | times, scope, held at, kind, what, units, proceeds, cost, gain or loss (+ CCY), matched by, acquired, holding days, held over a year, units without a lot, provisional (UK), reading, ID, tx; the matched pieces; per fiscal year and scope under both readings; the pools at the end |
+    | USDe flows | report | unit movement | times, in period, direction, held at, moved to, kind, what, units, USD per USDe, value (+ CCY), source, ID, tx; from the account's first event to the period end |
+
+    * **The tax-tool files** are built from events, not daily totals: times in UTC as `YYYY-MM-DD HH:mm:ss` (import
+      as UTC), oldest first, a deposit before results at the same instant, amounts in USDe. Perps Koinly: `realized
+      gain` per disposal fill (Received for a gain, Sent for a loss, its closing fee as Fee Amount), `futures fee`
+      for the fee of a fill that closes nothing and each position-fee settlement, `funding fee` per funding
+      settlement, `other fee` for a transfer fee on its own; deposits (Received, net of the deposit fee, no TxHash:
+      a deposit's finalized transaction is the exchange's relayer transaction, which Koinly would not match) and
+      withdrawals (Sent, the fee as Fee Amount, the payout transaction as TxHash) untagged; conversions left out.
+      Perps CoinTracking: `Derivatives / Futures Profit` or `Loss` per disposal fill with its fee, `Margin Fee` for
+      other fill fees and position fees, funding as `Other Income` / `Other Fee` in Trade-Group `Funding Rate`,
+      `Deposit`, `Withdrawal`, `Other Fee`. Each kind is checked UTC day by UTC day against the ledger; a day that
+      does not add up (or every day without the trade detail) is that day's ledger total stamped 10:00 UTC (which
+      keeps its date from UTC−10 to UTC+13), and the file says so. Rows a tool would skip as exact duplicates are
+      merged, amounts added. Predict Koinly and CoinTracking: one row per result booked under the card's basis, sale
+      and matched set (`realized gain`; `Derivatives / Futures Profit|Loss` in Trade-Group `Predict`), the wallet's
+      own claim transaction or the trade's as TxHash, adding up to the Realized PnL tile. The perps and Predict
+      files are separate, so importing both counts nothing twice. Neither file has been test-imported into either
+      tool: whether CoinTracking reads these column names and how either tool treats each type could not be checked
+      without an account.
+    * **Form 8949 statement**: built for one reading, labelled as such on its button and in its methodology row:
+      each perp disposal reported as a capital gain or loss on Form 8949 and Schedule D. The IRS has issued no
+      guidance on perpetual futures, and other readings (a swap / notional principal contract, a trader's
+      mark-to-market election) report them elsewhere. Part II only when the last increase a disposal is averaged
+      over is more than a year old (stricter than counting from the position's opening, and said in the file), the
+      anniversary read with Rev. Rul. 66-7 at a month's end (below). (d) and (e) follow the notional convention with
+      fees inside (there is no Form 1099), so (f) and (g) are blank; (b) is VARIOUS where the increases fall on different local dates; the check row sets
+      Σ(h) against the ledger's realized PnL − trading fees, item by item (realized PnL outside the disposals, fees
+      of fills in an hour a boundary cuts, fees of fills in no disposal, opening fees carried in and still open),
+      and is 0 on every account checked. No code E or aggregated mode, no TurboTax file (its gains columns could not
+      be confirmed), no Predict rows (their classification is unsettled), no loss limit.
+    * **The exports card** says, from the registry, which files add the report currency beside each amount, which
+      add only the net, which have none, and which are per event, per UTC day, per position or period totals.
+  * *Methodology, import notes and the ZIP* (`methodology.js`, `zip.js`) – one record per report, as key, value
+    rows: report, disclaimer, wallet, subaccount (name and ID), Predict wallet, report link, period (local and the
+    exact UTC instants), fiscal year, time zone, report currency, rate source, rate rule (with the holiday rule and
+    the date convention), latest rate and rate notes, how times count, USDe valuation, perps disposals, perps fees,
+    proceeds and costs, funding and position fees (both readings), holding period, Meridian Predict (the basis used
+    and the others computed beside it) and its data (snapshot build time or live), USDe lots (method, scope,
+    readings, opening lots, or not computed), the tax-tool files, data sources, completeness (truncations, failed
+    checks, netted or daily days, an incomplete Predict file), generated (UTC) and site version. A file's own rows
+    join it (the holdings' and the lots' describe rows, the classes' and Form 8949's notes: a new key before Data
+    sources, except the lots' Form 1040 fact line, right after Time zone) and its `Completeness` row is its own. It is shown on screen (*Methodology of this report*, under the notes), printed, written first in
+    every report file, and in the ZIP. **Import notes (methodology.txt)** (perps exports card and Predict card)
+    holds the record, each tool file with what it misses, and the tools' notes (headers, tags, UTC, daily rows).
+    **Download everything (ZIP)** (stored entries, UTF-8 names, CRC-32, no dependency) waits for the trade detail,
+    the holdings' reads and the Predict data, and holds every file of the report (the summary and classes, every
+    perps file the trade detail allows, the Predict files under the card's basis, the holdings, the USDe lots once
+    built), each named as its own download, plus methodology.txt (the record, the files and what each misses, what
+    was not included and why, the tool notes) and methodology.json (the same as data).
+  * *Print and phone* – **Print / PDF** prints the whole report: the identity line at the top (the full wallet, the
+    subaccount's name and ID, the Predict wallet, the period in its zone with the exact UTC instants, the time it
+    was generated), the balance reconciliation open, every row of the disposals, closed-positions and transactions
+    tables (above 2,000 disposals the per-position-per-local-day view, with a note; the USDe lots the newest 2,000),
+    the Predict card with its addresses in full and the basis in force, *Not computed for this report* for lots not
+    built, the disclaimer in every card that prints on its own, and the *Report identity and methodology* block.
+    Tables print at 9px with text cells wrapping and amounts on one line, so every table fits an A4 page; controls,
+    buttons and the definitions link are left out. On a phone (`max-width: 720px`, screens only) the results,
+    reconciliation, quarterly, class and holdings tables wrap their text and keep amounts on one line; the class
+    tables (*Gains and losses by class* and its *Other sections*) fold Proceeds and Costs into a line under the
+    name, so Disposals, Gains, Losses and Net stay in view; wider tables scroll sideways. Every export button shows a
+    spinner while its file is built and a toast (*Export failed: …*) if building it throws.
+  * *Conventions* (each named in the methodology) – a disposal is a reducing fill, booked against the position's
+    average entry (the exchange's method), its trading fees inside its result; each position is its own lot.
+    Proceeds and costs follow the notional convention in the disposals and Form 8949, and cash flows in the classes.
+    Held over a year: sold on or after the day after the acquisition's anniversary in local dates (29 Feb's
+    anniversary is 28 Feb), from the last increase a disposal is averaged over. Form 8949's Part also follows the
+    IRS's month-end ruling (Rev. Rul. 66-7: an asset acquired on the last day of a month is held more than six
+    months only from the first day of the seventh month after; read here for one year, the 13th): an increase on
+    28 Feb 2027 sold on 29 Feb 2028 is Part I there and held over a year elsewhere (`tz.heldOverYear(…, 'us')`).
+    The flag on screen is a neutral *held > 1 yr* chip, left out of a UK report; the files keep the column in every
+    report. Funding and position fees are
+    computed both ways. Amounts are USDe at 1 USD unless the USDe lots value them at market; the report currency is
+    the rate of each amount's local date; values at an instant use the local day before. Daily rows in tool files
+    sit at 10:00 UTC. An hour that a boundary cuts in its middle belongs to the period it starts in, in the ledger;
+    events count by their exact instant, and the page shows what that hour moves.
+  * *Checks the page runs*, each said where it fails: the balance reconciliation per pool; each UTC day's disposals
+    against the archive's realized PnL; each position's replay against the exchange's quantities, notional and
+    realized PnL (re-read from its own fills when it fails); each UTC day's funding settlements against the
+    archive's settled funding; each UTC day's position fees against the mPerp residual; the transactions' cash
+    effects against the balance change; Form 8949's Σ(h) against the ledger, item by item; the tax-tool files per
+    UTC day and kind; the hours of a split day against its daily row; each perps pool's USDe events against its
+    balance; the Predict record plus the secondary market against the Realized PnL tile. The tests and the
+    end-to-end check below also hold each closed position's settlements against the exchange's `fundingAccruedUsd`
+    and its position fees against `positionFeeAccruedUsd`.
+  * *Verified end to end* (3 Oct 2026, GET only, Predict from the published snapshot; the harnesses are not part of
+    the repository) – perps: 0x8ddb… (mPerp position fees), 0x7c75…, 0x8003… (liquidated), 0x2f46… (market maker,
+    funding) and 0x5853… (with Predict wallet 0x0fbf…), each in UTC, Europe/London, Australia/Sydney and
+    Asia/Kolkata, for the fiscal year and for 15–27 Sep 2026, in USD, EUR, PLN (NBP and ECB) and CAD (Bank of Canada
+    and ECB): 240 reports, 18,748 checks, all passing (reconciliation exact; disposals = the archive per UTC day;
+    funding per settlement and per position; position fees per day and per position; every tile against its file;
+    every file parsed back as a spreadsheet reads it; tool headers exact; every ZIP read back with zlib's CRC-32).
+    Predict: 0xc1ce…, 0x79cb… (maker), 0xba3b… (buyer), 0x7ff8…, 0x0fbf… and 0x0dc6… in the same zones and
+    currencies under all three bases (4,879 checks), and every snapshot wallet × preset × year × basis (742 wallets,
+    20,034 runs): the record plus the secondary market = the tile (for a big maker, the loaded predictions' part),
+    the Koinly file = the tile, the gross split identity. 0x0fbf…, UK 2026/27: 73 results (52 won, 20 lost, 1 sale)
+    adding up to −76.407197 = the tile, in 72 Koinly rows (two exact duplicates merged). 0x7ff8…: five losses
+    decided 30 Sep 2026 22:19 UTC and claimed by the counterparty on 1 Oct are Q3 under *claimable* and *verdict*,
+    Q4 under *claim*, and listed in Q3's decided-not-claimed. 0x0dc6…: a $2 loss claimed 30 Jun 2026 19:51 UTC is in
+    Sydney's and Karachi's 2026/27 (2027) year. USDe lots on seven wallets, every method, scope, reading and
+    valuation: 3,970 checks, every perps pool's events = the exchange's balance. The largest account (0x2f46…: 1,979
+    fills, 218 positions, 2,028 hourly charges in 2026) loads its trade detail in about 4 s with 28 GETs and
+    progress at least every second, then 12 ms of work; 44,050 synthetic fills with 90,046 charges take 0.4 s, every
+    perps file 1.2 s (26 M characters), four lot methods over 85,000 USDe events 2 s. The page renders without a
+    script error. Fixed by this check: a period ending inside an hour (India) now reads its fills, charges and
+    transfers to the end of that hour, so its last UTC day reconciles (and the tab keeps it open until that hour is
+    over); the holdings at a period end inside a UTC day now take the pools' levels at that instant, not at the
+    day's end; and `js/dev/sim-tax.js` now keeps one position per market at a time and answers for its own position
+    fills and funding charges, so its report reconciles and nothing about it is sent to the exchange.
+  * *Out of scope*, on purpose:
+    * computing tax: tax due, rates, deductions, allowances or loss limits (the US capital-loss limit, the UK annual
+      exempt amount, a gambling-loss cap and the like): the page gives gross gains, gross losses and counts;
+    * choosing a treatment where the law is unsettled: how a perpetual is classified, funding inside or outside a
+      result and at settlement or accrual, the regime and the date of a Predict result, deposits as disposals, USDe
+      as money or a cryptoasset, which SA108 or Form 8949 box: every reading is computed and shown side by side,
+      none marked as correct;
+    * trader, business or professional status, and elections (mark-to-market, a lot method required per wallet): the
+      page shows the facts and lets the reader pick a method, recommending none;
+    * anything needing holdings or activity outside Meridian beyond the opening lots entered on the page: a pool
+      over a whole holding (UK s104, Canada's ACB, Sweden's average, France's portfolio value), wash sales or
+      straddles against positions elsewhere, total wealth; the USDe flows file serves tools that keep a whole
+      portfolio;
+    * residency, part-year residency, state conformity, connected persons, joint or household filing;
+    * filing or submitting returns, signing forms or certifying figures;
+    * classifying Meridian or Sapience (reporting provider, licensed venue, a foreign account for any return);
+    * a counterparty's residence or the country of source of a result;
+    * when a claimable win counts as received: the decided, claimable and claimed dates are given instead;
+    * certifying a USDe price or an official rate where the law names none: the source and the rate date are on
+      every row;
+    * pending or future legislation.
+  * *Not built*, deferred by the plan with its reasons:
+    * specific identification of USDe lots: it needs an identification made at the time of each disposal, which a
+      records page cannot make after the fact (offering it afterwards could give records that do not meet the rules
+      that allow it); FIFO, LIFO, the moving average and UK pooling are built and the reader picks one;
+    * the other official rate sources (the Bank of England's XUDLUSS, HMRC's monthly rates, the Riksbank, Norges
+      Bank, Danmarks Nationalbank, the ESTV, the RBA, the RBNZ, the SARB, the SBP, India's Rule 115 SBI TT buying
+      rate) and the monthly-average and year-end conventions: no rule checked requires them, SBI publishes no API,
+      and each is a few lines in `scripts/build-fx.mjs` and `fx.SOURCES`; until then the USD columns serve;
+    * an India Schedule VDA file: the Disposals file already has the acquisition and transfer dates, cost,
+      consideration and gains and losses listed apart, and the form under the 2025 Act is unverified;
+    * a Hong Kong fiscal-year preset: a custom range covers it;
+    * an Australian 12-month CGT flag: *held over a year* (the disposals' column and the chip) covers the fact;
+    * a TurboTax file: its column list could not be confirmed.
+  * *Not a tax adviser* – `MD.tax.DISCLAIMER`, verbatim: "MeridianDataHub is not a tax adviser. These are records,
+    not tax advice: the rules for perpetual futures, funding and prediction markets differ by country, and no tax is
+    computed here. Use these records with a professional or a tax tool." It is in the notes card, on a wallet with
+    no perps subaccount, in the USDe lots and Holdings cards (each prints on its own), in the printed methodology
+    block, in every report file's methodology rows, in methodology.txt and methodology.json and in the import notes.
+    The header chip reads *records · not advice*. Where a text speaks of a treatment it is a reading ("if your rules
+    treat USDe as a cryptoasset …"), and a test scans the page, the tax modules, the definitions and this README for
+    a treatment stated as fact.
+  * *Code and tests* – `js/pages/tax.js` keeps the picker, the period and currency controls, the layout, the notes,
+    the methodology on screen and in print, the summary files, the ZIP and the import notes; the cards are
+    `view-perps.js`, `view-predict.js`, `view-holdings.js` and `view-lots.js`; every other module is pure (no DOM,
+    no network) except `load.js`, `fx.load` / `fx.usde` and `ui.js`, so the tests load them in Node (see *Tests*
+    above). `js/dev/sim-tax.js` (not loaded by the site) fakes a busy two-year account whose daily and hourly ledger
+    is built from the same events, one position per market at a time, with its own position fills and no hourly
+    funding charges (funding nets per UTC day), answering for its own account without calling the exchange:
+    `MDSim.install()` in the console, then open `#/tax?address=<its address>`; the report reconciles, every UTC day
+    and every position.
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
   * *Overview* – exchange-wide totals, wagered and count per UTC day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
@@ -466,8 +1004,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     (`P.bettorFigures`: `viaToken`). Results, win rates, PnL and the ex-post vig count from the
     settlement, and so does every date the site shows for a result (Big wins, slip pages and
     cards, curves, the Questions page's most recently settled predictions): claiming changes none
-    of them. The tax center is the one exception: it books Predict results on the claim date, when the
-    cash arrives.
+    of them. The tax center is the one exception: it books Predict results on the claim date by
+    default (a loss at the counterparty's claim of the pool), and offers the decision on Meridian and
+    the source market's resolution as the other date bases, with the period under all three side by side.
     - *Settlement time.* The API keeps none for a prediction, but each leg's condition carries
       Meridian's `settledAt`. `P.legVerdictAt` dates a win when its last leg settled and a loss
       when the first leg settled against the bettor. The snapshot builder stores that as `da` on
@@ -504,7 +1043,7 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     up to the Volume tile and Open counts the loaded predictions when they are all loaded.
     *Unresolved on Meridian* is the small separate set of questions Meridian's resolver has
     not resolved although Polymarket has (unlisted questions, see above); those are listed first on the Ended tab. The tax center
-    stays on a cash basis (claimed).
+    dates results by the claim by default (see *Tax center*).
   * *Predict wallets* – the Meridian app does not place predictions from the address a trader
     signs in with. That address owns the perps subaccounts. Predictions come from a ZeroDev Kernel
     v3.1 smart account it controls on Robinhood Chain: an ERC-1967 proxy to
@@ -545,8 +1084,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     The aggregate (Overview, Bettors, Market makers) carries the adjustment; a bettor page marks
     sold predictions, shows their ledger result and a *Secondary market* card (price per token,
     outcome, the sale's result against its cost), and no longer lists a sold winner as the
-    seller's unclaimed winnings; the tax center books a sale as a disposal on its date and the
-    held share on its claim, with a trades CSV.
+    seller's unclaimed winnings; the tax center books a sale on its date and the share still held
+    when its date basis books it (its redemption, by default), itemised in its secondary-market file.
   * *Market makers* – who takes the other side of the RFQ auctions: share of predictions,
     collateral committed, open collateral, PnL, win rate, average quoted vig (the Overview's
     makers table uses the same columns, `makerCols`). A counterparty counts as a market maker
@@ -603,8 +1142,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       on a single wallet.
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the chance now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
-    perps account page). The Tax center gains a Predict block with realized PnL, monthly table
-    and two CSV exports.
+    perps account page). The Tax center has a Predict card for the same wallet (both roles, three
+    date bases, the gross split, its own report and tax-tool files: see *Tax center*).
     - *Chance now*: the legs multiplied (as independent), a leg Meridian has settled counting as
       won or lost (its estimatedPrice freezes before the settlement), an open one at Polymarket's
       price once loaded, else Meridian's estimate from the snapshot, marked. A Meridian-settled leg
@@ -633,6 +1172,34 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     logs "snapshot not published". `-Force` publishes a real drop once.
   - **Safe file names:** addresses and condition ids from the API become file names only when they
     are well-formed hex.
+  - **Tax center fields** (additive; page code from before them ignores them, and the page reads
+    files without them):
+    - in `bettors/<address>.json`, each prediction's claim transaction (`stx`, the API's
+      `settleTxHash`) and each decided leg's source-market resolution (leg element 11, `vt`,
+      seconds: Polymarket's `umaEndDate`, else `closedTime` once closed, looked up for every
+      decided leg at most about 150 Gamma requests a run and cached as `resolved` in the price
+      cache); slips and question files carry neither;
+    - `rd: {"<pick configuration>|<P|C>": ms}`, when the wallet redeemed the tokens its ledger
+      held at a verdict that pays (`P.redemptionTimes` over its burns: Transfer holder → 0x0).
+      `scripts/burns.mjs` reads them with `eth_getLogs` on Robinhood Chain one token at a time:
+      the RPC spans at most 10M blocks for one address, 100,000 for several and 30,000 without
+      one (read on 2026-10-03; the earlier whole-wallet read without an address was refused every
+      run). Each token is read from the block of the first placement on its pick configuration
+      (else Predict's launch block, 328,896) to the head, every holder's burns at once; a refused
+      range takes the width the refusal names (else half) and keeps it, and the refusal is logged
+      once a run. At most 10 calls a request and 300 a run (start blocks and block times
+      included), paced. Each token's progress, width and burns are cached as `burnRead` in the
+      price cache, so `--cache` scratch copies work and a run reads only new blocks; a token
+      whose every holder has redeemed is not read again. A wallet's `rd` is written only once
+      each position it held at a paying verdict is redeemed or read to the head.
+      `P.ledger(norms, trades, addr, rd)` then dates held winnings by the wallet's own burn
+      (else its earliest own claim, else not redeemed), and without `rd` keeps the older rule
+      (its own claim on that side, else the latest claim on the pick configuration);
+    - in a truncated file, `rows` with `rowsFmt: 1`: `[t, stakeW, pnlW, code, claimable s,
+      verdict s, claim s, traded]` for every prediction of the wallet, either role (`P.taxRows`);
+    - trade rows carry `vt` where every leg's source time is known.
+    Each new step runs in its own `try`/`catch`: a failure leaves its field out and never stops
+    the snapshot.
   - **Complete history only:** an incomplete history (a time window hitting its page cap) writes
     no snapshot. The deploy workflow copies the branch into `data/` on each
   run, which is where the site reads it from; after each push the PC script triggers that
@@ -1023,7 +1590,7 @@ rather than a trader of its style.
   is put on that basis from the archive's hourly funding history (`AN.netOfUnsettled`). Position
   fees are not in the exchange's daily ledger: they are the balance change it records no deposit,
   withdrawal, conversion, trade, fee or funding entry for (`posFee` in `AN.buildSeries`; the tax
-  center keeps its own position-fee line and does not read it). An interval starts at the first
+  center books the same residual, from the mPerp pools only, in `js/tax/ledger.js`). An interval starts at the first
   archive bucket boundary at or after its nominal start (within 1 hour for 24h, 2 hours for 7d,
   8 hours for 30d); all-time starts at the subaccount's creation.
 * **Equity** = Σ margin balances (all pools are USD-equivalent tokens) + net unrealized PnL
@@ -1062,7 +1629,8 @@ rather than a trader of its style.
 * Meridian's history API clamps ranges (e.g. 3 days at 1-hour resolution, 120 days at daily);
   the client chunks requests automatically.
 * Nothing is written anywhere except `localStorage` (favorites, leaderboard snapshot, chart
-  preference).
+  preference, the Tax center's report currency and the USDe opening lots entered there) and
+  `sessionStorage` (the Tax center's frankfurter.dev and DefiLlama answers).
 
 ## Layout
 
@@ -1076,6 +1644,21 @@ js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
 js/router.js            hash router
 js/pages/*.js           home, account, favorites, leaderboard, dashboard, tax, copytrade, copysim, copyagent, predict, status
+js/tax/*.js             tax center modules (MD.tax): core (presets, currencies, CSV, the disclaimer), tz (local time),
+                        periods, fx (exchange rates: sources, conventions, fallbacks, money formatting), ledger (the
+                        archive cut at local boundaries), load (archive and per-fill reads, cached for the tab), fills
+                        (fills to positions, the replay at average entry, disposals, day checks), funding (funding
+                        settlements per position, mPerp position fees per fill), predict (a wallet's Predict record:
+                        both roles, three date bases, the gross split, the decided-not-claimed tail, its USDe flows, the
+                        Predict files), lots (the USDe lots: events, scopes, deposit readings, FIFO / LIFO / average /
+                        UK pooling, the lots files), holdings (values at the period's start and end: perps per pool,
+                        Predict at cost, the lots), summary (results by type, gains and losses by class, the summary
+                        file), methodology (the report's record, import notes, methodology.txt / .json), zip (the ZIP
+                        writer), exports (the registry of export files, the tax-tool rows, Form 8949), ui (downloads,
+                        progress), view-perps (the perps cards), view-predict (the Predict card), view-lots (the USDe
+                        lots card), view-holdings (the Holdings card); pure except load, fx.load, fx.usde, ui and view-*
+scripts/build-fx.mjs    deploy-time official exchange rates for the tax center (data/fx/: ECB, NBP, Bank of Canada) and
+                        DefiLlama's USDe/USD price (the USDe lots' market valuation)
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy

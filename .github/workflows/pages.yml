@@ -84,6 +84,15 @@ jobs:
           node -e "const j = JSON.parse(require('fs').readFileSync('data/predict.json', 'utf8')); if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }"
           echo "snapshot copied: $(find data -path 'data/bettors/*' -type f | wc -l) wallet files, $(find data -path 'data/questions/*' -type f | wc -l) question files, $(find data -path 'data/slips/*' -type f | wc -l) slip files"
 
+      # The Tax center's official exchange rates (data/fx/*.json): the ECB's euro reference rates, NBP table A for USD/PLN
+      # and the Bank of Canada's USD/CAD, about one GET per source from a fixed start date (scripts/build-fx.mjs), plus
+      # DefiLlama's daily USDe/USD price (one GET: the USDe lots' market valuation; without it the page reads DefiLlama). A
+      # visitor's browser cannot read most central banks itself (no CORS). A source that fails is left out with a warning
+      # and the page falls back to the ECB's rates (frankfurter.dev), so this step never blocks the deploy.
+      - name: Official exchange rates (data/fx)
+        run: node scripts/build-fx.mjs --out data/fx
+        continue-on-error: true
+
       - name: Assemble the site (dist/)
         run: |
           mkdir -p dist

@@ -73,7 +73,8 @@
   };
   A.qs = qs;
 
-  /** Cursor pagination: collects up to maxPages pages of `limit` rows. */
+  /** Cursor pagination: collects up to maxPages pages of `limit` rows. opts.onPage(pages, rows read so far) after each
+   *  page, for a progress line. */
   A.page = async function (base, path, params, opts = {}) {
     const limit = Math.min(A.MAX_LIMIT, opts.limit || A.MAX_LIMIT);
     const maxPages = opts.maxPages || 50;
@@ -86,6 +87,7 @@
       hasNext = !!(r && r.hasNext && r.nextCursor);
       cursor = hasNext ? r.nextCursor : null;
       pages++;
+      if (opts.onPage) opts.onPage(pages, rows.length);
     } while (hasNext && pages < maxPages);
     rows.truncated = hasNext;
     return rows;
@@ -137,7 +139,9 @@
   A.openPositions = (sid, o) => A.page(A.BASE, '/v1/position', { subaccountId: sid, open: true }, { ttl: (o && o.ttl) || 0, signal: o && o.signal }).then((rows) => rows.filter((p) => U.num(p.size) !== 0));
   A.positions = (sid, o) => A.page(A.BASE, '/v1/position', { subaccountId: sid }, { maxPages: (o && o.maxPages) || 10, ttl: (o && o.ttl) || 0, signal: o && o.signal });
   A.positionsPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/position', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
-  A.positionFills = (positionId, o) => A.page(A.BASE, '/v1/position/fill', { positionId }, { maxPages: 5, ttl: 60000, signal: o && o.signal });
+  /** A position's own fills (liquidation and deleverage fills included, each with its realizedPnl); o.maxPages (5 by
+   *  default) for a position with more than 1,000 fills. */
+  A.positionFills = (positionId, o) => A.page(A.BASE, '/v1/position/fill', { positionId }, { maxPages: (o && o.maxPages) || 5, ttl: (o && o.ttl) || 60000, signal: o && o.signal });
   A.openOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isWorking: true }, { maxPages: 5, signal: o && o.signal });
   /** Untriggered stop orders (take profit / stop loss) — a separate filter from working orders. */
   A.pendingOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isPending: true }, { maxPages: 5, signal: o && o.signal });
@@ -169,17 +173,19 @@
    *  1 hour to 3 days per request and floors startTime to the hour, so the windows run back from the next whole hour, each
    *  71 hours, a few at a time; a row two windows share is kept once. Hour-aligned, the same windows within the hour hit
    *  the request cache. Null when a window holds more rows than are read (40 pages): netting against part of the charges
-   *  would misdate every earlier bucket, so callers fall back to the settled funding. */
+   *  would misdate every earlier bucket, so callers fall back to the settled funding. o.end bounds the windows (charges
+   *  before it only; now when left out); o.onProgress(done, total) counts the windows. */
   A.fundingCharges = async function (sid, start, o) {
-    const W = 3 * U.DAY - U.HOUR, top = Math.ceil(Date.now() / U.HOUR) * U.HOUR;
+    const now = Date.now(), end = o && o.end != null ? Math.min(U.num(o.end), now) : null;
+    const W = 3 * U.DAY - U.HOUR, top = Math.ceil((end != null ? end : now) / U.HOUR) * U.HOUR;
     const ends = []; for (let e = top; e > start; e -= W) ends.push(e);
-    // the newest window sends no endTime, so the archive ends it at its own clock (it rejects an endTime past that)
-    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: e - W, endTime: e === top ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4);
+    // a window reaching the archive's clock sends no endTime, so the archive ends it there (it rejects an endTime past that)
+    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: e - W, endTime: e >= now - 2 * 60000 ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4, o && o.onProgress);
     const bad = res.find((r) => !r.ok); if (bad) throw bad.error;   // an abort or a failed window, as a serial loop would throw
     const parts = res.map((r) => r.value);
     if (parts.some((p) => !p || p.truncated)) return null;
     const seen = new Set(); const rows = [];
-    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k)) { seen.add(k); rows.push(c); } }
+    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end)) { seen.add(k); rows.push(c); } }
     return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
   };
   /**

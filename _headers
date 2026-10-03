@@ -11,7 +11,7 @@
   Referrer-Policy: no-referrer
   X-Frame-Options: SAMEORIGIN
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-GxvxLQzQ6AZ0QZNXtDESrH0ZEXMfG3lj+oceFyXddQc='; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.meridian.xyz https://archive.meridian.xyz https://tradingview.meridian.xyz wss://ws.meridian.xyz https://api.predict.meridian.xyz https://gamma-api.polymarket.com https://clob.polymarket.com https://polygon-bor-rpc.publicnode.com https://1rpc.io https://rpc.mainnet.chain.robinhood.com https://api.frankfurter.dev https://ntfy.sh https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-GxvxLQzQ6AZ0QZNXtDESrH0ZEXMfG3lj+oceFyXddQc='; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://api.meridian.xyz https://archive.meridian.xyz https://tradingview.meridian.xyz wss://ws.meridian.xyz https://api.predict.meridian.xyz https://gamma-api.polymarket.com https://clob.polymarket.com https://polygon-bor-rpc.publicnode.com https://1rpc.io https://rpc.mainnet.chain.robinhood.com https://api.frankfurter.dev https://coins.llama.fi https://ntfy.sh https: http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
 /data/*
   Cache-Control: no-cache
 /index.html

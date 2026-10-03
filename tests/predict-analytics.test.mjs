@@ -346,3 +346,77 @@ test('a percentage rounded to zero carries no sign', () => {
   assert.equal(MD.util.fmtPct(-0.06, { sign: true, dp: 1 }), '-0.1%');
   assert.equal(MD.util.fmtPct(2.5, { sign: true, dp: 0 }), '+3%');
 });
+// ---- the tax center's additions to the wallet files (stx, vt, rows) ----
+const sec = (ms) => Math.floor(ms / 1000);
+/** a raw API prediction with its legs' Meridian settlement times (one leg per entry of legs: {yes, res ('Y' | 'N' |
+ *  'V' | null), at (ms)}) and the claim's transaction */
+const rawLegs = (id, { verdict = null, claimedAt = null, legs, predictor = ME, counterparty = MAKER, stake = 10, cp = 30, t = T0, pc = 'pc-' + id }) => ({
+  predictionId: id, predictor, counterparty, predictorCollateral: wei(stake), counterpartyCollateral: wei(cp), predictorToken: 'tp-' + pc, counterpartyToken: 'tc-' + pc,
+  settled: !!claimedAt, result: claimedAt ? verdict : null, createdAt: new Date(t).toISOString(), settledAt: claimedAt ? new Date(claimedAt).toISOString() : null, createTxHash: '0xp' + id, settleTxHash: claimedAt ? '0xs' + id : null,
+  pickConfig: { pickConfigId: pc, resolved: !!verdict, result: verdict, picks: legs.map((l, i) => ({ conditionId: '0x' + id + i, predictedOutcome: l.yes === false ? 'NO' : 'YES', condition: { question: 'Q' + i, endTime: sec(t + 5 * DAY), settled: !!l.res, settledAt: l.res ? sec(l.at) : null, resolvedToYes: l.res === 'Y' ? true : l.res === 'N' ? false : null, nonDecisive: l.res === 'V' } })) } });
+
+test('the claim transaction and each leg\'s source-market resolution travel in the wallet files (stx, vt); older files read as before', () => {
+  const n = P.norm(rawLegs('s1', { verdict: 'PREDICTOR_WINS', claimedAt: T0 + 3 * DAY, legs: [{ res: 'Y', at: T0 + 2 * DAY }] }));
+  assert.equal(n.tx, '0xps1'); assert.equal(n.stx, '0xss1', 'P.norm: settleTxHash');
+  n.picks[0].verdictAt = T0 + 2 * DAY - 3600000;   // the builder's Polymarket resolution time (attachDecidedAt)
+  const w = JSON.parse(JSON.stringify(P.slim(n, { stx: true, vt: true })));
+  assert.equal(w.stx, '0xss1'); assert.equal(w.k[0].length, 11); assert.equal(w.k[0][10], sec(T0 + 2 * DAY) - 3600);
+  const u = P.unslim(w);
+  assert.equal(u.stx, '0xss1'); assert.equal(u.picks[0].verdictAt, T0 + 2 * DAY - 3600000); assert.equal(u.picks[0].settledAt, T0 + 2 * DAY);
+  // slips and question files carry neither, and read like a file written before them
+  const s = JSON.parse(JSON.stringify(P.slim(n, { ids: true })));
+  assert.equal('stx' in s, false); assert.equal(s.k[0].length, 10);
+  const old = P.unslim(s); assert.equal(old.stx, null); assert.equal(old.picks[0].verdictAt, null); assert.equal(old.picks[0].settledAt, T0 + 2 * DAY);
+  // the tape row (P.compact) keeps the claim transaction, and P.full passes it on
+  assert.equal(P.full(JSON.parse(JSON.stringify(P.compact(n)))).stx, '0xss1');
+  // a twin prediction paid by that claim takes its transaction too
+  const a = P.norm(rawLegs('tw1', { verdict: 'PREDICTOR_WINS', claimedAt: T0 + 3 * DAY, legs: [{ res: 'Y', at: T0 + 2 * DAY }], pc: 'twin' }));
+  const b = P.norm(rawLegs('tw2', { verdict: 'PREDICTOR_WINS', legs: [{ res: 'Y', at: T0 + 2 * DAY }], pc: 'twin' }));
+  P.markTokenClaims([a, b]); assert.equal(b.settledAt, T0 + 3 * DAY); assert.equal(b.stx, '0xstw1');
+});
+
+test('P.sourceVerdictAt: a win when its last leg resolved on its source market, a loss when the first leg against the bettor did', () => {
+  const won = P.norm(rawLegs('v1', { verdict: 'PREDICTOR_WINS', legs: [{ res: 'Y', at: T0 + DAY }, { res: 'Y', at: T0 + 2 * DAY }] }));
+  assert.deepEqual(P.sourceVerdictAt(won), { t: T0 + 2 * DAY, exact: false }, 'no source times: the Meridian settlements');
+  won.picks[0].verdictAt = T0 + DAY - 600000; won.picks[1].verdictAt = T0 + 2 * DAY - 900000;
+  assert.deepEqual(P.sourceVerdictAt(won), { t: T0 + 2 * DAY - 900000, exact: true }, 'the last leg\'s source time');
+  won.picks[1].verdictAt = null;
+  assert.deepEqual(P.sourceVerdictAt(won), { t: T0 + 2 * DAY, exact: false }, 'a leg without one counts at its Meridian settlement');
+  won.picks[1].verdictAt = T0 + 9 * DAY;
+  assert.equal(P.sourceVerdictAt(won).t, P.decidedAt(won), 'never after Meridian settled it');
+  won.picks[1].verdictAt = T0 - DAY;
+  assert.equal(P.sourceVerdictAt(won).t, T0 + DAY - 600000, 'the max over the legs');
+  // a combo lost on its second leg while the first won: the leg against the bettor, not the first to resolve
+  const lost = P.norm(rawLegs('v2', { verdict: 'COUNTERPARTY_WINS', legs: [{ res: 'Y', at: T0 + DAY }, { res: 'N', at: T0 + 3 * DAY }, { res: null }] }));
+  lost.picks[0].verdictAt = T0 + DAY - 1000; lost.picks[1].verdictAt = T0 + 3 * DAY - 5000;
+  assert.deepEqual(P.sourceVerdictAt(lost), { t: T0 + 3 * DAY - 5000, exact: true });
+  const early = P.norm(rawLegs('v3', { verdict: 'COUNTERPARTY_WINS', legs: [{ res: 'N', at: T0 + DAY }] }));
+  early.picks[0].verdictAt = T0 - DAY;
+  assert.equal(P.sourceVerdictAt(early).t, T0, 'never before the bet');
+  assert.equal(P.sourceVerdictAt(P.norm(rawLegs('v4', { legs: [{ res: null }] }))), null, 'open: none');
+  // a record from before the legs kept their times: the decision estimate, not exact
+  const bare = pred('v5', 10, 30, 'COUNTERPARTY_WINS', true);
+  assert.deepEqual(P.sourceVerdictAt(bare), { t: P.decidedAt(bare), exact: false });
+});
+
+test('P.taxRows: a compact row per prediction of the wallet in either role, signed for it, that P.fromTaxRow reads back (rowsFmt 1)', () => {
+  const B2 = '0x00000000000000000000000000000000000000b2';
+  const won = P.norm(rawLegs('r1', { verdict: 'PREDICTOR_WINS', claimedAt: T0 + 3 * DAY, legs: [{ res: 'Y', at: T0 + 2 * DAY }], t: T0 }));
+  won.picks[0].verdictAt = T0 + 2 * DAY - 60000;
+  const lostUnclaimed = P.norm(rawLegs('r2', { verdict: 'COUNTERPARTY_WINS', legs: [{ res: 'N', at: T0 + DAY }], t: T0 + 1000 }));
+  const open = P.norm(rawLegs('r3', { legs: [{ res: null }], t: T0 + 2000 }));
+  const asMaker = P.norm(rawLegs('r4', { verdict: 'PREDICTOR_WINS', claimedAt: T0 + 4 * DAY, legs: [{ res: 'Y', at: T0 + 2 * DAY }], t: T0 + 3000, predictor: B2, counterparty: ME, stake: 7, cp: 21 }));
+  const self = P.norm(rawLegs('r5', { legs: [{ res: null }], predictor: ME, counterparty: ME }));
+  const other = P.norm(rawLegs('r6', { legs: [{ res: null }], predictor: B2 }));
+  const rows = P.taxRows([won, lostUnclaimed, open, asMaker, self, other], ME, (n) => n.id === 'r2');
+  assert.equal(P.ROWS_FMT, 1); assert.equal(rows.length, 4, 'both roles; a self-match and other wallets\' predictions left out');
+  assert.deepEqual(rows.map((r) => r[0]), [T0 + 3000, T0 + 2000, T0 + 1000, T0], 'newest first');
+  const [m, o, l, w] = rows.map(P.fromTaxRow);
+  assert.deepEqual(w, { t: T0, stakeW: 10, pnlW: 30, res: 'won', maker: false, claimable: { t: T0 + 2 * DAY, exact: true }, verdict: { t: T0 + 2 * DAY - 60000, exact: true }, claim: T0 + 3 * DAY, traded: false });
+  assert.deepEqual(l, { t: T0 + 1000, stakeW: 10, pnlW: -10, res: 'lost', maker: false, claimable: { t: T0 + DAY, exact: true }, verdict: { t: T0 + DAY, exact: false }, claim: null, traded: true });
+  assert.deepEqual(o, { t: T0 + 2000, stakeW: 10, pnlW: 0, res: 'open', maker: false, claimable: null, verdict: null, claim: null, traded: false });
+  assert.equal(m.maker, true); assert.equal(m.res, 'lost', 'the bettor won: the maker lost'); assert.equal(m.stakeW, 21); assert.equal(m.pnlW, -21); assert.equal(m.claim, T0 + 4 * DAY);
+  // an estimated decision time (legs without times) is flagged
+  const est = P.fromTaxRow(P.taxRows([pred('r7', 5, 5, 'PREDICTOR_WINS', false)], ME)[0]);
+  assert.equal(est.claimable.exact, false); assert.equal(est.verdict.exact, false);
+});
