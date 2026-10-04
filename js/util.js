@@ -92,7 +92,8 @@
       el.__pending = children;
       if (!el.__catchUp) {
         el.__catchUp = true;
-        const catchUp = () => { if (pauses && (el.matches(':hover') || focusIn())) return; const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); };
+        // (the class is read when it runs: an element can start or stop pausing after its first held render)
+        const catchUp = () => { if (el.classList.contains('pause-hover') && (el.matches(':hover') || focusIn())) return; const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); };
         el.addEventListener('mouseleave', () => setTimeout(catchUp));
         el.addEventListener('focusout', () => setTimeout(catchUp));   // after the focus has landed: still inside means stay
       }

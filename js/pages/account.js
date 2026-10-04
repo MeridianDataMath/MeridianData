@@ -481,12 +481,26 @@
     const mktTrades = h('div.feed.pause-hover', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
     const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
     const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
+    // the book: the levels nearest the touch (top), every level (all), or every resting limit order with the account
+    // that placed it (orders); the choice is this viewer's, remembered in this browser
+    const BOOK_TOP = 12, BOOK_MODES = ['top', 'all', 'orders'];
+    let bookMode = BOOK_MODES.includes(U.storage.get('md.book.mode', 'top')) ? U.storage.get('md.book.mode', 'top') : 'top';
+    const bookSeg = UI.seg([
+      { v: 'top', label: 'Top ' + BOOK_TOP, title: 'The ' + BOOK_TOP + ' price levels nearest the spread on each side' },
+      { v: 'all', label: 'All levels', title: 'Every price level with a resting limit order, on both sides' },
+      { v: 'orders', label: 'Orders', title: 'Every resting limit order on its own row, with the account that placed it' },
+    ], bookMode, (v) => setBookMode(v), 'sm');
+    // the note under the book: its text, and the Orders view's button, made once (a button made again on every tick
+    // loses a click or the keyboard focus)
+    const noteText = h('span'), again = h('button.btn.ghost.sm', { hidden: true, onclick: () => readOrders(true) }, 'Read all again');
+    const bookNote = h('div.book-note.dim.xs', noteText, ' ', again);
+    let bookHook = null;   // the book's render, once the book below is set up (the first reload runs before it)
     U.replace(el, h('div.live',
       h('div.stack',
         h('div.card.tight', h('div.card-head', h('h2', 'Open positions'), status, statusTxt), posBody),
         h('div.card.tight', h('div.card-head', h('h2', 'Orders & stops')), ordBody),
         h('div.card.tight', h('div.card-head', h('h2', 'Fills'), h('span.dim.small', 'live')), fillBody)),
-      h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Order book'), mkSel), h('div', { style: { padding: '4px 0 6px', flex: 'none' } }, h('div.center', bookTitle)), h('div', { style: { flex: 'none' } }, book),
+      h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Order book'), mkSel), h('div.book-bar', h('div.center', bookTitle), bookSeg, h('div.paused.hover', 'paused while hovering'), h('div.paused.focus', 'paused while a row has the focus')), h('div', { style: { flex: 'none' } }, book), bookNote,
         h('div.card-head', { style: { borderTop: '1px solid var(--border-2)', flex: 'none' } }, h('h2', 'Market trades'), mktTitle), mktFill)));
 
     const marks = {}; // ticker -> {mark, bid, ask}
@@ -524,15 +538,17 @@
         positions = p; orders = o;
         const pids = Array.from(new Set(positions.map((x) => x.productId)));
         if (pids.length) Object.assign(prices, await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }));
-        renderPos(); renderOrd();
+        renderPos(); renderOrd(); if (bookHook) bookHook();   // the book marks this account's own resting orders
       } catch (e) { if (!isAbort(e)) console.warn(e); }
     }
     // a busy account's events rarely leave a 500 ms lull, which a debounce waited for (20 s and more); a throttle reloads
     // at most every 3 s and still applies the last event
     const reloadThrottled = U.throttle(reload, 3000);
     try { const f = await A.fillsPage(sid, null, 30, cx); fills = f.rows; } catch (_) {}
+    if (cx.signal.aborted) return;
     renderFills();
     await reload();
+    if (cx.signal.aborted) return;   // the viewer left during the first loads: no subscription would ever be cleaned up
 
     // WS subscriptions
     let curMarket = null, unsubBook = null;
@@ -556,32 +572,159 @@
     // a socket that (re)opens re-subscribes, and the book's next message is a full snapshot. It carries the latest
     // update's pt and t, so after a gap of exactly one update it would still chain: start the chain afresh here
     cx.onCleanup(A.ws.onStatus((s) => { if (s === 'open') lastBookT = null; }));
+    let bookLoaded = false;   // the current market's first L2Book message arrived (until then the book shows its loader)
+    let centerNext = true;    // the next render of a full book scrolls the spread into the middle of its box
+    // every resting limit order of every account (AN.restingOrders), read on request: the public book has no owners.
+    // A full read asks every subaccount (one request each); a quick read asks again only the subaccounts that had orders
+    // resting (a market maker re-quoting moves the book every few seconds)
+    let l3 = null, l3Busy = null, l3Err = null, l3Progress = null, l3Tried = 0, l3FullTried = 0, l3WantFull = false;
+    const L3_QUICK_MS = 5000, L3_FULL_MS = 60000;
+    function readOrders(full = true) {
+      // a full read asked for during another read runs after it
+      if (l3Busy) { if (full) l3WantFull = true; return l3Busy; }
+      if (!l3) full = true;
+      l3Err = null; l3Tried = Date.now(); if (full) { l3WantFull = false; l3FullTried = l3Tried; l3Progress = [0, 0]; }
+      again.disabled = true;
+      l3Busy = (async () => {
+        const subs = full ? await A.allSubaccounts({ signal: cx.signal }) : null;
+        const owner = full ? new Map(subs.map((s) => [s.id, s.account])) : l3.owner;
+        const ids = full ? subs.map((s) => s.id) : Array.from(new Set([sid, ...l3.orders.map((o) => o.sid), ...l3.failedIds]));
+        if (full) { l3Progress = [0, ids.length]; renderNote(); }
+        const res = await U.pLimit(ids.map((id) => () => A.openOrders(id, { signal: cx.signal })), 8, full ? (n) => { l3Progress = [n, ids.length]; renderNote(); } : null);
+        if (cx.signal.aborted) return;
+        const rows = [], failedIds = new Set(); let truncated = 0;
+        res.forEach((r, i) => { if (!r.ok) { failedIds.add(ids[i]); return; } if (r.value.truncated) truncated++; rows.push(...r.value); });
+        if (failedIds.size === ids.length && ids.length) throw new Error('no account\'s orders could be read');
+        const fresh = AN.restingOrders(rows, (id) => owner.get(id)), now = Date.now();
+        // the orders last known of the subaccounts it could not read stay (named in the note), and a quick read keeps
+        // those of the subaccounts it did not ask
+        const asked = new Set(ids);
+        const kept = l3 ? l3.orders.filter((o) => failedIds.has(o.sid) || (!full && !asked.has(o.sid))) : [];
+        l3 = full ? { at: now, fullAt: now, orders: kept.concat(fresh), owner, accounts: ids.length, failedIds, truncated, listCut: !!subs.truncated }
+          : Object.assign({}, l3, { at: now, orders: kept.concat(fresh), failedIds, truncated: Math.max(l3.truncated, truncated) });
+      })().catch((e) => { if (!isAbort(e)) l3Err = e; }).finally(() => {
+        l3Busy = null; l3Progress = null; if (cx.signal.aborted) return;
+        if (l3WantFull) readOrders(true); else renderBook();
+      });
+      return l3Busy;
+    }
+    function setBookMode(v) {
+      if (!BOOK_MODES.includes(v)) return;
+      bookMode = v; U.storage.set('md.book.mode', v); bookSeg.set(v);
+      if (!bookHook) return;   // still loading: the book starts in this mode
+      centerNext = true;
+      if (v === 'orders' && (!l3 || Date.now() - l3.fullAt > L3_FULL_MS)) readOrders(true);
+      renderBook();
+    }
+    const sideWord = (s) => (s === 'a' ? 'sell' : 'buy');
+    // this account's resting orders as of its last reload (OrderUpdate), in place of the read's: they are fresher
+    const ordersNow = () => (l3 ? l3.orders.filter((o) => o.sid !== sid).concat(AN.restingOrders(orders, () => sa.account || st.addr)) : []);
+    const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many);
+    const setNote = (text, button) => { noteText.textContent = text; again.hidden = !button; again.disabled = !!l3Busy; };
+    function renderNote() {
+      const prod = ref.byTicker[curMarket];
+      if (!prod || !bookLoaded) { setNote('', false); return; }
+      const na = Array.from(asks.values()).filter((q) => q > 0).length, nb = Array.from(bids.values()).filter((q) => q > 0).length;
+      if (bookMode === 'top') {
+        setNote(na > BOOK_TOP || nb > BOOK_TOP ? `The ${BOOK_TOP} levels nearest the spread on each side, of ${plural(na, 'ask', 'asks')} and ${plural(nb, 'bid', 'bids')}` : `Every level: ${plural(na, 'ask', 'asks')} and ${plural(nb, 'bid', 'bids')}`, false);
+        return;
+      }
+      if (bookMode === 'all') { setNote(`Every price level with a resting limit order: ${plural(na, 'ask', 'asks')} and ${plural(nb, 'bid', 'bids')}`, false); return; }
+      // the page opened on Orders (the remembered choice): the first read starts with the first book the viewer sees
+      if (!l3 && !l3Busy && !l3FullTried && !document.hidden) readOrders(true);
+      const reading = l3Progress ? `${l3 ? 'reading all subaccounts again' : 'Reading every account\'s working orders'}… ${l3Progress[0]} of ${l3Progress[1] || '?'}` : null;
+      if (reading && !l3) { setNote(reading, false); return; }
+      if (!l3) { setNote(l3Err ? 'The orders could not be read (' + (l3Err.message || l3Err) + ').' : l3Busy ? 'Reading every account\'s working orders…' : '', !!l3Err || !l3Busy); return; }
+      const list = ordersNow(), here = list.filter((o) => o.productId === prod.id);
+      const owners = new Set(here.map((o) => o.account || o.sid)).size, nf = l3.failedIds.size;
+      const ck = AN.bookCheck(asks, bids, list, prod.id), live = na + nb;
+      const parts = [`${plural(here.length, 'resting limit order', 'resting limit orders')} from ${plural(owners, 'account', 'accounts')}: `
+        + `${nf ? (l3.accounts - nf) + ' of ' + l3.accounts : 'all ' + l3.accounts} subaccounts read at ${U.fmtTime(l3.fullAt)}`
+        + (l3.at > l3.fullAt ? `, those with orders again at ${U.fmtTime(l3.at)}` : '')];
+      parts.push(!live && !here.length ? 'the live book is empty'
+        : !ck.differ.length ? `they add up to the live book at ${live === 1 ? 'its one level' : 'all ' + live + ' levels'}`
+        : `${plural(ck.differ.length, 'price level differs', 'price levels differ')} from the live book (orders placed, changed, filled or canceled since)`);
+      if (nf) parts.push(`${plural(nf, 'subaccount', 'subaccounts')} could not be read: ${nf === 1 ? 'its' : 'their'} orders as last read`);
+      if (l3.truncated) parts.push(`${l3.truncated === 1 ? '1 subaccount has' : l3.truncated + ' subaccounts have'} more than 1,000 working orders: only the first 1,000 are here`);
+      if (l3.listCut) parts.push('the subaccount list was cut short');
+      if (l3Err) parts.push('the last read failed (' + (l3Err.message || l3Err) + ')');
+      if (reading) parts.push(reading);
+      setNote(parts.join(' · ') + '.', true);
+      // the book moved on: ask the subaccounts with orders again (every 5 s at most), and every subaccount once a minute
+      // at most (a new account's orders); never while the tab is hidden. A failed read counts as a read
+      if (ck.differ.length && !l3Busy && !document.hidden) {
+        const now = Date.now();
+        if (now - Math.max(l3.fullAt, l3FullTried) > L3_FULL_MS) readOrders(true);
+        else if (now - Math.max(l3.at, l3Tried) > L3_QUICK_MS) readOrders(false);
+      }
+    }
     function renderBook() {
-      const prod = ref.byTicker[curMarket]; if (!prod) return;
-      const tick = prod.tickSize;
-      const a = Array.from(asks.entries()).filter(([, q]) => q > 0).sort((x, y) => x[0] - y[0]).slice(0, 12);
-      const b = Array.from(bids.entries()).filter(([, q]) => q > 0).sort((x, y) => y[0] - x[0]).slice(0, 12);
-      // Total = cumulative USD value of the levels from the touch out to this one (each at its own price); a running
-      // size × this level's price turned a dust bid far from the touch into a few dollars
-      let ca = 0, cb = 0; const rowsA = a.map(([p, q]) => (ca += q * p, { p, q, c: ca })); const rowsB = b.map(([p, q]) => (cb += q * p, { p, q, c: cb }));
-      const max = Math.max(ca, cb, 1e-9);
-      const lvl = (r, cls) => h('div.lvl', { class: cls }, h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q)), h('span', U.fmtUsd(r.c, { compact: true })));
+      const prod = ref.byTicker[curMarket]; if (!prod || !bookLoaded) return;
+      const tick = prod.tickSize, full = bookMode !== 'top', byOrder = bookMode === 'orders' && !!l3;
+      book.classList.toggle('full', full); book.classList.toggle('pause-hover', byOrder);
+      const all = (m, asc) => Array.from(m.entries()).filter(([, q]) => q > 0).sort((x, y) => (asc ? x[0] - y[0] : y[0] - x[0]));
+      const a = all(asks, true), b = all(bids, false);
+      // this account's own resting orders, by side and price (marked on their levels)
+      const own = AN.ordersAtLevels(AN.restingOrders(orders), prod.id);
       const m = marks[curMarket];
       const bestA = a.length ? a[0][0] : null, bestB = b.length ? b[0][0] : null;
       const spread = bestA && bestB ? ((bestA - bestB) / ((bestA + bestB) / 2)) * 100 : null;
-      U.replaceLive(book, h('div.hdr', h('span', 'Price'), h('span', 'Size'), h('span', 'Total')), rowsA.slice().reverse().map((r) => lvl(r, 'ask')),
-        h('div.mid', h('span.bold', m && m.mark ? U.fmtPrice(m.mark, tick) : '—'), h('span.dim.xs', spread != null ? '  spread ' + U.fmtPct(spread, { dp: 3 }) : '')),
-        rowsB.map((r) => lvl(r, 'bid')));
+      const mid = h('div.mid', h('span.bold', m && m.mark ? U.fmtPrice(m.mark, tick) : '—'), h('span.dim.xs', spread != null ? '  spread ' + U.fmtPct(spread, { dp: 3 }) : ''));
+      let head, upper, lower;
+      if (byOrder) {
+        // one row per order; within a price the oldest sits nearest the spread. The bar is the order's USD value
+        // against the largest order on this market
+        const list = ordersNow().filter((o) => o.productId === prod.id);
+        const sellO = list.filter((o) => o.side === 'a').sort((x, y) => y.price - x.price || y.createdAt - x.createdAt);
+        const buyO = list.filter((o) => o.side === 'b').sort((x, y) => y.price - x.price || x.createdAt - y.createdAt);
+        const maxUsd = Math.max(1e-9, ...list.map((o) => o.qty * o.price));
+        const tip = (o) => `${sideWord(o.side)} ${U.fmtQty(o.qty)} at ${U.fmtPrice(o.price, tick)} (${U.fmtUsd(o.qty * o.price)})`
+          + (o.createdAt ? ' · placed ' + U.fmtDateTime(o.createdAt) : '') + (o.expiresAt ? ' · expires ' + U.fmtDateTime(o.expiresAt) : '')
+          + (o.postOnly ? ' · post-only' : '') + (o.reduceOnly ? ' · reduce-only' : '') + (o.account ? ' · account ' + o.account : '') + ' · subaccount ' + o.sid;
+        const who = (o) => (o.sid === sid ? h('span.own', 'this account') : o.account ? h('a', { href: U.accountUrl(o.account, o.sid, 'live') }, U.shortAddr(o.account, 4)) : h('span.dim', '—'));
+        const row = (o) => h('div.lvl.ord', { class: (o.side === 'a' ? 'ask' : 'bid') + (o.sid === sid ? ' mine' : ''), title: tip(o) },
+          h('i', { style: { width: ((o.qty * o.price) / maxUsd) * 100 + '%' } }), h('span', U.fmtPrice(o.price, tick)), h('span', U.fmtQty(o.qty)), h('span', who(o)), h('span', o.createdAt ? U.fmtAgo(o.createdAt).replace(' ago', '') : '—'));
+        head = h('div.hdr.ord', h('span', 'Price'), h('span', 'Size'), h('span', 'Account'), h('span', 'Age'));
+        upper = sellO.length ? sellO.map(row) : [h('div.book-empty', 'No resting sell orders')];
+        lower = buyO.length ? buyO.map(row) : [h('div.book-empty', 'No resting buy orders')];
+      } else {
+        const ta = full ? a : a.slice(0, BOOK_TOP), tb = full ? b : b.slice(0, BOOK_TOP);
+        // Total = cumulative USD value of the levels from the touch out to this one (each at its own price); a running
+        // size × this level's price turned a dust bid far from the touch into a few dollars
+        let ca = 0, cb = 0; const rowsA = ta.map(([p, q]) => (ca += q * p, { p, q, c: ca, side: 'a' })); const rowsB = tb.map(([p, q]) => (cb += q * p, { p, q, c: cb, side: 'b' }));
+        const max = Math.max(ca, cb, 1e-9);
+        const lvl = (r) => {
+          const mineQ = own[r.side].get(r.p);
+          return h('div.lvl', { class: (r.side === 'a' ? 'ask' : 'bid') + (mineQ ? ' mine' : ''), title: mineQ ? `this account: ${U.fmtQty(mineQ)} of the ${U.fmtQty(r.q)} at this price` : null },
+            h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q)), h('span', U.fmtUsd(r.c, { compact: true })));
+        };
+        head = h('div.hdr', h('span', 'Price'), h('span', 'Size'), h('span', 'Total'));
+        upper = rowsA.length ? rowsA.slice().reverse().map(lvl) : [h('div.book-empty', 'No asks')];
+        lower = rowsB.length ? rowsB.map(lvl) : [h('div.book-empty', 'No bids')];
+      }
+      // a full book scrolls in its own box: keep the spread where the viewer left it while levels come and go above it
+      const oldMid = full && !centerNext ? book.querySelector('.mid') : null;
+      const off = oldMid ? oldMid.offsetTop - book.scrollTop : null;
+      U.replaceLive(book, head, upper, mid, lower);
+      if (full && book.contains(mid)) {
+        if (centerNext) { book.scrollTop = Math.max(0, mid.offsetTop - (book.clientHeight - mid.offsetHeight) / 2); centerNext = false; }
+        else if (off != null) book.scrollTop = Math.max(0, mid.offsetTop - off);
+      }
       bookTitle.textContent = prod.displayTicker + ' · mark ' + (m && m.mark ? U.fmtPrice(m.mark, tick) : '—');
+      renderNote();
     }
+    bookHook = renderBook;
+    const onShow = () => { if (!document.hidden && bookMode === 'orders') renderBook(); };
+    document.addEventListener('visibilitychange', onShow);
+    cx.onCleanup(() => document.removeEventListener('visibilitychange', onShow));
     let unsubTrades = null, mktRows = [];
     const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
     const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
       if (unsubTrades) unsubTrades();
-      curMarket = ticker; bids.clear(); asks.clear(); lastBookT = null; mkSel.value = ticker;
-      U.replace(book, UI.loading('Loading order book…'));
+      curMarket = ticker; bids.clear(); asks.clear(); lastBookT = null; mkSel.value = ticker; bookLoaded = false; centerNext = true;
+      book.classList.remove('full', 'pause-hover'); U.replace(book, UI.loading('Loading order book…')); noteText.textContent = ''; again.hidden = true;
       const prod = ref.byTicker[ticker];
       mktRows = []; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
       if (prod) {
@@ -600,7 +743,7 @@
         lastBookT = d.t;
         for (const [p, q] of d.a || []) { const qq = U.num(q); if (qq === 0) asks.delete(U.num(p)); else asks.set(U.num(p), qq); }
         for (const [p, q] of d.b || []) { const qq = U.num(q); if (qq === 0) bids.delete(U.num(p)); else bids.set(U.num(p), qq); }
-        renderBook();
+        bookLoaded = true; renderBook();
       });
       cx.onCleanup(() => { if (unsubBook) unsubBook(); if (unsubTrades) unsubTrades(); });
     }

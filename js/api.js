@@ -56,10 +56,14 @@
       const c = cache.get(url);
       if (c && c.exp > Date.now()) return c.value;
     }
-    if (inflight.has(url)) return inflight.get(url);
-    const p = rawGet(url, opts.signal).then((v) => { if (ttl) cache.set(url, { exp: Date.now() + ttl, value: v }); inflight.delete(url); return v; }, (e) => { inflight.delete(url); throw e; });
-    inflight.set(url, p);
-    return p;
+    // a request whose caller has left (its signal aborted) is not shared: a page that replaces it would inherit the abort
+    const cur = inflight.get(url);
+    if (cur && !(cur.signal && cur.signal.aborted)) return cur.p;
+    const entry = { signal: opts.signal || null, p: null };
+    const drop = () => { if (inflight.get(url) === entry) inflight.delete(url); };
+    entry.p = rawGet(url, opts.signal).then((v) => { if (ttl) cache.set(url, { exp: Date.now() + ttl, value: v }); drop(); return v; }, (e) => { drop(); throw e; });
+    inflight.set(url, entry);
+    return entry.p;
   };
 
   const qs = (params) => {

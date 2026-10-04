@@ -410,16 +410,34 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .book { font-family: var(--mono); font-size: 12px; }
 .book .lvl { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 2px 10px; position: relative; }
 .book .lvl > span { position: relative; z-index: 1; text-align: right; }
-.book .lvl > span:first-child { text-align: left; }
+.book .lvl > span:first-of-type { text-align: left; }   /* the depth bar (i) comes first in a row */
 .book .lvl i { position: absolute; top: 0; bottom: 0; right: 0; opacity: .13; }
 .book .lvl.ask i { background: var(--red); }
 .book .lvl.bid i { background: var(--green); }
-.book .lvl.ask > span:first-child { color: var(--red); }
-.book .lvl.bid > span:first-child { color: var(--green); }
+.book .lvl.ask > span:first-of-type { color: var(--red); }
+.book .lvl.bid > span:first-of-type { color: var(--green); }
 .book .mid { text-align: center; padding: 6px; border-top: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2); font-size: 13px; }
 .book .hdr { display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 6px 10px; color: var(--text-3); font-size: 11px; text-transform: uppercase; }
 .book .hdr > span { text-align: right; }
 .book .hdr > span:first-child { text-align: left; }
+/* the book's depth switch (Top 12 · All levels · Orders); a full book scrolls in its own box, its header stays on top */
+.book-bar { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 4px 8px 6px; flex: none; }
+.book.full { max-height: min(70vh, 720px); overflow-y: auto; position: relative; }   /* scrolling on past its end moves the page (a phone screen is mostly this box) */
+.book.full .hdr { position: sticky; top: 0; z-index: 2; background: var(--bg-2); }
+.book .lvl.ord, .book .hdr.ord { grid-template-columns: 1fr 0.95fr 1.15fr 0.5fr; column-gap: 6px; }
+.book .lvl.ord > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book .lvl.ord a { color: var(--text-2); text-decoration: none; }
+.book .lvl.ord a:hover, .book .lvl.ord a:focus-visible { color: var(--text-1); text-decoration: underline; }
+.book .lvl.mine { box-shadow: inset 2px 0 0 var(--accent); }
+.book .lvl .own { color: var(--accent); }
+.book .book-empty { padding: 6px 10px; color: var(--text-3); text-align: center; }
+.book-note { padding: 6px 10px 8px; flex: none; line-height: 1.45; text-align: center; }
+.book-note .btn { margin-left: 2px; vertical-align: baseline; }
+.book-note .btn[hidden] { display: none; }
+/* the Orders list holds still under the pointer or the keyboard focus (U.replaceLive); its bar says so */
+.book-bar .paused { display: none; font-size: 11px; color: var(--text-3); }
+.card:has(.book.pause-hover:hover) .book-bar .paused.hover { display: block; }
+.card:has(.book.pause-hover :focus-visible):not(:has(.book.pause-hover:hover)) .book-bar .paused.focus { display: block; }
 .feed { max-height: 380px; overflow: auto; }
 /* a feed that fills its grid row: the card adds no height of its own (the feed is absolutely placed inside the
    flex filler), so the row is as tall as the neighbouring column and the feed scrolls only inside that height */
@@ -473,7 +491,7 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .smap .mid, .smap-detail { min-width: 480px; }
 .smap .hdr { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-family: var(--font); border-bottom: 1px solid var(--border-2); }
 .smap .hdr > span, .smap .lvl > span { text-align: right; white-space: nowrap; }
-.smap .hdr > span:first-child, .smap .lvl > span:first-child { text-align: left; }
+.smap .hdr > span:first-child, .smap .lvl > span:first-of-type { text-align: left; }   /* the bar (i) comes first in a row */
 .smap .lvl { position: relative; cursor: pointer; }
 .smap .lvl:hover { background: var(--bg-3); }
 .smap .lvl > span { position: relative; z-index: 1; }

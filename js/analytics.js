@@ -596,6 +596,51 @@
     return rows;
   };
 
+  // ---------- the order book, order by order ----------
+  // The public book (L2Book, market-liquidity) has every price level but not who rests there. Every subaccount's
+  // working orders (GET /v1/order?isWorking=true, public per subaccount) add up to it level by level, so read from all
+  // subaccounts they give each resting limit order with the account that placed it.
+
+  /** The resting limit orders among order rows (A.openOrders / A.activeOrders): a LIMIT that is live (not a stop still
+   *  waiting for its trigger, not pending) with quantity left. owner(subaccountId) → the account address, if known.
+   *  Returns [{id, sid, account, productId, side 'a' (sell) | 'b' (buy), price, qty (the unfilled part, as the book
+   *  shows it), createdAt, expiresAt (ms, null if none), postOnly, reduceOnly}]. */
+  AN.restingOrders = function (rows, owner) {
+    const out = [];
+    for (const o of rows || []) {
+      if (!o || o.type !== 'LIMIT' || o.triggered === 'NOT_TRIGGERED' || !(o.status === 'NEW' || o.status === 'FILLED_PARTIAL')) continue;
+      const price = U.num(o.price);
+      // availableQuantity does not go down as the order fills (AN.attachStops): the unfilled part is it less what filled
+      const qty = Math.max(0, (U.num(o.availableQuantity) || U.num(o.quantity)) - U.num(o.filled));
+      if (!(price > 0) || !(qty > 0)) continue;
+      out.push({ id: o.id, sid: o.subaccountId, account: owner ? owner(o.subaccountId) || null : null, productId: o.productId,
+        side: String(o.side) === '1' || o.side === 'SELL' ? 'a' : 'b', price, qty, createdAt: U.num(o.createdAt) || null,
+        expiresAt: U.num(o.expiresAt) > 0 ? U.num(o.expiresAt) * 1000 : null, postOnly: !!o.postOnly, reduceOnly: !!o.reduceOnly });
+    }
+    return out;
+  };
+
+  /** One product's resting orders summed per side and price: {a: Map price → qty, b: Map}. */
+  AN.ordersAtLevels = function (orders, productId) {
+    const lv = { a: new Map(), b: new Map() };
+    for (const o of orders || []) if (o.productId === productId) lv[o.side].set(o.price, (lv[o.side].get(o.price) || 0) + o.qty);
+    return lv;
+  };
+
+  /** The orders against the live book (asks, bids: Maps price → qty): levels where the two agree, and those that do not
+   *  ({side, price, book, orders}, either 0 where it has nothing). Quantities carry 9 decimals; sums are compared to that. */
+  AN.bookCheck = function (asks, bids, orders, productId) {
+    const lv = AN.ordersAtLevels(orders, productId), differ = []; let matched = 0;
+    for (const [side, live] of [['a', asks], ['b', bids]]) {
+      for (const p of new Set([...live.keys(), ...lv[side].keys()])) {
+        const b = Math.max(0, live.get(p) || 0), q = lv[side].get(p) || 0;
+        if (!(b > 0) && !(q > 0)) continue;
+        if (Math.abs(b - q) <= 1e-9 * Math.max(1, b)) matched++; else differ.push({ side, price: p, book: b, orders: q });
+      }
+    }
+    return { matched, differ };
+  };
+
   /** Interval start timestamp for an interval key. */
   AN.startFor = (interval, accountCreatedAt) => {
     const len = AN.INTERVALS[interval];
