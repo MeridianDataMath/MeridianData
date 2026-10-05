@@ -73,6 +73,52 @@ test('position records: the nearest unused one per episode; an open position\'s 
   near(assert, open.fundingRecv, -423, 1e-9, 'applied and charged-but-unapplied funding (paid)'); near(assert, open.posFee, 0.1009, 1e-12);
 });
 
+// The audit's XAU position 01a0fd11-12b7… (finding #27): a short of 3 opened at 4,185, bought back in two fills; the
+// exchange's record and fills as /v1/position/{id} and /v1/position/fill return them
+const xauRec = { id: '01a0fd11-12b7-7736-a72c-4c3cc60962f9', productId: 'xau', cost: '0', feesAccruedUsd: '0.6216615', positionFeeAccruedUsd: '11.06787639', fundingUsd: '0', positionFeeUsd: '0', fundingAccruedUsd: '-11.869723563', realizedPnl: '121.77', size: '0', side: 1, totalIncreaseNotional: '12555', totalIncreaseQuantity: '3', totalDecreaseNotional: '12433.23', totalDecreaseQuantity: '3', createdAt: 1790952149682, updatedAt: 1791014705992, isLiquidated: false };
+const xauFills = [
+  { id: 'a', orderId: 'o1', productId: 'xau', side: 1, filled: '3', price: '4185', feeUsd: '0', createdAt: 1790952149682 },
+  { id: 'b', orderId: 'o2', productId: 'xau', side: 0, filled: '0.1', price: '4144.7', feeUsd: '0.0207235', createdAt: 1791014620143 },
+  { id: 'c', orderId: 'o3', productId: 'xau', side: 0, filled: '2.9', price: '4144.4', feeUsd: '0.600938', createdAt: 1791014705992 },
+];
+
+test('a closed position\'s result is Meridian\'s Closed P&L; the site\'s net, with position fees, rides along', () => {
+  const [e] = S.attachPositions(S.episodes(xauFills, [xauRec]), [xauRec]);
+  const L = S.leaderResult(e, null);
+  assert.equal(L.fromRecord, true, 'the record is this position whole');
+  near(assert, L.app, 121.77 + 11.869723563 - 0.6216615, 1e-9, 'the app\'s +$133.02: realized − fundingAccrued − feesAccrued');
+  near(assert, L.net, 121.77 - 0.6216615 + 11.869723563 - 11.06787639, 1e-9, 'the site\'s +$121.95');
+  near(assert, L.appPct, L.app / 12555, 1e-12, 'Closed P&L % on the notional opened');
+  near(assert, L.gross - L.fees + L.fundingSettled, L.app, 1e-9, 'the fills give the same figure');
+  // no whole record (it holds fills outside the episode): the same sum from the fills, funding settled only
+  const part = Object.assign({}, e, { pos: Object.assign({}, xauRec, { totalIncreaseQuantity: '4' }), fundingRecv: 12, fundingSettled: 10, posFee: 3 });
+  const P = S.leaderResult(part, null);
+  assert.equal(P.fromRecord, false); near(assert, P.app, 121.77 - 0.6216615 + 10, 1e-9, 'unsettled funding left out'); near(assert, P.net, 121.77 - 0.6216615 + 12 - 3, 1e-9);
+});
+
+test('an open position\'s result is the app\'s gross P&L on the average entry of what is held', () => {
+  const f = (t, q, p) => ({ t, q, px: p, fee: 0, oid: 'o' + t });
+  // bought 1 at 100, sold half at 120 (+10 realized), bought 1 more at 200: 1.5 held at an average of 166.67
+  const e = { pid: 'p', start: 0, end: null, side: 1, qty: 1.5, fundingRecv: -2, fundingSettled: -1, posFee: 0.5, fills: [f(0, 1, 100), f(1, -0.5, 120), f(2, 1, 200)] };
+  near(assert, S.avgEntry(e), 250 / 1.5, 1e-9, 'a cut takes out cost at the average');
+  const L = S.leaderResult(e, 180);
+  near(assert, L.app, 1.5 * (180 - 250 / 1.5), 1e-9, '(mark − average entry) × size: +$20');
+  near(assert, L.appPct, (180 - 250 / 1.5) / (250 / 1.5), 1e-12, 'the price move');
+  near(assert, L.net, 30 - 2 - 0.5, 1e-9, 'the site\'s net: the +$10 partial close, funding and position fees too');
+  const s = S.leaderResult({ pid: 'p', start: 0, side: -1, qty: -2, fills: [f(0, -2, 100)] }, 90);
+  near(assert, s.app, 20, 1e-9, 'a short gains as the price falls'); near(assert, s.appPct, 0.1, 1e-12);
+});
+
+test('the replay sums the app\'s figure for the leader and keeps the copier and the share kept on the net basis', async () => {
+  const [e] = S.attachPositions(S.episodes(xauFills, [xauRec]), [xauRec]);
+  const R = await S.replay({ episodes: [e], settings: { mode: 'ratio', ratio: 1, delaySec: 0, slipBps: 0, feeRate: 0, priceAt }, marks: {}, since: 0, ref: null });
+  near(assert, R.T.leaderApp, 133.018062063, 1e-9); near(assert, R.T.leaderNet, 121.950185673, 1e-9);
+  near(assert, R.rows[0].leaderAppBps, (133.018062063 / 12555) * 1e4, 1e-9);
+  // a copy of the whole position at no fee: its net is the leader's gross + funding − position fees, against the leader's net
+  near(assert, R.T.copierNet, 121.77 + 11.869723563 - 11.06787639, 1e-9);
+  near(assert, R.T.edgeKept, (R.T.copierNet / R.T.leaderNet) * 100, 1e-9, 'the share kept is net against net');
+});
+
 test('the share kept is against the leader\'s result at the copier\'s size: a cost-free copy keeps 100%', async () => {
   const e = { pid: 'p', start: 0, end: 2000, side: 1, qty: 0, pos: {}, fundingRecv: 0, posFee: 0, fills: [{ t: 0, q: 10, px: 100, fee: 0, oid: 'a' }, { t: 2000, q: -10, px: 110, fee: 0, oid: 'b' }] };
   for (const s of [{ mode: 'ratio', ratio: 0.1 }, { mode: 'fixed', size: 2000 }]) {

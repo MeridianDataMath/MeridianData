@@ -156,7 +156,7 @@ test('the series reads the position-fee charges only for an account that was cha
   } finally { Object.assign(A, saved); }
 });
 
-test('leaderboard row: a fee charged two days ago and still owed is in 7d and 30d, not in 24h; all time unchanged', async () => {
+test('leaderboard row: Meridian\'s PnL, and the site\'s with a fee charged two days ago and still owed in 7d and 30d, not in 24h', async () => {
   const now = Date.now(), created = now - 10 * D, opened = now - 3 * D;
   const XAU = 'p-xau', TOKEN = '0xxau';
   const ref = { byId: { [XAU]: { id: XAU, displayTicker: 'XAU-USD', ticker: 'XAUXAUUSD', marginMode: 'ISOLATED', quoteTokenAddress: TOKEN, quoteTokenName: 'XAU', maxLeverage: 20, takerFee: '0.00005', tickSize: '0.1', lotSize: '0.0001' } }, active: [] };
@@ -184,16 +184,26 @@ test('leaderboard row: a fee charged two days ago and still owed is in 7d and 30
     const prices = { [XAU]: { oraclePrice: '4010' } };
     const row = await AN.buildLeaderboardRow(sa, ref, prices, {});
     assert.deepEqual(asked, [opened], 'read from the position\'s opening');
-    near(assert, row.stats['24h'].pnl, 0, 1e-6, '24h: nothing charged in it, the price did not move');
+    // the site's net figures (sitePnl): the fees as charged
+    near(assert, row.stats['24h'].sitePnl, 0, 1e-6, '24h: nothing charged in it, the price did not move');
     near(assert, row.stats['24h'].posFees, 0, 1e-6);
-    near(assert, row.stats['7d'].pnl, 10 - 30, 1e-6, '7d: the price PnL less the 30 charged'); near(assert, row.stats['7d'].posFees, 30, 1e-6, 'as charged');
-    near(assert, row.stats['30d'].pnl, 10 - 30, 1e-6); near(assert, row.stats['30d'].posFees, 30, 1e-6);
-    near(assert, row.stats.all.pnl, 10 - 30, 1e-6);
-    // without the charges: the old basis, the whole 30 in every window; all time the same
+    near(assert, row.stats['7d'].sitePnl, 10 - 30, 1e-6, '7d: the price PnL less the 30 charged'); near(assert, row.stats['7d'].posFees, 30, 1e-6, 'as charged');
+    near(assert, row.stats['30d'].sitePnl, 10 - 30, 1e-6); near(assert, row.stats['30d'].posFees, 30, 1e-6);
+    near(assert, row.stats.all.sitePnl, 10 - 30, 1e-6);
+    // Meridian's (pnl): no position fees, the gross price PnL; 24h starts after the opening, the others before it
+    assert.equal(row.basis, 'app'); assert.ok(AN.isAppBasis(row));
+    near(assert, row.stats['24h'].pnl, 0, 1e-6); near(assert, row.stats['7d'].pnl, 10, 1e-6); near(assert, row.stats['30d'].pnl, 10, 1e-6); near(assert, row.stats.all.pnl, 10, 1e-6);
+    near(assert, row.stats.all.volume, 4000, 1e-6, 'all time: the archive\'s total volume'); near(assert, row.stats['7d'].volume, 0, 1e-6);
+    near(assert, row.stats['7d'].roi, 1, 1e-9, 'on the 1,000 at the window\'s start'); near(assert, row.stats.all.roi, 1, 1e-9, 'on the 1,000 deposited');
+    assert.equal(row.curve[row.curve.length - 1][1], 10, 'the card\'s line ends at its PnL');
+    assert.match(AN.sitePnlTitle(row, '7d'), /Site's net figure .*-\$20\.00/);
+    assert.match(AN.sitePnlTitle({ stats: row.stats }, '7d'), /older build/, 'a row without the basis is the site\'s');
+    // without the charges: the old basis, the whole 30 in every window; all time the same; Meridian's figures unchanged
     A.positionFeeCharges = async () => null;
     const old = await AN.buildLeaderboardRow(sa, ref, prices, {});
-    near(assert, old.stats['24h'].pnl, -30, 1e-6); near(assert, old.stats.all.pnl, row.stats.all.pnl, 1e-6, 'all time unchanged');
+    near(assert, old.stats['24h'].sitePnl, -30, 1e-6); near(assert, old.stats.all.sitePnl, row.stats.all.sitePnl, 1e-6, 'all time unchanged');
     near(assert, old.stats['7d'].posFees, 0, 1e-6, 'settled: none');
+    for (const iv of ['24h', '7d', '30d', 'all']) near(assert, old.stats[iv].pnl, row.stats[iv].pnl, 1e-9, iv + ': Meridian\'s figure does not read the fees');
   } finally { Object.assign(A, saved); }
 });
 
@@ -218,6 +228,13 @@ test('account state as Meridian\'s app: available never below 0 per pool, levera
   near(assert, usd.marginRatio, mmU / 110, 1e-12); near(assert, xau.marginRatio, mmX / 975, 1e-12);
   near(assert, a.mm, mmU + mmX, 1e-9); near(assert, a.marginRatio, (mmU + mmX) / 1085, 1e-12, 'all pools: maintenance ÷ equity');
   near(assert, a.leverage, 4820 / 1100, 1e-12, 'notional ÷ balance'); near(assert, a.leverageEquity, 4820 / 1085, 1e-12, 'notional ÷ equity');
+  // Meridian's Unrealized P&L is gross, the site's net figure takes the unsettled funding and position fee off
+  near(assert, a.grossUpnl, 20, 1e-9); near(assert, a.upnl, 20 - 5 - 30, 1e-9); near(assert, xau.grossUpnl, 10, 1e-9);
+  // its P&L %: the price move since the entry, no leverage (BTC 80,000 → 81,000 is +1.25%, not ×10)
+  const btc = a.positions.find((r) => r.ticker === 'BTC-USD');
+  near(assert, btc.pnlPct, 1.25, 1e-9); near(assert, btc.roe, (10 / (810 / 10)) * 100, 1e-9, 'the site\'s return on initial margin stays');
+  const short = AN.accountState({ balances: [], positions: [{ productId: 'btc', size: '-0.02', cost: '1600', fundingUsd: '0', positionFeeUsd: '0' }], ref, prices: { btc: { oraclePrice: '72000' } } }).positions[0];
+  near(assert, short.upnl, 160, 1e-9); near(assert, short.pnlPct, 10, 1e-9, 'a short gains on the fall');
   // the app's edge cases: nothing held → 0; equity at or under 0 → 1 (it prints "100%+")
   assert.equal(AN.marginRatio(0, 100), 0); assert.equal(AN.marginRatio(5, 0), 1); assert.equal(AN.marginRatio(5, -3), 1); near(assert, AN.marginRatio(5, 20), 0.25, 1e-12);
   const empty = AN.accountState({ balances: [balances[0]], positions: [], ref, prices: {} });
@@ -238,4 +255,98 @@ test('order book as Meridian\'s: the mid in the centre, Total the size from the 
   assert.equal(U.fmtUsd(asks[2].usd), '$100,024.10');
   assert.equal(U.fmtQty(1.19645, '0.00001'), '1.19645', 'a level at the lot size, not rounded to 4 dp');
   assert.deepEqual(AN.bookDepth(null), []);
+});
+
+// ---- Meridian's Trade Stats figures (AN.appStats), TP / SL and Closed P&L as its app shows them ----
+// archive rows for one token: cumulative realized, trading fee (paid: negative) and funding (+ received) per bucket
+const archive = (ts, f) => {
+  const balance = [], upnl = [], volume = [];
+  for (const t of ts) { const x = f(t); balance.push({ time: t, tokenId: 'usd', balance: String(x.bal), realizedPnl: String(x.r), tradingFee: String(x.fee), realizedFunding: String(x.fund), deposit: String(x.dep || 0), withdrawal: '0', withdrawalFee: '0', depositFee: '0' }); upnl.push({ time: t, tokenId: 'usd', unrealizedPnl: String(x.u) }); volume.push({ time: t, volumeUsd: String(x.vol || 0) }); }
+  return AN.buildSeries({ balance, upnl, volume });
+};
+
+test('Meridian\'s windows: 24h from the start of the hour a day ago, 7D and 30D from the UTC day holding the hour 7 or 30 days ago', () => {
+  const now = Date.UTC(2026, 9, 5, 20, 17);
+  assert.deepEqual(AN.appWindow('24h', 0, now), { from: Date.UTC(2026, 9, 4, 20), unit: H, all: false });
+  assert.deepEqual(AN.appWindow('7d', 0, now), { from: Date.UTC(2026, 8, 28), unit: D, all: false });
+  assert.deepEqual(AN.appWindow('30d', 0, now), { from: Date.UTC(2026, 8, 5), unit: D, all: false });
+  assert.deepEqual(AN.appWindow('all', Date.UTC(2026, 8, 20, 13), now), { from: Date.UTC(2026, 8, 20), unit: D, all: true });
+  assert.ok(AN.seriesStart('7d', 0) <= AN.appWindow('7d', 0).from && AN.seriesStart('7d', 0) <= AN.startFor('7d', 0), 'a series for both windows');
+});
+
+test('Meridian\'s P&L: the archive\'s running realized + funding + fees + gross uPnL, now less the end of the window\'s first bucket', () => {
+  const now = Date.now(), sOH = Math.floor(now / H) * H;
+  const ts = []; for (let k = 0; k <= 26; k++) ts.push(sOH - 26 * H + k * H);
+  const val = (t) => { const k = (t - ts[0]) / H; return { bal: 1000, r: 100 + k, fee: -(10 + 0.1 * k), fund: 5 - 0.2 * k, u: 20 + 2 * k, dep: 1000, vol: 1000 }; };
+  const s = archive(ts, val);
+  ts.forEach((t, k) => near(assert, s[k].appPnl, 115 + 2.7 * k, 1e-9, 'the app\'s value at bucket ' + k));
+  // netting the site's way leaves the app's figures alone
+  const n = AN.netOfUnsettled(s, [{ positionId: 'p', time: ts[20], fundingCharge: '3' }], 3, H);
+  assert.deepEqual(n.map((b) => b.appPnl), s.map((b) => b.appPnl));
+  const st = AN.appStats(s, '24h', { bucketMs: H, now });
+  near(assert, st.base, 115 + 2.7 * 2, 1e-9, 'from the end of the hour that began 24 hours before this one');
+  near(assert, st.pnl, 2.7 * 24, 1e-9, 'the archive\'s last value less it');
+  near(assert, st.volume, 25 * 1000, 1e-9, 'volume: every hour of the window, the first one whole');
+  // the open positions' uPnL now in place of the archive's last
+  const live = AN.appStats(s, '24h', { bucketMs: H, now, live: { grossUpnl: 99 } });
+  near(assert, live.pnl, (100 + 26 - 10 - 2.6 + 5 - 5.2 + 99) - (115 + 5.4), 1e-9);
+  assert.equal(live.curve[0].v, 0); assert.equal(live.curve[0].t, sOH - 23 * H);
+  assert.equal(live.curve[live.curve.length - 1].t, now, 'the bucket in progress gives way to now');
+  near(assert, live.curve[live.curve.length - 1].v, live.pnl, 1e-9); near(assert, live.curve[live.curve.length - 1].level, live.end, 1e-9);
+  assert.equal(live.curve.length, 25, 'the start, 23 finished hours, now');
+  near(assert, live.roi, (live.pnl / (1000 + 20 + 4)) * 100, 1e-9, 'on the equity (balance + gross uPnL) at its start');
+  // an account opened inside the window: from the end of its first hour, as the app takes the first row it gets
+  const young = archive(ts.slice(10), val);
+  near(assert, AN.appStats(young, '24h', { bucketMs: H, now }).pnl, 2.7 * (26 - 10), 1e-9);
+  // all time: the value now, volume the archive's total
+  const all = AN.appStats(s, 'all', { bucketMs: H, now, createdAt: ts[0], volumeAll: 123 });
+  near(assert, all.pnl, 115 + 2.7 * 26, 1e-9); assert.equal(all.volume, 123); near(assert, all.roi, (all.pnl / 1000) * 100, 1e-9, 'on the deposits');
+  assert.equal(AN.appStats([], '24h', { now }), null);
+});
+
+test('Meridian\'s 7D: a 2-hourly series gives what its daily one does (the days hold whole 2-hour buckets)', () => {
+  const now = Date.now(), from = AN.appWindow('7d', 0, now).from;
+  const f = (t) => ({ bal: 500, r: (t - from) / H, fee: 0, fund: 0, u: Math.sin(t / D), vol: 7 });   // a value that moves every hour
+  const end = (t, ms) => Math.min(t + ms, now);
+  const h2 = []; for (let t = from - 2 * H; t <= now; t += 2 * H) h2.push(t);
+  const d1 = []; for (let t = from - D; t <= now; t += D) d1.push(t);
+  // archive rows hold each bucket's end values
+  const s2 = archive(h2, (t) => f(end(t, 2 * H))), s1 = archive(d1, (t) => f(end(t, D)));
+  const a2 = AN.appStats(s2, '7d', { bucketMs: 2 * H, now }), a1 = AN.appStats(s1, '7d', { bucketMs: D, now });
+  near(assert, a2.base, D / H + Math.sin((from + D) / D), 1e-9, 'from the end of the first UTC day');
+  near(assert, a2.pnl, a1.pnl, 1e-9); near(assert, a2.end, a1.end, 1e-9);
+  near(assert, a1.volume, 7 * d1.filter((t) => t >= from).length, 1e-9);
+  near(assert, a2.volume, 7 * h2.filter((t) => t >= from).length, 1e-9, 'every bucket from the start of that day');
+});
+
+test('TP / SL as Meridian\'s app: the whole-position stops nearest the price, partial ones counted in groups', () => {
+  const pos = (long, pid = 'sol') => ({ p: { productId: pid }, long });
+  let id = 0;
+  const o = (x) => Object.assign({ id: 'o' + ++id, productId: 'sol', status: 'PENDING', triggered: 'NOT_TRIGGERED', close: true, stopPrice: '0', clientOrderId: '' }, x);
+  const orders = [
+    o({ side: 1, stopType: 0, stopPrice: '120' }), o({ side: 1, stopType: 0, stopPrice: '110' }),   // take profits of a long: the lowest
+    o({ side: 1, stopType: 1, stopPrice: '90' }), o({ side: 1, stopType: 1, stopPrice: '95' }),     // stop losses: the highest
+    o({ side: 1, stopType: 0, stopPrice: '105', clientOrderId: 'ui0tpsl0otoc0form0abc' }),          // its entry has not filled
+    o({ side: 1, stopType: 1, stopPrice: '97', clientOrderId: 'ui0tpsl0otoc0form0abd', triggered: 'OTO_ORDER_TRIGGERED' }),
+    o({ side: 1, stopType: 0, stopPrice: '130', close: false, groupId: 'g1', groupContingencyType: 1 }), o({ side: 1, stopType: 1, stopPrice: '80', close: false, groupId: 'g1', groupContingencyType: 1 }),
+    o({ side: 1, stopType: 0, stopPrice: '140', close: false }),
+    o({ side: 0, stopType: 1, stopPrice: '150', close: false, clientOrderId: 'ui0cond0form0xyz' }),   // a conditional entry, not a TP/SL
+    o({ side: 1, status: 'NEW', triggered: 'TRIGGERED', price: '115', reduceOnly: true, close: false, stopType: undefined }),   // a reduce-only limit: not a TP/SL
+    o({ productId: 'btc', side: 1, stopType: 0, stopPrice: '99999' }),
+  ];
+  const [long] = AN.appTpSl([pos(true)], orders);
+  assert.equal(long.appTp, 110); assert.equal(long.appSl, 97); assert.equal(long.partialTpSl, 2, 'an OCO pair and a single');
+  const [short] = AN.appTpSl([pos(false)], [o({ side: 0, stopType: 0, stopPrice: '80' }), o({ side: 0, stopType: 0, stopPrice: '85' }), o({ side: 0, stopType: 1, stopPrice: '120' }), o({ side: 0, stopType: 1, stopPrice: '110' })]);
+  assert.equal(short.appTp, 85); assert.equal(short.appSl, 110);
+  const [none] = AN.appTpSl([pos(true, 'eth')], orders);
+  assert.equal(none.appTp, null); assert.equal(none.appSl, null); assert.equal(none.partialTpSl, 0);
+});
+
+test('Closed P&L as Meridian\'s app: realized less funding settled and trading fees, position fees left out', () => {
+  // 0x66af656e…'s XAU position closed 2026-10-03: the app shows −$1.09, the site's net −$2.82
+  const c = AN.closedPnl({ realizedPnl: '-0.92', feesAccruedUsd: '0.165862', fundingAccruedUsd: '0', positionFeeAccruedUsd: '1.729488', totalIncreaseNotional: '417.41' });
+  assert.equal(U.fmtUsd(c.pnl), '-$1.09'); assert.equal(U.fmtUsd(c.site), '-$2.82');
+  near(assert, c.pct, (c.pnl / 417.41) * 100, 1e-12);
+  near(assert, AN.closedPnl({ realizedPnl: '10', fundingAccruedUsd: '-2', feesAccruedUsd: '1' }).pnl, 11, 1e-12, 'funding received adds');
+  assert.equal(AN.closedPnl({ realizedPnl: '1' }).pct, null);
 });

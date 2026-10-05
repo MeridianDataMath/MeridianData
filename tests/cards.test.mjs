@@ -101,6 +101,18 @@ test('a one-off counterparty (under P.MAKER_MIN predictions) is not called a mar
   assert.match(K.walletText({ address: ME, n: 1, won: 1, lost: 0, pnl: 25, wagered: 25, topCat: 'Sports' }, false).description, /^1 prediction · .* · top category Sports\./);
 });
 
+test('a wallet card\'s record and win rate are Meridian\'s app\'s: claimed predictions only, the rate to two decimals (0xdd9b…: 1,158 / 1,954, 37.21 %)', () => {
+  const T = Date.UTC(2026, 8, 1);
+  // a snapshot row carries both counts: won / lost at the verdict (the site's), appWon / appLost as the app counts them
+  const row = { address: MAKER, n: 4095, won: 1781, lost: 2233, winRate: 44.37, appWon: 1158, appLost: 1954, appWinRate: (1158 / 3112) * 100, pnl: 1000, roi: 1, wagered: 1e6, first: T };
+  const svg = K.walletSvg(row, null, true); clean(svg);
+  assert.match(svg, />1,158W \/ 1,954L</); assert.match(svg, />37\.21%</); assert.doesNotMatch(svg, /1,781W/);
+  assert.match(K.walletText(row, true).description, / · 1,158W \/ 1,954L · /);
+  // a row from a snapshot built before the app's counts: its own
+  const old = K.walletSvg({ address: ME, n: 16, won: 5, lost: 11, winRate: 31.25, pnl: -6.2, wagered: 50, first: T }, null, false); clean(old);
+  assert.match(old, />5W \/ 11L</); assert.match(old, />31\.25%</);
+});
+
 test('a long curve is thinned to 90 points and keeps its real high and low; one point per second', () => {
   const T = Date.UTC(2026, 7, 1), H1 = 3600000;
   // 200 results an hour apart swinging between $0 and $1, with a $51 high at the 60th and a −$40 low at the 150th

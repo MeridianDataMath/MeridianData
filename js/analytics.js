@@ -13,7 +13,11 @@
    * Merge archive rows (balance per token, unrealized pnl per token, volume) into one series.
    * Every bucket: {t, balance, upnl, equity, realizedPnl, fee (trading fees paid, positive), posFee (mPerp position fees
    * paid, positive; negative on the account they are credited to), funding (signed, + received),
-   * pnl (= realized − fee − posFee + funding), deposit, withdrawal (positive), volume}
+   * pnl (= realized − fee − posFee + funding), deposit, withdrawal (positive), volume,
+   * appCum, grossUpnl, appPnl: Meridian's Trade Stats P&L at the bucket's end, appPnl = appCum + grossUpnl, where appCum
+   * is the archive's cumulative realizedPnl + realizedFunding + tradingFee summed over the tokens (running totals, so the
+   * series' first bucket carries everything before it) and grossUpnl the archive's unrealized PnL. AN.netOfUnsettled
+   * leaves both alone: they stay on the app's basis (funding when settled, gross uPnL, no position fees)}
    */
   AN.buildSeries = function ({ balance = [], upnl = [], volume = [] }) {
     const m = new Map();
@@ -44,8 +48,13 @@
     for (const r of volume) { const b = at(r.time); b.volume += U.num(r.volumeUsd); }
     const rows = Array.from(m.values()).sort((a, b) => a.t - b.t);
     // carry balance forward across buckets that only had upnl/volume rows
-    let lastBal = 0;
-    for (const b of rows) { if (b.hasBalance) lastBal = b.balance; else b.balance = lastBal; b.pnl = b.realizedPnl - b.fee - b.posFee + b.funding; b.equity = b.balance + b.upnl; }
+    let lastBal = 0, cum = 0;
+    for (const b of rows) {
+      if (b.hasBalance) lastBal = b.balance; else b.balance = lastBal;
+      b.pnl = b.realizedPnl - b.fee - b.posFee + b.funding; b.equity = b.balance + b.upnl;
+      cum += b.realizedPnl - b.fee + b.funding;   // a token without a row in this bucket keeps its running total
+      b.appCum = cum; b.grossUpnl = b.upnl; b.appPnl = cum + b.upnl;
+    }
     return rows;
   };
 
@@ -226,6 +235,68 @@
     return out;
   };
 
+  // ---------- Meridian's own figures (its app's Trade Stats) ----------
+  /** The window Meridian's Trade Stats reads for an interval (its archiveHelpers): 24h the hourly series from the start of
+   *  the hour 24 hours ago; 7D and 30D the daily series from the start of the hour 7 or 30 days ago, which the archive
+   *  answers with the whole UTC day holding that moment; All the daily series since the subaccount was created.
+   *  {from: its first bucket's start, unit: the app's bucket, all} */
+  AN.appWindow = (interval, createdAt, now = Date.now()) => {
+    const sOH = Math.floor(now / U.HOUR) * U.HOUR;
+    if (interval === '24h') return { from: sOH - U.DAY, unit: U.HOUR, all: false };
+    const n = { '7d': 7, '30d': 30 }[interval];
+    if (n) return { from: Math.floor((sOH - n * U.DAY) / U.DAY) * U.DAY, unit: U.DAY, all: false };
+    return { from: Math.floor(U.num(createdAt) / U.DAY) * U.DAY, unit: U.DAY, all: true };
+  };
+  /** Where a series must start to hold both the site's window (AN.startFor) and Meridian's (AN.appWindow). */
+  AN.seriesStart = (interval, createdAt) => Math.min(AN.startFor(interval, createdAt), AN.appWindow(interval, createdAt).from);
+
+  /**
+   * An interval's PnL, volume and ROI as Meridian's Trade Stats shows them, from a series of AN.loadSeries (its appPnl per
+   * bucket: cumulative realized PnL + funding settled + trading fees, + the archive's gross unrealized PnL; position fees
+   * not in it). PnL = the value now − the value at the end of the window's first app bucket (the first one the series
+   * has, as the app takes the first row the archive returns); all time the value now. Volume = every bucket of the
+   * window, the first one whole; all time o.volumeAll (the archive's total-volume, as the app) when given.
+   * The series may be finer than the app's buckets (hourly, 2- or 8-hourly for days): they nest in them.
+   * o: {createdAt, bucketMs (the series'), live: {grossUpnl} (the open positions' unrealized PnL now: the value now takes
+   * it in place of the archive's last, which follows it within minutes), volumeAll, now}.
+   * ROI = PnL ÷ (equity, balance + gross uPnL, at the PnL's start + deposits after it), as AN.intervalStats on its own.
+   * curve: [{t, v (PnL since the start), level (the app's running total)}] from the start to now, each point at its
+   * bucket's end and the bucket in progress replaced by now; bars: [{t (a bucket's start), v (the change in it)}], the
+   * app's bar view, adding up to pnl. Null without a bucket in or before the window.
+   */
+  AN.appStats = function (series, interval, o = {}) {
+    const now = o.now || Date.now(), bm = o.bucketMs || U.DAY;
+    const w = AN.appWindow(interval, o.createdAt, now);
+    const s = (series || []).filter((b) => b.appPnl != null);
+    const rows = s.filter((b) => b.t >= w.from);
+    const before = s.filter((b) => b.t < w.from);
+    if (!rows.length && !before.length) return null;
+    // the end of the app's first bucket: the one holding the series' first bucket of the window
+    const firstEnd = rows.length ? w.from + (Math.floor((rows[0].t - w.from) / w.unit) + 1) * w.unit : w.from;
+    const baseRow = w.all ? null : s.filter((b) => b.t < firstEnd).pop() || null;
+    const base = baseRow ? baseRow.appPnl : 0;
+    const lastRow = rows.length ? rows[rows.length - 1] : before[before.length - 1];
+    const gross = o.live && o.live.grossUpnl != null && Number.isFinite(o.live.grossUpnl) ? o.live.grossUpnl : lastRow.grossUpnl;
+    const end = lastRow.appCum + gross;
+    const pnl = end - base;
+    const volume = w.all && o.volumeAll != null ? U.num(o.volumeAll) : U.sum(rows, (b) => b.volume || 0);
+    const after = w.all ? rows : rows.filter((b) => b.t >= firstEnd);
+    const eqStart = baseRow ? baseRow.balance + baseRow.grossUpnl : 0;
+    const deposits = U.sum(after, (b) => b.deposit || 0) + (w.all ? U.sum(before, (b) => b.deposit || 0) : 0);
+    const capital = Math.max(eqStart, 0) + deposits;
+    const roi = capital > 1 ? (pnl / capital) * 100 : null;
+    const t0 = w.all ? Math.max(w.from, Math.min(U.num(o.createdAt) || w.from, rows.length ? rows[0].t : w.from)) : firstEnd;
+    const curve = [{ t: t0, v: 0, level: base }], bars = [];
+    let prev = base;
+    for (const b of after) { curve.push({ t: Math.min(b.t + bm, now), v: b.appPnl - base, level: b.appPnl }); bars.push({ t: b.t, v: b.appPnl - prev }); prev = b.appPnl; }
+    const p = { t: now, v: pnl, level: end };
+    const lastB = after[after.length - 1];
+    // the bucket in progress gives way to now; the change since the last bucket's end goes on it, or on now's bucket
+    if (lastB && lastB.t + bm > now) { curve[curve.length - 1] = p; bars[bars.length - 1].v += end - lastB.appPnl; }
+    else { curve.push(p); bars.push({ t: Math.floor(now / bm) * bm, v: end - prev }); }
+    return { pnl, volume, roi, eqStart, deposits, from: w.from, pnlFrom: w.all ? t0 : firstEnd, base, end, curve, bars };
+  };
+
   AN.styleFromDuration = (ms) => (ms == null ? '—' : ms < U.HOUR ? 'Scalper' : ms < U.DAY ? 'Intraday' : ms < 7 * U.DAY ? 'Swing' : 'Long-term');
 
   /** Position-level stats. Closed positions are those with size 0 and some decrease. */
@@ -279,13 +350,13 @@
       const key = String(b.tokenAddress).toLowerCase();
       // available as the app reads it: never below 0. A pool whose losses exceed its free margin reports a negative figure,
       // and summed raw it took that from the other pools' (−$2,175.58 isolated plus $75.96 cross showed −$2,099.62)
-      pools[key] = { key, name: b.tokenName, balance: U.num(b.amount), available: Math.max(0, U.num(b.available)), used: U.num(b.totalUsed), upnl: 0, mm: 0, notional: 0, positions: [] };
+      pools[key] = { key, name: b.tokenName, balance: U.num(b.amount), available: Math.max(0, U.num(b.available)), used: U.num(b.totalUsed), upnl: 0, grossUpnl: 0, mm: 0, notional: 0, positions: [] };
     }
     const rows = [];
     for (const p of positions) {
       const prod = ref && ref.byId[p.productId]; if (!prod) continue;
       const key = String(prod.quoteTokenAddress).toLowerCase();
-      const pool = pools[key] || (pools[key] = { key, name: prod.quoteTokenName, balance: 0, available: 0, used: 0, upnl: 0, mm: 0, notional: 0, positions: [] });
+      const pool = pools[key] || (pools[key] = { key, name: prod.quoteTokenName, balance: 0, available: 0, used: 0, upnl: 0, grossUpnl: 0, mm: 0, notional: 0, positions: [] });
       const size = U.num(p.size); const abs = Math.abs(size);
       const px = prices[p.productId]; const mark = px ? U.num(px.oraclePrice) : 0;
       const entry = abs > 0 ? U.num(p.cost) / abs : 0;
@@ -296,10 +367,13 @@
       const maxLev = U.num(prod.maxLeverage) || 1;
       const k = 1 / (2 * maxLev) + U.num(prod.takerFee);
       const mm = notional * k;
-      const row = { p, prod, ticker: prod.displayTicker, size, abs, long: size > 0, mark, entry, upnl, net, notional, mm, k, maxLev, pool, funding: U.num(p.fundingUsd), positionFee: U.num(p.positionFeeUsd), realized: U.num(p.realizedPnl), roe: null, liqPrice: null, distPct: null, leverage: null };
-      pool.upnl += net; pool.mm += mm; pool.notional += notional; pool.positions.push(row); rows.push(row);
+      // pnlPct: Meridian's P&L % beside its P&L (upnl, gross): the price move since the entry, a fall for a short, in percent;
+      // no leverage, funding or fees in it
+      const pnlPct = mark > 0 && entry > 0 ? ((mark - entry) / entry) * (size > 0 ? 100 : -100) : null;
+      const row = { p, prod, ticker: prod.displayTicker, size, abs, long: size > 0, mark, entry, upnl, net, pnlPct, notional, mm, k, maxLev, pool, funding: U.num(p.fundingUsd), positionFee: U.num(p.positionFeeUsd), realized: U.num(p.realizedPnl), roe: null, liqPrice: null, distPct: null, leverage: null };
+      pool.upnl += net; pool.grossUpnl += upnl; pool.mm += mm; pool.notional += notional; pool.positions.push(row); rows.push(row);
     }
-    let equity = 0, balance = 0, upnl = 0, notional = 0, used = 0, available = 0, mmTotal = 0;
+    let equity = 0, balance = 0, upnl = 0, grossUpnl = 0, notional = 0, used = 0, available = 0, mmTotal = 0;
     const poolList = Object.values(pools);
     for (const pool of poolList) {
       pool.equity = pool.balance + pool.upnl;
@@ -318,13 +392,15 @@
         r.roe = margin > 0 ? (r.net / margin) * 100 : null;
         r.leverage = pool.equity > 0 ? r.notional / pool.equity : null;
       }
-      equity += pool.equity; balance += pool.balance; upnl += pool.upnl; notional += pool.notional; used += pool.used; available += pool.available; mmTotal += pool.mm;
+      equity += pool.equity; balance += pool.balance; upnl += pool.upnl; grossUpnl += pool.grossUpnl; notional += pool.notional; used += pool.used; available += pool.available; mmTotal += pool.mm;
     }
+    // upnl: the site's net figure (what counts in equity); grossUpnl: Meridian's "Unrealized P&L", Σ (oracle − entry) ×
+    // size with no funding or fees (its Trade Equity still takes the unsettled ones off, as equity here does).
     // unsettledFunding / unsettledPositionFee: the open positions' funding and mPerp position fees not yet in the balance
     // (fundingUsd, positionFeeUsd; + = paid), for AN.netOfUnsettled. leverage as Meridian's app ("Trade Account
     // Leverage"): notional ÷ the pools' balance, not equity (its tooltip says equity; its code divides by the balance);
     // leverageEquity the notional ÷ equity. marginRatio: AN.marginRatio of the whole account, as the app's trade panel
-    return { equity, balance, upnl, notional, used, available, mm: mmTotal, unsettledFunding: U.sum(rows, (r) => r.funding), unsettledPositionFee: U.sum(rows, (r) => r.positionFee),
+    return { equity, balance, upnl, grossUpnl, notional, used, available, mm: mmTotal, unsettledFunding: U.sum(rows, (r) => r.funding), unsettledPositionFee: U.sum(rows, (r) => r.positionFee),
       leverage: balance > 0 ? notional / balance : null, leverageEquity: equity > 0 ? notional / equity : null, marginRatio: mmTotal > 0 ? AN.marginRatio(mmTotal, equity) : null,
       pools: poolList.sort((a, b) => b.equity - a.equity), positions: rows.sort((a, b) => b.notional - a.notional) };
   };
@@ -332,17 +408,20 @@
   /**
    * All leaderboard metrics for one subaccount (shared by the browser build and scripts/build-snapshot.mjs).
    * ctx: {signal}. Returns a plain JSON-serialisable row.
+   * basis 'app' (rows built before it have none): stats[iv].pnl, .volume and .roi and the all-time curve are Meridian's
+   * Trade Stats figures (AN.appStats, its windows); sitePnl, siteVolume and siteRoi keep the site's net figures over the
+   * rolling windows (AN.intervalStats), on which sharpe, ddPct, fees, posFees and funding stay.
    */
   AN.buildLeaderboardRow = async function (sa, ref, prices, ctx) {
     const sid = sa.id;
     const o = { signal: ctx && ctx.signal };
     const [balances, positionsOpen, vol] = await Promise.all([A.balances(sid, o), A.openPositions(sid, o), A.totalVolume(sid, o).catch(() => 0)]);
     const acct = AN.accountState({ balances, positions: positionsOpen, ref, prices });
-    const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
+    const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
     if (AN.EXCHANGE[sid]) row.exchange = true;   // for the share cards, which have no MD.analytics
     if (acct.balance === 0 && !positionsOpen.length && !vol) {
       row.inactive = true;
-      for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, posFees: 0, funding: 0 };
+      for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, posFees: 0, funding: 0, sitePnl: 0, siteVolume: 0, siteRoi: null };
       return row;
     }
     const copyCtx = ctx && ctx.copy;   // {depth, candles} from AN.copyContext: the snapshot build adds a copy profile per account
@@ -368,15 +447,24 @@
     const ps = AN.positionStats(positions, ref);
     row.winRate = ps.winRate; row.positionsCount = ps.count; row.style = ps.style; row.closedCount = ps.closed.length; row.liquidated = ps.liquidated;
     const live = { upnl: acct.upnl, equity: acct.equity };
-    // funding and posFees (mPerp position fees) as charged when the charges were readable, else as settled, so that
-    // pnl = realized − fees − posFees + funding + the change in price uPnL; fees are trading fees
-    const pick = (s) => ({ pnl: s.pnl, volume: s.volume, roi: s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, posFees: s.posFeesCharged != null ? s.posFeesCharged : s.posFees, funding: s.fundingCharged != null ? s.fundingCharged : s.funding });
-    row.stats['24h'] = pick(AN.intervalStats(net(hourly, U.HOUR), s24, live, U.HOUR));
-    row.stats['7d'] = pick(AN.intervalStats(net(h2, 2 * U.HOUR), s7, live, 2 * U.HOUR));
-    row.stats['30d'] = pick(AN.intervalStats(net(h8, 8 * U.HOUR), s30, live, 8 * U.HOUR));
+    // Meridian's figures: 24h from the hourly series (it starts an hour before the app's window), 7d, 30d and all time from
+    // the daily one, the app's own buckets for them
+    const ao = { createdAt: sa.createdAt, live: { grossUpnl: acct.grossUpnl } };
+    const app = {
+      '24h': AN.appStats(hourly, '24h', Object.assign({ bucketMs: U.HOUR }, ao)),
+      '7d': AN.appStats(daily, '7d', Object.assign({ bucketMs: U.DAY }, ao)),
+      '30d': AN.appStats(daily, '30d', Object.assign({ bucketMs: U.DAY }, ao)),
+      all: AN.appStats(daily, 'all', Object.assign({ bucketMs: U.DAY, volumeAll: vol || null }, ao)),   // a failed read (caught as 0) falls back to the daily buckets
+    };
+    // the site's: funding and posFees (mPerp position fees) as charged when the charges were readable, else as settled, so
+    // that sitePnl = realized − fees − posFees + funding + the change in price uPnL; fees are trading fees
+    const pick = (s, a) => ({ pnl: a ? a.pnl : s.pnl, volume: a ? a.volume : s.volume, roi: a ? a.roi : s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, posFees: s.posFeesCharged != null ? s.posFeesCharged : s.posFees, funding: s.fundingCharged != null ? s.fundingCharged : s.funding, sitePnl: s.pnl, siteVolume: s.volume, siteRoi: s.roi });
+    row.stats['24h'] = pick(AN.intervalStats(net(hourly, U.HOUR), s24, live, U.HOUR), app['24h']);
+    row.stats['7d'] = pick(AN.intervalStats(net(h2, 2 * U.HOUR), s7, live, 2 * U.HOUR), app['7d']);
+    row.stats['30d'] = pick(AN.intervalStats(net(h8, 8 * U.HOUR), s30, live, 8 * U.HOUR), app['30d']);
     const all = AN.intervalStats(dailyN, sAll, live, U.DAY);
-    row.stats.all = pick(all);
-    row.curve = AN.compactCurve(all.curve);   // the all-time PnL line for the account's link preview card
+    row.stats.all = pick(all, app.all);
+    row.curve = AN.compactCurve(app.all ? app.all.curve : all.curve);   // the all-time PnL line for the account's link preview card, ending at its PnL
     if (copyCtx) {
       // fills and the price drift after them only for accounts with a track record worth copying (the candle cache is shared)
       let decays = null;
@@ -388,6 +476,20 @@
     }
     return row;
   };
+
+  /** A leaderboard row whose PnL, volume and ROI are Meridian's (AN.buildLeaderboardRow); a row from an older build (a
+   *  published snapshot carries one over up to a week) has the site's net figures there instead. */
+  AN.isAppBasis = (r) => !!r && r.basis === 'app';
+  /** The tooltip of a leaderboard row's PnL for interval iv: the site's own figure beside Meridian's, or what an older
+   *  row's figure is. */
+  AN.sitePnlTitle = (r, iv) => {
+    const s = r && r.stats && r.stats[iv]; if (!s) return null;
+    const win = iv === 'all' ? '' : ', over a rolling window';
+    if (!AN.isAppBasis(r)) return `From an older build: the site's net figure (funding and mPerp position fees as charged, unrealized PnL net of what is owed${win}), not Meridian's`;
+    return s.sitePnl == null ? null : `Site's net figure incl. unsettled funding and mPerp position fees${win}: ` + U.fmtUsd(s.sitePnl, { sign: true }) + (s.siteRoi != null ? ' (ROI ' + U.fmtPct(s.siteRoi, { sign: true, dp: 1 }) + ')' : '');
+  };
+  /** The tooltip of an older row's volume or ROI (headers describe Meridian's figures; such a row holds the site's). */
+  AN.siteRowNote = (r, iv) => (AN.isAppBasis(r) ? null : `From an older build: the site's figure${iv === 'all' ? '' : ' over a rolling window'}, not Meridian's`);
 
   /** A leaderboard row that never traded: no volume and no positions. The exchange's fee-collector subaccount is one —
    *  its "PnL" is fees received — so lists of traders leave these out and the leaderboard labels them. */
@@ -588,10 +690,13 @@
     const add = (pillar, key, label, v, w, note) => { parts.push({ pillar, key, label, v: v == null ? null : cl(v, 0, 1), w, note }); };
     // track record
     add('track', 'sample', 'Sample size', cl(c.closed / 40, 0, 1), 0.15, `${c.closed} closed positions (40+ for full marks)`);
-    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.15, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far');
+    // profitability on the all-time PnL the pages show beside the score: Meridian's (row.basis 'app'), or the site's net
+    // figure on a row built before; drawdown and consistency stay on the site's net PnL
+    const basisTxt = AN.isAppBasis(row) ? ' (as Meridian\'s app)' : ' (the site\'s net figure)';
+    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.15, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })}${basisTxt} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far' + basisTxt);
     add('track', 'signal', 'Clear of noise', c.tStat == null ? null : cl(c.tStat / 4, 0, 1), 0.2, c.tStat == null ? 'too few positions to tell' : `per-position result ${U.fmtNum(c.netTrimBps, 1)} bps after fees and funding, t = ${U.fmtNum(c.tStat, 1)} (4+ for full marks: the mean is well clear of the noise)`);
     add('track', 'steady', 'Consistency', c.weeksActive >= 3 ? c.weeksPos / c.weeksActive : null, 0.2, c.weeksActive >= 3 ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable (weeks start Monday 00:00 UTC)` : 'fewer than 3 active weeks');
-    add('track', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 40, 0, 1), 0.15, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)}`);
+    add('track', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 40, 0, 1), 0.15, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)} (on the site's net PnL)`);
     add('track', 'liq', 'Liquidations', cl(1 - (c.liq / Math.max(c.closed, 1)) * 5, 0, 1), 0.1, c.liq ? `${c.liq} liquidated of ${c.closed}` : 'never liquidated');
     add('track', 'conc', 'Concentration', c.top == null ? null : cl(1 - (c.top - 30) / 70, 0, 1), 0.1, c.top == null ? 'no winning position yet' : `largest win is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
     // copy friction
@@ -675,6 +780,46 @@
       r.tp = tp.sort(near); r.sl = sl.sort(near);
     }
     return rows;
+  };
+
+  /**
+   * TP / SL as Meridian's app shows them on an open position (its positions table): the stop price of the whole-position
+   * take profit and stop loss among the untriggered stop orders (status PENDING) that close the position (close: true)
+   * on its closing side, the nearest to the price of each kind when there are several (a long: the lowest take profit,
+   * the highest stop loss; a short the other way). Partial ones (close: false; not a conditional entry the app placed)
+   * are only counted, in groups (an OCO pair is one), per market: Meridian prints "Partial: n" or "n Details". Orders
+   * of an OTO bracket whose entry has not filled yet (triggered NOT_TRIGGERED, tagged otoc by the app) are left out.
+   * Sets r.appTp, r.appSl (prices, null when none) and r.partialTpSl on accountState rows.
+   */
+  AN.appTpSl = function (rows, orders) {
+    // the app's tags ride in clientOrderId: "ui0" + tags joined by "0" + "0" + a random part without zeros
+    const tags = (o) => { const c = String(o.clientOrderId || ''); return c.startsWith('ui0') ? c.split('0').slice(1, -1) : []; };
+    const live = (orders || []).filter((o) => o.status === 'PENDING' && !(o.triggered === 'NOT_TRIGGERED' && tags(o).includes('otoc')));
+    const groups = new Map();
+    for (const o of live) {
+      if (o.close || o.stopType == null || tags(o).includes('cond')) continue;
+      const g = groups.get(o.productId) || new Set();
+      g.add(o.groupId && String(o.groupContingencyType) === '1' ? o.groupId : o.id); groups.set(o.productId, g);
+    }
+    for (const r of rows) {
+      const closing = r.long ? '1' : '0';
+      const whole = live.filter((o) => o.close && o.productId === r.p.productId && String(o.side) === closing && U.num(o.stopPrice) > 0);
+      const px = (kind) => whole.filter((o) => String(o.stopType) === kind).map((o) => U.num(o.stopPrice));
+      const tp = px('0'), sl = px('1');
+      r.appTp = tp.length ? (r.long ? Math.min(...tp) : Math.max(...tp)) : null;
+      r.appSl = sl.length ? (r.long ? Math.max(...sl) : Math.min(...sl)) : null;
+      r.partialTpSl = (groups.get(r.p.productId) || new Set()).size;
+    }
+    return rows;
+  };
+
+  /** A position's result as Meridian's app shows it under Closed P&L: realized PnL − funding settled (+ = paid) − trading
+   *  fees, mPerp position fees not in it; pct on the notional opened (its Closed P&L %). The site's net figure takes
+   *  the position fees off too (AN.positionStats). */
+  AN.closedPnl = (p) => {
+    const pnl = U.num(p.realizedPnl) - U.num(p.fundingAccruedUsd) - U.num(p.feesAccruedUsd);
+    const n = U.num(p.totalIncreaseNotional);
+    return { pnl, pct: n > 0 ? (pnl / n) * 100 : null, site: pnl - U.num(p.positionFeeAccruedUsd) };
   };
 
   // ---------- the order book ----------

@@ -11,8 +11,9 @@ const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
 const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty })', { Math, Number, String, parseFloat, Infinity });
-// the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util)
-const MD = load(['js/util.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
+// the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util), with the
+// simulator's engine they build on (MD.copysim: episodes, the exchange's records, each position's result)
+const MD = load(['js/util.js', 'js/copy/sim.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
 const plain = (x) => JSON.parse(JSON.stringify(x));   // objects and arrays from the block's own context, compared as data
 
 test('quantities round down to the lot, limits to the tick in the direction that never tightens the cap', () => {
@@ -341,4 +342,38 @@ test('a position\'s entry notional, with Meridian\'s Size (quantity opened × th
   const t = CS.sizeTitle(e, 12555, { lotSize: '0.01', tickSize: '0.01' });
   assert.match(t, /Entry notional \$12,555\.00/); assert.match(t, /quantity opened, 3\.00/); assert.match(t, /4,144\.41 exit: \$12,433\.23/);
   assert.match(CS.sizeTitle({ side: 1, qty: 2, fills: [{ q: 2, px: 10 }] }, 20, null), /Still open/);
+});
+test('Copy history shows Meridian\'s P&L per position, per leader and in the tiles; the site\'s net rides along', () => {
+  const CA = MD.copyagentPage, CS = MD.copysimPage;
+  // the audit's XAU short (01a0fd11-12b7…) as the agent's own: opened by leader A's order, closed by a close order
+  const rec = { id: '01a0fd11', productId: 'xau', feesAccruedUsd: '0.6216615', positionFeeAccruedUsd: '11.06787639', fundingUsd: '0', positionFeeUsd: '0', fundingAccruedUsd: '-11.869723563', realizedPnl: '121.77', size: '0', side: 1, totalIncreaseNotional: '12555', totalIncreaseQuantity: '3', totalDecreaseNotional: '12433.23', totalDecreaseQuantity: '3', createdAt: 1000, updatedAt: 9000, isLiquidated: false };
+  // a BTC long of leader B: +$5 on the price, $1 trading fees, $6 of position fees (profitable in the app, not net)
+  const btc = { id: 'b1', productId: 'btc', feesAccruedUsd: '1', positionFeeAccruedUsd: '6', fundingUsd: '0', positionFeeUsd: '0', fundingAccruedUsd: '0', realizedPnl: '5', size: '0', side: 0, totalIncreaseNotional: '100', totalIncreaseQuantity: '1', totalDecreaseNotional: '105', totalDecreaseQuantity: '1', createdAt: 2000, updatedAt: 3000, isLiquidated: false };
+  const orders = [
+    { id: 'o1', pid: 'xau', side: 'SELL', leaderSid: 'A', leaderPx: 4185, fills: [{ id: 'f1', t: 1000, px: 4185, qty: 3, fee: 0 }] },
+    { id: 'c1', pid: 'xau', side: 'BUY', reduceOnly: true, close: true, leaderSid: 'A', leaderPx: 4144.5, fills: [{ id: 'f2', t: 8000, px: 4144.7, qty: 0.1, fee: 0.0207235 }, { id: 'f3', t: 9000, px: 4144.4, qty: 2.9, fee: 0.600938 }] },
+    { id: 'o2', pid: 'btc', side: 'BUY', leaderSid: 'B', leaderPx: 100, fills: [{ id: 'f4', t: 2000, px: 100, qty: 1, fee: 0.5 }] },
+    { id: 'c2', pid: 'btc', side: 'SELL', reduceOnly: true, close: true, leaderSid: 'B', leaderPx: 105, fills: [{ id: 'f5', t: 3000, px: 105, qty: 1, fee: 0.5 }] },
+    // an ETH long of leader B still open: 2 at 50, marked at 55
+    { id: 'o3', pid: 'eth', side: 'BUY', leaderSid: 'B', leaderPx: 50, fills: [{ id: 'f6', t: 4000, px: 50, qty: 2, fee: 0.03 }] },
+  ];
+  const S = { orders, leaders: [{ sid: 'A', address: '0xa' }, { sid: 'B', address: '0xb' }], mark: { eth: 55 } };
+  const H = CA.history(S, null, [rec, btc, { id: 'e1', productId: 'eth', size: '2', side: 0, createdAt: 4000, fundingAccruedUsd: '0.2', fundingUsd: '0.1', positionFeeAccruedUsd: '0', positionFeeUsd: '0.04' }]);
+  const row = (pid) => H.rows.find((r) => r.e.pid === pid);
+  near(assert, row('xau').pnl, 133.018062063, 1e-9, 'the app\'s Closed P&L, +$133.02'); near(assert, row('xau').net, 121.950185673, 1e-9, 'the site\'s +$121.95');
+  near(assert, row('btc').pnl, 4, 1e-9); near(assert, row('btc').net, -2, 1e-9);
+  near(assert, row('eth').pnl, 10, 1e-9, 'open: gross at the mark'); near(assert, row('eth').net, 10 - 0.03 - 0.3 - 0.04, 1e-9);
+  near(assert, H.T.realized, 137.018062063, 1e-9); near(assert, H.T.realizedNet, 119.950185673, 1e-9);
+  near(assert, H.T.openPnl, 10, 1e-9); near(assert, H.T.openNet, 9.63, 1e-9);
+  assert.equal(H.T.wins, 2, 'profitable as the P&L shown says');
+  const B = H.leaders.find((p) => p.sid === 'B');
+  near(assert, B.pnl, 14, 1e-9); near(assert, B.net, 7.63, 1e-9); assert.equal(B.winRate, 100);
+  assert.deepEqual(H.leaders.map((p) => p.sid), ['A', 'B'], 'ranked by P&L');
+  near(assert, H.series.B[0].y, 4, 1e-9, 'the chart counts Closed P&L');
+  // the tooltips: what the app leaves out, and the site's figure
+  const t = CS.pnlTitle(row('xau').L);
+  assert.match(t, /Closed P&L/); assert.match(t, /Site's net incl\. position fees and unsettled funding: \+\$121\.95/); assert.match(t, /\(position fees -\$11\.07\)/);
+  assert.doesNotMatch(t, /not yet settled|between the fills/, 'nothing else differs here');
+  assert.match(CS.pnlTitle(Object.assign({}, row('btc').L, { posFee: 0, net: row('btc').pnl })), /: \+\$4\.00, the same here/, 'no position fee: the two agree');
+  assert.match(CS.pnlTitle(row('eth').L), /open position.*\$9\.63/);
 });

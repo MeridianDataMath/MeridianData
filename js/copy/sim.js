@@ -77,6 +77,7 @@
       if (!p && (positions || []).some((p) => p.productId === e.pid && U.num(p.createdAt) < e.start - 5000 && (U.num(p.size) !== 0 || U.num(p.updatedAt) >= e.start))) e.partial = true;
       e.liq = !!(p && p.isLiquidated);
       e.fundingRecv = p ? -(U.num(p.fundingAccruedUsd) + U.num(p.fundingUsd)) : 0;   // + = received; an open position's charged-but-unapplied funding is in fundingUsd
+      e.fundingSettled = p ? -U.num(p.fundingAccruedUsd) : 0;   // the settled part alone, + = received: what Meridian's Closed P&L counts
       e.posFee = p ? U.num(p.positionFeeAccruedUsd) + U.num(p.positionFeeUsd) : 0;
     });
     return episodes;
@@ -103,12 +104,54 @@
     return out;
   };
 
-  /** Leader's own result of an episode: gross from its fills (cash flow), fees, funding, position fee, entry notional. */
+  /**
+   * The exchange's position record of an episode when it is the episode's whole position: closed, with exactly the
+   * quantity the episode opened. Its own figures (realizedPnl, feesAccruedUsd, the exit) are then the episode's; a record
+   * that also holds fills outside the episode (a position the copy agent adopted, or one traded by hand) is not. Else null.
+   */
+  S.wholeRecord = function (e) {
+    const p = e.pos; if (e.qty || !p || U.num(p.size) || !(U.num(p.totalDecreaseQuantity) > 0)) return null;
+    const qty = U.sum(e.fills.filter((f) => Math.sign(f.q) === e.side), (f) => Math.abs(f.q));
+    return Math.abs(U.num(p.totalIncreaseQuantity) - qty) <= 1e-9 * Math.max(1, qty) ? p : null;
+  };
+
+  /** The average entry of what an episode still holds, as the exchange keeps it (cost ÷ size): every opening or adding
+   *  fill adds its notional, every reduction takes out cost at the average, so a cut does not move it. null when flat. */
+  S.avgEntry = function (e) {
+    let q = 0, cost = 0;
+    for (const f of e.fills) {
+      const a = Math.abs(f.q);
+      if (Math.sign(f.q) === e.side) { q += a; cost += a * f.px; } else if (q > EPS) { const cut = Math.min(a, q); cost -= cost * (cut / q); q -= cut; }
+    }
+    return q > EPS ? cost / q : null;
+  };
+
+  /**
+   * Leader's own result of an episode: gross from its fills (cash flow), fees, funding, position fee, entry notional, and
+   * the result two ways.
+   *   app: Meridian's own figure for the position. Closed: its Closed P&L, realizedPnl − fundingAccruedUsd − feesAccruedUsd
+   *        (trading fees and settled funding, no position fees), from the exchange's record when it is the whole position
+   *        (fromRecord), else the same sum from the fills. Open: its positions table's P&L, (mark − average entry) × size,
+   *        gross of fees and funding (what partial closes realized waits for the close, as in the app). appPct is the app's
+   *        percent beside it: Closed P&L ÷ the notional opened (totalIncreaseNotional), or the open price move from the
+   *        average entry, signed for the side.
+   *   net: the site's, gross − trading fees − position fees + all funding received (settled, and charged but not yet
+   *        settled); open ones include their partial closes. The copy simulator models the copier on this basis.
+   */
   S.leaderResult = function (e, mark) {
-    const gross = -U.sum(e.fills, (f) => f.q * f.px) + (e.qty ? e.qty * (mark || e.fills[e.fills.length - 1].px) : 0);
+    const m = e.qty ? mark || e.fills[e.fills.length - 1].px : 0;
+    const gross = -U.sum(e.fills, (f) => f.q * f.px) + (e.qty ? e.qty * m : 0);
     const fees = U.sum(e.fills, (f) => f.fee);
     const entryNotional = U.sum(e.fills.filter((f) => Math.sign(f.q) === e.side), (f) => Math.abs(f.q) * f.px);
-    return { gross, fees, funding: e.fundingRecv || 0, posFee: e.posFee || 0, net: gross - fees + (e.fundingRecv || 0) - (e.posFee || 0), entryNotional };
+    const funding = e.fundingRecv || 0, fundingSettled = e.fundingSettled || 0, posFee = e.posFee || 0;
+    const rec = S.wholeRecord(e);
+    let app, appPct;
+    if (e.qty) { const avg = S.avgEntry(e); app = avg == null ? 0 : e.qty * (m - avg); appPct = avg ? (e.side * (m - avg)) / avg : null; }
+    else {
+      app = rec ? U.num(rec.realizedPnl) - U.num(rec.fundingAccruedUsd) - U.num(rec.feesAccruedUsd) : gross - fees + fundingSettled;
+      const opened = rec ? U.num(rec.totalIncreaseNotional) : entryNotional; appPct = opened > 0 ? app / opened : null;
+    }
+    return { open: !!e.qty, gross, fees, funding, fundingSettled, posFee, net: gross - fees + funding - posFee, app, appPct, fromRecord: !!rec, entryNotional };
   };
 
   /** The notional of the leader's opening order: every fill of the episode's first order, not just its first piece. */
@@ -188,16 +231,18 @@
       const L = S.leaderResult(e, mark); const Cp = await S.replayEpisode(e, settings, mark);
       const prod = ref && ref.byId[e.pid];
       rows.push({ e, ticker: prod ? prod.displayTicker : e.pid, long: e.side > 0, open: !!e.qty, liq: e.liq, t0: e.start, t1: e.end || Date.now(), hold: (e.end || Date.now()) - e.start, L, C: Cp,
-        leaderBps: L.entryNotional ? (L.net / L.entryNotional) * 1e4 : null, copierBps: Cp.entryNotional ? (Cp.net / Cp.entryNotional) * 1e4 : null });
+        leaderBps: L.entryNotional ? (L.net / L.entryNotional) * 1e4 : null, leaderAppBps: L.appPct != null ? L.appPct * 1e4 : null, copierBps: Cp.entryNotional ? (Cp.net / Cp.entryNotional) * 1e4 : null });
     }
     rows.sort((a, b) => a.t1 - b.t1);
-    // leaderNet: the leader's own dollars; leaderScaled: its result scaled to the copier's size position by position, which
-    // the share kept and the leader's curve are measured against (dollars at two sizes would only show the size ratio)
-    const T = { leaderNet: 0, leaderScaled: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
+    // leaderApp: the leader's positions as Meridian's app shows them (L.app); leaderNet: its own dollars on the site's net
+    // basis, the copier's; leaderScaled: that net scaled to the copier's size position by position, which the share kept
+    // and the leader's curve are measured against (dollars at two sizes would only show the size ratio, and the app's
+    // figure, without position fees, would count those as copying costs)
+    const T = { leaderApp: 0, leaderNet: 0, leaderScaled: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
     let cum = 0, cumL = 0, peak = 0, dd = 0; const curve = [], curveL = [];
     for (const r of rows) {
       const lAtC = r.L.entryNotional ? r.L.net * (r.C.entryNotional / r.L.entryNotional) : 0;   // the leader's result at the copier's size
-      T.leaderNet += r.L.net; T.leaderScaled += lAtC; T.leaderGross += r.L.gross; T.leaderFees += r.L.fees; T.copierNet += r.C.net; T.copierGross += r.C.gross; T.fees += r.C.fees; T.drift += r.C.driftCost; T.slip += r.C.slipCost; T.funding += r.C.funding; T.posFee += r.C.posFee; T.notional += r.C.notional;
+      T.leaderApp += r.L.app; T.leaderNet += r.L.net; T.leaderScaled += lAtC; T.leaderGross += r.L.gross; T.leaderFees += r.L.fees; T.copierNet += r.C.net; T.copierGross += r.C.gross; T.fees += r.C.fees; T.drift += r.C.driftCost; T.slip += r.C.slipCost; T.funding += r.C.funding; T.posFee += r.C.posFee; T.notional += r.C.notional;
       if (r.C.net > 0) T.wins++; if (r.open) T.open++; if (r.liq) T.liq++; if (r.C.capped) T.capped++;
       cum += r.C.net; cumL += lAtC; curve.push({ x: r.t1, y: cum }); curveL.push({ x: r.t1, y: cumL });
       if (cum > peak) peak = cum; if (peak - cum > dd) dd = peak - cum;

@@ -29,7 +29,8 @@
       if (ctx.signal.aborted) return;
       const lb = LB && LB.cache();
       if (lb && lb.rows && lb.rows.length) {
-        // ranked by all-time PnL (realized + unrealized since the exchange launched) → copy-trading candidates
+        // ranked by all-time PnL as Meridian's app shows it (the rows' basis 'app': realized PnL, settled funding and trading
+        // fees, plus unrealized PnL) → copy-trading candidates
         // copy-trade candidates must be traders: the fee collector (no trades) and the exchange's own account are left out
         const rows = lb.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !MD.analytics.noTrades(r) && !MD.analytics.exchangeAccount(r));
         const ranked = U.sortBy(rows, (r) => r.stats.all.pnl, true);
@@ -37,8 +38,9 @@
         const items = winners.length >= 4 ? winners : ranked.slice(0, 12);
         if (items.length) {
           const track = h('div.track');
-          // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are
-          const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: r.carried ? `Open account · these figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : 'Open account' },
+          // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are; the
+          // site's own all-time figure follows
+          const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: [r.carried ? `Open account · these figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : 'Open account', MD.analytics.sitePnlTitle(r, 'all')].filter(Boolean).join('\n') },
             h('span.rank', { class: i < 3 ? 'top' : '', style: { width: 'auto' } }, '#' + (i + 1)),
             h('span.addr', U.shortAddr(r.account)), U.pnlEl(r.stats.all.pnl),
             // a big account's small percentage reads "+0.3%", not "+0%"
@@ -48,7 +50,7 @@
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           strip.appendChild(track);
           // the ranking says, as the Leaderboard does, when accounts are missing from it or carried over, and when it is stale
-          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copyability scores'), LB.coverageNote(lb), MD.ui.staleNote(lb.builtAt, 'the publishing job may be down')), strip);
+          hero.insertBefore(h('div.strip-title', { title: 'All-time PnL as Meridian\'s app shows it (its Trade Stats): realized PnL, settled funding and trading fees, plus unrealized PnL; ROI on the deposits. Hover a wallet for the site\'s net figure' }, 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copyability scores'), LB.coverageNote(lb), MD.ui.staleNote(lb.builtAt, 'the publishing job may be down')), strip);
         }
       } else {
         strip.appendChild(h('div', { style: { textAlign: 'center', fontSize: '12.5px' } }, h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here')));

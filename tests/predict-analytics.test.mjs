@@ -177,6 +177,12 @@ test('the record against the odds, and the ideas from winning bettors: slips tha
   const { bettors, ideas } = P.ideas(norms, a, now);
   assert.deepEqual(bettors.map((b) => b.address), [ME], 'in profit with 10 decided and more wins than the odds implied; the lucky hit is not a record');
   assert.equal(bettors[0].ideas, 1);
+  // beside the record against the odds, the record the page shows: Meridian's app's, from the bettor's row (claimed only)
+  assert.deepEqual([bettors[0].won, bettors[0].n, bettors[0].appWon, bettors[0].appLost, bettors[0].appWinRate], [7, 10, 7, 3, 70]);
+  const unclaimed = norms.map((n) => (n.id === 'd0' || n.id === 'd9' ? pred(n.id, 10, 10, n.id === 'd0' ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', false) : n));
+  const u = P.ideas(unclaimed, P.aggregate(unclaimed), now).bettors[0];
+  assert.deepEqual([u.won, u.n, u.appWon, u.appLost, u.appWinRate], [7, 10, 6, 2, 75], 'a decided prediction nobody has claimed is in the record against the odds, pending in the app\'s');
+  assert.deepEqual(P.ideas([], { bettors: [{ address: ME, pnl: 1, rec: { n: 10, won: 7, expected: 5, luck: 0.1, predictions: 10 } }], soldOf: () => null }).bettors.map((b) => b.appWon), [undefined], 'a row without the app\'s counts adds none');
   assert.deepEqual(ideas.map((x) => x.id), ['open'], 'only slips still before their cutoff, from winning bettors');
   // the same picks placed again are one idea, the newest, with the count
   const again = pred('again', 5, 20, null, false, now + 1000);
@@ -211,12 +217,17 @@ test('headline figures: the exchange\'s PnL already counts unclaimed results, so
   const exchange = [{ t: T0, pnl: verdictPnl, won: 1, lost: 1, pending: 2, nonDecisive: 0 }];
   const live = P.bettorFigures({ mine, hist: exchange, isMaker: false, live: true });
   near(assert, live.pnl, verdictPnl, 1e-9, 'live PnL');
-  assert.equal(live.won, 2); assert.equal(live.lost, 2); assert.equal(live.open, 0); assert.equal(live.unclaimedWon, 1);
+  // the record is the app's (Positions Won / Lost: claimed only); the site's count at the verdict adds the unclaimed ones
+  assert.equal(live.won, 1); assert.equal(live.lost, 1); assert.equal(live.vWon, 2); assert.equal(live.vLost, 2);
+  assert.equal(live.open, 0); assert.equal(live.unclaimedWon, 1);
   near(assert, live.unclaimedPayout, 28.94, 1e-9, 'payout of the unclaimed win');
-  // offline the history is rebuilt from claims, so the unclaimed results are added
+  // offline the history is rebuilt from claims, so the unclaimed results are added; the app's record from the API's flag
   const offline = P.bettorFigures({ mine, hist: P.historyFromPredictions(mine, ME, false), isMaker: false, live: false });
   near(assert, offline.pnl, verdictPnl, 1e-9, 'offline PnL agrees');
-  assert.equal(offline.won, 2); assert.equal(offline.lost, 2);
+  assert.equal(offline.won, 1); assert.equal(offline.lost, 1); assert.equal(offline.vWon, 2); assert.equal(offline.vLost, 2);
+  // the maker's side of the same predictions, turned round
+  const mk = P.bettorFigures({ mine, hist: P.historyFromPredictions(mine, MAKER, true), isMaker: true, live: false });
+  assert.equal(mk.won, 1); assert.equal(mk.lost, 1); assert.equal(mk.vWon, 2); assert.equal(mk.vLost, 2);
 });
 
 test('a claim pays every prediction the wallet holds on that token: the API flags one, the others count as claimed with it', () => {
@@ -235,13 +246,39 @@ test('a claim pays every prediction the wallet holds on that token: the API flag
   assert.equal(other.unclaimed, true, 'a win on another token is still to claim'); assert.equal(voidOpen.unclaimed, true, 'a void is left as it is');
   assert.equal(claimed.viaToken, undefined, 'the claimed one is the API\'s own');
   const s = JSON.parse(JSON.stringify(P.slim(twin))); assert.equal(s.st, 1); assert.equal(s.sa, T0 + 5 * DAY);
-  // live, the exchange's won / pending follow the API's flag: the twin is still pending there, so the record adds it back
+  // live, the exchange's won / pending follow the API's flag: the twin is still pending there, as in the app's record;
+  // the site's count at the verdict adds it back
   const mine = [claimed, twin, other];
   const live = P.bettorFigures({ mine, hist: [{ t: T0, pnl: 30 + 15 + 15, won: 1, lost: 0, pending: 2, nonDecisive: 0 }], isMaker: false, live: true });
-  assert.equal(live.won, 3); assert.equal(live.open, 0); assert.equal(live.unclaimedWon, 1, 'only the win on its own token'); near(assert, live.unclaimedPayout, 20, 1e-9);
-  // offline the history is rebuilt from claims, where the twin is now claimed: the same record
+  assert.equal(live.won, 1); assert.equal(live.vWon, 3); assert.equal(live.open, 0); assert.equal(live.unclaimedWon, 1, 'only the win on its own token'); near(assert, live.unclaimedPayout, 20, 1e-9);
+  // offline the history is rebuilt from claims, where the twin is now claimed: the same site count, and the app's record
+  // from the API's own flag (the twin, viaToken, is pending there)
   const offline = P.bettorFigures({ mine, hist: P.historyFromPredictions(mine, ME, false), isMaker: false, live: false });
-  assert.equal(offline.won, 3); assert.equal(offline.open, 0); assert.equal(offline.unclaimedWon, 1); near(assert, offline.pnl, 60, 1e-9);
+  assert.equal(offline.won, 1); assert.equal(offline.vWon, 3); assert.equal(offline.open, 0); assert.equal(offline.unclaimedWon, 1); near(assert, offline.pnl, 60, 1e-9);
+  // the wallet files keep the mark (tk), so a page reading them counts the same
+  const back = mine.map((n) => P.unslim(JSON.parse(JSON.stringify(P.slim(n, { stx: true })))));
+  assert.deepEqual(back.map((n) => !!n.viaToken), [false, true, false]); assert.equal(JSON.parse(JSON.stringify(P.slim(claimed))).tk, undefined, 'only on a twin');
+  assert.deepEqual(P.appRecord(back, false), { won: 1, lost: 0, winRate: 100 });
+});
+
+test('won / lost as Meridian\'s app counts them: claimed predictions only, by the API\'s flag (0x9c1c…: 4 / 0 in the app, 5 / 11 at the verdict)', () => {
+  // claimed: a win and a loss; decided, nobody has claimed: a win and two losses (the maker has not collected); open; a void
+  const mine = [pred('cw', 5, 10, 'PREDICTOR_WINS', true), pred('cl', 2, 3, 'COUNTERPARTY_WINS', true), pred('uw', 10, 20, 'PREDICTOR_WINS', false),
+    pred('ul1', 4, 6, 'COUNTERPARTY_WINS', false), pred('ul2', 4, 6, 'COUNTERPARTY_WINS', false), pred('o', 1, 1, null, false), pred('v', 3, 4, 'NON_DECISIVE', true)];
+  assert.deepEqual(P.appRecord(mine, false), { won: 1, lost: 1, winRate: 50 });
+  assert.deepEqual(P.appRecord(mine, true), { won: 1, lost: 1, winRate: 50 }, 'the maker: the same claimed predictions turned round');
+  assert.deepEqual(P.appRecord([pred('x', 1, 1, 'COUNTERPARTY_WINS', false)], false), { won: 0, lost: 0, winRate: null }, 'nothing claimed: no win rate');
+  // the snapshot's rows carry both counts (additive: won / lost / winRate keep the site's count at the verdict)
+  const a = P.aggregate(mine);
+  const b = a.bettors[0], m = a.makers[0];
+  assert.equal(b.won, 2); assert.equal(b.lost, 3); near(assert, b.winRate, 40, 1e-9);
+  assert.equal(b.appWon, 1); assert.equal(b.appLost, 1); near(assert, b.appWinRate, 50, 1e-9);
+  assert.equal(m.won, 3); assert.equal(m.lost, 2); assert.equal(m.appWon, 1); assert.equal(m.appLost, 1);
+  assert.equal(a.totals.appWon, 1); assert.equal(a.totals.appLost, 1); near(assert, a.totals.appWinRate, 50, 1e-9); near(assert, a.totals.winRate, 40, 1e-9);
+  // a row for display: the app's counts, or a row from an older snapshot, its own
+  assert.deepEqual(P.rowRecord(b), { won: 1, lost: 1, winRate: 50, app: true });
+  assert.deepEqual(P.rowRecord({ won: 2, lost: 3, winRate: 40 }), { won: 2, lost: 3, winRate: 40, app: false });
+  assert.deepEqual(P.rowRecord({ appWon: 0, appLost: 0, appWinRate: null, won: 1, lost: 0, winRate: 100 }), { won: 0, lost: 0, winRate: null, app: true });
 });
 
 test('combo legs on one match: a leg carries its match keys, and legs sharing any key are on one match', () => {
@@ -481,4 +518,19 @@ test('no sale and no win: a hedge\'s profit on a lost bet is no big win; bought 
   const g = P.full(a.bigWins[0]).group;
   assert.deepEqual([g.in, g.lp, g.s], [1100, 3900, 100]);
   assert.equal(P.full(a.bigWins[0]).cashOut, null, 'it sold nothing');
+});
+
+test('question volume as Meridian\'s app shows it: all time on its page, the Filtered windows on its list cards (Flávio Bolsonaro: $16.98M, $2.72M)', () => {
+  // the live API's row (USD floats, not wei) and the snapshot's compact row carry the same figures
+  const api = { conditionId: '0xq', question: 'Will Flávio Bolsonaro win the 2026 Brazilian presidential election?', openInterest: '0', similarMarketVolume: 16981737.2, similarMarketVolume24h: 1280881.67, similarMarketVolume7d: 4792126, similarMarketVolumeFiltered24h: 2310277.44, similarMarketVolumeFiltered7d: 2718695 };
+  const row = P.compactQuestion(api);
+  const want = { all: 16981737.2, d24: 2310277.44, d7: 2718695, raw24: 1280881.67, raw7: 4792126 };
+  assert.deepEqual(P.questionVolume(api), want); assert.deepEqual(P.questionVolume(row), want);
+  assert.equal(P.fmtVol(want.d7), '$2.72M'); assert.equal(P.fmtVol(want.all), '$16.98M'); assert.equal(P.fmtVol(want.raw7), '$4.79M');
+  // an older snapshot's row (only the unfiltered windows) and one added from open predictions (none)
+  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 5, v7: 7 }), { all: null, d24: null, d7: null, raw24: 5, raw7: 7 });
+  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 0, v7: 0 }), { all: null, d24: null, d7: null, raw24: 0, raw7: 0 });
+  // the app's format: to the cent below $10,000, else two decimals and k / M / B / T
+  assert.deepEqual([12345.6, 9999.99, 950, 0, 1.2e9, 3.4e12].map(P.fmtVol), ['$12.35k', '$9,999.99', '$950.00', '$0.00', '$1.20B', '$3.40T']);
+  assert.equal(P.fmtVol(null), '—');
 });

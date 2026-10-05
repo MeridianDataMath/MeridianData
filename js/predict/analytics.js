@@ -187,6 +187,21 @@
     return { total, payout: Math.max(0, total - self - other), positions, wonP, wonC, self, selfN, other, otherN };
   };
 
+  /** Won / lost and the win rate (percent) as Meridian's app counts them: its Predict portfolio's Positions Won / Lost
+   *  are the sums of the exchange's statsHistory predictionsWon / predictionsLost, and a prediction leaves pending there
+   *  only when the API flags it settled, i.e. when a claim went through it (checked 2026-10-06: the flag's counts equal
+   *  the stats exactly on four bettors and on the maker 0xdd9b…f223, 1,158 / 1,954 of 4,095). So a decided prediction
+   *  nobody has claimed, and one a claim on its token paid without flagging it (viaToken, P.markTokenClaims), is still
+   *  pending, and a void (NON_DECISIVE) is neither. asMaker: from the maker's side. */
+  P.appRecord = function (norms, asMaker) {
+    let won = 0, lost = 0;
+    for (const n of norms || []) { if (!n.settled || n.viaToken || n.nd) continue; if (asMaker ? n.lost : n.won) won++; else lost++; }
+    return { won, lost, winRate: won + lost ? (won / (won + lost)) * 100 : null };
+  };
+  /** A row's record for display (a P.aggregate bettor or maker row, or a page's): the app's counts (appWon / appLost /
+   *  appWinRate) with app true, or from a snapshot built before the rows kept them, the row's own verdict count (won /
+   *  lost / winRate: every decided prediction, claimed or not) with app false. */
+  P.rowRecord = (r) => (r && r.appWon != null ? { won: r.appWon, lost: r.appLost || 0, winRate: r.appWinRate, app: true } : { won: (r && r.won) || 0, lost: (r && r.lost) || 0, winRate: r && r.winRate != null ? r.winRate : null, app: false });
   /** ROI in percent on one base, for the snapshot's rows (P.aggregate) and a wallet page (P.bettorFigures): the PnL (secondary market included) over the stakes that have met their result, i.e. decided predictions' stakes plus the sold share of open ones (a sale books its result before the verdict, so its stake belongs in the base). Null with neither. */
   P.roiOf = (pnl, decidedStake, soldOpenStake, anyDecided) => (anyDecided || soldOpenStake > 1e-9 ? (pnl / Math.max(1e-9, decidedStake + (soldOpenStake || 0))) * 100 : null);
   /**
@@ -194,8 +209,11 @@
    * they are not) and its history: exchange stats when live (P.account), else rebuilt from claims (P.historyFromPredictions).
    * Checked against the exchange: its history books PnL at the verdict (claimed or not) and already follows secondary-
    * market trades, while its won / lost counts move only at the claim. So live the PnL is the exchange's as it stands; the
-   * claim-based fallback adds the decided-but-unclaimed results and the ledger's adjustment. Either way the record adds the
-   * unclaimed predictions, and a won prediction whose tokens were sold is not this wallet's to claim.
+   * claim-based fallback adds the decided-but-unclaimed results and the ledger's adjustment. A won prediction whose tokens
+   * were sold is not this wallet's to claim.
+   * The record is the app's (won / lost: its Positions Won / Lost, claimed predictions only): live the exchange's own
+   * counts, else P.appRecord of the loaded predictions. vWon / vLost are the site's count, every decided prediction at
+   * its verdict, claimed or not (the exchange's counts plus the unclaimed predictions and the twins a token claim paid).
    * ROI is this PnL as the snapshot's rows count it (P.roiOf; soldOpen: the sold share of open stakes in its base). Avg
    * odds and legs come from the wallet's own row for its role: a maker's are its bettors' odds, as on the Market makers page.
    * Open counts the loaded predictions when they are all loaded; otherwise (truncated) the exchange's pending count, less
@@ -226,9 +244,13 @@
     // with the balances: this role's won predictions still held, or where none is (tokens bought, a truncated file) the
     // positions, so a payout to claim always comes with a count (the account page shows the line on it)
     const cWon = claim ? (isMaker ? claim.wonC : claim.wonP) || (claim.payout > 0.005 ? claim.positions : 0) : 0;
+    // offline the history is rebuilt from the claims a file records, twins paid through their token included, which the
+    // exchange still counts as pending: the app's record comes from the API's own flag on each prediction
+    const app = live ? { won: totals.won, lost: totals.lost } : P.appRecord(mine, isMaker);
     return {
       pnl,
-      won: totals.won + unflagged.filter((n) => (isMaker ? n.lost : n.won)).length, lost: totals.lost + unflagged.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
+      won: app.won, lost: app.lost,
+      vWon: totals.won + unflagged.filter((n) => (isMaker ? n.lost : n.won)).length, vLost: totals.lost + unflagged.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
       open: truncated ? Math.max(0, totals.pending - unflagged.length - (selfPending || 0)) : mine.filter((n) => !n.decided).length,
       openPos: truncated ? null : new Set(mine.filter((n) => !n.decided && riskShare(n) > 1e-6).map((n) => P.posKey(n, isMaker ? 'C' : 'P'))).size,
       unclaimedWon: claim ? cWon : uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: claim ? claim.payout : U.sum(uWon, (n) => n.pool * heldOf(n)), claim: claim || null,
@@ -479,9 +501,13 @@
     const acc = (m, k, init) => m[k] || (m[k] = init());
     // decided = verdict in (claimed or not); settled = claimed; unclaimed = decided, not claimed (unclaimedWon / unclaimedPayout: money this side can collect)
     // (r*: the record against the odds, see finish; decided predictions with odds, not void)
-    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {}, catW: {}, rBets: [] });
+    // (won / lost / winRate: the site's count, every decided prediction at its verdict, claimed or not; appWon / appLost /
+    // appWinRate: Meridian's app's, P.appRecord, the claimed ones only: the pages show these, a snapshot from before them
+    // the site's)
+    const side = () => ({ n: 0, wagered: 0, open: 0, openWagered: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedPayout: 0, won: 0, lost: 0, appWon: 0, appLost: 0, pnl: 0, combos: 0, legs: 0, oddsSum: 0, oddsN: 0, vigSum: 0, vigN: 0, biggestWin: 0, biggestStake: 0, first: null, last: null, cats: {}, catW: {}, rBets: [] });
     const bump = (s, n, asMaker) => {
       s.n++; s.wagered += asMaker ? n.cp : n.stake; s.legs += n.legs; if (n.combo) s.combos++;
+      if (n.settled && !n.viaToken && !n.nd) { if (asMaker ? n.lost : n.won) s.appWon++; else s.appLost++; }   // as P.appRecord
       if (n.odds != null) { s.oddsSum += n.odds; s.oddsN++; }
       if (cleanVig(n)) { s.vigSum += n.vig; s.vigN++; }
       if (n.decided) { s.decided++; if (!toClaim(n)) s.settled++; else { s.unclaimed++; const w = asMaker ? n.lost : n.won; if (w) { s.unclaimedWon++; s.unclaimedPayout += n.pool; if (claimBal) (s.claimKeys || (s.claimKeys = new Set())).add(pcOf(n) + '|' + (asMaker ? 'C' : 'P')); } } if (n.nd) s.nd = (s.nd || 0) + 1; else { const w = asMaker ? n.lost : n.won; if (w) s.won++; else s.lost++; } const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if (pnl > s.biggestWin) s.biggestWin = pnl; }
@@ -493,7 +519,7 @@
       s.cats[n.cat] = (s.cats[n.cat] || 0) + 1;
       s.catW[n.cat] = (s.catW[n.cat] || 0) + (asMaker ? n.cp : n.stake);
     };
-    const finish = (s, isBettor, addr) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = P.roiOf(s.pnl, s.wagered - s.openWagered, s.soldOpen || 0, s.decided > 0); s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = P.topCategory(s.cats, s.catW);
+    const finish = (s, isBettor, addr) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.appWinRate = s.appWon + s.appLost ? (s.appWon / (s.appWon + s.appLost)) * 100 : null; s.roi = P.roiOf(s.pnl, s.wagered - s.openWagered, s.soldOpen || 0, s.decided > 0); s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = P.topCategory(s.cats, s.catW);
       s.rec = isBettor && records ? recordOf(s.rBets) : null;
       // open positions as Meridian counts them: one per pick configuration and side with a balance; one this wallet sold
       // out of, or matched in full with the other side's tokens it bought (a maker buying the bettor's side back burns
@@ -532,9 +558,10 @@
     // match or asset are correlated
     const cleanVig = (n) => n.vig != null && n.sameEvent !== true;
     const vigAll = [], vigByCat = {};
-    let totals = { n: 0, wagered: 0, cpCommitted: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedWonPayout: 0, unclaimedLost: 0, won: 0, lost: 0, bettorPnl: 0, open: 0, openWagered: 0, combos: 0 };
+    let totals = { n: 0, wagered: 0, cpCommitted: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedWonPayout: 0, unclaimedLost: 0, won: 0, lost: 0, appWon: 0, appLost: 0, bettorPnl: 0, open: 0, openWagered: 0, combos: 0 };
     for (const n of norms) {
       totals.n++; totals.wagered += n.stake; totals.cpCommitted += n.cp; if (n.combo) totals.combos++;
+      if (n.settled && !n.viaToken && !n.nd) { if (n.won) totals.appWon++; else totals.appLost++; }   // the bettors' side, as the rows
       if (n.decided) { totals.decided++; if (!toClaim(n)) totals.settled++; else { totals.unclaimed++; if (n.won) { totals.unclaimedWon++; totals.unclaimedWonPayout += n.pool; } else if (!n.nd) totals.unclaimedLost++; } if (n.nd) totals.nd = (totals.nd || 0) + 1; else if (n.won) totals.won++; else totals.lost++; totals.bettorPnl += n.pnl; } else { totals.open++; totals.openWagered += n.stake; }
       const b = acc(bettors, n.predictor, side); bump(b, n, false);
       const m = acc(makers, n.counterparty, side); bump(m, n, true);
@@ -640,7 +667,7 @@
     };
     vig.realized = realized;
     const out = {
-      totals: Object.assign(totals, { selfMatched, bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null }),
+      totals: Object.assign(totals, { selfMatched, bettors: Object.keys(bettors).length, makers: Object.keys(makers).length, winRate: totals.won + totals.lost ? (totals.won / (totals.won + totals.lost)) * 100 : null, appWinRate: totals.appWon + totals.appLost ? (totals.appWon / (totals.appWon + totals.appLost)) * 100 : null }),
       bettors: rowsOf(bettors, 'address').sort((a, b) => b.pnl - a.pnl),
       makers: rowsOf(makers, 'address').sort((a, b) => b.n - a.n),
       categories: Object.values(cats).map((c) => ({ cat: c.cat, n: c.n, wagered: c.wagered, settled: c.settled, won: c.won, winRate: c.settled ? (c.won / c.settled) * 100 : null, pnl: c.pnl, avgVig: avg(c.vig) })).sort((a, b) => b.wagered - a.wagered),
@@ -713,8 +740,8 @@
    *  140 bettors ranked by luck, luck alone is expected to give up to a tenth of them a good record, so the tiers rank
    *  records and do not establish skill.) */
   P.IDEAS = { minDecided: 10, strongLuck: 0.02, goodLuck: 0.1 };
-  /** { bettors, ideas, tested }: every winning bettor, least likely by luck first, with its tier and the number of its
-   *  ideas; those ideas, the bettor's predictions the site still offers to copy at `now` (undecided, every leg before the
+  /** { bettors, ideas, tested }: every winning bettor, least likely by luck first, with its tier, its record as the app
+   *  counts it and the number of its ideas; those ideas, the bettor's predictions the site still offers to copy at `now` (undecided, every leg before the
    *  end time Meridian lists for it, a listed end and no betting cutoff, and not settled, the bettor still holding at
    *  least half its tokens), best record first, then newest; tested = bettors with a record. agg: P.aggregate over the
    *  same norms (its bettor rows and soldOf). */
@@ -738,7 +765,10 @@
       const rec = Object.assign(P.slim(n, { ids: true }), sold(n), { x: 1 }); seen.set(k, rec); ideas.push(rec);
     }
     const count = {}; for (const r of ideas) count[r.p] = (count[r.p] || 0) + 1;
-    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b.rec.luck), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
+    // won / n / expected: the record against the odds, which the tier rests on; appWon / appLost / appWinRate: the row's
+    // record as Meridian's app counts it (P.appRecord, claimed predictions only), the one the page shows (added: a file
+    // from before them has none, and the page shows the record against the odds as it did)
+    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b.rec.luck), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, appWon: b.appWon, appLost: b.appLost, appWinRate: r2(b.appWinRate), pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
     if (bettors.length && !bettors.some((b) => b.tier)) bettors[0].tier = 'good';   // the best record, when none reaches good
     return { bettors, ideas, tested: tested.length };
   };
@@ -756,11 +786,12 @@
   // o.stx adds the claim's transaction (the wallet files; slips and question files stay small), and there the pick
   // configuration of a prediction whose tokens were not traded (pk; pc stays the mark of a traded one): a wallet page
   // groups its open bets into Meridian's positions by it and finds the balances it still has to claim (P.applyClaims)
-  // tc: P.compact's (the winner still holds its winning tokens, where the balances were read)
+  // tc: P.compact's (the winner still holds its winning tokens, where the balances were read); tk: claimed with its token's
+  // claim (P.markTokenClaims: st 1, while the API, and so Meridian's app, still counts it pending; P.appRecord)
   const legResult = (k) => (k.settled ? (k.nonDecisive ? 2 : k.resolvedToYes ? 1 : 0) : null);
   function slimLegs(n, ids, vt) { return n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, (ids || !n.settled) && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null, legResult(k), k.settled && k.settledAt ? Math.round(k.settledAt / 1000) : null, vt && k.verdictAt ? Math.round(k.verdictAt / 1000) : null]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }); }
   P.slim = (n, o) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, da: n.decidedAt || undefined, k: slimLegs(n, !!(o && o.ids), !!(o && o.vt)), stx: o && o.stx && n.stx ? n.stx : undefined,
-    pk: o && o.stx && !n.pcTraded && n.pc ? n.pc : undefined, tc: tcOf(n) });
+    pk: o && o.stx && !n.pcTraded && n.pc ? n.pc : undefined, tc: tcOf(n), tk: n.viaToken ? 1 : undefined });
   P.unslim = function (s) {
     if (s.picks) return s;                               // already a full record
     const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
@@ -776,6 +807,7 @@
       pk: s.pk || null, toClaim: s.tc == null ? null : !!s.tc,
       // big wins: a traded position (its bets on the same picks, counted together) and its sales (P.aggregate's bigList)
       group: s.gp || null, cashOut: s.co || null };
+    if (s.tk) n.viaToken = true;   // a file from before tk: every claimed record reads as the API's own claim
     return P.applyAtBet(n, picks.map((k) => k.priceAtBet));
   };
   /** Any stored prediction row as a full record: a full record as it is, a slim one (big wins, wallet and question
@@ -856,7 +888,29 @@
     const code = r[3] | 0, res = ['open', 'won', 'lost', 'void'][code & 3];
     return { t: r[0], stakeW: r[1], pnlW: r[2], res, maker: !!(code & 16), claimable: r[4] ? { t: r[4] * 1000, exact: !(code & 4) } : null, verdict: r[5] ? { t: r[5] * 1000, exact: !(code & 8) } : null, claim: r[6] ? r[6] * 1000 : null, traded: !!r[7] };
   };
-  /** Compact question row for the snapshot's question explorer. */
-  P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
+  /** Compact question row for the snapshot's question explorer. The source market's volume (USD, not wei): v24 / v7 its
+   *  last 24 hours and 7 days; va all time, f24 / f7 the windows without low-odds trading, the figures Meridian's app shows
+   *  (P.questionVolume). A row from before va / f24 / f7 has only v24 / v7. */
+  P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0,
+    va: c.similarMarketVolume == null ? undefined : Number(c.similarMarketVolume) || 0, f24: c.similarMarketVolumeFiltered24h == null ? undefined : Number(c.similarMarketVolumeFiltered24h) || 0, f7: c.similarMarketVolumeFiltered7d == null ? undefined : Number(c.similarMarketVolumeFiltered7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
+  /** A question's source-market volume as Meridian's app shows it, from a live API row or a snapshot row
+   *  (P.compactQuestion): all = all time (its market page's "… Vol"), d24 / d7 = the windows its list cards show sorted
+   *  Hot / Top (the Filtered fields: its lists leave out low-odds trading by default, excludeLowOdds), raw24 / raw7 = the
+   *  unfiltered windows the app never shows. null where the row does not carry the field (an older snapshot's rows have
+   *  only raw24 / raw7; the snapshot's rows for questions it adds from open predictions have no volume at all). */
+  P.questionVolume = (c) => {
+    const num = (v) => (v == null || v === '' ? null : Number(v) || 0);
+    return c && c.conditionId ? { all: num(c.similarMarketVolume), d24: num(c.similarMarketVolumeFiltered24h), d7: num(c.similarMarketVolumeFiltered7d), raw24: num(c.similarMarketVolume24h), raw7: num(c.similarMarketVolume7d) }
+      : { all: num(c && c.va), d24: num(c && c.f24), d7: num(c && c.f7), raw24: num(c && c.v24), raw7: num(c && c.v7) };
+  };
+  /** Volume as Meridian's app writes it ("$12.35k Vol"): to the cent below $10,000, else two decimals with k, M, B or T
+   *  ($2.72M, $12.35k); "—" when unknown. */
+  P.fmtVol = (x) => {
+    if (x == null || !Number.isFinite(Number(x))) return '—';
+    const v = Number(x), a = Math.abs(v), sg = v < 0 ? '-' : '';
+    if (a < 1e4) return sg + '$' + a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const [d, u] = a >= 1e12 ? [1e12, 'T'] : a >= 1e9 ? [1e9, 'B'] : a >= 1e6 ? [1e6, 'M'] : [1e3, 'k'];
+    return sg + '$' + (a / d).toFixed(2) + u;
+  };
   P.compactTrade = (x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: String(x.seller || '').toLowerCase(), buyer: String(x.buyer || '').toLowerCase(), tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash, token: String(x.token || '').toLowerCase() }; };
 })();

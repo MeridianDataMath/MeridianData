@@ -193,19 +193,22 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
     const walletCurve = (file, addr) => (!file || !Array.isArray(file.predictions) ? null : file.truncated ? (Array.isArray(file.curve) && file.curve.length >= 2 ? file.curve : null) : curveFromPredictions(file.predictions.map(P.unslim), file.trades, addr));
     /** A wallet's card input from its snapshot row; isMaker: the row is a counterparty's, a market maker from
      *  P.MAKER_MIN predictions (fewer: a one-off counterparty, as on the Market makers page). */
+    /** A wallet row's record as Meridian's app counts it (P.rowRecord: claimed predictions only, its Positions Won / Lost),
+     *  its win rate to two decimals as the app shows it; a row from before the snapshot kept those: its own count. */
+    const walletRecord = (row) => { const r = P.rowRecord(row); return { text: `${U.fmtNum(r.won, 0)}W / ${U.fmtNum(r.lost, 0)}L`, rate: pct(r.winRate, 2) }; };
     const walletInput = (row, curve, isMaker) => {
-      const record = `${U.fmtNum(row.won || 0, 0)}W / ${U.fmtNum(row.lost || 0, 0)}L`;
+      const rec = walletRecord(row), record = rec.text;
       const n = U.fmtNum(row.n || 0, 0);
       const mm = isMaker && P.isMarketMaker(row.n || 0);
       return {
         kind: isMaker ? (mm ? 'maker' : 'counterparty') : 'bettor', address: row.address, period: 'All time', pnl: row.pnl || 0, roi: row.roi, curve,
         periodRange: curve ? range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : row.first ? 'since ' + date(row.first) : null,
         stats: isMaker
-          ? [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Committed', U.fmtUsd(row.wagered || 0, { compact: true })], ['Taken', n]]
-          : [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Wagered', U.fmtUsd(row.wagered || 0, { compact: true })], ['Avg odds', row.avgOdds == null ? '—' : pct(row.avgOdds * 100, 0)]],
+          ? [['Win rate', rec.rate], ['Record', record], ['Committed', U.fmtUsd(row.wagered || 0, { compact: true })], ['Taken', n]]
+          : [['Win rate', rec.rate], ['Record', record], ['Wagered', U.fmtUsd(row.wagered || 0, { compact: true })], ['Avg odds', row.avgOdds == null ? '—' : pct(row.avgOdds * 100, 0)]],
         statsHidden: isMaker
-          ? [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Taken', n], ['Open', U.fmtNum(row.open || 0, 0)]]
-          : [['Win rate', pct(row.winRate, 0)], ['Record', record], ['Predictions', n], ['Avg odds', row.avgOdds == null ? '—' : pct(row.avgOdds * 100, 0)]],
+          ? [['Win rate', rec.rate], ['Record', record], ['Taken', n], ['Open', U.fmtNum(row.open || 0, 0)]]
+          : [['Win rate', rec.rate], ['Record', record], ['Predictions', n], ['Avg odds', row.avgOdds == null ? '—' : pct(row.avgOdds * 100, 0)]],
         // the top category is the one with the most predictions, often a plurality: not "mostly"
         footRight: isMaker ? (mm ? 'Market maker' : 'One-off counterparty') + (row.first ? ' since ' + date(row.first) : '') : (row.topCat ? 'Top category ' + row.topCat : 'Meridian Predict') + (row.first ? ' · since ' + date(row.first) : ''),
       };
@@ -216,7 +219,7 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
       return flexSvg(inp);
     };
     const walletText = (row, isMaker) => {
-      const bits = [`${U.fmtNum(row.n || 0, 0)} prediction${row.n === 1 ? '' : 's'}${isMaker ? ' taken' : ''}`, `${U.fmtNum(row.won || 0, 0)}W / ${U.fmtNum(row.lost || 0, 0)}L`, row.roi != null ? pct(row.roi, 1, true) + ' ROI' : null, U.fmtUsd(row.wagered || 0, { compact: true }) + (isMaker ? ' committed' : ' wagered'), !isMaker && row.topCat ? 'top category ' + row.topCat : null].filter(Boolean);
+      const bits = [`${U.fmtNum(row.n || 0, 0)} prediction${row.n === 1 ? '' : 's'}${isMaker ? ' taken' : ''}`, walletRecord(row).text, row.roi != null ? pct(row.roi, 1, true) + ' ROI' : null, U.fmtUsd(row.wagered || 0, { compact: true }) + (isMaker ? ' committed' : ' wagered'), !isMaker && row.topCat ? 'top category ' + row.topCat : null].filter(Boolean);
       return { title: `${short(row.address)} on Meridian Predict: ${money(row.pnl || 0, true)} ${isMaker ? (P.isMarketMaker(row.n || 0) ? 'maker PnL' : 'counterparty PnL') : 'net'}`, description: bits.join(' · ') + '. Every prediction, its legs and how each resolved, on MeridianDataHub.' };
     };
 

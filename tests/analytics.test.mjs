@@ -231,6 +231,14 @@ test('copyability notes: an account under a week old shows its count, not a week
   assert.match(AN.copyScore(good()).parts.find((p) => p.key === 'steady').note, /weeks start Monday 00:00 UTC/);
 });
 
+test('copyability notes say which PnL they read: Meridian\'s on a row with that basis, the site\'s net figure on an older one', () => {
+  const app = Object.assign(good(), { basis: 'app' });
+  assert.match(AN.copyScore(app).parts.find((p) => p.key === 'profit').note, /^all-time PnL \+\$5,000 \(as Meridian's app\) · ROI 25%$/);
+  assert.match(AN.copyScore(good()).parts.find((p) => p.key === 'profit').note, /\(the site's net figure\)/);
+  assert.match(AN.copyScore(Object.assign(with_({}, { pnl: -10 }), { basis: 'app' })).parts.find((p) => p.key === 'profit').note, /^not profitable so far \(as Meridian's app\)$/);
+  assert.match(AN.copyScore(app).parts.find((p) => p.key === 'dd').note, /on the site's net PnL/);
+});
+
 // ---- the copy profile (AN.buildCopyProfile) on closed positions of $1,000 entry each
 const P_ID = 'p';
 const cref = { byTicker: {}, byId: { [P_ID]: { id: P_ID, ticker: 'PUSD', displayTicker: 'P-USD', takerFee: '0.00005' } } };

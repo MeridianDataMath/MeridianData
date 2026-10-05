@@ -8,6 +8,8 @@
   const isoDate = (ms) => new Date(U.num(ms)).toISOString().slice(0, 10);
   const usd0 = (v, o) => U.fmtUsd(v, Object.assign({ dp: 0 }, o));
   const bpsEl = (v) => (v == null ? h('span.dim', '—') : h('span.dim.xs', ' ' + (v > 0 ? '+' : '') + U.fmtNum(v, 0) + ' bps'));
+  // what every copier figure is: a model on the site's net basis, not a figure Meridian's app shows
+  const COPIER_NET = 'Modelled for the copier, not a Meridian figure: its fills less taker fees and mPerp position fees, plus the leader\'s funding (settled and not yet settled), scaled to your size. The leader\'s result it is compared with is on the same basis.';
 
   /**
    * Meridian's "Size" for a position episode, as its Closed P&L tab shows it: the quantity opened (the opening order plus
@@ -19,8 +21,8 @@
    */
   const closedSize = (e) => {
     const opened = e.fills.filter((f) => Math.sign(f.q) === e.side), closing = e.fills.filter((f) => Math.sign(f.q) === -e.side);
-    const qty = U.sum(opened, (f) => Math.abs(f.q)); const p = e.pos;
-    if (!e.qty && p && !U.num(p.size) && U.num(p.totalDecreaseQuantity) > 0 && Math.abs(U.num(p.totalIncreaseQuantity) - qty) <= 1e-9 * Math.max(1, qty)) {
+    const qty = U.sum(opened, (f) => Math.abs(f.q)); const p = S.wholeRecord(e);
+    if (p) {
       const exitPx = U.num(p.liquidationPrice) > 0 ? U.num(p.liquidationPrice) : U.num(p.totalDecreaseNotional) / U.num(p.totalDecreaseQuantity);
       return { qty: U.num(p.totalIncreaseQuantity), exitPx, usd: U.num(p.totalIncreaseQuantity) * exitPx };
     }
@@ -35,9 +37,23 @@
       ? `Meridian's Closed P&L shows Size as the quantity opened, ${U.fmtQty(z.qty, lot)}, and that quantity at the ${U.fmtPrice(z.exitPx, tick)} exit: ${U.fmtUsd(z.usd, { dp: 2 })}.`
       : `Still open: ${U.fmtQty(z.qty, lot)} opened; Meridian's positions table shows the size now held at the oracle price instead.`);
   };
+  /**
+   * The tooltip of a P&L cell that shows Meridian's figure for a position (L from MD.copysim.leaderResult): what the app
+   * counts, and the site's net beside it with what makes the difference. Closed: the position fees the app leaves out,
+   * the funding charged and not yet settled that only the site counts, and any rest between the fills and the exchange's
+   * record (a liquidation's fee, rounding). Open: the app's P&L is gross, the site's net carries the partial closes, fees
+   * and funding too.
+   */
+  const pnlTitle = (L) => {
+    const f = (v) => U.fmtUsd(v, { sign: true, dp: 2 });
+    if (L.open) return `Meridian's P&L for an open position: (mark − average entry) × size, before fees and funding. Site's net incl. partial closes, trading and position fees and funding (settled and not yet settled): ${f(L.net)}.`;
+    const unsettled = L.funding - L.fundingSettled, rest = L.net - L.app + L.posFee - unsettled;
+    const parts = [].concat(Math.abs(L.posFee) >= 0.005 ? [`position fees ${f(-L.posFee)}`] : [], Math.abs(unsettled) >= 0.005 ? [`funding not yet settled ${f(unsettled)}`] : [], Math.abs(rest) >= 0.005 ? [`${f(rest)} between the fills and the exchange's record`] : []);
+    return `Meridian's Closed P&L: realized P&L − trading fees + settled funding, without position fees${L.fromRecord ? '' : ' (from the fills: no exchange record covers exactly this position)'}. Site's net incl. position fees and unsettled funding: ${f(L.net)}` + (parts.length ? ` (${parts.join(', ')}).` : ', the same here: no position fees or unsettled funding on this position.');
+  };
 
   MD.copysimPage = {
-    closedSize, sizeTitle,
+    closedSize, sizeTitle, pnlTitle,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Simulator'));
       const addr = String(route.params.address || '').toLowerCase();
@@ -139,10 +155,13 @@
         const sizeLabel = st.mode === 'fixed' ? usd0(st.size) + ' per position (the opening order)' : st.mode === 'perfill' ? usd0(st.size) + ' per entry fill' : U.fmtNum(st.ratio, 1) + '% of the leader\'s size';
         const perPos = T.n ? T.copierNet / T.n : 0, perPosL = T.n ? T.leaderNet / T.n : 0;
         const avgEntry = T.n ? U.sum(R.rows, (r) => r.C.entryNotional) / T.n : 0, avgEntryL = T.n ? U.sum(R.rows, (r) => r.L.entryNotional) / T.n : 0;
+        // the leader's tile and column show Meridian's own figure (Closed P&L, open ones gross at the mark); everything that
+        // models the copier stays on the site's net basis, the leader's net beside it included, so the two compare like
+        // for like (against the app's figure, the position fees both pay would count as a cost of copying)
         const tiles = h('div.stats',
-          UI.stat('Copier net', usd0(T.copierNet, { sign: true }), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's result at your size` : ''), U.pnlClass(T.copierNet)),
-          UI.stat('Leader net', usd0(T.leaderNet, { sign: true }), 'same positions, their fills, fees and funding', U.pnlClass(T.leaderNet)),
-          UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps`, U.pnlClass(perPos)),
+          UI.stat('Copier net', h('span', { title: COPIER_NET }, usd0(T.copierNet, { sign: true })), `${sizeLabel} · ${st.delay ? st.delay + ' s' : 'instant'} delay` + (T.edgeKept != null ? ` · ${U.fmtPct(T.edgeKept, { dp: 0 })} of the leader's net at your size` : ''), U.pnlClass(T.copierNet)),
+          UI.stat('Leader P&L', h('span', { title: `Meridian's figures for the same positions, summed: Closed P&L (realized − trading fees + settled funding, without position fees) for closed ones, and P&L at the mark (before fees and funding) for open ones. Site's net incl. position fees and unsettled funding (open ones also with their partial closes, fees and funding): ${U.fmtUsd(T.leaderNet, { sign: true, dp: 2 })}; the copier is modelled on that basis, and the share it keeps is measured against it.` }, usd0(T.leaderApp, { sign: true })), 'the same positions as Meridian shows them: Closed P&L, open ones at the mark', U.pnlClass(T.leaderApp)),
+          UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', h('span', { title: 'Both on the site\'s net basis (trading and position fees, all funding), so they compare like for like; the leader\'s Closed P&L % of each position is beside its P&L in the table' }, `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${avgEntryL ? (perPosL > 0 ? '+' : '') + U.fmtNum((perPosL / avgEntryL) * 1e4, 0) : '—'} bps net`), U.pnlClass(perPos)),
           UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '') + (T.capped ? ` · ${T.capped} capped at ${usd0(maxPos)}` : '')),
           UI.stat('Costs', usd0(T.fees + T.drift + T.slip + T.posFee), `${usd0(T.fees)} fees · ${usd0(T.drift, { sign: true })} drift · ${usd0(T.slip)} slippage` + (T.posFee ? ` · ${usd0(T.posFee)} position fees` : ''), 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'the leader\'s, scaled to your size', U.pnlClass(T.funding)),
@@ -150,12 +169,12 @@
           UI.stat('If instant', usd0(R0.copierNet, { sign: true }), 'the same copy with zero delay: what latency costs is the gap', U.pnlClass(R0.copierNet)));
         const canvas = h('canvas');
         const col = C.colors();
-        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Cumulative result'), h('span.grow'), h('span.dim.small', 'by position close · the leader\'s result scaled to your size, position by position')), h('div.chart-box', canvas));
+        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Cumulative result'), h('span.grow'), h('span.dim.small', { title: 'The leader\'s line is its net (position fees and all funding, as the copier\'s), not Meridian\'s Closed P&L' }, 'by position close · the leader\'s net scaled to your size, position by position')), h('div.chart-box', canvas));
         // delay sensitivity
         const sens = UI.table({ cols: [
           { key: 'd', label: 'Delay', render: (d) => h('span', { class: d === st.delay ? 'bold' : '' }, d ? d + ' s' : 'instant') },
-          { key: 'net', label: 'Copier net', num: true, render: (d) => U.pnlEl(runs[d].T.copierNet, { dp: 0 }) },
-          { key: 'kept', label: 'Of the leader\'s', num: true, title: 'The copier\'s net as a share of the leader\'s result on the same positions, scaled to the copier\'s size per position', render: (d) => (runs[d].T.edgeKept == null ? h('span.dim', '—') : h('span', { class: 'num ' + (runs[d].T.edgeKept >= 50 ? 'pos' : runs[d].T.edgeKept > 0 ? '' : 'neg') }, U.fmtPct(runs[d].T.edgeKept, { dp: 0 }))) },
+          { key: 'net', label: 'Copier net', num: true, title: COPIER_NET, render: (d) => U.pnlEl(runs[d].T.copierNet, { dp: 0 }) },
+          { key: 'kept', label: 'Of the leader\'s', num: true, title: 'The copier\'s net as a share of the leader\'s net on the same positions (the same basis: trading and position fees, all funding), scaled to the copier\'s size per position', render: (d) => (runs[d].T.edgeKept == null ? h('span.dim', '—') : h('span', { class: 'num ' + (runs[d].T.edgeKept >= 50 ? 'pos' : runs[d].T.edgeKept > 0 ? '' : 'neg') }, U.fmtPct(runs[d].T.edgeKept, { dp: 0 }))) },
           { key: 'drift', label: 'Drift cost', num: true, render: (d) => usd0(runs[d].T.drift, { sign: true }) },
           { key: 'wr', label: 'Profitable', num: true, render: (d) => U.fmtPct(runs[d].T.winRate || 0, { dp: 0 }) },
         ], rows: DELAYS });
@@ -171,9 +190,10 @@
             { key: 'h', label: 'Held', num: true, render: (r) => h('span', U.fmtDuration(r.hold), r.open ? UI.chip('open', 'blue') : r.liq ? UI.chip('LIQ', 'red') : null) },
             // entry notional, not Meridian's Size (quantity opened × the exit price): each cell's tooltip gives that one too
             { key: 'ls', label: 'Leader entry notional', num: true, title: 'Everything the leader put into the position: the opening order plus every add, each at its own fill price. Meridian\'s Closed P&L "Size" is the quantity opened, valued at the exit price instead: hover a row for it', render: (r) => h('span', { title: sizeTitle(r.e, r.L.entryNotional, ref.byId[r.e.pid]) }, usd0(r.L.entryNotional)) },
-            { key: 'ln', label: 'Leader net', num: true, render: (r) => h('span', U.pnlEl(r.L.net, { dp: 2 }), bpsEl(r.leaderBps)) },
+            // Meridian's figure for the leader's position; the site's net, the copier's basis, in each cell's tooltip
+            { key: 'ln', label: 'Leader P&L', num: true, title: 'As Meridian shows the leader\'s position: Closed P&L (realized − trading fees + settled funding, without position fees) with its Closed P&L % in bps, or for an open position the P&L at the mark before fees and funding, with its price move in bps. Hover a cell for the site\'s net (position fees and unsettled funding), the basis the copier is modelled on', render: (r) => h('span', { title: pnlTitle(r.L) }, U.pnlEl(r.L.app, { dp: 2 }), bpsEl(r.leaderAppBps)) },
             { key: 'cs', label: 'Copier entry notional', num: true, title: 'Everything the copier would have put in: the opening order plus every add, each at its own price. The maximum per position limits what is held at once, so a position trimmed and added to again can total more than it', render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
-            { key: 'cn', label: 'Copier net', num: true, render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
+            { key: 'cn', label: 'Copier net', num: true, title: COPIER_NET + ' Beside it: that net on the copier\'s entry notional, in bps', render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
             { key: 'dr', label: 'Drift cost', num: true, title: 'What the price move between each of the leader\'s fills and the copier\'s fill cost the copier (+ = a worse price, − = a better one)', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(r.C.driftCost, { sign: true, dp: 2 }))) },
             { key: 'sl', label: 'Slippage', num: true, render: (r) => (r.C.slipCost ? U.fmtUsd(r.C.slipCost, { dp: 2 }) : h('span.dim', '—')) },
             { key: 'fe', label: 'Fees', num: true, render: (r) => U.fmtUsd(r.C.fees, { dp: 2 }) },
@@ -185,7 +205,7 @@
         const slipNote = st.slip === 'auto' ? 'Slippage from today\'s books at ' + usd0(base.mode !== 'ratio' ? st.size : AN.COPY_SIZE) + ': ' + traded.map((p) => `${p.displayTicker} ${slipAuto[p.id] == null ? 'no book loaded, 0 bps used' : U.fmtNum(slipAuto[p.id], 1) + ' bps'}`).join(' · ') + '. A size the book cannot fill, or one costing more than 60 bps, counts as 60 bps.' : `Slippage set to ${U.fmtNum(st.slip, 1)} bps each way.`;
         const notes = h('div.card', h('h3', { style: { marginBottom: '8px' } }, 'What this assumes'), h('div.note-grid',
           h('div.it', h('div.t', 'Prices'), h('div.d', (st.delay ? 'Each of the leader\'s fills is copied at the estimated oracle price ' + st.delay + ' seconds later: a straight line between the nearest known prices on either side of that moment (the fill itself and the end of its minute while still inside the fill\'s minute; after that, the one-minute closes before and after it)' : 'Each of the leader\'s fills is copied at the leader\'s own fill price') + ', then moved against you by the slippage. The leader\'s own fills are what it actually paid.')),
-          h('div.it', h('div.t', 'Fees, funding, position fees'), h('div.d', 'You pay the taker fee of each market on every fill. Funding and mPerp position fees are the leader\'s for the same position, scaled to your size: you would hold it over the same hours.')),
+          h('div.it', h('div.t', 'Fees, funding, position fees'), h('div.d', 'You pay the taker fee of each market on every fill. Funding and mPerp position fees are the leader\'s for the same position, scaled to your size: you would hold it over the same hours. The leader\'s P&L is what Meridian shows for its positions (Closed P&L: realized − trading fees + settled funding, without position fees; an open position at the mark, before fees and funding); your net, the share kept and the leader\'s line on the chart count the position fees and the funding not yet settled too, on both sides, so they compare like for like.')),
           h('div.it', h('div.t', 'Sizing'), h('div.d', st.mode === 'fixed' ? `The leader's opening order (all of its fills, not just the first piece) becomes ${usd0(st.size)} for you; later adds follow the leader in proportion until the position reaches ${usd0(maxPos)}, the most one position may hold (a leader who opens small and scales in would otherwise make yours any multiple of ${usd0(st.size)}). A reduction cuts your position by the same share as the leader's.` : st.mode === 'perfill' ? `Every entry fill becomes ${usd0(st.size)} for you, until the position reaches ${usd0(maxPos)}, the most one position may hold; a reduction cuts your position by the same share as the leader's.` : `Every fill is ${U.fmtNum(st.ratio, 1)}% of the leader's quantity.`)),
           h('div.it', h('div.t', 'Liquidations and open positions'), h('div.d', 'A position the leader was liquidated out of is closed at the leader\'s exit price; whether you would have been liquidated depends on your own margin. Positions still open are marked at the current oracle price.')),
           h('div.it', h('div.t', 'Books'), h('div.d', slipNote)),
@@ -196,7 +216,7 @@
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
             (candleStats && candleStats.noCandle ? `${U.fmtNum(candleStats.noCandle, 0)} of ${U.fmtNum(candleStats.fills, 0)} delayed fills had no candle and were priced at the leader's fill (no drift).` : ''))) : null));
         U.replace(results, tiles, h('div.grid.cols-2', chartCard, sensCard), UI.card('Positions', wrap, h('span.dim.small', `${T.n} opened since ${st.since} (UTC), newest first`)), notes);
-        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader (at your size)' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
+        C.timeSeries(canvas, { series: [{ points: R.curveL, color: col.blue, label: 'Leader net (at your size)' }, { points: R.curve, color: col.accent, label: 'Copier' }], yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 0, sign: true }) });
       }
 
       // ---- paper copy: the same copier, live, in a virtual account kept in this browser

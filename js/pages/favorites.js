@@ -44,12 +44,13 @@
             { key: 'acct', label: 'Account', render: (r) => h('div.row', U.addrLink(r.f.address, r.f.subaccountId), U.copyBtn(r.f.address)) },
             { key: 'sub', label: 'Subaccount', render: (r) => h('span.dim', r.f.name || 'primary') },
             { key: 'equity', label: 'Equity', num: true, render: (r) => (r.error ? h('span.neg', 'error') : UI.usd(r.st.equity)) },
-            { key: 'upnl', label: 'Net unrealized PnL', num: true, title: 'Price PnL of the open positions at the oracle price, plus unsettled funding received (minus paid), minus unsettled mPerp position fees: the amount that counts in equity. Meridian\'s app and API show unrealized PnL without these.', render:(r) => (r.error ? '—' : U.pnlEl(r.st.upnl)) },
+            // Meridian's Unrealized P&L (gross); the site's net figure, what equity counts, in the cell's tooltip
+            { key: 'upnl', label: 'Unrealized PnL', num: true, title: 'As Meridian\'s app (Unrealized P&L): the open positions\' (oracle price − entry) × size, before funding and fees. Hover a cell for the site\'s net figure, the unsettled funding and mPerp position fees counted too (the amount that counts in equity)', render: (r) => (r.error ? '—' : h('span', { title: 'Site\'s net figure incl. unsettled funding and position fees: ' + U.fmtUsd(r.st.upnl, { sign: true }) }, U.pnlEl(r.st.grossUpnl))) },
             { key: 'pos', label: 'Open positions', num: true, render: (r) => (r.error ? '—' : String(r.st.positions.length)) },
             { key: 'notional', label: 'Notional', num: true, render: (r) => (r.error ? '—' : UI.usd(r.st.notional, { compact: true })) },
             { key: 'vol', label: 'Volume (all)', num: true, render: (r) => (r.vol == null ? '—' : UI.usd(r.vol, { compact: true })) },
             // a row the snapshot carried over from an earlier build is marked "older", as on the Leaderboard
-            { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? h('span', U.pnlEl(r.lb.stats['30d'].pnl), r.lb.carried && LB ? [' ', LB.carriedChip(r.lb)] : null) : h('span.dim', '—')) },
+            { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot, as Meridian\'s Trade Stats 30D: from the end of the UTC day 30 days back. Hover a cell for the site\'s net figure', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? h('span', { title: AN.sitePnlTitle(r.lb, '30d') }, U.pnlEl(r.lb.stats['30d'].pnl), r.lb.carried && LB ? [' ', LB.carriedChip(r.lb)] : null) : h('span.dim', '—')) },
             { key: 'added', label: 'Added', render: (r) => h('span.dim', U.fmtAgo(r.f.addedAt)) },
             { key: 'rm', label: '', render: (r) => h('button.btn.sm.icon.ghost', { title: 'Remove', onclick: () => U.favorites.remove(r.f.subaccountId) }, U.icon('trash')) },
           ],

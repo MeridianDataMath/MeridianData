@@ -13,24 +13,26 @@
     MD.flex.open({
       address: addr, what: 'account', periods: FLEX_PERIODS, period: 'all', shareUrl: A.shareUrl('a', addr),
       build: async (p) => {
-        const start = AN.startFor(p, sa.createdAt);
+        const start = AN.startFor(p, sa.createdAt), ms = BUCKET[p] || U.DAY;
         posP = posP || A.positions(sid, { maxPages: 10, ttl: 60000 });
-        const [series, balances, open, positions] = await Promise.all([AN.loadSeries(sid, { start, resolution: AN.resFor(p), ttl: 60000, charges: true, positions: posP }), A.balances(sid), A.openPositions(sid), posP]);
+        const [series, balances, open, positions, volAll] = await Promise.all([AN.loadSeries(sid, { start: AN.seriesStart(p, sa.createdAt), resolution: AN.resFor(p), ttl: 60000, charges: true, positions: posP }), A.balances(sid), A.openPositions(sid), posP,
+          p === 'all' ? A.totalVolume(sid, { ttl: 60000 }).catch(() => null) : null]);
         const pids = Array.from(new Set(open.map((x) => x.productId)));
         const prices = pids.length ? await A.marketPrices(pids) : {};
         const acct = AN.accountState({ balances, positions: open, ref, prices });
-        const ser = AN.netLive(series, acct, BUCKET[p] || U.DAY);   // every bucket on the live figures' basis (funding and position fees as charged)
-        const is = AN.intervalStats(ser, start, { upnl: acct.upnl, equity: acct.equity }, BUCKET[p] || U.DAY);
-        const base = is.curve.length ? is.curve[0].v : 0;
-        const curve = is.curve.map((c) => [Math.round(c.t / 1000), Math.round((c.v - base) * 100) / 100]);
+        // PnL, ROI, volume and the line as the Overview's tiles: Meridian's (its Trade Stats); the drawdown is the site's, on
+        // every bucket net of what was owed at its end (funding and position fees as charged)
+        const is = AN.intervalStats(AN.netLive(series, acct, ms), start, { upnl: acct.upnl, equity: acct.equity }, ms);
+        const ap = AN.appStats(series, p, { createdAt: sa.createdAt, bucketMs: ms, live: { grossUpnl: acct.grossUpnl }, volumeAll: volAll });
+        const curve = ap ? ap.curve.map((c) => [Math.round(c.t / 1000), Math.round(c.v * 100) / 100]) : [];
         // positions of the period: those still open or updated since its start (a close is the last update)
         const ps = AN.positionStats(p === 'all' ? positions : positions.filter((x) => U.num(x.size) !== 0 || U.num(x.updatedAt) >= start), ref);
         const wr = ps.winRate == null ? '—' : U.fmtPct(ps.winRate, { dp: 0 }), dd = U.fmtDd(is.ddPct);
         const style = ps.style && ps.style !== '—' ? ps.style : null;
         return {
-          kind: 'perps', address: addr, period: FLEX_PERIODS.find((x) => x.v === p).label, pnl: is.pnl, roi: is.roi, curve: curve.length >= 2 ? curve : null,
+          kind: 'perps', address: addr, period: FLEX_PERIODS.find((x) => x.v === p).label, pnl: ap ? ap.pnl : is.pnl, roi: ap ? ap.roi : is.roi, curve: curve.length >= 2 ? curve : null,
           periodRange: curve.length >= 2 ? K.range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : null,
-          stats: [['Win rate', wr], ['Max drawdown', dd], ['Volume', U.fmtUsd(is.volume, { compact: true })], ['Positions', U.fmtNum(ps.count, 0)]],
+          stats: [['Win rate', wr], ['Max drawdown', dd], ['Volume', U.fmtUsd(ap ? ap.volume : is.volume, { compact: true })], ['Positions', U.fmtNum(ps.count, 0)]],
           statsHidden: [['Win rate', wr], ['Max drawdown', dd], ['Positions', U.fmtNum(ps.count, 0)], ['Style', style || '—']],
           // the exchange's own account (AN.EXCHANGE) is not a trader, as on the share card
           footRight: (AN.exchangeAccount({ sid }) ? 'Exchange account · ' : style ? style + ' trader · ' : '') + 'since ' + K.date(sa.createdAt),
@@ -63,15 +65,33 @@
   /** Meridian's margin ratio (AN.marginRatio) as its app prints it */
   const mrTxt = (x) => (x == null ? '—' : x >= 1 ? '100%+' : U.fmtPct(x * 100, { dp: 2 }));
 
-  // The interval tiles' window, and how Meridian's app draws its own (its Trade Stats): the site's windows roll with the
-  // clock, in the buckets AN.resFor gives each range, from the first bucket that starts inside the window
-  const WINDOW_NOTE = {
-    '24h': 'The last 24 hours, in the hourly buckets that start inside them (23 to 24 hours), up to now. Meridian\'s app counts its 24h from the start of the hour 24 hours ago: up to an hour more.',
-    '7d': 'The last 7 × 24 hours, in the 2-hour buckets that start inside them (6 days 22 hours to 7 days), up to now. Meridian\'s app reads 7D in whole UTC days: its volume from the start of the UTC day 7 days back, its P&L from that day\'s end, so either can differ by up to a day\'s trading.',
-    '30d': 'The last 30 × 24 hours, in the 8-hour buckets that start inside them (29 days 16 hours to 30 days), up to now. Meridian\'s app reads 30D in whole UTC days: its volume from the start of the UTC day 30 days back, its P&L from that day\'s end, so either can differ by up to a day\'s trading.',
+  // The interval tiles' windows. PnL and volume are Meridian's (its Trade Stats, AN.appWindow): its own windows, which
+  // start on the hour (24h) or on a UTC day (7D, 30D), the P&L from the end of the first bucket and the volume from its
+  // start. Funding, fees, drawdown and Sharpe are the site's: windows that roll with the clock, in the buckets AN.resFor
+  // gives each range, from the first bucket that starts inside them
+  const APP_WINDOW = {
+    '24h': 'Its 24h reads its hourly archive from the start of the hour 24 hours before this one: the P&L from the end of that first hour (23 to 24 hours back), the volume from its start (24 to 25 hours).',
+    '7d': 'Its 7D reads its daily archive from the UTC day holding the moment 7 days before this hour began: the P&L from the end of that day (6 to 7 days back), the volume from its start (7 to 8 days).',
+    '30d': 'Its 30D reads its daily archive from the UTC day holding the moment 30 days before this hour began: the P&L from the end of that day (29 to 30 days back), the volume from its start (30 to 31 days).',
+    all: 'All: since the subaccount was created, the volume its archive\'s all-time total.',
+  };
+  const SITE_WINDOW = {
+    '24h': 'The site\'s window: the last 24 hours, in the hourly buckets that start inside them (23 to 24 hours), up to now.',
+    '7d': 'The site\'s window: the last 7 × 24 hours, in the 2-hour buckets that start inside them (6 days 22 hours to 7 days), up to now.',
+    '30d': 'The site\'s window: the last 30 × 24 hours, in the 8-hour buckets that start inside them (29 days 16 hours to 30 days), up to now.',
     all: 'Since the subaccount was created, up to now.',
   };
   const withTitle = (el, title) => { if (title) el.title = title; return el; };
+  const fmtS = (v) => U.fmtUsd(v, { sign: true });
+  /** The site's net PnL per bucket of a series on the live figures' basis (AN.netLive): realized − trading fees − mPerp
+   *  position fees + funding, as charged, + the change in net uPnL, the bucket in progress ending at liveUpnl (the live
+   *  net uPnL). Map bucket start → USD, for the tooltips beside Meridian's bars; the series' first bucket has none. */
+  const siteBuckets = (ser, liveUpnl, ms) => {
+    const m = new Map(), nowT = Date.now(); let prev = null;
+    for (const b of ser) { if (prev) m.set(b.t, b.pnl + (b.upnl - prev.upnl)); prev = b; }
+    if (prev && liveUpnl != null) { const t = prev.t + ms > nowT ? prev.t : Math.floor(nowT / ms) * ms; m.set(t, (m.get(t) || 0) + liveUpnl - prev.upnl); }
+    return m;
+  };
 
   /** table with cursor-based server paging */
   function cursorTable({ fetchPage, cols, empty, pageSize = 25, onRow }) {
@@ -93,14 +113,32 @@
   }
 
   // column tooltips shared by the Overview's and the Live tab's open positions
-  const UPNL_TITLE = 'Price PnL at the mark, plus the funding charged since the position\'s last fill and not settled yet (received +, paid −; the unsettled part of the Funding column), minus unsettled mPerp position fees: the amount that counts in equity. Funding settled at earlier fills is already in the balance. Meridian\'s app and API show unrealized PnL without these.';
-  const RPNL_TITLE = 'Gross PnL booked on partial closes of this position, before fees and funding (Positions history shows the net)';
-  const FUND_TITLE = 'Funding since the position opened (received +, paid −), as Meridian\'s app shows it: settled into the balance at its fills, plus charged every hour since its last fill and not settled yet. Only the unsettled part is in Net unrealized PnL. Hover a cell for the split';
+  const UPNL_TITLE = 'As Meridian\'s app (its P&L column): (oracle price − entry) × size, before funding and fees, and in brackets its P&L %, the price move since the entry (a fall, for a short) with no leverage in it. Hover a cell for the site\'s net figure: the funding charged since the position\'s last fill and not settled yet (received +, paid −; the unsettled part of the Funding column) and the unsettled mPerp position fees counted too, the amount that counts in equity.';
+  const RPNL_TITLE = 'Gross PnL booked on partial closes of this position, before fees and funding (Positions history shows its Closed PnL)';
+  const FUND_TITLE = 'Funding since the position opened (received +, paid −), as Meridian\'s app shows it: settled into the balance at its fills, plus charged every hour since its last fill and not settled yet. The unsettled part counts in equity and in the site\'s net unrealized figure, not in Meridian\'s P&L. Hover a cell for the split';
   // an open position's funding since it opened: settled at its fills (fundingAccruedUsd) and charged since its last fill,
   // not settled yet (fundingUsd, the row's funding); both fields are positive when paid
   const fundCell = (r) => {
     const settled = -U.num(r.p.fundingAccruedUsd), unsettled = -U.num(r.funding);
-    return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in Net unrealized PnL)` }, U.pnlEl(settled + unsettled));
+    return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in equity and the site's net unrealized figure)` }, U.pnlEl(settled + unsettled));
+  };
+  // Meridian's P&L and P&L % (gross, the price move); the site's net figure and its return on initial margin in the tooltip
+  const upnlCell = (r) => h('span', { title: `Site's net figure incl. unsettled funding and position fees: ${fmtS(r.net)}` + (r.roe != null ? `\nIts return on initial margin: ${U.fmtUsd(r.net)} ÷ (${U.fmtUsd(r.notional)} ÷ ${r.maxLev}×) = ${U.fmtPct(r.roe, { sign: true, dp: 1 })}` : '') },
+    U.pnlEl(r.upnl), r.pnlPct != null ? h('span.dim.xs', ' (' + U.fmtPct(r.pnlPct, { sign: true, dp: 2 }) + ')') : null);
+  const TPSL_TITLE = 'As Meridian\'s app: the trigger prices of the take profit and the stop loss set on the whole position (the nearest of each kind when there are several), and the take profits and stop losses set on part of it counted ("Partial"). Hover a cell for the site\'s nearest exit levels: every stop or reduce-only order, whole or partial, with its distance from the mark and its PnL.';
+  /** an exit level of AN.attachStops in words: price, how much, how it was placed, distance from the mark, PnL there */
+  const exitTxt = (e, r) => U.fmtPrice(e.price, r.prod.tickSize) + (e.qty != null ? ' for ' + U.fmtQty(e.qty, r.prod.lotSize) : ' for the whole position')
+    + (e.kind === 'limit' ? ', a reduce-only limit' : e.trigger === 'last' ? ', a stop on the last price' : '') + (e.oco ? ', OCO' : '')
+    + (e.distPct != null ? ' · ' + U.fmtPct(e.distPct, { sign: true, dp: 1 }) + ' from the mark' : '') + ' · ' + fmtS(e.pnl) + ' at the level before fees';
+  /** TP / SL as Meridian's app (AN.appTpSl): the whole-position take profit / stop loss and the partial ones counted; the
+   *  site's nearest exit levels (stops and reduce-only limits, whole or partial: AN.attachStops) in the tooltip */
+  const tpslCell = (r) => {
+    const near = (label, list) => (list && list.length ? `Nearest ${label}: ${exitTxt(list[0], r)}` + (list.length > 1 ? ` (+${list.length - 1} more)` : '') : `No ${label}`);
+    const title = 'The site\'s nearest exit levels, from stop and reduce-only orders, whole or partial:\n' + near('take profit', r.tp) + '\n' + near('stop loss', r.sl);
+    const whole = r.appTp != null || r.appSl != null;
+    if (!whole && !r.partialTpSl) return h('span.dim', { title }, '—');
+    const px = (v, cls) => (v == null ? h('span.dim', '—') : h('span', { class: cls }, U.fmtPrice(v, r.prod.tickSize)));
+    return h('div.tpsl', { title }, whole ? h('div', px(r.appTp, 'pos'), h('span.dim', ' / '), px(r.appSl, 'neg')) : null, r.partialTpSl ? h('div.xs.dim', 'Partial: ' + r.partialTpSl) : null);
   };
   /** liquidation price cell — / none: no price, or a long the pool keeps above maintenance even at zero */
   const liqCell = (r) => {
@@ -116,19 +154,6 @@
     if (m.oco) f.push('OCO'); else if (m.oto) f.push('OTO');
     if (o.timeInForce && o.timeInForce !== 'GTD') f.push(o.timeInForce);
     return f.join(' · ');
-  };
-  /** TP / SL cell for a position row: nearest level, distance from mark, PnL if it fires, and how it was placed */
-  const exitCell = (r, list) => {
-    if (!list || !list.length) return h('span.dim', '—');
-    const e = list[0];
-    const tags = [];
-    if (e.kind === 'limit') tags.push('limit');
-    if (e.oco) tags.push('OCO');
-    if (e.kind === 'stop' && e.trigger === 'last') tags.push('last px');
-    if (e.qty != null) tags.push(U.fmtQty(e.qty, r.prod.lotSize));
-    return h('div', { style: { lineHeight: '1.25' }, title: (e.kind === 'stop' ? 'Stop order on the exchange' : 'Reduce-only limit order') + ' · PnL at this level before fees' },
-      h('div', U.fmtPrice(e.price, r.prod.tickSize), tags.length ? h('span.xs.dim', ' ' + tags.join(' · ')) : null),
-      h('div.xs', e.distPct == null ? null : h('span.dim', U.fmtPct(e.distPct, { sign: true, dp: 1 }) + ' · '), h('span', { class: U.pnlClass(e.pnl) }, U.fmtUsd(e.pnl, { sign: true })), list.length > 1 ? h('span.dim', ' · +' + (list.length - 1) + ' more') : null));
   };
   const orderCols = (ref) => [
     { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
@@ -276,7 +301,7 @@
       const pids = Array.from(new Set(positions.map((p) => p.productId)));
       const prices = pids.length ? await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }) : {};
       const acct = AN.accountState({ balances, positions, ref, prices });
-      AN.attachStops(acct.positions, orders);
+      AN.attachStops(acct.positions, orders); AN.appTpSl(acct.positions, orders);
       const sig = balances.map((b) => String(b.tokenAddress).toLowerCase() + ':' + b.amount).sort().join('|');
       if (balSig != null && sig !== balSig) { seriesStale = true; trailTries = 0; }   // a close, partial close, funding settlement, fee or transfer moved a balance
       balSig = sig;
@@ -290,20 +315,24 @@
     function renderState() {
       const a = base.acct;
       const kv = (k, v, cls, title) => [h('span.k', { title: title || null }, k), h('span.v', { class: cls || '', title: title || null }, v)];
-      // a pool's figure is its equity (balance + its positions' net uPnL); Meridian's Balances table calls the balance alone
-      // "Equity", so the balance stands on the line under it. The ratio is Meridian's: maintenance margin ÷ pool equity
+      // a pool's figure is its balance, as Meridian's Balances table shows it under "Equity" (unrealized PnL left out), with
+      // its In Use and Available under it; the site's pool equity (balance + its positions' net uPnL) in the tooltip. The
+      // ratio is Meridian's: maintenance margin ÷ pool equity, that equity with the net uPnL counted
       const pools = a.pools.map((p) => h('div.pool',
         h('div.name', h('span', p.name === 'USD' ? 'USD (cross)' : p.name + ' (isolated)'),
-          h('span.num', { title: `Pool equity: its balance ${U.fmtUsd(p.balance)} plus its positions' net unrealized PnL ${U.fmtUsd(p.upnl, { sign: true })} (after the funding and position fees not settled yet). Meridian's Balances table shows the balance alone, as "Equity".` }, U.fmtUsd(p.equity))),
+          h('span.num', { title: `As Meridian's Balances table ("Equity"): the pool's balance, unrealized PnL left out.\nSite's pool equity incl. its positions' unrealized PnL net of unsettled funding and position fees (${fmtS(p.upnl)}): ${U.fmtUsd(p.equity)}` }, U.fmtUsd(p.balance))),
         h('div.bar', h('i', { class: p.marginRatio != null && p.marginRatio > 2 / 3 ? 'bad' : p.marginRatio != null && p.marginRatio > 1 / 3 ? 'warn' : '', style: { width: U.clamp(p.balance > 0 ? (p.used / p.balance) * 100 : 0, 0, 100) + '%' } })),
         h('div.row.xs.dim', { style: { marginTop: '4px', justifyContent: 'space-between' } },
-          h('span', { title: 'As Meridian\'s Balances table: the pool\'s balance (its "Equity" column, unrealized PnL left out) and the margin in use (the bar: in use ÷ balance)' }, 'balance ' + U.fmtUsd(p.balance, { compact: true }) + ' · in use ' + U.fmtUsd(p.used, { compact: true })),
-          p.marginRatio != null ? h('span', { title: `Margin ratio, as Meridian's app: maintenance margin ${U.fmtUsd(p.mm)} ÷ pool equity ${U.fmtUsd(p.equity)}. The pool is liquidated at 100%.` }, 'margin ratio ' + mrTxt(p.marginRatio)) : h('span', 'no positions'))));
+          h('span', { title: 'As Meridian\'s Balances table: the margin in use (the bar: in use ÷ balance) and the margin available, never below 0' }, 'in use ' + U.fmtUsd(p.used, { compact: true }) + ' · available ' + U.fmtUsd(p.available, { compact: true })),
+          p.marginRatio != null ? h('span', { title: `Margin ratio, as Meridian's app: maintenance margin ${U.fmtUsd(p.mm)} ÷ pool equity ${U.fmtUsd(p.equity)} (its balance plus its positions' net unrealized PnL). The pool is liquidated at 100%.` }, 'margin ratio ' + mrTxt(p.marginRatio)) : h('span', 'no positions'))));
       const cross = a.pools.find((p) => p.name === 'USD');
+      // unrealized PnL as Meridian's app shows it on its account panel (gross); its Trade Equity, like the Equity above,
+      // still takes the unsettled funding and position fees off
+      const upTitle = `As Meridian's app (Unrealized P&L): the open positions' (oracle price − entry) × size, before funding and fees.\nSite's net figure incl. unsettled funding and position fees: ${fmtS(a.upnl)} (what equity counts above the balance)`;
       U.replace(stateCard,
-        h('div.k.dim.small', 'Equity'),
+        h('div.k.dim.small', { title: 'Meridian\'s Trade Equity: the pools\' balances plus unrealized PnL, less the funding and mPerp position fees charged to open positions and not settled yet' }, 'Equity'),
         h('div.big', { class: '' }, U.fmtUsd(a.equity)),
-        h('div.small', { style: { marginBottom: '12px' } }, h('span.dim', { title: 'Price PnL of the open positions, plus unsettled funding received (minus paid), minus unsettled mPerp position fees' }, 'Net unrealized '), U.pnlEl(a.upnl)),
+        h('div.small', { style: { marginBottom: '12px' }, title: upTitle }, h('span.dim', 'Unrealized PnL '), U.pnlEl(a.grossUpnl)),
         h('div.kv',
           ...kv('Balance', U.fmtUsd(a.balance)),
           ...kv('Available', U.fmtUsd(a.available), '', 'Margin free for new orders, summed over the pools with each pool counted from 0, as Meridian\'s app does: a pool whose losses exceed its free margin reports less than 0, and nothing is available from it'),
@@ -341,9 +370,8 @@
             { key: 'entry', label: 'Entry price', num: true, render: (r) => U.fmtPrice(r.entry, r.prod.tickSize) },
             { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
             { key: 'cost', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
-            { key: 'upnl', label: 'Net unrealized PnL', num: true, title: UPNL_TITLE + ' In brackets: the return on initial margin (notional at the mark ÷ the market\'s max leverage, the margin the exchange holds for the position), not on the pool\'s equity.', render: (r) => h('span', U.pnlEl(r.net), r.roe != null ? h('span.dim.xs', { title: 'Return on initial margin: ' + U.fmtUsd(r.net) + ' ÷ (' + U.fmtUsd(r.notional) + ' ÷ ' + r.maxLev + '×)' }, ' (' + U.fmtPct(r.roe, { sign: true, dp: 1 }) + ')') : null) },
-            { key: 'tp', label: 'Take profit', num: true, title: 'Nearest take-profit level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.tp) },
-            { key: 'sl', label: 'Stop loss', num: true, title: 'Nearest stop-loss level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.sl) },
+            { key: 'upnl', label: 'Unrealized PnL', num: true, title: UPNL_TITLE + ' The site\'s return on initial margin (net figure ÷ (notional at the mark ÷ the market\'s max leverage), the margin the exchange holds for the position) is in the tooltip too.', render: upnlCell },
+            { key: 'tpsl', label: 'TP / SL', num: true, title: TPSL_TITLE, render: tpslCell },
             { key: 'rpnl', label: 'Realized PnL', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
             { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
             { key: 'liq', label: 'Liq. price', num: true, title: 'Estimated liquidation price (pool maintenance margin)', render: (r) => liqCell(r) },
@@ -378,11 +406,12 @@
             { key: 'size', label: 'Qty opened', num: true, title: 'Total quantity opened over the position\'s life; adding again after a partial close counts again, so this can exceed the largest size the position reached', render: (r) => U.fmtQty(r.totalIncreaseQuantity, lotOf(ref, r.productId)) },
             { key: 'cost', label: 'Cost', num: true, title: 'Total notional opened', render: (r) => U.fmtUsd(r.totalIncreaseNotional) },
             { key: 'avg', label: 'Avg entry', num: true, title: 'Average price of all fills that opened or added to the position (Cost ÷ Qty opened). For an open position that was partly closed and then added to, this differs from the Entry price under Open positions, which is the average entry of the size still open', render: (r) => (U.num(r.totalIncreaseQuantity) ? U.fmtPrice(U.num(r.totalIncreaseNotional) / U.num(r.totalIncreaseQuantity), tickOf(ref, r.productId)) : '—') },
-            { key: 'rpnl', label: 'Net PnL', num: true, title: 'Realized PnL less trading and position fees, plus settled funding (minus if paid)', render: (r) => U.pnlEl(U.num(r.realizedPnl) - U.num(r.feesAccruedUsd) - U.num(r.fundingAccruedUsd) - U.num(r.positionFeeAccruedUsd)) },
+            // Meridian's Closed P&L (AN.closedPnl); the site's net figure, position fees taken off too, in the tooltip
+            { key: 'rpnl', label: 'Closed PnL', num: true, title: 'As Meridian\'s app (its Closed P&L): realized PnL less trading fees, plus settled funding (minus if paid); mPerp position fees are not in it. In brackets its P&L %, on the notional opened. An open position shows what its partial closes booked so far. Hover a cell for the site\'s net figure, position fees taken off too', render: (r) => { const c = AN.closedPnl(r); return h('span', { title: `Site's net figure incl. position fees: ${fmtS(c.site)}` }, U.pnlEl(c.pnl), c.pct != null ? h('span.dim.xs', ' (' + U.fmtPct(c.pct, { sign: true, dp: 2 }) + ')') : null); } },
             { key: 'fund', label: 'Funding', num: true, title: 'Settled funding (negative = paid)', render: (r) => U.pnlEl(-U.num(r.fundingAccruedUsd)) },
             // trading fees alone, as Meridian's app shows Fees; the mPerp position fees in a column of their own
             { key: 'fees', label: 'Fees', num: true, title: 'Trading fees paid on the position\'s fills', render: (r) => U.fmtUsd(r.feesAccruedUsd) },
-            { key: 'pfee', label: 'Position fee', num: true, title: 'mPerp position fees settled into the balance (the isolated markets charge them; Meridian\'s app has no column for them on closed positions). An open position\'s unsettled ones are in Net unrealized PnL under Open positions', render: (r) => (U.num(r.positionFeeAccruedUsd) ? U.fmtUsd(r.positionFeeAccruedUsd) : h('span.dim', '—')) },
+            { key: 'pfee', label: 'Position fee', num: true, title: 'mPerp position fees settled into the balance (the isolated markets charge them; Meridian\'s app has no column for them on closed positions). An open position\'s unsettled ones count in equity and in the site\'s net unrealized figure under Open positions', render: (r) => (U.num(r.positionFeeAccruedUsd) ? U.fmtUsd(r.positionFeeAccruedUsd) : h('span.dim', '—')) },
             { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
             { key: 'closed', label: 'Closed', render: (r) => h('span.dim', U.num(r.size) !== 0 ? '—' : U.fmtDateTimeS(r.updatedAt)) },
           ],
@@ -424,7 +453,7 @@
       if (Date.now() - reloadAt < 60000) return;
       reloadAt = Date.now();
       const r = range, gen = ++seriesGen;
-      const s = await AN.loadSeries(sid, { start: AN.startFor(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true, positions: positionsList(true) });
+      const s = await AN.loadSeries(sid, { start: AN.seriesStart(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true, positions: positionsList(true) });
       if (cx.signal.aborted || gen !== seriesGen || r !== range) return;   // the range was switched meanwhile
       seriesCache.clear(); seriesCache.set(r, s); series = s;
       seriesStale = trails(s) && ++trailTries < 3;
@@ -432,7 +461,7 @@
     }
     async function loadRange() {
       const res = AN.resFor(range);
-      const start = AN.startFor(range, sa.createdAt);
+      const start = AN.seriesStart(range, sa.createdAt);   // the site's window and Meridian's
       const key = range;
       if (seriesCache.has(key)) { series = seriesCache.get(key); loadingRange = false; drawChart(); return; }   // (a load still running for another range then ends without drawing)
       loadingRange = true; drawChart();
@@ -453,69 +482,87 @@
       const start = AN.startFor(range, sa.createdAt);
       const nowT = Date.now();
       const live = base ? { upnl: base.acct.upnl, equity: base.acct.equity } : null;
-      const ser = base ? AN.netLive(series, base.acct, res.ms) : series;   // every bucket on the live figures' basis (funding and position fees as charged)
+      // the site's figures: every bucket on the live figures' basis (funding and position fees as charged), its window
+      const ser = base ? AN.netLive(series, base.acct, res.ms) : series;
       const stats = AN.intervalStats(ser, start, live, res.ms);
-      const rows = ser.filter((b) => b.t >= start);
-      const prev = ser.filter((b) => b.t < start).pop();
+      // Meridian's (its Trade Stats): PnL and volume on its own windows, unrealized PnL gross and the live one at the end,
+      // all-time volume the archive's total
+      const ap = AN.appStats(series, range, { createdAt: sa.createdAt, bucketMs: res.ms, live: base ? { grossUpnl: base.acct.grossUpnl } : null, volumeAll: range === 'all' && base ? base.vol : null });
+      const appFrom = AN.appWindow(range, sa.createdAt).from;
       const level = metric === 'balance' || metric === 'equity';
       const line = level || cumulative;
-      let prevUp = prev ? prev.upnl : 0, acc = 0;
       // archive rows hold end-of-bucket values under the bucket's start: lines plot them at the bucket's end; bars keep
       // the start, they stand for the whole bucket
-      const pts = line && (rows.length || prev) ? [{ x: prev ? Math.max(start, prev.t + res.ms) : start, y: level ? (prev ? prev[metric] : 0) : 0 }] : [];
-      for (const b of rows) {
-        let v;
-        if (metric === 'pnl') { v = b.pnl + (b.upnl - prevUp); prevUp = b.upnl; }
-        else if (metric === 'volume') v = b.volume;
-        else if (metric === 'balance') v = b.balance;
-        else if (metric === 'equity') v = b.equity;
-        else if (metric === 'funding') v = b.fundingCharged != null ? b.fundingCharged : b.funding;
-        else v = b.fee + (ser.posNetted ? b.posFeeCharged : b.posFee || 0);   // position fees as charged, as the PnL books them
-        if (!level && cumulative) { acc += v; v = acc; }
-        pts.push({ x: line ? Math.min(b.t + res.ms, nowT) : b.t, y: v });
-      }
-      const lastB = rows[rows.length - 1];
-      const inProgress = !!lastB && lastB.t + res.ms > nowT;
-      if (live && pts.length) {
-        if (metric === 'equity') { if (inProgress) pts.pop(); pts.push({ x: nowT, y: live.equity }); }
-        else if (metric === 'pnl') {
-          const d = live.upnl - prevUp;   // the live net uPnL against the last bucket's: the line ends at the PnL tile, the bars add up to it
-          if (cumulative) { if (inProgress) pts[pts.length - 1].y = acc + d; else pts.push({ x: nowT, y: acc + d }); }
-          else if (inProgress) pts[pts.length - 1].y += d; else pts.push({ x: Math.floor(nowT / res.ms) * res.ms, y: d });
+      const end = (b) => Math.min(b.t + res.ms, nowT);
+      let pts = [], xMin = start, tooltipLabel;
+      if (metric === 'pnl') {
+        // Meridian's P&L chart: its running total since the account opened (not from 0 at the period's start) at each
+        // bucket's end, ending at now, or the change in each bucket; a bar's tooltip has the site's net figure too
+        if (ap && line) pts = ap.curve.map((c) => ({ x: c.t, y: c.level }));
+        else if (ap) { const sb = siteBuckets(ser, live && live.upnl, res.ms); pts = ap.bars.map((b) => ({ x: b.t, y: b.v, site: sb.get(b.t) })); tooltipLabel = (r) => ['PnL ' + fmtS(r.y)].concat(r.site != null ? ['Site\'s net figure: ' + fmtS(r.site)] : []); }
+        xMin = ap ? Math.min(ap.curve[0].t, ap.bars.length ? ap.bars[0].t : Infinity) : start;
+      } else if (metric === 'volume' || metric === 'equity') {
+        // Meridian's window; equity as its chart, balance + unrealized PnL (gross), the site's net of what was owed then in
+        // the tooltip, ending at the live figures
+        const rows = series.filter((b) => b.t >= appFrom);
+        if (metric === 'volume') {
+          let acc = 0;
+          pts = rows.map((b) => { acc += b.volume; return { x: line ? end(b) : b.t, y: line ? acc : b.volume }; });
+          if (line && pts.length) pts.unshift({ x: rows[0].t, y: 0 });
+        } else {
+          const net = new Map(ser.map((b) => [b.t, b.equity]));
+          pts = rows.map((b) => ({ x: end(b), y: b.balance + b.grossUpnl, site: net.get(b.t) }));
+          if (base && pts.length) { if (rows[rows.length - 1].t + res.ms > nowT) pts.pop(); pts.push({ x: nowT, y: base.acct.balance + base.acct.grossUpnl, site: base.acct.equity }); }
+          tooltipLabel = (r) => ['Equity ' + U.fmtUsd(r.y), 'balance + unrealized PnL, as Meridian\'s Trade Stats chart'].concat(r.site != null ? ['Site\'s, net of the funding and position fees owed then: ' + U.fmtUsd(r.site)] : []);
         }
+        xMin = rows.length ? rows[0].t : appFrom;
+      } else {
+        // the site's own figures on its rolling window: balance, funding and fees (position fees as charged, as its PnL
+        // books them)
+        const rows = ser.filter((b) => b.t >= start);
+        const prev = ser.filter((b) => b.t < start).pop();
+        let acc = 0;
+        if (line && (rows.length || prev)) pts.push({ x: prev ? Math.max(start, prev.t + res.ms) : start, y: level ? (prev ? prev.balance : 0) : 0 });
+        for (const b of rows) {
+          let v = metric === 'balance' ? b.balance : metric === 'funding' ? (b.fundingCharged != null ? b.fundingCharged : b.funding) : b.fee + (ser.posNetted ? b.posFeeCharged : b.posFee || 0);
+          if (!level && cumulative) { acc += v; v = acc; }
+          pts.push({ x: line ? end(b) : b.t, y: v });
+        }
+        xMin = rows.length ? Math.min(rows[0].t, start) : start;
       }
       const col = C.colors();
       const last = pts.length ? pts[pts.length - 1].y : 0;
-      const color = metric === 'volume' ? col.blue : metric === 'fees' ? col.amber : metric === 'balance' || metric === 'equity' ? col.accent : last >= 0 ? col.green : col.red;
+      const up = metric === 'pnl' ? !(ap && ap.pnl < 0) : last >= 0;   // a running total is coloured by the period's change
+      const color = metric === 'volume' ? col.blue : metric === 'fees' ? col.amber : level ? col.accent : up ? col.green : col.red;
       const type = !level && !cumulative ? 'bar' : 'line';
       // without the funding history (unreadable) the funding figures are those settled into the balance
       const mLabel = metric === 'funding' && !ser.netted ? 'Funding settled' : METRICS.find((m) => m.v === metric).label;
-      // the PnL line starts from 0 at the period's start (Meridian's P&L chart plots the running total since the account
-      // opened, so its axis reads differently while the changes agree)
-      const label = metric === 'pnl' && cumulative ? (range === 'all' ? 'PnL since the account opened' : 'PnL since the start of the period') : mLabel + (level ? '' : cumulative ? ' (cumulative)' : '');
-      // the equity line is net of what was owed at each moment (AN.netLive), as the live equity; Meridian's chart is not
-      const owedParts = [ser.netted ? 'funding' : null, ser.posNetted ? 'mPerp position fees' : null].filter(Boolean);
-      const tooltipLabel = metric === 'equity' && owedParts.length ? (r) => ['Equity ' + U.fmtUsd(r.y), 'net of the ' + owedParts.join(' and '), 'charged and not settled then'] : undefined;
+      const label = metric === 'pnl' && cumulative ? 'PnL since the account opened' : mLabel + (level ? '' : cumulative ? ' (cumulative)' : '');
       cumBox.querySelector('input').disabled = level;
       // day bars are UTC days; line points are real instants and keep the local date and time
-      C.timeSeries(chartCanvas, { points: pts, color, type, label, tooltipLabel, zero: true, signColors: metric === 'pnl' || metric === 'funding', xMin: rows.length ? Math.min(rows[0].t, start) : undefined, xMax: nowT, beginAtZero: metric === 'volume' || metric === 'fees', titleFmt: range === 'all' && !line ? U.fmtDayUTC : undefined });
+      C.timeSeries(chartCanvas, { points: pts, color, type, label, tooltipLabel, zero: true, signColors: metric === 'pnl' || metric === 'funding', xMin, xMax: nowT, beginAtZero: metric === 'volume' || metric === 'fees', titleFmt: range === 'all' && !line ? U.fmtDayUTC : undefined });
       const rl = RANGES.find((r) => r.v === range).label;
       const fund = stats.fundingCharged != null ? stats.fundingCharged : stats.funding;
-      // position fees as the PnL books them: charged in the period (settled or still owed) once their charges are read
+      // position fees as the site's PnL books them: charged in the period (settled or still owed) once their charges are read
       const pfee = stats.posFeesCharged != null ? stats.posFeesCharged : stats.posFees || 0;
-      const win = WINDOW_NOTE[range];
-      // what the PnL books, on the basis the charges allowed (unreadable charges leave that part as settled, and all of it
-      // still owed falls on the period's end)
+      const sw = SITE_WINDOW[range];
+      // what the site's PnL books, on the basis the charges allowed (unreadable charges leave that part as settled, and all
+      // of it still owed falls on the period's end)
       const posBasis = ser.posNetted || !(Math.abs(stats.posFees || 0) > 0.005 || (base && base.acct.unsettledPositionFee > 0.005)) ? 'as charged' : 'as settled (all still owed counted at the end)';
-      const pnlTip = `${win} Realized PnL less trading fees, plus funding ${ser.netted ? 'as charged' : 'as settled (all still owed counted at the end)'}, less mPerp position fees ${posBasis}, plus the change in price PnL of the open positions.`;
+      const siteTip = `Site's net figure incl. unsettled funding and position fees: ${fmtS(stats.pnl)}` + (stats.roi != null ? ` (ROI ${U.fmtPct(stats.roi, { sign: true, dp: 1 })})` : '')
+        + `. ${sw} Realized PnL less trading fees, plus funding ${ser.netted ? 'as charged' : 'as settled (all still owed counted at the end)'}, less mPerp position fees ${posBasis}, plus the change in unrealized PnL net of the funding and position fees owed.`;
+      const pnl = ap ? ap.pnl : stats.pnl, roi = ap ? ap.roi : stats.roi;
+      const pnlTip = 'As Meridian\'s Trade Stats: the change in its running total of realized PnL, settled funding and trading fees, plus the open positions\' unrealized PnL at the oracle price now (its chart takes it from its archive, which follows within minutes); mPerp position fees are not in it. '
+        + APP_WINDOW[range] + ' ROI: on the equity (balance + unrealized PnL) at its start plus the deposits since.\n\n' + siteTip;
+      const own = (what) => `The site's own figure, ${what}. ${sw}`;
       U.replace(tiles,
-        withTitle(UI.stat('PnL (' + rl + ')', U.fmtUsd(stats.pnl, { sign: true }), stats.roi != null ? 'ROI ' + U.fmtPct(stats.roi, { sign: true, dp: 1 }) : null, U.pnlClass(stats.pnl)), pnlTip),
-        withTitle(UI.stat('Volume (' + rl + ')', U.fmtUsd(stats.volume)), win),
-        UI.stat((stats.fundingCharged != null ? 'Funding (' : 'Funding settled (') + rl + ')', U.fmtUsd(fund, { sign: true }), null, U.pnlClass(fund)),
+        withTitle(UI.stat('PnL (' + rl + ')', fmtS(pnl), roi != null ? 'ROI ' + U.fmtPct(roi, { sign: true, dp: 1 }) : null, U.pnlClass(pnl)), pnlTip),
+        withTitle(UI.stat('Volume (' + rl + ')', U.fmtUsd(ap ? ap.volume : stats.volume)), 'As Meridian\'s Trade Stats. ' + APP_WINDOW[range] + `\n\nSite's figure: ${U.fmtUsd(stats.volume)}. ${sw}`),
+        withTitle(UI.stat((stats.fundingCharged != null ? 'Funding (' : 'Funding settled (') + rl + ')', fmtS(fund), null, U.pnlClass(fund)), own(stats.fundingCharged != null ? 'funding as charged every hour, settled into the balance or not (received +, paid −)' : 'funding as settled into the balance (received +, paid −)')),
         withTitle(UI.stat('Fees (' + rl + ')', U.fmtUsd(stats.fees + pfee), Math.abs(pfee) > 0.005 ? U.fmtUsd(stats.fees) + ' trading · ' + U.fmtUsd(pfee) + ' position (mPerps)' : null),
-          Math.abs(pfee) > 0.005 ? 'Trading fees, and the mPerp position fees ' + (stats.posFeesCharged != null ? 'charged in the period (settled into the balance or still owed)' : 'settled into the balance in the period') : null),
-        UI.stat('Max drawdown (' + rl + ')', U.fmtDd(stats.ddPct), stats.ddUsd ? U.fmtUsd(stats.ddUsd) : null),
-        UI.stat('Sharpe (' + rl + ')', U.ratioFmt(stats.sharpe), 'annualized · ' + ({ '24h': 'hourly', '7d': '2-hourly', '30d': '8-hourly', all: 'daily' })[range] + ' returns'));
+          own(Math.abs(pfee) > 0.005 ? 'trading fees and the mPerp position fees ' + (stats.posFeesCharged != null ? 'charged in the period (settled into the balance or still owed)' : 'settled into the balance in the period') : 'trading fees')),
+        withTitle(UI.stat('Max drawdown (' + rl + ')', U.fmtDd(stats.ddPct), stats.ddUsd ? U.fmtUsd(stats.ddUsd) : null), own('on its net PnL (funding and position fees as charged), deposits and withdrawals left out')),
+        withTitle(UI.stat('Sharpe (' + rl + ')', U.ratioFmt(stats.sharpe), 'annualized · ' + ({ '24h': 'hourly', '7d': '2-hourly', '30d': '8-hourly', all: 'daily' })[range] + ' returns'), own('on its net PnL (funding and position fees as charged)')));
     }
 
     await Promise.all([loadBase(), loadRange()]);
@@ -562,7 +609,7 @@
       const px = {};
       for (const p of positions) { const prod = ref.byId[p.productId]; const m = prod && marks[prod.ticker]; px[p.productId] = m ? { oraclePrice: m.mark } : prices[p.productId]; }
       const acct = AN.accountState({ balances: [], positions, ref, prices: px });
-      AN.attachStops(acct.positions, orders);
+      AN.attachStops(acct.positions, orders); AN.appTpSl(acct.positions, orders);
       U.replaceLive(posBody, UI.table({
         cols: [
           { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker) },
@@ -571,9 +618,8 @@
           { key: 'entry', label: 'Entry', num: true, render: (r) => U.fmtPrice(r.entry, r.prod.tickSize) },
           { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
           { key: 'notional', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
-          { key: 'upnl', label: 'Net unrealized PnL', num: true, title: UPNL_TITLE, render: (r) => U.pnlEl(r.net) },
-          { key: 'tp', label: 'Take profit', num: true, render: (r) => exitCell(r, r.tp) },
-          { key: 'sl', label: 'Stop loss', num: true, render: (r) => exitCell(r, r.sl) },
+          { key: 'upnl', label: 'Unrealized PnL', num: true, title: UPNL_TITLE, render: upnlCell },
+          { key: 'tpsl', label: 'TP / SL', num: true, title: TPSL_TITLE, render: tpslCell },
           { key: 'rpnl', label: 'Realized', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
           { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
@@ -812,41 +858,47 @@
     const { sa, ref } = st; const sid = sa.id;
     U.replace(el, UI.loading('Crunching positions and history…'));
     const posP = A.positions(sid, { maxPages: 10, signal: cx.signal, ttl: 60000 });   // also where the position-fee charges begin
-    const [positions, fills, series, balances, openPos] = await Promise.all([
+    const [positions, fills, series, balances, openPos, volAll] = await Promise.all([
       posP,
       A.fills(sid, { maxPages: 5, signal: cx.signal }).catch(() => []),
       AN.loadSeries(sid, { start: AN.startFor('all', sa.createdAt), resolution: 'day1', signal: cx.signal, ttl: 60000, charges: true, positions: posP }),
-      A.balances(sid, cx), A.openPositions(sid, cx),
+      A.balances(sid, cx), A.openPositions(sid, cx), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
     ]);
     const pids = Array.from(new Set(openPos.map((p) => p.productId)));
     const prices = pids.length ? await A.marketPrices(pids, cx) : {};
     const acct = AN.accountState({ balances, positions: openPos, ref, prices });
     const ps = AN.positionStats(positions, ref);
-    const ser = AN.netLive(series, acct, U.DAY);   // every day on the live figures' basis (funding and position fees as charged)
+    // the site's figures on every day on the live figures' basis (funding and position fees as charged); Meridian's (its
+    // Trade Stats: PnL, ROI on it, volume, the charts) beside them
+    const ser = AN.netLive(series, acct, U.DAY);
     const is = AN.intervalStats(ser, AN.startFor('all', sa.createdAt), { upnl: acct.upnl, equity: acct.equity }, U.DAY);
+    const ap = AN.appStats(series, 'all', { createdAt: sa.createdAt, bucketMs: U.DAY, live: { grossUpnl: acct.grossUpnl }, volumeAll: volAll });
+    const pnl = ap ? ap.pnl : is.pnl, roi = ap ? ap.roi : is.roi;
     const fundAll = is.fundingCharged != null ? is.fundingCharged : is.funding - acct.unsettledFunding;   // settled + still unsettled on open positions, + = received
-    // as charged (settled or still owed), as the Overview's Fees tile and this tab's PnL have them; settled only where the
+    // as charged (settled or still owed), as the Overview's Fees tile and the site's PnL have them; settled only where the
     // charges could not be read
     const posFees = is.posFeesCharged != null ? is.posFeesCharged : is.posFees || 0;
     const dwDp = Math.max(is.deposits, is.withdrawals) >= 1000 ? 0 : 2;   // one precision for both numbers in the tile
     const makerN = fills.filter((f) => f.isMaker).length;
-    const m = (k, v, s, cls) => UI.metric(k, v, s, cls);
+    const m = (k, v, s, cls, title) => withTitle(UI.metric(k, v, s, cls), title);
+    const netNote = 'On the site\'s net PnL: funding and mPerp position fees as charged, unrealized PnL net of what is owed, deposits and withdrawals left out';
     const grid = h('div.metric-list',
-      m('Total PnL (all time)', U.fmtUsd(is.pnl, { sign: true }), 'incl. unrealized', U.pnlClass(is.pnl)),
-      m('ROI', is.roi != null ? U.fmtPct(is.roi, { sign: true, dp: 1 }) : '—', 'on deposits + starting equity', U.pnlClass(is.roi)),
+      m('Total PnL (all time)', fmtS(pnl), 'as Meridian\'s app · incl. unrealized', U.pnlClass(pnl), 'As Meridian\'s Trade Stats (All): its running total of realized PnL, settled funding and trading fees, plus the open positions\' unrealized PnL at the oracle price now; mPerp position fees are not in it.\n\n'
+        + `Site's net figure incl. unsettled funding and position fees: ${fmtS(is.pnl)} (funding as charged, position fees taken off, unrealized PnL net of what is owed)`),
+      m('ROI', roi != null ? U.fmtPct(roi, { sign: true, dp: 1 }) : '—', 'on deposits + starting equity', U.pnlClass(roi), 'Total PnL (as Meridian\'s app) ÷ the deposits since the subaccount was created. On the site\'s net figure: ' + (is.roi != null ? U.fmtPct(is.roi, { sign: true, dp: 1 }) : '—')),
       m('Win rate', ps.winRate != null ? U.fmtPct(ps.winRate, { dp: 1 }) : '—', `${ps.wins}W / ${ps.losses}L of ${ps.closed.length} closed`),
       m('Profit factor', ps.profitFactor == null ? '—' : ps.profitFactor === Infinity ? '∞' : U.fmtNum(ps.profitFactor, 2), 'net wins ÷ net losses'),
-      m('Expectancy', ps.expectancy != null ? U.fmtUsd(ps.expectancy, { sign: true }) : '—', 'avg net per closed position', U.pnlClass(ps.expectancy)),
+      m('Expectancy', ps.expectancy != null ? fmtS(ps.expectancy) : '—', 'avg net per closed position', U.pnlClass(ps.expectancy)),
       m('Avg win / loss', (ps.avgWin != null ? U.fmtUsd(ps.avgWin) : '—') + ' / ' + (ps.avgLoss != null ? U.fmtUsd(ps.avgLoss) : '—')),
       m('Largest win / loss', (ps.largestWin != null ? U.fmtUsd(ps.largestWin) : '—') + ' / ' + (ps.largestLoss != null ? U.fmtUsd(ps.largestLoss) : '—')),
-      m('Sharpe (daily, annualized)', U.ratioFmt(is.sharpe)),
-      m('Max drawdown (all time)', U.fmtDd(is.ddPct), is.ddUsd ? U.fmtUsd(is.ddUsd) : null, is.ddPct > 30 ? 'neg' : ''),
+      m('Sharpe (daily, annualized)', U.ratioFmt(is.sharpe), null, '', netNote),
+      m('Max drawdown (all time)', U.fmtDd(is.ddPct), is.ddUsd ? U.fmtUsd(is.ddUsd) : null, is.ddPct > 30 ? 'neg' : '', netNote),
       m('Trading style', ps.style, ps.avgDuration != null ? 'avg hold ' + U.fmtDuration(ps.avgDuration) : 'no closed positions'),
       m('Long / short', `${ps.longs} / ${ps.shorts}`, 'positions'),
       m('Positions', String(ps.count) + (positions.truncated ? '+' : ''), `${ps.open.length} open · ${ps.liquidated} liquidated`),
-      m('Volume (all time)', U.fmtUsd(is.volume, { compact: true })),
+      m('Volume (all time)', U.fmtUsd(ap ? ap.volume : is.volume, { compact: true }), null, '', 'As Meridian\'s Trade Stats (All): the archive\'s total volume. The site\'s sum of its daily buckets: ' + U.fmtUsd(is.volume)),
       m('Fees paid', U.fmtUsd(is.fees + posFees), (Math.abs(posFees) > 0.005 ? 'incl. ' + U.fmtUsd(posFees) + (is.posFeesCharged != null ? ' position fees charged (settled or still owed)' : ' position fees') + (fills.length ? ' · ' : '') : '') + (fills.length ? `${U.fmtPct((makerN / fills.length) * 100, { dp: 0 })} maker of last ${fills.length} fills` : '') || null),
-      m('Funding (net)', U.fmtUsd(fundAll, { sign: true }), 'positive = received · incl. unsettled on open positions', U.pnlClass(fundAll)),
+      m('Funding (net)', fmtS(fundAll), 'positive = received · incl. unsettled on open positions', U.pnlClass(fundAll)),
       m('Deposits / withdrawals', U.fmtUsd(is.deposits, { compact: true, dp: dwDp }) + ' / ' + U.fmtUsd(is.withdrawals, { compact: true, dp: dwDp }), is.withdrawals ? 'withdrawals incl. fees' : null));
 
     const c1 = h('canvas'), c2 = h('canvas'), c3 = h('canvas');
@@ -856,32 +908,30 @@
         { key: 'count', label: 'Positions', num: true, render: (r) => String(r.count) },
         { key: 'closed', label: 'Closed', num: true, render: (r) => String(r.closed) },
         { key: 'wr', label: 'Win rate', num: true, render: (r) => (r.closed ? U.fmtPct((r.wins / r.closed) * 100, { dp: 0 }) : '—') },
-        { key: 'pnl', label: 'Net PnL (closed)', num: true, render: (r) => U.pnlEl(r.pnl) },
+        { key: 'pnl', label: 'Net PnL (closed)', num: true, title: 'The site\'s net result of the closed positions: realized PnL less trading and position fees, plus funding (Meridian\'s Closed P&L leaves position fees out)', render: (r) => U.pnlEl(r.pnl) },
         { key: 'vol', label: 'Volume', num: true, render: (r) => U.fmtUsd(r.vol, { compact: true }) },
         { key: 'ls', label: 'Long %', num: true, render: (r) => U.fmtPct((r.longs / r.count) * 100, { dp: 0 }) },
       ], rows: ps.byMarket, empty: 'No positions yet',
     });
-    // what a day's bar holds, on the basis the charges allowed, and how Meridian's P&L calendar differs
+    // what a day's bar holds (Meridian's calendar), and the site's figure in its tooltip on the basis the charges allowed
     const posCharged = ser.posNetted || !(Math.abs(is.posFees || 0) > 0.005 || acct.unsettledPositionFee > 0.005);   // (none at all reads the same)
-    const dayNote = 'UTC days: realized PnL less trading fees, '
+    const dayNote = 'UTC days, as Meridian\'s P&L calendar adds them up: the change in its running total of realized PnL, settled funding and trading fees, plus the change in unrealized PnL at the oracle price; mPerp position fees are not in it, and today\'s bar ends at the live figures. Its calendar labels each UTC day with the local date that day starts on, so west of UTC it shows each a date earlier. '
+      + 'Hover a bar for the site\'s net figure: realized PnL less trading fees, '
       + (ser.netted && posCharged ? 'funding and mPerp position fees on the day they are charged' : `funding on the day it ${ser.netted ? 'is charged' : 'settles'}, mPerp position fees on the day they ${posCharged ? 'are charged' : 'settle'}`)
-      + ', plus the change in price PnL; today\'s bar ends at the live figures. Meridian\'s P&L calendar dates each day in your local time, counts funding when it settles and leaves position fees out.';
+      + ', plus the change in unrealized PnL net of what is owed.';
     U.replace(el, h('div.stack', grid, h('div.row', { style: { marginTop: '-8px' } }, h('span.grow'), MD.defsLink()),
-      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2), h('div.chart-note', dayNote))),
+      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1), h('div.chart-note', 'As Meridian\'s P&L chart: its running total since the subaccount was created, ending at Total PnL.')), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2), h('div.chart-note', dayNote))),
       h('div.grid.cols-2.wl', UI.card('By market', perMarket), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
       positions.truncated ? h('div.notice', 'Only the most recent 2,000 positions were analysed.') : null));
-    const start = AN.startFor('all', sa.createdAt);
-    const rows = ser.filter((b) => b.t >= start);
-    const prevB = ser.filter((b) => b.t < start).pop(); const nowT = Date.now();
-    // each day's value is reached at its end (the line plots it there); the daily bars stand for the whole UTC day
-    let acc = 0, prevUp = prevB ? prevB.upnl : 0; const cum = [{ x: start, y: 0 }], daily = [];
-    for (const b of rows) { const v = b.pnl + (b.upnl - prevUp); prevUp = b.upnl; acc += v; cum.push({ x: Math.min(b.t + U.DAY, nowT), y: acc }); daily.push({ x: b.t, y: v }); }
-    const dLive = acct.upnl - prevUp; acc += dLive;   // the line ends at Total PnL (all time) and the bars add up to it
-    const lastB = rows[rows.length - 1];
-    if (lastB && lastB.t + U.DAY > nowT) { cum[cum.length - 1].y = acc; daily[daily.length - 1].y += dLive; } else { cum.push({ x: nowT, y: acc }); daily.push({ x: Math.floor(nowT / U.DAY) * U.DAY, y: dLive }); }
+    const nowT = Date.now();
+    // each day's value is reached at its end (the line plots it there); the daily bars stand for the whole UTC day and add
+    // up to Total PnL
+    const cum = ap ? ap.curve.map((c) => ({ x: c.t, y: c.level })) : [];
+    const sb = siteBuckets(ser, acct.upnl, U.DAY);
+    const daily = ap ? ap.bars.map((b) => ({ x: b.t, y: b.v, site: sb.get(b.t) })) : [];
     const col = C.colors();
-    C.timeSeries(c1, { points: cum, color: acc >= 0 ? col.green : col.red, label: 'PnL', xMax: nowT });   // real instants: local date and time
-    C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, signColors: true, label: 'PnL', xMax: nowT, titleFmt: U.fmtDayUTC });
+    C.timeSeries(c1, { points: cum, color: pnl >= 0 ? col.green : col.red, label: 'PnL', xMax: nowT });   // real instants: local date and time
+    C.timeSeries(c2, { points: daily, type: 'bar', color: col.accent, signColors: true, label: 'PnL', xMax: nowT, titleFmt: U.fmtDayUTC, tooltipLabel: (r) => ['PnL ' + fmtS(r.y)].concat(r.site != null ? ['Site\'s net figure: ' + fmtS(r.site)] : []) });
     const closedMk = ps.byMarket.filter((r) => r.closed > 0);   // a market with only an open position has no closed result to show
     C.bars(c3, closedMk.map((r) => r.ticker), closedMk.map((r) => r.pnl), { horizontal: true });
   }
@@ -900,7 +950,8 @@
     const toTab = h('a.small', { href: U.accountUrl(st.addr, st.sa.id, 'predict'), title: 'Open the Predict tab', onclick: (e) => { if (st.showTab) { e.preventDefault(); st.showTab('predict'); } } }, 'Predict tab →');
     U.replace(slot, UI.chip('Predict', 'accent'),
       h('span.small', h('span.dim', x.isMaker ? (x.marketMaker ? 'Maker PnL ' : 'Counterparty PnL ') : 'Net PnL '), U.pnlEl(F.pnl, dp(F.pnl))), sep(),
-      h('span.small', `${U.fmtNum(n, 0)} prediction${n === 1 ? '' : 's'} · ${U.fmtNum(F.won || 0, 0)}W / ${U.fmtNum(F.lost || 0, 0)}L` + (F.open ? ` · ${U.fmtNum(F.open, 0)} open` : '')),
+      // the record as Meridian's app counts it (claimed predictions only), the site's count at the verdict in the title
+      h('span.small', `${U.fmtNum(n, 0)} prediction${n === 1 ? '' : 's'} · `, h('span', { title: F.recordTitle || null }, `${U.fmtNum(F.won || 0, 0)}W / ${U.fmtNum(F.lost || 0, 0)}L`), F.open ? ` · ${U.fmtNum(F.open, 0)} open` : ''),
       F.unclaimedWon && !x.isMaker ? [sep(), h('span.small.pos', `${U.fmtUsd(F.unclaimedPayout, dp(F.unclaimedPayout))} to claim`)] : null,
       sep(), toTab);
     slot.title = 'Meridian Predict, from ' + (r.via ? 'this account\'s Predict wallet ' + r.via + ' (the smart account the Meridian app places its predictions from)' : r.address);

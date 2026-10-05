@@ -231,11 +231,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     mPerp), estimated liquidation prices, chart of PnL · Volume · Balance · Equity · Funding ·
     Fees (cumulative or per bucket, 24h / 7d / 30d / all time), interval stats, and tables for
     open positions, orders & stops, fills, position history and deposits/withdrawals/conversions.
-    The chart and the interval tiles count funding when it is charged (open positions' unsettled
-    funding included; "Funding settled" when the archive's funding history cannot be read), and
-    their fees include mPerp position fees. Line charts plot each archive bucket at its end and end
-    on the live figures (the PnL line at the PnL tile, the Equity line at the live equity); the
-    all-time bars are UTC days. Auto-refresh reloads the archive series whenever a balance moves
+    PnL, volume, the PnL and equity charts, unrealized PnL with its P&L %, Closed PnL, TP / SL and
+    the pool figures are Meridian's own (see Metric definitions), each with the site's figure in
+    its tooltip. The Funding, Fees, drawdown and Sharpe tiles are the site's, on its rolling
+    windows: they count funding when it is charged (open positions' unsettled funding included;
+    "Funding settled" when the archive's funding history cannot be read), and their fees include
+    mPerp position fees. Line charts plot each archive bucket at its end and end on the live
+    figures (the PnL line, the app's running total, at the PnL tile's end); the all-time bars
+    are UTC days. Auto-refresh reloads the archive series whenever a balance moves
     (a close, funding settlement, fee or transfer).
   * *Live* – WebSocket-driven positions, orders, fills and an L2 order book for any market.
   * *Performance* – win rate, profit factor, expectancy, Sharpe, max drawdown, trading style,
@@ -247,8 +250,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
 * **Favorites** – starred accounts with live equity (stored in this browser only).
 * **Leaderboard** – every subaccount on the exchange, ranked; sortable columns and filters for
   interval (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
-  style. PnL, volume, ROI, Sharpe and drawdown follow the interval; equity, positions, win rate
-  and trading style do not. **#** is the account's rank on the whole leaderboard in the current
+  style. PnL, volume and ROI follow the interval on Meridian's windows and are its figures (the
+  site's in each cell's tooltip), Sharpe and drawdown on the site's rolling windows; equity,
+  positions, win rate and trading style do not follow it. **#** is the account's rank on the whole leaderboard in the current
   sort, also while a search or filter hides other rows. A snapshot is published every 30 minutes
   by the deploy workflow; **Update** rebuilds one in your browser (a few API calls per account),
   cached in `localStorage`; cancelling it drops the partial build and keeps the snapshot shown.
@@ -820,10 +824,15 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     (only a win has a payout for the token buyer). "Won" is never the payout: the sentence says
     what was paid on what stake, as the slip page does. Slim legs carry Meridian's result for a
     settled question as a 9th element (1 YES, 0 NO, 2 50/50).
-    - An undecided prediction whose legs already tell says so, as the question dialog does: *lost
-      · awaiting settlement* once a leg went against the bettor (Meridian's result, else
-      Polymarket's, 50/50 included), *won on Polymarket · awaiting settlement* once every leg went
-      its way. The dialog, the slip page and a bettor page's history all use it.
+    - An undecided prediction's status follows Meridian's app (`appPending`, the owner's call
+      2026-10-06): only legs Meridian itself has settled count, so *lost · awaiting settlement*
+      once a settled leg went against the bettor and *won · awaiting settlement* once every leg is
+      settled its way. A result known only on Polymarket leaves it *open* (the slip page: *live*,
+      with its payout), as in the app, and the Polymarket result goes in the chip's and the
+      hero's tooltip (`sourceNote`). The dialog, the slip page, the question dialog and a bettor
+      page's history all use it.
+    - A lost prediction's Payout reads $0.00, as the app's Positions table shows it, with the
+      missed payout (stake + the maker's collateral) in the tooltip.
     - A leg shows when Meridian settled it, or else the end time Meridian lists for it. That is a
       listed end, not a betting cutoff: Meridian has taken bets after it (566 legs in 335
       predictions by 2026-09-30, the latest on Sep 30).
@@ -899,7 +908,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     reaches, `recentFrom`; the exchange itself lists 85k):
     search, category, open / ended-unsettled / settled / all (Open by default), sortable columns
     (stake ever placed on Meridian first); probability, Meridian OI with the number of
-    open bets and stake, source volume, link to the mirrored source market. *Probability* is
+    open bets and stake, *Vol 24h* / *Vol 7d* (the mirrored market's volume as Meridian's list
+    cards show it, `similarMarketVolumeFiltered24h` / `7d`, formatted as the app does; the
+    unfiltered and all-time volumes in the tooltip), link to the mirrored source market. *Probability* is
     Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors), loaded for the
     rows on screen; until it has loaded, the `estimatedPrice` Meridian's API reported at the
     snapshot, which stops following the market once a game starts. A settled question shows its
@@ -1003,11 +1014,16 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     251 such wins ($32.7K), on 2026-10-02 the makers' 726 (on 305 tokens), every token at 0. With
     them the snapshot's decided-but-unclaimed predictions fell from 1,120 to 143, and the bettors'
     unclaimed wins from 393 ($38.1K) to 142 ($5.5K). Live, the exchange's own won / lost /
-    pending counts still follow the API's flag, and a bettor page's record allows for that
-    (`P.bettorFigures`: `viaToken`). Results, win rates, PnL and the ex-post vig count from the
+    pending counts still follow the API's flag. The won / lost records and win rates the pages
+    show are those counts, as Meridian's app shows them (Positions Won / Lost, Win Rate: the API's
+    flag, twins paid through a token claim still pending, `P.appRecord`; the snapshot's rows carry
+    them as `appWon` / `appLost` / `appWinRate` beside the site's own `won` / `lost` / `winRate`,
+    and the wallet files mark the twins `tk`), the site's count at the verdict in each figure's
+    tooltip (`P.bettorFigures`: `vWon` / `vLost`); the breakdowns by category and number of legs
+    keep the verdict count, as the app has none. Results, PnL and the ex-post vig count from the
     settlement, and so does every date the site shows for a result (Big wins, slip pages and
     cards, curves, the Questions page's most recently settled predictions): claiming changes none
-    of them. The tax center is the one exception: it books Predict results on the claim date by
+    of them but the won / lost counts. The tax center is the one exception: it books Predict results on the claim date by
     default (a loss at the counterparty's claim of the pool), and offers the decision on Meridian and
     the source market's resolution as the other date bases, with the period under all three side by side.
     - *Settlement time.* The API keeps none for a prediction, but each leg's condition carries
@@ -1298,6 +1314,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     - Only an idea needs the bettor to still hold at least half its tokens.
     - Wallet files drop settled legs' ids, so a bettor page does not compute a record
       (`P.bettorSummary`); the snapshot's is the one.
+  - *What the card shows:* the Record column and the bettor line under each slip show the
+    bettor's won / lost and win rate as Meridian's app counts them (`appWon` / `appLost` /
+    `appWinRate` in `predict-ideas.json`, from the bettor's snapshot row: its Positions Won / Lost
+    and Win Rate, every prediction on its own, each once it is claimed; the owner's call,
+    2026-10-06). The record against the odds above, which the chip and *By luck* rest on, is in
+    their tooltips. The two can read very differently (0x59e7…: 134W / 424L, 24.01% in the app;
+    92 of 231 bets won where 79.8 were implied). An ideas file from before those fields shows the
+    record against the odds, as before.
   - *Why wins, not money:* a long shot's payout is so skewed that a money-weighted z-score read
     one 49× hit among nine losses as a "5-sigma" record. Counted in wins, that bettor won 1
     where the odds implied 4.5, so it has no record at all. A long shot that hit still counts as
@@ -1377,7 +1401,10 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   position's charged-but-unapplied funding (`fundingUsd`, `positionFeeUsd`) included; each
   episode takes the exchange's position record nearest its first fill (within 5 s, nearest
   pairs first, each record used once, so a fast flipper's episodes a second apart each get
-  their own); open positions are marked at the current oracle price. The page shows copier vs
+  their own); open positions are marked at the current oracle price. The page shows the
+  leader's P&L as Meridian's app shows it (the Leader P&L tile and column: Closed P&L without
+  position fees, an open position gross at the mark; `T.leaderApp`, the site's net in the
+  tooltip), and on the site's net basis, since the copier pays position fees too: copier vs
   leader net, the share kept (the copier's net against the leader's result scaled to the
   copier's size position by position, `T.leaderScaled`; the leader's curve is drawn the same
   way, while the Leader net tile stays in the leader's own dollars), per-position bps, costs
@@ -1563,8 +1590,11 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   counts up to what the agent's own openings hold in that market, so closing a position it
   adopted at start, one traded by hand (Close all) or one whose opening order has left the
   1,000-order log adds no position. Per leader: closed and open positions, share profitable,
-  net (the result less trading fees and mPerps position fees plus funding received: realized
-  for closed positions, at the live mark for open ones; funding, position fees and liquidations
+  P&L as Meridian's app shows it (`S.leaderResult`'s `app`: a closed position's Closed P&L,
+  realized PnL less trading fees plus settled funding, without position fees; an open one's
+  gross P&L at the mark, (mark − average entry) × size), the site's net in each cell's tooltip
+  (the result less trading fees and mPerps position fees plus funding received: realized for
+  closed positions, at the live mark for open ones; funding, position fees and liquidations
   from the exchange's position records), slippage of your fills against the leader's weighted
   by each fill's notional (positive = you paid more), average delay from the leader's fill to
   yours; a cumulative realized chart per leader; every position with its slippage and delay
@@ -1585,7 +1615,25 @@ rather than a trader of its style.
 
 ## Metric definitions
 
-* **PnL** (interval) = realized PnL − trading fees − mPerp position fees + funding over the
+Where the site shows a figure under the same name as Meridian's app, it shows the app's figure,
+computed the way the app computes it, and puts its own in that figure's tooltip with the
+difference explained (the owner's call, 2026-10-06; the in-app definitions, `MD.DEFINITIONS` in
+`js/app.js`, carry the full wording).
+
+* **PnL** (interval), as shown = Meridian's Trade Stats (`AN.appStats`): the archive's running
+  total of realized PnL + settled funding + trading fees (`appCum` per bucket in
+  `AN.buildSeries`), plus the open positions' gross unrealized PnL (the live figure at the end).
+  All-time is that figure now; 24h / 7d / 30d are its change since the end of the first archive
+  bucket of the app's window (`AN.appWindow`: 24h hourly buckets from the start of the hour 24
+  hours before the current one; 7d / 30d daily buckets from the UTC day holding the moment 7 or
+  30 days before the current hour began). Funding counts when it settles, and mPerp position fees
+  are not in it. **Volume** likewise: every bucket of the app's window, the first one whole;
+  all-time the archive's total volume. The PnL chart plots the running total itself (not from 0
+  at the window's start) and the daily bars its change per UTC day. Leaderboard rows built this
+  way carry `basis: 'app'` and keep the site's figures in `sitePnl` / `siteVolume` / `siteRoi`; a
+  row from an older build has the site's figure in `pnl` and says so in its tooltip.
+* **Site's PnL** (interval, in the tooltips; drawdown and Sharpe use it) = realized PnL − trading
+  fees − mPerp position fees + funding over the
   interval, plus the change in unrealized PnL from the start of the interval to now. Funding counts
   when the exchange charges it each hour, and mPerp position fees when it charges them, including
   what is charged to open positions and not yet settled into the balance; unrealized PnL is net of
@@ -1599,21 +1647,34 @@ rather than a trader of its style.
   archive bucket boundary at or after its nominal start (within 1 hour for 24h, 2 hours for 7d,
   8 hours for 30d); all-time starts at the subaccount's creation.
 * **Equity** = Σ margin balances (all pools are USD-equivalent tokens) + net unrealized PnL
-  (unrealized − unsettled funding − unsettled position fees).
-* **ROI** = PnL ÷ (equity at the start of the interval + deposits during it).
-* **Max drawdown** = largest peak-to-trough decline in the interval, as a percentage of a time-weighted
+  (unrealized − unsettled funding − unsettled position fees): Meridian's Trade Equity. The equity
+  chart is the app's (balance + gross unrealized PnL per bucket), the site's net value in its
+  tooltip; a pool's figure is its balance, as the app's Balances table shows it.
+* **Unrealized PnL**, as shown = Meridian's: (oracle − entry) × size, gross, with its P&L % the
+  price move since the entry; the site's net figure (less unsettled funding and position fees)
+  and its return on initial margin are in the tooltip.
+* **Closed PnL** (positions history) = Meridian's Closed P&L: realized PnL − trading fees +
+  settled funding, without position fees (`AN.closedPnl`); the site's net figure, which the win
+  rate, profit factor and expectancy use, in the tooltip. **TP / SL** = the app's whole-position
+  take-profit / stop-loss trigger prices, partial groups counted (`AN.appTpSl`); the site's
+  nearest exit levels in the tooltip.
+* **ROI** = PnL ÷ (equity at the start of the interval + deposits during it), on the app's
+  window and figure as shown, on the site's in the tooltip.
+* **Max drawdown** (on the site's PnL and its rolling windows) = largest peak-to-trough decline in the interval, as a percentage of a time-weighted
   return index (each bucket's gain on the capital it started with, plus that bucket's deposits, compounded), so
   deposits and withdrawals change nothing: losing $30 of $184 and then withdrawing the rest is a 16.6 % drawdown,
   not 100 %. Buckets are 1 hour for 24h, 2 hours for 7d, 8 hours for 30d and 1 day for all-time, on the
   leaderboard, the account page and the cards alike (`AN.resFor`); finer buckets catch swings inside a day, so a
   shorter interval can show a deeper drawdown than a longer one. The dollar figure (account page) is the loss
   since the high-water mark of the flow-adjusted PnL curve.
-* **Sharpe** = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized, with the same
+* **Sharpe** (on the site's PnL) = mean ÷ stdev of per-bucket PnL returns on prior equity, annualized, with the same
   buckets as the drawdown; shown only with at least 10 returns, at least 3 of them non-zero (an
   account's first bucket has no prior equity, so its all-time Sharpe appears from its 11th day at
   the earliest).
 * **Win rate** = closed positions with positive net result (realized − trading fees − position
-  fees + funding received − funding paid) ÷ closed positions. **Trading style** is the average
+  fees + funding received − funding paid: the site's net figure) ÷ closed positions. On Predict,
+  the won / lost records and win rates are the app's (claimed predictions only, `P.appRecord` /
+  `P.rowRecord`), the site's count at the verdict in the tooltip. **Trading style** is the average
   holding time of closed positions: Scalper < 1h, Intraday < 1d, Swing < 7d, otherwise Long-term.
 * **Liquidation price** is an estimate from the app's pool maths: maintenance margin =
   notional × (1 / (2 × maxLeverage) + takerFee), solved per position with the equity left after

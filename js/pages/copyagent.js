@@ -26,6 +26,9 @@
    * agent's orders (the same episode engine as the simulator), each attributed to the leader whose order opened it;
    * slippage against the leader's own fill price and the delay behind it per fill. Only what the agent itself opened
    * (CS.agentFills): a close of a position it adopted or one traded by hand is not a position of its own.
+   * A position's result is Meridian's own figure (`pnl`, CS.leaderResult's app: Closed P&L, open ones gross at the mark),
+   * which Realized, Open, the per-leader P&L, the share profitable and the chart count; the site's net (position fees and
+   * unsettled funding, open ones with their partial closes) rides along as `net` for the tooltips.
    */
   function history(S, ref, positions) {
     const CS = MD.copysim; const recs = (S.orders || []).filter((r) => r.fills && r.fills.length);
@@ -41,23 +44,26 @@
       let slipW = 0, slipSum = 0, delaySum = 0, delayN = 0, standIn = 0;
       for (const fl of e.fills) { const r = byOrder[fl.oid]; if (!r || !r.leaderPx) continue; const dir = r.side === 'BUY' ? 1 : -1; const w = Math.abs(fl.q) * fl.px; if (r.resync) { standIn += w; continue; } slipW += w; slipSum += dir * ((fl.px - r.leaderPx) / r.leaderPx) * 1e4 * w; if (r.leaderT) { delaySum += Math.max(0, fl.t - r.leaderT); delayN++; } }
       const prod = ref && ref.byId[e.pid];
-      return { e, ticker: prod ? prod.displayTicker : e.pid, leader: l, leaderSid: rec ? rec.leaderSid : null, open: !!e.qty, t0: e.start, t1: e.end, hold: (e.end || Date.now()) - e.start, net: L.net, gross: L.gross, fees: L.fees, posFee: L.posFee, funding: L.funding, entryNotional: L.entryNotional, slipW, slipSum, slipBps: slipW ? slipSum / slipW : null, delayMs: delayN ? delaySum / delayN : null, standIn: standIn > 0, liq: e.liq, why: rec ? rec.why : '' };
+      return { e, L, ticker: prod ? prod.displayTicker : e.pid, leader: l, leaderSid: rec ? rec.leaderSid : null, open: !!e.qty, t0: e.start, t1: e.end, hold: (e.end || Date.now()) - e.start, pnl: L.app, net: L.net, gross: L.gross, fees: L.fees, posFee: L.posFee, funding: L.funding, entryNotional: L.entryNotional, slipW, slipSum, slipBps: slipW ? slipSum / slipW : null, delayMs: delayN ? delaySum / delayN : null, standIn: standIn > 0, liq: e.liq, why: rec ? rec.why : '' };
     }).sort((a, b) => (b.t1 || Date.now()) - (a.t1 || Date.now()));
     const perLeader = {};
     // slippage is weighted by each fill's own notional everywhere (per position, per leader, in total)
-    for (const r of rows) { const k = r.leaderSid || 'none'; const p = perLeader[k] || (perLeader[k] = { leader: r.leader, sid: k, n: 0, open: 0, wins: 0, net: 0, fees: 0, posFee: 0, funding: 0, slipW: 0, slipSum: 0, delaySum: 0, delayN: 0, notional: 0 }); p.n++; if (r.open) p.open++; else if (r.net > 0) p.wins++; p.net += r.net; p.fees += r.fees; p.posFee += r.posFee; p.funding += r.funding; p.notional += r.entryNotional; p.slipW += r.slipW; p.slipSum += r.slipSum; if (r.delayMs != null) { p.delaySum += r.delayMs; p.delayN++; } }
-    const leaders = Object.values(perLeader).map((p) => Object.assign(p, { slipBps: p.slipW ? p.slipSum / p.slipW : null, delayMs: p.delayN ? p.delaySum / p.delayN : null, closed: p.n - p.open, winRate: p.n - p.open ? (p.wins / (p.n - p.open)) * 100 : null })).sort((a, b) => b.net - a.net);
+    for (const r of rows) { const k = r.leaderSid || 'none'; const p = perLeader[k] || (perLeader[k] = { leader: r.leader, sid: k, n: 0, open: 0, wins: 0, pnl: 0, net: 0, fees: 0, posFee: 0, funding: 0, slipW: 0, slipSum: 0, delaySum: 0, delayN: 0, notional: 0 }); p.n++; if (r.open) p.open++; else if (r.pnl > 0) p.wins++; p.pnl += r.pnl; p.net += r.net; p.fees += r.fees; p.posFee += r.posFee; p.funding += r.funding; p.notional += r.entryNotional; p.slipW += r.slipW; p.slipSum += r.slipSum; if (r.delayMs != null) { p.delaySum += r.delayMs; p.delayN++; } }
+    const leaders = Object.values(perLeader).map((p) => Object.assign(p, { slipBps: p.slipW ? p.slipSum / p.slipW : null, delayMs: p.delayN ? p.delaySum / p.delayN : null, closed: p.n - p.open, winRate: p.n - p.open ? (p.wins / (p.n - p.open)) * 100 : null })).sort((a, b) => b.pnl - a.pnl);
     const closed = rows.filter((r) => !r.open).slice().sort((a, b) => a.t1 - b.t1);
     const series = {}; const cum = {};
-    for (const r of closed) { const k = r.leaderSid || 'none'; cum[k] = (cum[k] || 0) + r.net; (series[k] || (series[k] = [])).push({ x: r.t1, y: cum[k] }); }
-    const T = { net: U.sum(rows, (r) => r.net), realized: U.sum(closed, (r) => r.net), fees: U.sum(rows, (r) => r.fees), posFee: U.sum(rows, (r) => r.posFee), funding: U.sum(rows, (r) => r.funding), n: rows.length, open: rows.filter((r) => r.open).length, wins: closed.filter((r) => r.net > 0).length };
+    for (const r of closed) { const k = r.leaderSid || 'none'; cum[k] = (cum[k] || 0) + r.pnl; (series[k] || (series[k] = [])).push({ x: r.t1, y: cum[k] }); }
+    const openRows = rows.filter((r) => r.open);
+    // realized / open: Meridian's Closed P&L and its open P&L at the mark; the *Net twins are the site's, for the tooltips
+    const T = { realized: U.sum(closed, (r) => r.pnl), openPnl: U.sum(openRows, (r) => r.pnl), realizedNet: U.sum(closed, (r) => r.net), openNet: U.sum(openRows, (r) => r.net), fees: U.sum(rows, (r) => r.fees), posFee: U.sum(rows, (r) => r.posFee), funding: U.sum(rows, (r) => r.funding), n: rows.length, open: openRows.length, wins: closed.filter((r) => r.pnl > 0).length };
+    T.net = T.realizedNet + T.openNet;
     const slipW = U.sum(rows, (r) => r.slipW); T.slipBps = slipW ? U.sum(rows, (r) => r.slipSum) / slipW : null;
     const dRows = rows.filter((r) => r.delayMs != null); T.delayMs = dRows.length ? U.sum(dRows, (r) => r.delayMs) / dRows.length : null;
     return { rows, leaders, series, T };
   }
 
   MD.copyagentPage = {
-    leverage,
+    leverage, history,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Copy agent'));
       const st = load(); const save = () => U.storage.set(KEY, st); save();   // a token made just now must be the one next time too
@@ -247,9 +253,11 @@
         if (!H) { U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
         const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : 'no leader');
         const col = C.colors(); const palette = [col.accent, col.blue, col.amber, col.green, col.red];
+        const usd2 = (v) => U.fmtUsd(v, { sign: true, dp: 2 });
+        // Meridian's figures in the tiles; the site's net, with what it adds, in their tooltips
         const tiles = h('div.stats',
-          UI.stat('Realized', U.fmtUsd(H.T.realized, { sign: true, dp: 2 }), `${H.T.n - H.T.open} closed position${H.T.n - H.T.open === 1 ? '' : 's'} · ${H.T.n - H.T.open ? U.fmtPct((H.T.wins / (H.T.n - H.T.open)) * 100, { dp: 0 }) : '—'} profitable`, U.pnlClass(H.T.realized)),
-          UI.stat('Open', U.fmtUsd(H.T.net - H.T.realized, { sign: true, dp: 2 }), `${H.T.open} at the live mark`, U.pnlClass(H.T.net - H.T.realized)),
+          UI.stat('Realized', h('span', { title: `Meridian's Closed P&L of these positions, summed: realized P&L − trading fees + settled funding, without position fees. Site's net incl. position fees and unsettled funding: ${usd2(H.T.realizedNet)}.` }, usd2(H.T.realized)), `${H.T.n - H.T.open} closed position${H.T.n - H.T.open === 1 ? '' : 's'} · ${H.T.n - H.T.open ? U.fmtPct((H.T.wins / (H.T.n - H.T.open)) * 100, { dp: 0 }) : '—'} profitable`, U.pnlClass(H.T.realized)),
+          UI.stat('Open', h('span', { title: `Meridian's P&L of these open positions: (mark − average entry) × size, before fees and funding. Site's net incl. their partial closes, trading and position fees and funding (settled and not yet settled): ${usd2(H.T.openNet)}.` }, usd2(H.T.openPnl)), `${H.T.open} at the live mark, before fees and funding`, U.pnlClass(H.T.openPnl)),
           UI.stat('Slippage vs leader', H.T.slipBps == null ? '—' : (H.T.slipBps > 0 ? '+' : '') + U.fmtNum(H.T.slipBps, 1) + ' bps', 'your fill price against the leader\'s, per fill, size-weighted · positive = you paid more', H.T.slipBps > 0 ? 'neg' : H.T.slipBps < 0 ? 'pos' : ''),
           UI.stat('Delay', H.T.delayMs == null ? '—' : U.fmtNum(H.T.delayMs / 1000, 1) + ' s', 'from the leader\'s fill to yours, average'),
           UI.stat('Fees & funding', U.fmtUsd(-H.T.fees - H.T.posFee + H.T.funding, { sign: true, dp: 2 }), `${U.fmtUsd(H.T.fees, { dp: 2 })} fees` + (H.T.posFee ? ` · ${U.fmtUsd(H.T.posFee, { dp: 2 })} position fees` : '') + ` · ${U.fmtUsd(H.T.funding, { sign: true, dp: 2 })} funding`, U.pnlClass(-H.T.fees - H.T.posFee + H.T.funding)));
@@ -257,7 +265,7 @@
           { key: 'l', label: 'Leader', render: (p) => (p.leader ? h('a.addr', { href: U.accountUrl(p.leader.address, p.leader.sid) }, who(p.leader)) : h('span.dim', 'no leader')) },
           { key: 'n', label: 'Positions', num: true, render: (p) => h('span', String(p.closed), p.open ? h('span.dim.xs', ' + ' + p.open + ' open') : null) },
           { key: 'wr', label: 'Profitable', num: true, render: (p) => (p.winRate == null ? h('span.dim', '—') : U.fmtPct(p.winRate, { dp: 0 })) },
-          { key: 'net', label: 'Net', num: true, render: (p) => U.pnlEl(p.net, { dp: 2 }) },
+          { key: 'pnl', label: 'P&L', num: true, title: 'As Meridian shows the positions: Closed P&L (realized − trading fees + settled funding, without position fees) for closed ones, P&L at the mark (before fees and funding) for open ones, summed. Hover a cell for the site\'s net', render: (p) => h('span', { title: `Site's net incl. position fees and unsettled funding${p.open ? ', open positions also with their partial closes, fees and funding' : ''}: ${usd2(p.net)}` + (Math.abs(p.posFee) >= 0.005 ? ` (position fees ${usd2(-p.posFee)})` : '') }, U.pnlEl(p.pnl, { dp: 2 })) },
           { key: 'f', label: 'Fees', num: true, title: 'trading fees plus position fees (mPerps)', render: (p) => U.fmtUsd(p.fees + p.posFee, { dp: 2 }) },
           { key: 'fu', label: 'Funding', num: true, render: (p) => U.pnlEl(p.funding, { dp: 2 }) },
           { key: 'sl', label: 'Slippage', num: true, render: (p) => (p.slipBps == null ? h('span.dim', '—') : h('span', { class: p.slipBps > 0 ? 'neg' : 'pos' }, (p.slipBps > 0 ? '+' : '') + U.fmtNum(p.slipBps, 1) + ' bps')) },
@@ -272,14 +280,15 @@
           // entry notional with the quantity opened beside it; Meridian's Size (that quantity at the exit price) in the tooltip
           { key: 'sz', label: 'Entry notional', num: true, title: 'What the agent put into the position: the opening order plus every add, each at its own fill price, with the quantity opened beside it. Meridian\'s Closed P&L "Size" is that quantity valued at the exit price instead: hover a row for it', render: (r) => { const prod = MD._agentRef && MD._agentRef.byId[r.e.pid]; return h('span', { title: MD.copysimPage.sizeTitle(r.e, r.entryNotional, prod) }, U.fmtUsd(r.entryNotional, { dp: 0 }), h('span.dim.xs', ' · ' + U.fmtQty(MD.copysimPage.closedSize(r.e).qty, prod && prod.lotSize))); } },
           { key: 'h', label: 'Held', num: true, render: (r) => U.fmtDuration(r.hold) },
-          { key: 'net', label: 'Net', num: true, render: (r) => h('span', U.pnlEl(r.net, { dp: 2 }), r.liq ? UI.chip('LIQ', 'red') : null) },
+          // Meridian's figure for the position, the site's net with what makes the difference in the tooltip
+          { key: 'pnl', label: 'P&L', num: true, title: 'As Meridian shows the position: Closed P&L (realized − trading fees + settled funding, without position fees), or for an open one the P&L at the mark before fees and funding. Hover a row for the site\'s net (position fees and unsettled funding)', render: (r) => h('span', h('span', { title: MD.copysimPage.pnlTitle(r.L) }, U.pnlEl(r.pnl, { dp: 2 })), r.liq ? UI.chip('LIQ', 'red') : null) },
           { key: 'sl', label: 'Slippage', num: true, title: 'your fill price against the leader\'s, size-weighted over the position\'s fills; "at mark" when the leader\'s price was unknown (a close after a resync)', render: (r) => (r.slipBps == null ? h('span.dim', r.standIn ? 'at mark' : '—') : h('span', { class: r.slipBps > 0 ? 'neg' : 'pos' }, (r.slipBps > 0 ? '+' : '') + U.fmtNum(r.slipBps, 1) + ' bps', r.standIn ? h('span.dim.xs', ' · part at mark') : null)) },
           { key: 'd', label: 'Delay', num: true, render: (r) => (r.delayMs == null ? h('span.dim', '—') : U.fmtNum(r.delayMs / 1000, 1) + ' s') },
         ], rows: H.rows.slice(0, 40), empty: 'No position the agent opened has a fill yet; positions it adopted at start or that were closed by Close all are not listed.' });
         const canvas = h('canvas');
-        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Realized by leader'), h('span.grow'), h('span.dim.small', 'cumulative, by position close')), h('div.chart-box.sm', canvas));
+        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Realized by leader'), h('span.grow'), h('span.dim.small', 'cumulative Closed P&L, by position close')), h('div.chart-box.sm', canvas));
         U.replace(histWrap, tiles, h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('By leader', leadersTbl), chartCard), UI.card('Positions', posTbl, h('span.dim.small', (H.rows.length > 40 ? `newest 40 of ${H.rows.length} positions` : `${H.rows.length} position${H.rows.length === 1 ? '' : 's'}`) + ' from the agent\'s orders, newest first' + (last.dry ? ' · dry run: fills are virtual' : ''))),
-          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. Net is the position\'s result less trading fees and the exchange\'s position fees, plus funding received (closed positions: realized; open ones: at the live mark); funding, position fees and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".'));
+          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. P&L is what Meridian shows for the position: its Closed P&L (realized − trading fees + settled funding, without position fees; the exchange\'s own record when it covers exactly this position, else the same sum from the fills), or for an open one the P&L at the live mark, before fees and funding. The site\'s net, which also takes off position fees and counts funding charged and not yet settled (and, while a position is open, its partial closes, fees and funding), is in each tooltip; funding, position fees and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".'));
         const ser = Object.entries(H.series).map(([sid, pts], i) => ({ points: pts, color: palette[i % palette.length], label: who((last.leaders || []).find((l) => l.sid === sid) || null) }));
         if (ser.length) C.timeSeries(canvas, { series: ser, yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 2, sign: true }) });
       }

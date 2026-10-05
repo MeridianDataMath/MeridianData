@@ -1,7 +1,10 @@
 /* MeridianDataHub — Leaderboard: every subaccount, ranked, with a client-side build engine + cache */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const h = U.h;
-  const KEY = 'md.lb.v3';
+  // v4: rows with Meridian's PnL (AN.buildLeaderboardRow basis 'app'); a browser build of the site's figures alone (v3)
+  // would outrank a newer published snapshot for up to half an hour, so it is dropped
+  const KEY = 'md.lb.v4';
+  U.storage.del('md.lb.v3');
   const INTERVALS = [{ v: '24h', label: '24h' }, { v: '7d', label: '7d' }, { v: '30d', label: '30d' }, { v: 'all', label: 'All' }];
   const STYLES = ['Scalper', 'Intraday', 'Swing', 'Long-term'];
   const PAGE = 25;
@@ -66,7 +69,7 @@
       // narrow screens stack the filters under the table, so a toolbar above it carries the interval and a Filters toggle
       const lbEl = h('div.lb');
       const toolbar = h('div.row.lb-toolbar');
-      const intervalNote = 'PnL, volume, ROI, Sharpe and drawdown follow the selected interval; equity, positions, win rate and trading style do not';
+      const intervalNote = 'PnL, volume and ROI follow the selected interval on Meridian\'s windows (its Trade Stats), Sharpe and drawdown on the site\'s rolling ones; equity, positions, win rate and trading style do not follow it';
       const renderToolbar = () => { const seg = UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'); seg.title = intervalNote; U.replace(toolbar, seg, h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters')); };
       const filtersCard = h('div.card.filters', filters);
       // one header row: what is shown, then (narrow screens) the interval and the filters toggle, then Update
@@ -126,13 +129,14 @@
             { key: 'rank', label: '#', render: (r) => { const i = rankOf.get(r.sid); return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
             { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
-            { key: 'pnl', label: 'PnL', num: true, sortVal: 1, render: (r) => (s(r) ? U.pnlEl(s(r).pnl) : '—') },
-            { key: 'volume', label: 'Volume', num: true, sortVal: 1, render: (r) => (s(r) ? U.fmtUsd(s(r).volume) : '—') },
-            { key: 'roi', label: 'ROI', num: true, sortVal: 1, render: (r) => UI.pct(s(r) ? s(r).roi : null) },
+            // PnL, volume and ROI as Meridian's Trade Stats (row basis 'app'); the site's net figures in a cell's tooltip
+            { key: 'pnl', label: 'PnL', num: true, sortVal: 1, title: 'As Meridian\'s Trade Stats: the change in its running total of realized PnL, settled funding and trading fees, plus unrealized PnL, over its window (24h from the start of the hour a day ago, 7d and 30d from the end of the UTC day 7 or 30 days back); mPerp position fees are not in it. Hover a cell for the site\'s net figure', render: (r) => (s(r) ? h('span', { title: AN.sitePnlTitle(r, iv) }, U.pnlEl(s(r).pnl)) : '—') },
+            { key: 'volume', label: 'Volume', num: true, sortVal: 1, title: 'As Meridian\'s Trade Stats: its window\'s volume, the first hour or UTC day whole (24h from the start of the hour a day ago, 7d and 30d from the start of the UTC day 7 or 30 days back), all time its archive\'s total', render: (r) => (s(r) ? h('span', { title: AN.isAppBasis(r) && s(r).siteVolume != null ? (iv === 'all' ? 'Site\'s figure, its daily buckets summed: ' : 'Site\'s figure over a rolling window: ') + U.fmtUsd(s(r).siteVolume) : AN.siteRowNote(r, iv) }, U.fmtUsd(s(r).volume)) : '—') },
+            { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'PnL (as Meridian\'s app) ÷ (equity at the start of its window + deposits since)', render: (r) => h('span', { title: AN.isAppBasis(r) && s(r) ? 'On the site\'s net figure: ' + (s(r).siteRoi != null ? U.fmtPct(s(r).siteRoi, { sign: true, dp: 1 }) : '—') : AN.siteRowNote(r, iv) }, UI.pct(s(r) ? s(r).roi : null)) },
             { key: 'positions', label: 'Positions', num: true, sortVal: 1, title: 'Total positions (open in brackets)', render: (r) => h('span', String(r.positionsCount), r.openCount ? h('span.dim.xs', ' (' + r.openCount + ')') : null) },
             { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 1 })) },
-            { key: 'sharpe', label: 'Sharpe', num: true, sortVal: 1, render: (r) => { const v = s(r) ? s(r).sharpe : null; return v == null ? h('span.dim', '—') : h('span', { class: U.pnlClass(v) }, U.fmtNum(v, 2)); } },
-            { key: 'ddPct', label: 'Max DD', num: true, sortVal: 1, render: (r) => { const v = s(r) ? s(r).ddPct : null; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
+            { key: 'sharpe', label: 'Sharpe', num: true, sortVal: 1, title: 'On the site\'s net PnL (funding and mPerp position fees as charged) over a rolling window', render: (r) => { const v = s(r) ? s(r).sharpe : null; return v == null ? h('span.dim', '—') : h('span', { class: U.pnlClass(v) }, U.fmtNum(v, 2)); } },
+            { key: 'ddPct', label: 'Max DD', num: true, sortVal: 1, title: 'Largest drawdown on the site\'s net PnL (funding and mPerp position fees as charged) over a rolling window, deposits and withdrawals left out', render: (r) => { const v = s(r) ? s(r).ddPct : null; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
             { key: 'style', label: 'Trading style', sortVal: 1, render: (r) => (r.style === '—' ? h('span.dim', '—') : r.style) },
           ],
           rows: slice, empty: 'No accounts match the filters',
