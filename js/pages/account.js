@@ -15,11 +15,11 @@
       build: async (p) => {
         const start = AN.startFor(p, sa.createdAt);
         posP = posP || A.positions(sid, { maxPages: 10, ttl: 60000 });
-        const [series, balances, open, positions] = await Promise.all([AN.loadSeries(sid, { start, resolution: AN.resFor(p), ttl: 60000, charges: true }), A.balances(sid), A.openPositions(sid), posP]);
+        const [series, balances, open, positions] = await Promise.all([AN.loadSeries(sid, { start, resolution: AN.resFor(p), ttl: 60000, charges: true, positions: posP }), A.balances(sid), A.openPositions(sid), posP]);
         const pids = Array.from(new Set(open.map((x) => x.productId)));
         const prices = pids.length ? await A.marketPrices(pids) : {};
         const acct = AN.accountState({ balances, positions: open, ref, prices });
-        const ser = AN.netOfUnsettled(series, series.charges, acct.unsettledFunding, BUCKET[p] || U.DAY);   // every bucket on the live figures' basis
+        const ser = AN.netLive(series, acct, BUCKET[p] || U.DAY);   // every bucket on the live figures' basis (funding and position fees as charged)
         const is = AN.intervalStats(ser, start, { upnl: acct.upnl, equity: acct.equity }, BUCKET[p] || U.DAY);
         const base = is.curve.length ? is.curve[0].v : 0;
         const curve = is.curve.map((c) => [Math.round(c.t / 1000), Math.round((c.v - base) * 100) / 100]);
@@ -57,6 +57,21 @@
   }
   const tickerOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].displayTicker : U.shortAddr(pid, 4));
   const tickOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].tickSize : null);
+  // sizes at the market's lot-size decimals, padded, as Meridian's app shows them (U.fmtQty)
+  const lotOf = (ref, pid) => (ref.byId[pid] ? ref.byId[pid].lotSize : null);
+  const baseOf = (prod) => prod.baseTokenName || String(prod.displayTicker || '').split('-')[0];
+  /** Meridian's margin ratio (AN.marginRatio) as its app prints it */
+  const mrTxt = (x) => (x == null ? '—' : x >= 1 ? '100%+' : U.fmtPct(x * 100, { dp: 2 }));
+
+  // The interval tiles' window, and how Meridian's app draws its own (its Trade Stats): the site's windows roll with the
+  // clock, in the buckets AN.resFor gives each range, from the first bucket that starts inside the window
+  const WINDOW_NOTE = {
+    '24h': 'The last 24 hours, in the hourly buckets that start inside them (23 to 24 hours), up to now. Meridian\'s app counts its 24h from the start of the hour 24 hours ago: up to an hour more.',
+    '7d': 'The last 7 × 24 hours, in the 2-hour buckets that start inside them (6 days 22 hours to 7 days), up to now. Meridian\'s app reads 7D in whole UTC days: its volume from the start of the UTC day 7 days back, its P&L from that day\'s end, so either can differ by up to a day\'s trading.',
+    '30d': 'The last 30 × 24 hours, in the 8-hour buckets that start inside them (29 days 16 hours to 30 days), up to now. Meridian\'s app reads 30D in whole UTC days: its volume from the start of the UTC day 30 days back, its P&L from that day\'s end, so either can differ by up to a day\'s trading.',
+    all: 'Since the subaccount was created, up to now.',
+  };
+  const withTitle = (el, title) => { if (title) el.title = title; return el; };
 
   /** table with cursor-based server paging */
   function cursorTable({ fetchPage, cols, empty, pageSize = 25, onRow }) {
@@ -94,7 +109,6 @@
     const cls = r.distPct < 5 ? 'neg' : r.distPct < 15 ? '' : 'dim';
     return h('span', U.fmtPrice(r.liqPrice, r.prod.tickSize), h('span.xs', { class: cls, style: r.distPct >= 5 && r.distPct < 15 ? { color: 'var(--amber)' } : null }, ' ' + (r.distPct > 500 ? '>500%' : U.fmtPct(r.distPct, { dp: 1 }))));
   };
-  const ratioTxt = (x) => (x == null ? null : x > 999 ? '>999×' : U.fmtNum(x, 1) + '×');
   const flags = (o, tick) => {
     const f = []; const m = AN.orderMeta(o);
     if (m.stop) f.push(m.kind + ' @' + U.fmtPrice(o.stopPrice, tick) + (m.trigger === 'last' ? ' (last)' : ''));
@@ -111,7 +125,7 @@
     if (e.kind === 'limit') tags.push('limit');
     if (e.oco) tags.push('OCO');
     if (e.kind === 'stop' && e.trigger === 'last') tags.push('last px');
-    if (e.qty != null) tags.push(U.fmtQty(e.qty));
+    if (e.qty != null) tags.push(U.fmtQty(e.qty, r.prod.lotSize));
     return h('div', { style: { lineHeight: '1.25' }, title: (e.kind === 'stop' ? 'Stop order on the exchange' : 'Reduce-only limit order') + ' · PnL at this level before fees' },
       h('div', U.fmtPrice(e.price, r.prod.tickSize), tags.length ? h('span.xs.dim', ' ' + tags.join(' · ')) : null),
       h('div.xs', e.distPct == null ? null : h('span.dim', U.fmtPct(e.distPct, { sign: true, dp: 1 }) + ' · '), h('span', { class: U.pnlClass(e.pnl) }, U.fmtUsd(e.pnl, { sign: true })), list.length > 1 ? h('span.dim', ' · +' + (list.length - 1) + ' more') : null));
@@ -121,8 +135,8 @@
     { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
     { key: 'type', label: 'Type', render: (r) => { const m = AN.orderMeta(r); return m.stop ? h('span', m.kind, h('span.dim.xs', ' ' + r.type.toLowerCase())) : r.type; } },
     { key: 'price', label: 'Price', num: true, render: (r) => { const m = AN.orderMeta(r); if (m.stop) return h('span', U.fmtPrice(r.stopPrice, tickOf(ref, r.productId)), h('span.dim.xs', ' trigger')); return U.num(r.price) ? U.fmtPrice(r.price, tickOf(ref, r.productId)) : 'MKT'; } },
-    { key: 'qty', label: 'Quantity', num: true, render: (r) => (AN.orderMeta(r).whole ? h('span.dim', 'all') : U.fmtQty(r.quantity)) },
-    { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled) },
+    { key: 'qty', label: 'Quantity', num: true, render: (r) => (AN.orderMeta(r).whole ? h('span.dim', 'all') : U.fmtQty(r.quantity, lotOf(ref, r.productId))) },
+    { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled, lotOf(ref, r.productId)) },
     { key: 'value', label: 'Value', num: true, title: 'Limit price × order quantity', render: (r) => { const v = U.num(r.price) * U.num(r.quantity); return v > 0 ? U.fmtUsd(v) : h('span.dim', '—'); } },
     { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'NEW' ? 'accent' : r.status === 'PENDING' ? 'amber' : r.status === 'FILLED_PARTIAL' ? 'blue' : '') },
     { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', flags(r, tickOf(ref, r.productId))) },
@@ -275,21 +289,29 @@
     }
     function renderState() {
       const a = base.acct;
-      const kv = (k, v, cls) => [h('span.k', k), h('span.v', { class: cls || '' }, v)];
+      const kv = (k, v, cls, title) => [h('span.k', { title: title || null }, k), h('span.v', { class: cls || '', title: title || null }, v)];
+      // a pool's figure is its equity (balance + its positions' net uPnL); Meridian's Balances table calls the balance alone
+      // "Equity", so the balance stands on the line under it. The ratio is Meridian's: maintenance margin ÷ pool equity
       const pools = a.pools.map((p) => h('div.pool',
-        h('div.name', h('span', p.name === 'USD' ? 'USD (cross)' : p.name + ' (isolated)'), h('span.num', U.fmtUsd(p.equity))),
-        h('div.bar', h('i', { class: p.ratio != null && p.ratio < 1.5 ? 'bad' : p.ratio != null && p.ratio < 3 ? 'warn' : '', style: { width: U.clamp(p.balance > 0 ? (p.used / p.balance) * 100 : 0, 0, 100) + '%' } })),
-        h('div.row.xs.dim', { style: { marginTop: '4px', justifyContent: 'space-between' } }, h('span', 'used ' + U.fmtUsd(p.used, { compact: true }) + ' / ' + U.fmtUsd(p.balance, { compact: true })), h('span', p.ratio != null ? 'margin ' + ratioTxt(p.ratio) + ' maint.' : 'no positions'))));
+        h('div.name', h('span', p.name === 'USD' ? 'USD (cross)' : p.name + ' (isolated)'),
+          h('span.num', { title: `Pool equity: its balance ${U.fmtUsd(p.balance)} plus its positions' net unrealized PnL ${U.fmtUsd(p.upnl, { sign: true })} (after the funding and position fees not settled yet). Meridian's Balances table shows the balance alone, as "Equity".` }, U.fmtUsd(p.equity))),
+        h('div.bar', h('i', { class: p.marginRatio != null && p.marginRatio > 2 / 3 ? 'bad' : p.marginRatio != null && p.marginRatio > 1 / 3 ? 'warn' : '', style: { width: U.clamp(p.balance > 0 ? (p.used / p.balance) * 100 : 0, 0, 100) + '%' } })),
+        h('div.row.xs.dim', { style: { marginTop: '4px', justifyContent: 'space-between' } },
+          h('span', { title: 'As Meridian\'s Balances table: the pool\'s balance (its "Equity" column, unrealized PnL left out) and the margin in use (the bar: in use ÷ balance)' }, 'balance ' + U.fmtUsd(p.balance, { compact: true }) + ' · in use ' + U.fmtUsd(p.used, { compact: true })),
+          p.marginRatio != null ? h('span', { title: `Margin ratio, as Meridian's app: maintenance margin ${U.fmtUsd(p.mm)} ÷ pool equity ${U.fmtUsd(p.equity)}. The pool is liquidated at 100%.` }, 'margin ratio ' + mrTxt(p.marginRatio)) : h('span', 'no positions'))));
+      const cross = a.pools.find((p) => p.name === 'USD');
       U.replace(stateCard,
         h('div.k.dim.small', 'Equity'),
         h('div.big', { class: '' }, U.fmtUsd(a.equity)),
         h('div.small', { style: { marginBottom: '12px' } }, h('span.dim', { title: 'Price PnL of the open positions, plus unsettled funding received (minus paid), minus unsettled mPerp position fees' }, 'Net unrealized '), U.pnlEl(a.upnl)),
         h('div.kv',
           ...kv('Balance', U.fmtUsd(a.balance)),
-          ...kv('Available', U.fmtUsd(a.available)),
+          ...kv('Available', U.fmtUsd(a.available), '', 'Margin free for new orders, summed over the pools with each pool counted from 0, as Meridian\'s app does: a pool whose losses exceed its free margin reports less than 0, and nothing is available from it'),
           ...kv('Margin used', U.fmtUsd(a.used)),
           ...kv('Notional', U.fmtUsd(a.notional)),
-          ...kv('Leverage', a.leverage != null ? U.fmtNum(a.leverage, 2) + '×' : '—'),
+          ...kv('Leverage', a.leverage != null ? U.fmtNum(a.leverage, 2) + '×' : '—', '', 'Notional ÷ balance, as Meridian\'s app shows the account\'s leverage' + (a.leverageEquity != null ? `. Notional ÷ equity (net unrealized PnL counted): ${U.fmtNum(a.leverageEquity, 2)}×` : '')),
+          ...kv('Margin ratio', mrTxt(a.marginRatio), a.marginRatio != null && a.marginRatio > 2 / 3 ? 'neg' : '', 'Maintenance margin ' + U.fmtUsd(a.mm) + ' ÷ equity, over every pool, as Meridian\'s app shows it on the trade page: a pool is liquidated when its own reaches 100%'
+            + (cross && cross.marginRatio != null && a.pools.some((p) => p !== cross && p.marginRatio != null) ? `. The cross pool alone (the app's Trade Stats "Cross Margin Ratio"): ${mrTxt(cross.marginRatio)}` : '')),
           ...kv('Open positions', String(a.positions.length)),
           ...kv('Open orders', String(base.working.length)),
           ...kv('Stop orders (TP/SL)', String(base.pending.length)),
@@ -315,7 +337,7 @@
           cols: [
             { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker, r.prod.marginMode === 'CROSS' ? 'cross' : 'isolated') },
             { key: 'side', label: 'Side', render: (r) => U.sideEl(r.long, true) },
-            { key: 'size', label: 'Size', num: true, render: (r) => U.fmtQty(r.abs) },
+            { key: 'size', label: 'Size', num: true, render: (r) => U.fmtQty(r.abs, r.prod.lotSize) },
             { key: 'entry', label: 'Entry price', num: true, render: (r) => U.fmtPrice(r.entry, r.prod.tickSize) },
             { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
             { key: 'cost', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
@@ -336,7 +358,7 @@
           cols: [
             { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
             { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
-            { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled) },
+            { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled, lotOf(ref, r.productId)) },
             { key: 'price', label: 'Price', num: true, render: (r) => U.fmtPrice(r.price, tickOf(ref, r.productId)) },
             { key: 'cost', label: 'Cost', num: true, render: (r) => U.fmtUsd(U.num(r.filled) * U.num(r.price)) },
             { key: 'fee', label: 'Fee', num: true, render: (r) => U.fmtUsd(r.feeUsd) },
@@ -353,12 +375,14 @@
             { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
             { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side, true) },
             { key: 'status', label: 'Status', render: (r) => (U.num(r.size) !== 0 ? UI.chip('OPEN', 'accent') : r.isLiquidated ? UI.chip('LIQUIDATED', 'red') : r.wasDeleveraged ? UI.chip('ADL', 'amber') : UI.chip('CLOSED')) },
-            { key: 'size', label: 'Qty opened', num: true, title: 'Total quantity opened over the position\'s life; adding again after a partial close counts again, so this can exceed the largest size the position reached', render: (r) => U.fmtQty(r.totalIncreaseQuantity) },
+            { key: 'size', label: 'Qty opened', num: true, title: 'Total quantity opened over the position\'s life; adding again after a partial close counts again, so this can exceed the largest size the position reached', render: (r) => U.fmtQty(r.totalIncreaseQuantity, lotOf(ref, r.productId)) },
             { key: 'cost', label: 'Cost', num: true, title: 'Total notional opened', render: (r) => U.fmtUsd(r.totalIncreaseNotional) },
             { key: 'avg', label: 'Avg entry', num: true, title: 'Average price of all fills that opened or added to the position (Cost ÷ Qty opened). For an open position that was partly closed and then added to, this differs from the Entry price under Open positions, which is the average entry of the size still open', render: (r) => (U.num(r.totalIncreaseQuantity) ? U.fmtPrice(U.num(r.totalIncreaseNotional) / U.num(r.totalIncreaseQuantity), tickOf(ref, r.productId)) : '—') },
             { key: 'rpnl', label: 'Net PnL', num: true, title: 'Realized PnL less trading and position fees, plus settled funding (minus if paid)', render: (r) => U.pnlEl(U.num(r.realizedPnl) - U.num(r.feesAccruedUsd) - U.num(r.fundingAccruedUsd) - U.num(r.positionFeeAccruedUsd)) },
             { key: 'fund', label: 'Funding', num: true, title: 'Settled funding (negative = paid)', render: (r) => U.pnlEl(-U.num(r.fundingAccruedUsd)) },
-            { key: 'fees', label: 'Fees', num: true, render: (r) => U.fmtUsd(U.num(r.feesAccruedUsd) + U.num(r.positionFeeAccruedUsd)) },
+            // trading fees alone, as Meridian's app shows Fees; the mPerp position fees in a column of their own
+            { key: 'fees', label: 'Fees', num: true, title: 'Trading fees paid on the position\'s fills', render: (r) => U.fmtUsd(r.feesAccruedUsd) },
+            { key: 'pfee', label: 'Position fee', num: true, title: 'mPerp position fees settled into the balance (the isolated markets charge them; Meridian\'s app has no column for them on closed positions). An open position\'s unsettled ones are in Net unrealized PnL under Open positions', render: (r) => (U.num(r.positionFeeAccruedUsd) ? U.fmtUsd(r.positionFeeAccruedUsd) : h('span.dim', '—')) },
             { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
             { key: 'closed', label: 'Closed', render: (r) => h('span.dim', U.num(r.size) !== 0 ? '—' : U.fmtDateTimeS(r.updatedAt)) },
           ],
@@ -387,11 +411,20 @@
     // reloaded on a later refresh, at most once a minute and three times per balance change (an account whose archive
     // never catches up, such as the exchange's fee account, would otherwise reload the whole range on every refresh)
     const trails = (s) => { const last = s.length ? s[s.length - 1] : null; return !last || !base || Math.abs(last.balance - base.acct.balance) > 0.01; };
+    // every position of the account (A.positions): where a range's mPerp position-fee charges begin (AN.positionFeeFrom).
+    // Read once, and again with a reloaded series (a close settles fees); a failed read is not kept
+    let posList = null;
+    const positionsList = (fresh) => {
+      if (posList && !fresh) return posList;
+      const p = (posList = A.positions(sid, { maxPages: 10, signal: cx.signal, ttl: fresh ? 0 : 60000 }));
+      p.catch(() => { if (posList === p) posList = null; });
+      return p;
+    };
     async function reloadSeries() {
       if (Date.now() - reloadAt < 60000) return;
       reloadAt = Date.now();
       const r = range, gen = ++seriesGen;
-      const s = await AN.loadSeries(sid, { start: AN.startFor(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true });
+      const s = await AN.loadSeries(sid, { start: AN.startFor(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true, positions: positionsList(true) });
       if (cx.signal.aborted || gen !== seriesGen || r !== range) return;   // the range was switched meanwhile
       seriesCache.clear(); seriesCache.set(r, s); series = s;
       seriesStale = trails(s) && ++trailTries < 3;
@@ -405,7 +438,7 @@
       loadingRange = true; drawChart();
       let s;
       try {
-        s = await AN.loadSeries(sid, { start, resolution: res, signal: cx.signal, ttl: 60000, charges: true });
+        s = await AN.loadSeries(sid, { start, resolution: res, signal: cx.signal, ttl: 60000, charges: true, positions: positionsList() });
         seriesCache.set(key, s);
       } catch (e) { if (isAbort(e) || key !== range) return; series = null; chartBox.appendChild(h('div.overlay', 'History unavailable: ' + e.message)); loadingRange = false; return; }
       if (key !== range) return;   // another range was picked meanwhile: its own load draws the chart
@@ -420,7 +453,7 @@
       const start = AN.startFor(range, sa.createdAt);
       const nowT = Date.now();
       const live = base ? { upnl: base.acct.upnl, equity: base.acct.equity } : null;
-      const ser = base ? AN.netOfUnsettled(series, series.charges, base.acct.unsettledFunding, res.ms) : series;   // every bucket on the live figures' basis (funding as charged)
+      const ser = base ? AN.netLive(series, base.acct, res.ms) : series;   // every bucket on the live figures' basis (funding and position fees as charged)
       const stats = AN.intervalStats(ser, start, live, res.ms);
       const rows = ser.filter((b) => b.t >= start);
       const prev = ser.filter((b) => b.t < start).pop();
@@ -437,7 +470,7 @@
         else if (metric === 'balance') v = b.balance;
         else if (metric === 'equity') v = b.equity;
         else if (metric === 'funding') v = b.fundingCharged != null ? b.fundingCharged : b.funding;
-        else v = b.fee + (b.posFee || 0);
+        else v = b.fee + (ser.posNetted ? b.posFeeCharged : b.posFee || 0);   // position fees as charged, as the PnL books them
         if (!level && cumulative) { acc += v; v = acc; }
         pts.push({ x: line ? Math.min(b.t + res.ms, nowT) : b.t, y: v });
       }
@@ -457,17 +490,30 @@
       const type = !level && !cumulative ? 'bar' : 'line';
       // without the funding history (unreadable) the funding figures are those settled into the balance
       const mLabel = metric === 'funding' && !ser.netted ? 'Funding settled' : METRICS.find((m) => m.v === metric).label;
-      const label = mLabel + (level ? '' : cumulative ? ' (cumulative)' : '');
+      // the PnL line starts from 0 at the period's start (Meridian's P&L chart plots the running total since the account
+      // opened, so its axis reads differently while the changes agree)
+      const label = metric === 'pnl' && cumulative ? (range === 'all' ? 'PnL since the account opened' : 'PnL since the start of the period') : mLabel + (level ? '' : cumulative ? ' (cumulative)' : '');
+      // the equity line is net of what was owed at each moment (AN.netLive), as the live equity; Meridian's chart is not
+      const owedParts = [ser.netted ? 'funding' : null, ser.posNetted ? 'mPerp position fees' : null].filter(Boolean);
+      const tooltipLabel = metric === 'equity' && owedParts.length ? (r) => ['Equity ' + U.fmtUsd(r.y), 'net of the ' + owedParts.join(' and '), 'charged and not settled then'] : undefined;
       cumBox.querySelector('input').disabled = level;
       // day bars are UTC days; line points are real instants and keep the local date and time
-      C.timeSeries(chartCanvas, { points: pts, color, type, label, zero: true, signColors: metric === 'pnl' || metric === 'funding', xMin: rows.length ? Math.min(rows[0].t, start) : undefined, xMax: nowT, beginAtZero: metric === 'volume' || metric === 'fees', titleFmt: range === 'all' && !line ? U.fmtDayUTC : undefined });
+      C.timeSeries(chartCanvas, { points: pts, color, type, label, tooltipLabel, zero: true, signColors: metric === 'pnl' || metric === 'funding', xMin: rows.length ? Math.min(rows[0].t, start) : undefined, xMax: nowT, beginAtZero: metric === 'volume' || metric === 'fees', titleFmt: range === 'all' && !line ? U.fmtDayUTC : undefined });
       const rl = RANGES.find((r) => r.v === range).label;
       const fund = stats.fundingCharged != null ? stats.fundingCharged : stats.funding;
+      // position fees as the PnL books them: charged in the period (settled or still owed) once their charges are read
+      const pfee = stats.posFeesCharged != null ? stats.posFeesCharged : stats.posFees || 0;
+      const win = WINDOW_NOTE[range];
+      // what the PnL books, on the basis the charges allowed (unreadable charges leave that part as settled, and all of it
+      // still owed falls on the period's end)
+      const posBasis = ser.posNetted || !(Math.abs(stats.posFees || 0) > 0.005 || (base && base.acct.unsettledPositionFee > 0.005)) ? 'as charged' : 'as settled (all still owed counted at the end)';
+      const pnlTip = `${win} Realized PnL less trading fees, plus funding ${ser.netted ? 'as charged' : 'as settled (all still owed counted at the end)'}, less mPerp position fees ${posBasis}, plus the change in price PnL of the open positions.`;
       U.replace(tiles,
-        UI.stat('PnL (' + rl + ')', U.fmtUsd(stats.pnl, { sign: true }), stats.roi != null ? 'ROI ' + U.fmtPct(stats.roi, { sign: true, dp: 1 }) : null, U.pnlClass(stats.pnl)),
-        UI.stat('Volume (' + rl + ')', U.fmtUsd(stats.volume)),
+        withTitle(UI.stat('PnL (' + rl + ')', U.fmtUsd(stats.pnl, { sign: true }), stats.roi != null ? 'ROI ' + U.fmtPct(stats.roi, { sign: true, dp: 1 }) : null, U.pnlClass(stats.pnl)), pnlTip),
+        withTitle(UI.stat('Volume (' + rl + ')', U.fmtUsd(stats.volume)), win),
         UI.stat((stats.fundingCharged != null ? 'Funding (' : 'Funding settled (') + rl + ')', U.fmtUsd(fund, { sign: true }), null, U.pnlClass(fund)),
-        UI.stat('Fees (' + rl + ')', U.fmtUsd(stats.fees + (stats.posFees || 0)), Math.abs(stats.posFees || 0) > 0.005 ? U.fmtUsd(stats.fees) + ' trading · ' + U.fmtUsd(stats.posFees) + ' position (mPerps)' : null),
+        withTitle(UI.stat('Fees (' + rl + ')', U.fmtUsd(stats.fees + pfee), Math.abs(pfee) > 0.005 ? U.fmtUsd(stats.fees) + ' trading · ' + U.fmtUsd(pfee) + ' position (mPerps)' : null),
+          Math.abs(pfee) > 0.005 ? 'Trading fees, and the mPerp position fees ' + (stats.posFeesCharged != null ? 'charged in the period (settled into the balance or still owed)' : 'settled into the balance in the period') : null),
         UI.stat('Max drawdown (' + rl + ')', U.fmtDd(stats.ddPct), stats.ddUsd ? U.fmtUsd(stats.ddUsd) : null),
         UI.stat('Sharpe (' + rl + ')', U.ratioFmt(stats.sharpe), 'annualized · ' + ({ '24h': 'hourly', '7d': '2-hourly', '30d': '8-hourly', all: 'daily' })[range] + ' returns'));
     }
@@ -521,7 +567,7 @@
         cols: [
           { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker) },
           { key: 'side', label: 'Side', render: (r) => U.sideEl(r.long, true) },
-          { key: 'size', label: 'Size', num: true, render: (r) => U.fmtQty(r.abs) },
+          { key: 'size', label: 'Size', num: true, render: (r) => U.fmtQty(r.abs, r.prod.lotSize) },
           { key: 'entry', label: 'Entry', num: true, render: (r) => U.fmtPrice(r.entry, r.prod.tickSize) },
           { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
           { key: 'notional', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
@@ -535,7 +581,7 @@
       }));
     };
     const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
-    const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
+    const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled, lotOf(ref, f.productId)) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
 
     async function reload() {
@@ -666,16 +712,18 @@
     }
     function renderBook() {
       const prod = ref.byTicker[curMarket]; if (!prod || !bookLoaded) return;
-      const tick = prod.tickSize, full = bookMode !== 'top', byOrder = bookMode === 'orders' && !!l3;
+      const tick = prod.tickSize, lot = prod.lotSize, unit = baseOf(prod), full = bookMode !== 'top', byOrder = bookMode === 'orders' && !!l3;
       book.classList.toggle('full', full); book.classList.toggle('pause-hover', byOrder);
       const all = (m, asc) => Array.from(m.entries()).filter(([, q]) => q > 0).sort((x, y) => (asc ? x[0] - y[0] : y[0] - x[0]));
       const a = all(asks, true), b = all(bids, false);
       // this account's own resting orders, by side and price (marked on their levels)
       const own = AN.ordersAtLevels(AN.restingOrders(orders), prod.id);
       const m = marks[curMarket];
-      const bestA = a.length ? a[0][0] : null, bestB = b.length ? b[0][0] : null;
-      const spread = bestA && bestB ? ((bestA - bestB) / ((bestA + bestB) / 2)) * 100 : null;
-      const mid = h('div.mid', h('span.bold', m && m.mark ? U.fmtPrice(m.mark, tick) : '—'), h('span.dim.xs', spread != null ? '  spread ' + U.fmtPct(spread, { dp: 3 }) : ''));
+      // the centre as Meridian's book shows it: the mid price, the mark (its oracle price) beside it, the spread at 2 dp
+      const bm = AN.bookMid(a.length ? a[0][0] : null, b.length ? b[0][0] : null);
+      const mid = h('div.mid', h('span.bold', { title: 'Mid price: (best bid + best ask) ÷ 2, the centre of Meridian\'s order book' }, bm.mid != null ? U.fmtPrice(bm.mid, tick) : '—'),
+        m && m.mark ? h('span.dim.xs', { title: 'Mark price (the oracle price Meridian\'s app shows beside the mid), which open positions are valued at' }, '  mark ' + U.fmtPrice(m.mark, tick)) : null,
+        h('span.dim.xs', bm.spreadPct != null ? '  spread ' + U.fmtPct(bm.spreadPct, { dp: 2 }) : ''));
       let head, upper, lower;
       if (byOrder) {
         // one row per order; within a price the oldest sits nearest the spread. The bar is the order's USD value
@@ -684,27 +732,27 @@
         const sellO = list.filter((o) => o.side === 'a').sort((x, y) => y.price - x.price || y.createdAt - x.createdAt);
         const buyO = list.filter((o) => o.side === 'b').sort((x, y) => y.price - x.price || x.createdAt - y.createdAt);
         const maxUsd = Math.max(1e-9, ...list.map((o) => o.qty * o.price));
-        const tip = (o) => `${sideWord(o.side)} ${U.fmtQty(o.qty)} at ${U.fmtPrice(o.price, tick)} (${U.fmtUsd(o.qty * o.price)})`
+        const tip = (o) => `${sideWord(o.side)} ${U.fmtQty(o.qty, lot)} ${unit} at ${U.fmtPrice(o.price, tick)} (${U.fmtUsd(o.qty * o.price)})`
           + (o.createdAt ? ' · placed ' + U.fmtDateTime(o.createdAt) : '') + (o.expiresAt ? ' · expires ' + U.fmtDateTime(o.expiresAt) : '')
           + (o.postOnly ? ' · post-only' : '') + (o.reduceOnly ? ' · reduce-only' : '') + (o.account ? ' · account ' + o.account : '') + ' · subaccount ' + o.sid;
         const who = (o) => (o.sid === sid ? h('span.own', 'this account') : o.account ? h('a', { href: U.accountUrl(o.account, o.sid, 'live') }, U.shortAddr(o.account, 4)) : h('span.dim', '—'));
         const row = (o) => h('div.lvl.ord', { class: (o.side === 'a' ? 'ask' : 'bid') + (o.sid === sid ? ' mine' : ''), title: tip(o) },
-          h('i', { style: { width: ((o.qty * o.price) / maxUsd) * 100 + '%' } }), h('span', U.fmtPrice(o.price, tick)), h('span', U.fmtQty(o.qty)), h('span', who(o)), h('span', o.createdAt ? U.fmtAgo(o.createdAt).replace(' ago', '') : '—'));
-        head = h('div.hdr.ord', h('span', 'Price'), h('span', 'Size'), h('span', 'Account'), h('span', 'Age'));
+          h('i', { style: { width: ((o.qty * o.price) / maxUsd) * 100 + '%' } }), h('span', U.fmtPrice(o.price, tick)), h('span', U.fmtQty(o.qty, lot)), h('span', who(o)), h('span', o.createdAt ? U.fmtAgo(o.createdAt).replace(' ago', '') : '—'));
+        head = h('div.hdr.ord', h('span', 'Price'), h('span', 'Size (' + unit + ')'), h('span', 'Account'), h('span', 'Age'));
         upper = sellO.length ? sellO.map(row) : [h('div.book-empty', 'No resting sell orders')];
         lower = buyO.length ? buyO.map(row) : [h('div.book-empty', 'No resting buy orders')];
       } else {
         const ta = full ? a : a.slice(0, BOOK_TOP), tb = full ? b : b.slice(0, BOOK_TOP);
-        // Total = cumulative USD value of the levels from the touch out to this one (each at its own price); a running
-        // size × this level's price turned a dust bid far from the touch into a few dollars
-        let ca = 0, cb = 0; const rowsA = ta.map(([p, q]) => (ca += q * p, { p, q, c: ca, side: 'a' })); const rowsB = tb.map(([p, q]) => (cb += q * p, { p, q, c: cb, side: 'b' }));
-        const max = Math.max(ca, cb, 1e-9);
+        // Total as Meridian's book shows it by default: the size from the touch out to this level, in the base asset, at
+        // its lot size; the levels' USD value (each at its own price) is the row's tooltip, and the bars follow the size
+        const rowsA = AN.bookDepth(ta).map((r) => Object.assign(r, { side: 'a' })), rowsB = AN.bookDepth(tb).map((r) => Object.assign(r, { side: 'b' }));
+        const max = Math.max(rowsA.length ? rowsA[rowsA.length - 1].c : 0, rowsB.length ? rowsB[rowsB.length - 1].c : 0, 1e-9);
         const lvl = (r) => {
           const mineQ = own[r.side].get(r.p);
-          return h('div.lvl', { class: (r.side === 'a' ? 'ask' : 'bid') + (mineQ ? ' mine' : ''), title: mineQ ? `this account: ${U.fmtQty(mineQ)} of the ${U.fmtQty(r.q)} at this price` : null },
-            h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q)), h('span', U.fmtUsd(r.c, { compact: true })));
+          return h('div.lvl', { class: (r.side === 'a' ? 'ask' : 'bid') + (mineQ ? ' mine' : ''), title: `From the touch to this level: ${U.fmtQty(r.c, lot)} ${unit}, worth ${U.fmtUsd(r.usd)} (each level at its own price)` + (mineQ ? `\nThis account: ${U.fmtQty(mineQ, lot)} of the ${U.fmtQty(r.q, lot)} at this price` : '') },
+            h('i', { style: { width: (r.c / max) * 100 + '%' } }), h('span', U.fmtPrice(r.p, tick)), h('span', U.fmtQty(r.q, lot)), h('span', U.fmtQty(r.c, lot)));
         };
-        head = h('div.hdr', h('span', 'Price'), h('span', 'Size'), h('span', 'Total'));
+        head = h('div.hdr', h('span', 'Price'), h('span', 'Size (' + unit + ')'), h('span', { title: 'The size from the touch out to the level, as Meridian\'s order book shows it; hover a level for its USD value' }, 'Total (' + unit + ')'));
         upper = rowsA.length ? rowsA.slice().reverse().map(lvl) : [h('div.book-empty', 'No asks')];
         lower = rowsB.length ? rowsB.map(lvl) : [h('div.book-empty', 'No bids')];
       }
@@ -716,7 +764,7 @@
         if (centerNext) { book.scrollTop = Math.max(0, mid.offsetTop - (book.clientHeight - mid.offsetHeight) / 2); centerNext = false; }
         else if (off != null) book.scrollTop = Math.max(0, mid.offsetTop - off);
       }
-      bookTitle.textContent = prod.displayTicker + ' · mark ' + (m && m.mark ? U.fmtPrice(m.mark, tick) : '—');
+      bookTitle.textContent = prod.displayTicker + ' · mid ' + (bm.mid != null ? U.fmtPrice(bm.mid, tick) : '—') + ' · mark ' + (m && m.mark ? U.fmtPrice(m.mark, tick) : '—');
       renderNote();
     }
     bookHook = renderBook;
@@ -724,7 +772,7 @@
     document.addEventListener('visibilitychange', onShow);
     cx.onCleanup(() => document.removeEventListener('visibilitychange', onShow));
     let unsubTrades = null, mktRows = [];
-    const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
+    const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
     const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
@@ -734,10 +782,10 @@
       const prod = ref.byTicker[ticker];
       mktRows = []; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
       if (prod) {
-        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); renderMkt(); }).catch(() => { if (curMarket === ticker) renderMkt(); });
+        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, lot: prod.lotSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); renderMkt(); }).catch(() => { if (curMarket === ticker) renderMkt(); });
         unsubTrades = A.ws.subscribe('TradeFill', ticker, (m) => {
           const d = m.data || {};
-          for (const it of d.d || []) { const sids = it.sids || []; const mine = sids[0] === sa.id ? 'this account · taker' : sids[1] === sa.id ? 'this account · maker' : null; mktRows.unshift({ id: it.id, t: d.t || m.t, tick: prod.tickSize, side: it.sd, size: it.sz, price: it.px, mine, _new: true }); }
+          for (const it of d.d || []) { const sids = it.sids || []; const mine = sids[0] === sa.id ? 'this account · taker' : sids[1] === sa.id ? 'this account · maker' : null; mktRows.unshift({ id: it.id, t: d.t || m.t, tick: prod.tickSize, lot: prod.lotSize, side: it.sd, size: it.sz, price: it.px, mine, _new: true }); }
           mktRows = mktRows.slice(0, 200); renderMkt();
         });
       }
@@ -763,20 +811,23 @@
   async function mountPerformance(el, st, cx) {
     const { sa, ref } = st; const sid = sa.id;
     U.replace(el, UI.loading('Crunching positions and history…'));
+    const posP = A.positions(sid, { maxPages: 10, signal: cx.signal, ttl: 60000 });   // also where the position-fee charges begin
     const [positions, fills, series, balances, openPos] = await Promise.all([
-      A.positions(sid, { maxPages: 10, signal: cx.signal, ttl: 60000 }),
+      posP,
       A.fills(sid, { maxPages: 5, signal: cx.signal }).catch(() => []),
-      AN.loadSeries(sid, { start: AN.startFor('all', sa.createdAt), resolution: 'day1', signal: cx.signal, ttl: 60000, charges: true }),
+      AN.loadSeries(sid, { start: AN.startFor('all', sa.createdAt), resolution: 'day1', signal: cx.signal, ttl: 60000, charges: true, positions: posP }),
       A.balances(sid, cx), A.openPositions(sid, cx),
     ]);
     const pids = Array.from(new Set(openPos.map((p) => p.productId)));
     const prices = pids.length ? await A.marketPrices(pids, cx) : {};
     const acct = AN.accountState({ balances, positions: openPos, ref, prices });
     const ps = AN.positionStats(positions, ref);
-    const ser = AN.netOfUnsettled(series, series.charges, acct.unsettledFunding, U.DAY);   // every day on the live figures' basis (funding as charged)
+    const ser = AN.netLive(series, acct, U.DAY);   // every day on the live figures' basis (funding and position fees as charged)
     const is = AN.intervalStats(ser, AN.startFor('all', sa.createdAt), { upnl: acct.upnl, equity: acct.equity }, U.DAY);
     const fundAll = is.fundingCharged != null ? is.fundingCharged : is.funding - acct.unsettledFunding;   // settled + still unsettled on open positions, + = received
-    const posFees = is.posFees || 0;
+    // as charged (settled or still owed), as the Overview's Fees tile and this tab's PnL have them; settled only where the
+    // charges could not be read
+    const posFees = is.posFeesCharged != null ? is.posFeesCharged : is.posFees || 0;
     const dwDp = Math.max(is.deposits, is.withdrawals) >= 1000 ? 0 : 2;   // one precision for both numbers in the tile
     const makerN = fills.filter((f) => f.isMaker).length;
     const m = (k, v, s, cls) => UI.metric(k, v, s, cls);
@@ -794,7 +845,7 @@
       m('Long / short', `${ps.longs} / ${ps.shorts}`, 'positions'),
       m('Positions', String(ps.count) + (positions.truncated ? '+' : ''), `${ps.open.length} open · ${ps.liquidated} liquidated`),
       m('Volume (all time)', U.fmtUsd(is.volume, { compact: true })),
-      m('Fees paid', U.fmtUsd(is.fees + posFees), (Math.abs(posFees) > 0.005 ? 'incl. ' + U.fmtUsd(posFees) + ' position fees' + (fills.length ? ' · ' : '') : '') + (fills.length ? `${U.fmtPct((makerN / fills.length) * 100, { dp: 0 })} maker of last ${fills.length} fills` : '') || null),
+      m('Fees paid', U.fmtUsd(is.fees + posFees), (Math.abs(posFees) > 0.005 ? 'incl. ' + U.fmtUsd(posFees) + (is.posFeesCharged != null ? ' position fees charged (settled or still owed)' : ' position fees') + (fills.length ? ' · ' : '') : '') + (fills.length ? `${U.fmtPct((makerN / fills.length) * 100, { dp: 0 })} maker of last ${fills.length} fills` : '') || null),
       m('Funding (net)', U.fmtUsd(fundAll, { sign: true }), 'positive = received · incl. unsettled on open positions', U.pnlClass(fundAll)),
       m('Deposits / withdrawals', U.fmtUsd(is.deposits, { compact: true, dp: dwDp }) + ' / ' + U.fmtUsd(is.withdrawals, { compact: true, dp: dwDp }), is.withdrawals ? 'withdrawals incl. fees' : null));
 
@@ -810,8 +861,13 @@
         { key: 'ls', label: 'Long %', num: true, render: (r) => U.fmtPct((r.longs / r.count) * 100, { dp: 0 }) },
       ], rows: ps.byMarket, empty: 'No positions yet',
     });
+    // what a day's bar holds, on the basis the charges allowed, and how Meridian's P&L calendar differs
+    const posCharged = ser.posNetted || !(Math.abs(is.posFees || 0) > 0.005 || acct.unsettledPositionFee > 0.005);   // (none at all reads the same)
+    const dayNote = 'UTC days: realized PnL less trading fees, '
+      + (ser.netted && posCharged ? 'funding and mPerp position fees on the day they are charged' : `funding on the day it ${ser.netted ? 'is charged' : 'settles'}, mPerp position fees on the day they ${posCharged ? 'are charged' : 'settle'}`)
+      + ', plus the change in price PnL; today\'s bar ends at the live figures. Meridian\'s P&L calendar dates each day in your local time, counts funding when it settles and leaves position fees out.';
     U.replace(el, h('div.stack', grid, h('div.row', { style: { marginTop: '-8px' } }, h('span.grow'), MD.defsLink()),
-      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2))),
+      h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Cumulative PnL'), h('div.chart-box.sm', c1)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Daily PnL'), h('div.chart-box.sm', c2), h('div.chart-note', dayNote))),
       h('div.grid.cols-2.wl', UI.card('By market', perMarket), h('div.card.chart-fill', h('h3', { style: { marginBottom: '10px', flex: 'none' } }, 'Net PnL by market (closed)'), h('div.chart-box.sm', c3))),
       positions.truncated ? h('div.notice', 'Only the most recent 2,000 positions were analysed.') : null));
     const start = AN.startFor('all', sa.createdAt);
@@ -885,9 +941,13 @@
     for (const s of seasons) {
       const share = total && U.num(total.totalPoints) > 0 ? (U.num(s.totalPoints) / U.num(total.totalPoints)) * 100 : null;
       const epochs = h('div.chart-box.sm'); const cv = h('canvas'); epochs.appendChild(cv);
+      // Total points as Meridian's points page: trading plus referral points (the API keeps them apart), the split under it
+      const tp = U.num(s.totalPoints), rp = U.num(s.referralPoints);
       cards.push(h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', 'Season ' + s.season), UI.chip('Tier ' + (s.tier != null ? s.tier : '—'), 'accent'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(s.updatedAt))),
-        h('div.stats', UI.stat('Rank', s.rank ? '#' + s.rank : '—', s.previousRank > 0 && s.previousRank !== s.rank ? 'was #' + s.previousRank : null), UI.stat('Total points', U.fmtNum(s.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(s.referralPoints, 0)), UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null)),
-        h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs));
+        h('div.stats', UI.stat('Rank', s.rank ? '#' + s.rank : '—', s.previousRank > 0 && s.previousRank !== s.rank ? 'was #' + s.previousRank : null),
+          withTitle(UI.stat('Total points', U.fmtNum(tp + rp, 0), U.fmtNum(tp, 0) + ' trading · ' + U.fmtNum(rp, 0) + ' referral'), 'Trading points plus referral points, as Meridian\'s points page shows the total'),
+          withTitle(UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null), 'This address\'s trading points ÷ all trading points distributed in the season (referral points left out of both)')),
+        h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs, h('div.chart-note', 'Trading plus referral points per epoch, as Meridian\'s points history shows them')));
       // epoch history (probe epochs until two consecutive empties)
       (async () => {
         const pts = []; let misses = 0;
@@ -898,7 +958,7 @@
           misses = 0; for (const r of rows) pts.push({ epoch: e, name: r.name, points: U.num(r.points), ref: U.num(r.referralPoints), t: r.endedAt || r.startedAt });
         }
         if (!pts.length) { U.replace(epochs, UI.empty('No epoch breakdown available')); return; }
-        C.bars(cv, pts.map((p) => 'E' + p.epoch), pts.map((p) => p.points), { fmt: (v) => U.fmtNum(v, 0) + ' pts' });
+        C.bars(cv, pts.map((p) => 'E' + p.epoch), pts.map((p) => p.points + p.ref), { fmt: (v) => U.fmtNum(v, 0) + ' pts', axisFmt: (v) => U.fmtCompact(v) });
       })();
     }
     if (total) cards.push(h('div.card', h('div.row', h('h2', 'Exchange-wide points'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(total.updatedAt))), h('div.stats', { style: { marginTop: '10px' } }, UI.stat('Total distributed', U.fmtNum(total.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(total.referralPoints, 0)))));

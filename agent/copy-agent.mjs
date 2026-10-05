@@ -25,6 +25,11 @@
  *
  * Facts this code relies on, each checked against the exchange (see README):
  *   - a position's `size` is signed (long > 0); its `fundingAccruedUsd` is positive when PAID (the ledger says so)
+ *   - an open position's `fundingUsd` and `positionFeeUsd` are funding and position fees charged but not yet settled into
+ *     the balance (positive when paid; `cost` is unsigned): Meridian's Trade Equity is Σ pool amounts + Σ (mark − |cost ÷
+ *     size|) × size − Σ fundingUsd − Σ positionFeeUsd, and the agent's equity is the same figure (checked against the app
+ *     on a live account: balance + gross uPnL was $1,192.92 above its Trade Equity, exactly the $820.33 funding and
+ *     $372.59 position fee unsettled)
  *   - the order submission response's `filled` is deprecated and always 0: fills are read back from GET /v1/order/{id}
  *   - a close order is quantity "0" + reduceOnly + close (dry-run: Ok); an IOC limit fills what it can and cancels the rest
  *   - signedAt must be within the exchange's clock tolerance: the clock offset to /v1/time is measured and applied, again
@@ -75,8 +80,36 @@ const sizeOrder = (sizing, { kind, leaderDelta, px, followed, ownNow, prev, orde
   const oq = orderQty && orderQty > leaderDelta ? orderQty : leaderDelta; const k = num(sizing.size) / (oq * px);
   return { q: leaderDelta * k, k };
 };
-/** USD that may still be added in a market under the per-market cap, the market's own cap, the leverage limit and the
- *  hard ceilings per position and per order (the agent always sets the last two; 0 here means "none" for the tests) */
+/**
+ * One open position of the copy account from its /v1/position record, as Meridian's app books it: entry = |cost ÷ size|
+ * (the app's avgPrice), uPnL GROSS at the mark (what the app's positions table shows; without a mark the exchange's own
+ * unrealizedPnl stands in), and the funding and position fee charged on it but not yet settled into the balance
+ * (fundingUsd, positionFeeUsd: positive when paid). null for a flat record.
+ */
+const ownPosition = (p, m) => {
+  const size = num(p.size); if (!size) return null;
+  const entry = Math.abs(num(p.cost) / size); const mk = num(m);
+  return { size, entry, mark: mk, notional: Math.abs(size) * mk, upnl: mk && entry ? size * (mk - entry) : num(p.unrealizedPnl), funding: num(p.fundingUsd), posFee: num(p.positionFeeUsd) };
+};
+/** Funding and position fees charged on the open positions and not yet settled into the balance, USD (+ = paid) */
+const unsettledOf = (own) => Object.values(own || {}).reduce((a, o) => a + num(o.funding) + num(o.posFee), 0);
+/**
+ * The equity every risk figure counts on (today's loss, the drawdown, the leverage cap, "no equity"): Meridian's Trade
+ * Equity, i.e. the balance (every pool's amount) plus the positions' gross uPnL less what is charged on them and not yet
+ * settled. Without that last part a position paying funding looked flat until the charge settled into the balance, and
+ * the daily-loss stop then saw the whole accumulated charge as one loss at that moment.
+ */
+const tradeEquity = (balance, own) => Object.values(own || {}).reduce((a, o) => a + num(o.upnl), num(balance)) - unsettledOf(own);
+/**
+ * A state.json from an agent that counted equity before the unsettled charges (no equityNet in it) holds the day's loss
+ * baseline and the drawdown peak on that gross basis: both move onto the net one by what is unsettled at the first
+ * reading, so the upgrade alone is neither a loss nor a drawdown (what was charged between that baseline and the reading
+ * cannot be told apart and is not counted). null stays null (not saved).
+ */
+const toNetBasis = (saved, unsettled) => ({ equityDayStart: saved.equityDayStart != null ? saved.equityDayStart - unsettled : null, equityPeak: saved.equityPeak != null ? saved.equityPeak - unsettled : null });
+/** USD that may still be added in a market under the per-market cap, the market's own cap, the leverage limit (on
+ *  equity: tradeEquity) and the hard ceilings per position and per order (the agent always sets the last two; 0 here means
+ *  "none" for the tests) */
 const roomLeft = ({ curNotional = 0, maxPerMarket = 0, marketCap = 0, maxLeverage = 0, equity = 0, totalNotional = 0, maxPosition = 0, maxOrder = 0 }) => {
   let room = Infinity;
   if (maxPerMarket) room = Math.min(room, maxPerMarket - curNotional);
@@ -158,6 +191,7 @@ const parseState = (text) => {
   if (s.orders != null && !Array.isArray(s.orders)) return { error: 'orders is garbled' };
   if (s.tripped != null && (typeof s.tripped !== 'object' || typeof s.tripped.why !== 'string')) return { error: 'tripped is garbled' };
   for (const k of ['equityDayStart', 'equityPeak', 'savedAt', 'dayBaseAt', 'peakSince']) if (s[k] != null && !Number.isFinite(s[k])) return { error: k + ' is garbled' };
+  if (s.equityNet != null && typeof s.equityNet !== 'boolean') return { error: 'equityNet is garbled' };
   if (s.dayKey != null && !/^\d{4}-\d{2}-\d{2}$/.test(s.dayKey)) return { error: 'dayKey is garbled' };
   return { state: s };
 };
@@ -348,11 +382,14 @@ async function run() {
   // the risk stop set (see loadState): only an explicit resume clears it
   const { saved, damaged } = loadState();
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: damaged ? { t: Date.now(), why: `${damaged}${saved.tripped ? '; the stop it had: ' + saved.tripped.why : ''}: check the positions and resume` } : saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [] };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, upnl: 0, unsettled: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [] };
   let persistErr = null, onDiskGood = !damaged;   // a damaged file must not become the backup
+  // a baseline or peak saved by an agent that counted equity gross is moved onto the net basis at the first reading
+  // (toNetBasis); until then a save keeps saying it is gross, so a stop in between cannot skip the move
+  let grossBasis = !saved.equityNet && (S.equityDayStart != null || S.equityPeak != null);
   const persist = () => {
     try {
-      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
+      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
       // written whole beside it and swapped in: a crash or a full disk mid-write leaves the last good file, never half of one
       if (onDiskGood && fs.existsSync(statePath)) fs.copyFileSync(statePath, statePath + '.bak');
       fs.renameSync(statePath + '.tmp', statePath); persistErr = null; onDiskGood = true;
@@ -396,11 +433,17 @@ async function run() {
     const readAt = serverNow();   // the baseline is taken before the reads it is compared with
     const [bal, pos, prices] = await Promise.all([api('/v1/subaccount/balance', { params: { subaccountId: SID, limit: 100 } }), api('/v1/position', { params: { subaccountId: SID, open: true, limit: 100 } }), api('/v1/product/market-price?' + products.filter((p) => p.status === 'ACTIVE').map((p) => 'productIds=' + p.id).join('&'))]);
     const mark = {}; for (const x of prices.data || []) mark[x.productId] = num(x.oraclePrice) || num(x.markPrice);
-    const own = {}; let upnl = 0, notional = 0;
-    if (DRY) { for (const [pid, o] of Object.entries(S.own || {})) { const m = mark[pid] || o.mark; const u = o.size * (m - o.entry); own[pid] = Object.assign({}, o, { mark: m, notional: Math.abs(o.size) * m, upnl: u }); upnl += u; notional += Math.abs(o.size) * m; } }   // the virtual book of a dry run
-    else for (const p of pos.data || []) { const size = num(p.size); if (!size) continue; const m = mark[p.productId] || 0; const entry = Math.abs(size) ? num(p.cost) / Math.abs(size) : 0; const u = m && entry ? size * (m - entry) : num(p.unrealizedPnl); own[p.productId] = { size, entry, mark: m, notional: Math.abs(size) * m, upnl: u }; upnl += u; notional += Math.abs(size) * m; }
+    const own = {};
+    if (DRY) { for (const [pid, o] of Object.entries(S.own || {})) { const m = mark[pid] || o.mark; own[pid] = Object.assign({}, o, { mark: m, notional: Math.abs(o.size) * m, upnl: o.size * (m - o.entry) }); } }   // the virtual book of a dry run (no funding or position fee is charged on it)
+    else for (const p of pos.data || []) { const o = ownPosition(p, mark[p.productId]); if (o) own[p.productId] = o; }
     const balance = (bal.data || []).reduce((a, b) => a + num(b.amount), 0);
-    S.own = own; S.mark = mark; S.equity = balance + upnl; S.notional = notional; S.balance = balance; S.ownAt = Date.now();
+    // equity as Meridian's Trade Equity (tradeEquity): the per-position uPnL stays gross, as the app's positions table shows it
+    S.own = own; S.mark = mark; S.balance = balance; S.unsettled = unsettledOf(own); S.equity = tradeEquity(balance, own); S.ownAt = Date.now();
+    S.upnl = Object.values(own).reduce((a, o) => a + o.upnl, 0); S.notional = Object.values(own).reduce((a, o) => a + o.notional, 0);
+    if (grossBasis) {
+      const nb = toNetBasis(S, S.unsettled); S.equityDayStart = nb.equityDayStart; S.equityPeak = nb.equityPeak; grossBasis = false;
+      if (S.unsettled) note('start', `equity now takes out the funding and position fees charged but not yet settled (${S.unsettled.toFixed(2)} USD), as Meridian's Trade Equity does: the saved day baseline and drawdown peak moved by the same amount`);
+    }
     for (const pid of Object.keys(S.carry)) if (!own[pid] || !(S.carry[pid] > 1e-12)) delete S.carry[pid];   // nothing left to reduce, nothing owed
     const db = dayBaseline(S, { day: dayKeyOf(readAt), readAt, equity: S.equity }); S.dayKey = db.dayKey; S.equityDayStart = db.equityDayStart; S.dayBaseAt = db.dayBaseAt;
     const fDay = db.fresh ? 0 : await flows(S.dayBaseAt), fPeak = await flows(S.peakSince);
@@ -411,7 +454,7 @@ async function run() {
     S.flowsDay = fl.day; S.flowsSinceStart = fl.peak;
     const adjEquity = S.equity - S.flowsSinceStart;   // deposits since peakSince do not raise the peak, withdrawals do not count as loss
     if (S.equityPeak == null || adjEquity > S.equityPeak) S.equityPeak = adjEquity;   // the first reading sets it, in the same terms
-    S.dayPnl = S.equity - S.equityDayStart - S.flowsDay;
+    S.dayPnl = S.equity - S.equityDayStart - S.flowsDay;   // funding and position fees count the hour they are charged, not when they settle
     S.ddPct = S.equityPeak > 0 ? ((S.equityPeak - adjEquity) / S.equityPeak) * 100 : 0;
     if (!S.tripped && ((risk.dailyLossStop && -S.dayPnl >= risk.dailyLossStop) || (risk.drawdownStopPct && S.ddPct >= risk.drawdownStopPct))) {
       S.tripped = { t: Date.now(), why: -S.dayPnl >= (risk.dailyLossStop || Infinity) ? `today's loss ${(-S.dayPnl).toFixed(2)} USD reached the stop of ${risk.dailyLossStop}` : `drawdown ${S.ddPct.toFixed(1)}% reached the stop of ${risk.drawdownStopPct}%` };
@@ -514,7 +557,9 @@ async function run() {
     if (over(addNotional, risk.maxOrderUsd)) return `the order is over the ${risk.maxOrderUsd} USD ceiling per order`;
     if (num(prod.maxPositionNotionalUsd) && over(curNotional + addNotional, num(prod.maxPositionNotionalUsd))) return `would exceed the market's position cap`;
     if (risk.maxOpenPositions && !cur && Object.keys(S.own).length >= risk.maxOpenPositions) return `already ${risk.maxOpenPositions} open positions`;
-    if (risk.maxLeverage && S.equity > 0 && over((heldTotal() + addNotional) / S.equity, risk.maxLeverage)) return `would exceed ${risk.maxLeverage}x leverage`;
+    // on equity (tradeEquity), not on the balance Meridian's account leverage divides by: losing positions and the funding
+    // and position fees charged on them raise it, so the cap tightens as the account loses
+    if (risk.maxLeverage && S.equity > 0 && over((heldTotal() + addNotional) / S.equity, risk.maxLeverage)) return `would exceed ${risk.maxLeverage}x leverage on equity`;
     if (S.equity <= 0) return 'no equity';
     const owner = S.marketOwner[prod.id]; if (owner && owner !== leaderSid) return `${prod.displayTicker} is being copied from another leader`;
     return null;
@@ -563,7 +608,7 @@ async function run() {
     else { S.orphans.push(pid); note('warn', `${byId[pid].displayTicker}: an open position no leader holds (orphan); ${ex.onOrphan === 'close' ? 'closing it' : 'left alone — close it yourself or set execution.onOrphan to "close"'}`); if (ex.onOrphan === 'close') await closeMarket(pid, 'orphan on start'); }
   }
   persist();
-  note('start', `copy agent up · ${DRY ? 'DRY RUN, nothing is placed' : 'LIVE, real orders'} · signer ${w.address} · ${cfg.leaders.length} leader(s) · equity ${S.equity.toFixed(2)} USD · sizing ${sizing.mode} ${sizing.mode === 'ratio' ? sizing.ratio + '%' : sizing.size + ' USD'} · ${ex.type}${ex.type === 'IOC' ? ' ±' + ex.slippageBps + ' bps' : ''}`);
+  note('start', `copy agent up · ${DRY ? 'DRY RUN, nothing is placed' : 'LIVE, real orders'} · signer ${w.address} · ${cfg.leaders.length} leader(s) · equity ${S.equity.toFixed(2)} USD (Meridian's Trade Equity) · sizing ${sizing.mode} ${sizing.mode === 'ratio' ? sizing.ratio + '%' : sizing.size + ' USD'} · ${ex.type}${ex.type === 'IOC' ? ' ±' + ex.slippageBps + ' bps' : ''}`);
 
   /** One leader order (its fills grouped): decide and place the mirror. Runs inside the serial queue. */
   async function onLeaderOrder(l, prod, g) {

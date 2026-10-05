@@ -37,7 +37,8 @@
         const items = winners.length >= 4 ? winners : ranked.slice(0, 12);
         if (items.length) {
           const track = h('div.track');
-          const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: 'Open account' },
+          // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are
+          const mk = (r, i) => h('a.item', { href: U.accountUrl(r.account, r.sid), title: r.carried ? `Open account · these figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : 'Open account' },
             h('span.rank', { class: i < 3 ? 'top' : '', style: { width: 'auto' } }, '#' + (i + 1)),
             h('span.addr', U.shortAddr(r.account)), U.pnlEl(r.stats.all.pnl),
             // a big account's small percentage reads "+0.3%", not "+0%"
@@ -46,7 +47,8 @@
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           items.forEach((r, i) => track.appendChild(mk(r, i)));
           strip.appendChild(track);
-          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copyability scores')), strip);
+          // the ranking says, as the Leaderboard does, when accounts are missing from it or carried over, and when it is stale
+          hero.insertBefore(h('div.strip-title', 'Top wallets by all-time PnL · ', h('a', { href: '#/copytrade' }, 'copyability scores'), LB.coverageNote(lb), MD.ui.staleNote(lb.builtAt, 'the publishing job may be down')), strip);
         }
       } else {
         strip.appendChild(h('div', { style: { textAlign: 'center', fontSize: '12.5px' } }, h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here')));

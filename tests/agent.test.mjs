@@ -5,12 +5,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { root, near } from './_load.mjs';
+import { root, near, load } from './_load.mjs';
 
 const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
-const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty })', { Math, Number, String, parseFloat, Infinity });
+const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty })', { Math, Number, String, parseFloat, Infinity });
+// the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util)
+const MD = load(['js/util.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
 const plain = (x) => JSON.parse(JSON.stringify(x));   // objects and arrays from the block's own context, compared as data
 
 test('quantities round down to the lot, limits to the tick in the direction that never tightens the cap', () => {
@@ -259,4 +261,84 @@ test('the risk stops keep running when the transfer list cannot be read', () => 
   assert.deepEqual(plain(A.flowsForStops({ day: null, peak: null }, last, '2026-10-02')), { day: -50, peak: -200, stale: true });
   assert.deepEqual(plain(A.flowsForStops({ day: null, peak: 30 }, last, '2026-10-03')), { day: 0, peak: 30, stale: true });
   assert.deepEqual(plain(A.flowsForStops({ day: null, peak: null }, null, '2026-10-02')), { day: 0, peak: 0, stale: true });
+});
+
+// the audit's live account (0x7c7565ad…, 2026-10-05): two pools, one XAU long paying funding and position fees
+const xauRec = { productId: 'xau', size: '33.3634', cost: '139262.16794', fundingUsd: '820.3282402184786', positionFeeUsd: '372.585000573', unrealizedPnl: '-1127.349286' };
+const xauBalance = 7114.758728994 + 75.958376294;
+
+test('equity is Meridian\'s Trade Equity: balance + gross uPnL − funding and position fees not yet settled', () => {
+  const o = plain(A.ownPosition(xauRec, 4140.31));
+  near(assert, o.entry, 139262.16794 / 33.3634, 1e-9, 'entry = |cost ÷ size|');
+  near(assert, o.upnl, -1127.349286, 1e-6, 'the per-position uPnL stays gross, as the app\'s positions table shows it');
+  near(assert, o.notional, 33.3634 * 4140.31, 1e-6);
+  near(assert, o.funding, 820.3282402184786, 1e-12); near(assert, o.posFee, 372.585000573, 1e-12);
+  const own = { xau: o };
+  near(assert, A.unsettledOf(own), 1192.913240791, 1e-6);
+  near(assert, A.tradeEquity(xauBalance, own), 4870.454578, 1e-5, 'the app\'s Trade Equity ($4,870.45), not balance + gross uPnL ($6,063.37)');
+  // a short: size negative, cost unsigned; funding received is negative and adds to equity
+  const s = plain(A.ownPosition({ size: '-0.235', cost: '180.987051666', fundingUsd: '-0.032138720085', positionFeeUsd: '0' }, 770));
+  near(assert, s.entry, 180.987051666 / 0.235, 1e-9); near(assert, s.upnl, 0.037051666, 1e-6);
+  near(assert, A.tradeEquity(100, { s }), 100 + 0.037051666 + 0.032138720085, 1e-9);
+  assert.equal(A.ownPosition({ size: '0', cost: '0' }, 1), null, 'a flat record is no position');
+  near(assert, A.ownPosition(xauRec, undefined).upnl, -1127.349286, 1e-9, 'no mark: the exchange\'s own uPnL stands in');
+  assert.equal(A.tradeEquity(250, {}), 250, 'no position: the balance');
+});
+
+test('a charge settling into the balance moves neither the equity nor today\'s loss; the charge itself is the loss', () => {
+  const pos = (fundingUsd) => ({ xau: plain(A.ownPosition(Object.assign({}, xauRec, { fundingUsd: String(fundingUsd) }), 4140.31)) });
+  const before = A.tradeEquity(xauBalance, pos(820.3282402184786));
+  const settled = A.tradeEquity(xauBalance - 820.3282402184786, pos(0));   // the same funding, now taken from the balance
+  near(assert, settled, before, 1e-6, 'settlement is not a loss');
+  // the stop counts the hour's charge when it is charged: $50 more owed is $50 off today's result
+  const day = A.dayBaseline({}, { day: '2026-10-05', readAt: 1, equity: before });
+  const later = A.tradeEquity(xauBalance, pos(820.3282402184786 + 50));
+  near(assert, later - day.equityDayStart, -50, 1e-6);
+  // the leverage cap counts on the net equity, not on balance + gross uPnL: at 30x, room for 30 × 4,870.45 less what is held
+  near(assert, A.roomLeft({ maxLeverage: 30, equity: before, totalNotional: 33.3634 * 4140.31 }), 30 * 4870.454578 - 33.3634 * 4140.31, 1e-3);
+});
+
+test('a state saved on the gross basis moves onto the net one at the first reading, so the upgrade is no loss', () => {
+  const m = plain(A.toNetBasis({ equityDayStart: 6203.07, equityPeak: 6500 }, 1192.91));
+  near(assert, m.equityDayStart, 5010.16, 1e-9); near(assert, m.equityPeak, 5307.09, 1e-9);
+  assert.deepEqual(plain(A.toNetBasis({ equityDayStart: null }, 1192.91)), { equityDayStart: null, equityPeak: null }, 'not saved stays not saved');
+  // gross before the upgrade: day result −140.04 (6,063.37 now against 6,203.41 at the baseline); the same just after it,
+  // and the drawdown from a 6,600 peak the same in dollars
+  const grossNow = xauBalance - 1127.349286, unsettled = 1192.913240791, netNow = A.tradeEquity(xauBalance, { xau: plain(A.ownPosition(xauRec, 4140.31)) });
+  const nb = A.toNetBasis({ equityDayStart: 6203.41, equityPeak: 6600 }, unsettled);
+  near(assert, netNow - nb.equityDayStart, grossNow - 6203.41, 1e-6, 'today\'s result unchanged by the move');
+  near(assert, nb.equityPeak - netNow, 6600 - grossNow, 1e-6, 'the drawdown in dollars unchanged by the move');
+  assert.equal(A.parseState('{"equityNet":true,"equityDayStart":5010.16}').error, undefined);
+  assert.ok(A.parseState('{"equityNet":"yes"}').error, 'a garbled equityNet');
+});
+
+test('the dashboard\'s leverage: Meridian\'s (positions ÷ balance) and the one the agent caps (÷ equity)', () => {
+  const CA = MD.copyagentPage;
+  near(assert, CA.leverage({ notional: 138094.58, balance: 7190.72, equity: 6023.13 }).balance, 19.2045, 1e-4, 'the app\'s 19.20x, not 22.93x');
+  const w = CA.leverage({ notional: 393221.34, balance: 41283.64, equity: 41283.64 + 962.76 });
+  near(assert, w.balance, 9.52487, 1e-5, 'the app\'s 9.52x'); near(assert, w.equity, 9.30781, 1e-5, 'on equity, as the cap counts');
+  assert.deepEqual(plain(CA.leverage({ notional: 100, balance: 0, equity: -5 })), { balance: null, equity: null }, 'nothing to divide by');
+  assert.deepEqual(plain(CA.leverage({})), { balance: null, equity: null }, 'an agent that has not read its account yet');
+});
+
+test('a position\'s entry notional, with Meridian\'s Size (quantity opened × the exit price) beside it', () => {
+  const CS = MD.copysimPage;
+  // the audit's XAU position 01a0fd11-12b7…: 3 opened for $12,555 in two fills, closed at 4,144.41
+  const rec = { productId: 'xau', size: '0', totalIncreaseQuantity: '3', totalIncreaseNotional: '12555', totalDecreaseQuantity: '3', totalDecreaseNotional: '12433.23', isLiquidated: false };
+  const fills = [{ t: 1, q: 1, px: 4180 }, { t: 2, q: 2, px: 4187.5 }, { t: 3, q: -3, px: 4144.41 }];
+  const e = { pid: 'xau', side: 1, qty: 0, fills, pos: rec };
+  const z = plain(CS.closedSize(e));
+  assert.equal(z.qty, 3); near(assert, z.exitPx, 4144.41, 1e-9); near(assert, z.usd, 12433.23, 1e-6, 'the app\'s $12,433.23, not the $12,555 entry notional');
+  near(assert, CS.closedSize(Object.assign({}, e, { pos: null })).usd, 12433.23, 1e-6, 'no record (a dry run): the fills give the same');
+  // the record also holds fills that are not this episode's (traded by hand): the episode's own fills
+  near(assert, CS.closedSize(Object.assign({}, e, { pos: Object.assign({}, rec, { totalIncreaseQuantity: '4' }) })).qty, 3, 1e-12);
+  // a liquidation: the record's liquidation price is the exit, as the app takes it
+  const liq = Object.assign({}, rec, { isLiquidated: true, liquidationPrice: '4100' });
+  near(assert, CS.closedSize(Object.assign({}, e, { pos: liq })).usd, 12300, 1e-9);
+  // a short, and an open position (no exit yet)
+  near(assert, CS.closedSize({ side: -1, qty: 0, fills: [{ q: -2, px: 100 }, { q: 1, px: 90 }, { q: 1, px: 80 }], pos: null }).usd, 170, 1e-9);
+  assert.deepEqual(plain(CS.closedSize({ side: 1, qty: 2, fills: [{ q: 3, px: 10 }, { q: -1, px: 12 }], pos: null })), { qty: 3, exitPx: null, usd: null });
+  const t = CS.sizeTitle(e, 12555, { lotSize: '0.01', tickSize: '0.01' });
+  assert.match(t, /Entry notional \$12,555\.00/); assert.match(t, /quantity opened, 3\.00/); assert.match(t, /4,144\.41 exit: \$12,433\.23/);
+  assert.match(CS.sizeTitle({ side: 1, qty: 2, fills: [{ q: 2, px: 10 }] }, 20, null), /Still open/);
 });

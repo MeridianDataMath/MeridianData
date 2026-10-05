@@ -26,6 +26,34 @@
       P._remoteAt = Date.now();
       return P._remote;
     },
+    /** What a snapshot covers (null without one): the accounts listed when it was built, its rows, the rows carried over
+     *  from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs) and when
+     *  the oldest of those was built, and the accounts with no row at all. A snapshot from before rows were carried does
+     *  not count them: every account short of its list is missing. */
+    coverage(data) {
+      if (!data || !Array.isArray(data.rows)) return null;
+      const carried = data.rows.filter((r) => r && r.carried);
+      const accounts = data.accounts > 0 ? data.accounts : null;
+      const missing = data.missing != null ? data.missing : accounts ? Math.max(0, accounts - data.rows.length) : 0;
+      const oldest = carried.reduce((m, r) => Math.min(m, r.builtAt || data.builtAt), Infinity);
+      return { accounts, rows: data.rows.length, carried: carried.length, oldest: carried.length ? oldest : null, missing, partial: !!data.partial };
+    },
+    /** After a snapshot's age, on every page that ranks it (Leaderboard, Copy trading, Home): ' · N of M accounts
+     *  missing', ' · N from an earlier build', or ' · partial build' for a browser build that did not count its accounts;
+     *  null when the snapshot is whole. */
+    coverageNote(data) {
+      const c = P.coverage(data); if (!c) return null;
+      const s = (n) => (n === 1 ? '' : 's');
+      const out = [];
+      if (c.missing) out.push(h('span.neg', { title: `${c.missing} account${s(c.missing)} could not be built for this snapshot and had no recent row to fall back on: left out of every ranking until a build reaches ${c.missing === 1 ? 'it' : 'them'}` }, ` · ${c.missing} of ${c.accounts} accounts missing`));
+      else if (c.partial && !c.carried) out.push(h('span.neg', { title: 'Some accounts could not be built: they are left out' }, ' · partial build'));
+      if (c.carried) out.push(h('span', { style: { color: 'var(--amber)' }, title: `${c.carried} account${s(c.carried)} could not be rebuilt for this snapshot: ${c.carried === 1 ? 'its row is' : 'their rows are'} carried over from an earlier build (the oldest from ${U.fmtWhen(c.oldest)}, ${U.fmtAgo(c.oldest)}) and marked "older" where listed` }, ` · ${c.carried} from an earlier build`));
+      return out.length ? out : null;
+    },
+    /** A carried row's mark beside its account: equity, PnL and the rest are as of an earlier build */
+    carriedChip(r) {
+      return r && r.carried ? h('span.chip.amber', { title: `This account could not be rebuilt for the latest snapshot: its figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)})` }, 'older') : null;
+    },
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Leaderboard'));
       await P.loadRemote();
@@ -62,7 +90,7 @@
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
             fld('Trading style', h('select.input.sm', { onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
           h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
-          h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; Update rebuilds one in your browser right now.'),
+          h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; an account it could not rebuild keeps its row from an earlier one, marked "older". Update rebuilds one in your browser right now.'),
           h('div.sec', MD.defsLink()));
       }
       renderFilters(); renderToolbar();
@@ -96,7 +124,7 @@
           sort: state.sort, onSort,
           cols: [
             { key: 'rank', label: '#', render: (r) => { const i = rankOf.get(r.sid); return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
-            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null) },
+            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
             { key: 'pnl', label: 'PnL', num: true, sortVal: 1, render: (r) => (s(r) ? U.pnlEl(s(r).pnl) : '—') },
             { key: 'volume', label: 'Volume', num: true, sortVal: 1, render: (r) => (s(r) ? U.fmtUsd(s(r).volume) : '—') },
@@ -116,7 +144,7 @@
       }
       function renderSummary(data) {
         if (!data) return;
-        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), data.partial ? h('span.neg', ' · partial build') : null, UI.staleNote(data.builtAt, 'the publishing job may be down; press Update to rebuild in your browser'));
+        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), P.coverageNote(data), UI.staleNote(data.builtAt, 'the publishing job may be down; press Update to rebuild in your browser'));
       }
       // keep the page current: re-check the published snapshot every minute, tick the age label every 30 s
       let shownBuiltAt = 0;
@@ -152,7 +180,7 @@
           // a cancelled build is dropped: the snapshot already shown stays (home, favorites and the dashboard read the same cache)
           if (cancel) { U.replace(progress); return; }
           const ok = rows.filter(Boolean);
-          const snapshot = { builtAt: Date.now(), rows: ok, partial: ok.length < subs.length };
+          const snapshot = { builtAt: Date.now(), rows: ok, partial: ok.length < subs.length, accounts: subs.length };   // accounts: how many are missing (P.coverage)
           if (!U.storage.set(KEY, snapshot)) U.toast('Snapshot too large for local storage; shown for this session only');
           P._mem = snapshot;
           U.replace(progress);

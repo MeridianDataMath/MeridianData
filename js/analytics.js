@@ -50,42 +50,103 @@
   };
 
   /** Fetch + build the series for a subaccount over [start, now]. Adds one prior bucket for deltas. With `charges`, also
-   *  the funding charged since then (series.charges, for AN.netOfUnsettled; null when not asked for or not readable). */
-  AN.loadSeries = async function (sid, { start, resolution, signal, ttl, withVolume = true, charges = false }) {
+   *  the funding charged since then (series.charges, for AN.netOfUnsettled; null when not asked for or not readable).
+   *  With `positions` (A.positions rows, or a promise of them), also the mPerp position fees charged from where they can
+   *  matter to it (AN.positionFeeFrom): series.posCharges {rows, from}, null when none can or they could not be read
+   *  (AN.netLive takes both). */
+  AN.loadSeries = async function (sid, { start, resolution, signal, ttl, withVolume = true, charges = false, positions = null }) {
     const res = A.RES[resolution];
     const s = Math.max(0, Math.floor(start / res.ms) * res.ms - res.ms);
-    const [balance, upnl, volume, ch] = await Promise.all([
+    const soft = (e) => { if (e && e.name === 'AbortError') throw e; return null; };   // unreadable: that part keeps the settled basis
+    // read alongside the series: an account never charged a position fee asks nothing more
+    const pf = positions ? Promise.resolve(positions).then((ps) => { const from = AN.positionFeeFrom(ps, s); return from == null ? null : A.positionFeeCharges(sid, from, { signal, ttl }).then((rows) => (rows ? { rows, from } : null)); }).catch(soft) : Promise.resolve(null);
+    const [balance, upnl, volume, ch, pc] = await Promise.all([
       A.history('balance', sid, { start: s, resolution, signal, ttl }),
       A.history('unrealized-pnl', sid, { start: s, resolution, signal, ttl }),
       withVolume ? A.history('volume', sid, { start: s, resolution, signal, ttl }) : Promise.resolve([]),
-      charges ? A.fundingCharges(sid, s, { signal, ttl }).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; }) : Promise.resolve(null),
+      charges ? A.fundingCharges(sid, s, { signal, ttl }).catch(soft) : Promise.resolve(null),
+      pf,
     ]);
     const series = AN.buildSeries({ balance, upnl, volume });
-    series.charges = ch;
+    series.charges = ch; series.posCharges = pc;
     return series;
+  };
+
+  /** mPerps (the isolated markets: XAU, XAG, SPY, QQQ) charge a position fee. They opened on 16 Sep 2026: the archive
+   *  holds no position-fee charge before that. */
+  AN.POSITION_FEE_START = Date.UTC(2026, 8, 16);
+  /**
+   * Where the position-fee charges must be read from (A.positionFeeCharges) to net a series whose first bucket starts at
+   * s0 (AN.netOfUnsettled): the opening of the first position that was ever charged a fee and was still open at s0 or
+   * opened after it. No earlier charge can be owed at a bucket from s0 on (a position closed before s0 settled its fees
+   * at its close), and before that opening nothing is owed. Null when no position qualifies: nothing to read.
+   * positions: A.positions rows. A list cut short (positions.truncated) can lack an older one, so then, with one
+   * qualifying in it or a fee owed now (owedNow: Σ positionFeeUsd of the open positions), it is s0.
+   */
+  AN.positionFeeFrom = function (positions, s0, owedNow) {
+    let from = null;
+    for (const p of positions || []) {
+      if (!(U.num(p.positionFeeAccruedUsd) + U.num(p.positionFeeUsd) > 0)) continue;   // never charged one
+      if (U.num(p.size) === 0 && U.num(p.updatedAt) < s0) continue;                     // closed (and settled) before s0
+      const c = U.num(p.createdAt); if (from == null || c < from) from = c;
+    }
+    if (positions && positions.truncated && (from != null || U.num(owedNow) > 0.005)) from = s0;
+    return from == null ? null : Math.max(from, U.num(s0), AN.POSITION_FEE_START);
   };
 
   /** The archive's unrealized PnL leaves out funding charged to open positions but not yet settled into the balance
    *  (Meridian settles it when a position is increased, reduced or closed); the live figures subtract it. This puts every
    *  bucket on that basis: owed at a bucket's end = owed now − charges after it − funding settled after it. Adds
    *  fundingCharged per bucket (+ = received, like funding). Returns a new series marked netted, or the series as it is
-   *  when there are no charges. */
-  AN.netOfUnsettled = function (series, charges, unsettledNow, bucketMs) {
-    if (!charges || !series || !series.length) return series;
-    const ch = charges.map((c) => [U.num(c.time), U.num(c.fundingCharge)]).sort((a, b) => a[0] - b[0]);
+   *  when there are no charges.
+   *  pf: the mPerp position fees, which the live figures subtract the same way (positionFeeUsd): {charges
+   *  (A.positionFeeCharges rows), owed (Σ positionFeeUsd now), from (AN.positionFeeFrom)}, or null. Without them every
+   *  interval would end at a uPnL net of all the fees owed now and start at one net of none, booking fees charged days
+   *  before it began. Netted alike: owed at a bucket's end = owed now − charged after it + settled after it (the
+   *  buckets' posFee). A position fee is a cost to both sides, so nothing is ever owed to the account and the running
+   *  figure stops at 0 (the exchange's account, credited every fee, has them as negative posFee); a bucket that ends by
+   *  `from` owes nothing (no position charged one had opened). Adds posFeeCharged per bucket (+ = paid, like posFee:
+   *  what the bucket's PnL books, settled in it plus the change in what is owed) and marks the series posNetted. */
+  AN.netOfUnsettled = function (series, charges, unsettledNow, bucketMs, pf) {
+    const pfOk = !!(pf && pf.charges);
+    if ((!charges && !pfOk) || !series || !series.length) return series;
     const out = series.map((b) => Object.assign({}, b));
-    let owed = U.num(unsettledNow), i = ch.length - 1;
-    for (let k = out.length - 1; k >= 0; k--) {
-      const b = out[k];
-      while (i >= 0 && ch[i][0] >= b.t + bucketMs) owed -= ch[i--][1];   // charged after this bucket ended
-      b.upnl -= owed; b.equity -= owed;
-      let inside = 0; while (i >= 0 && ch[i][0] >= b.t) inside += ch[i--][1];
-      b.fundingCharged = -inside;
-      owed -= inside + b.funding;   // at the bucket's start: less what was charged in it and what settled in it (+ received)
+    if (charges) {
+      const ch = charges.map((c) => [U.num(c.time), U.num(c.fundingCharge)]).sort((a, b) => a[0] - b[0]);
+      let owed = U.num(unsettledNow), i = ch.length - 1;
+      for (let k = out.length - 1; k >= 0; k--) {
+        const b = out[k];
+        while (i >= 0 && ch[i][0] >= b.t + bucketMs) owed -= ch[i--][1];   // charged after this bucket ended
+        b.upnl -= owed; b.equity -= owed;
+        let inside = 0; while (i >= 0 && ch[i][0] >= b.t) inside += ch[i--][1];
+        b.fundingCharged = -inside;
+        owed -= inside + b.funding;   // at the bucket's start: less what was charged in it and what settled in it (+ received)
+      }
+      out.netted = true;
     }
-    out.netted = true;
+    if (pfOk) {
+      const ch = pf.charges.map((c) => [U.num(c.time), U.num(c.positionFeeCharge)]).sort((a, b) => a[0] - b[0]);
+      const from = U.num(pf.from), owedEnd = new Array(out.length);
+      let owed = U.num(pf.owed), i = ch.length - 1;
+      for (let k = out.length - 1; k >= 0; k--) {
+        const b = out[k];
+        while (i >= 0 && ch[i][0] >= b.t + bucketMs) owed -= ch[i--][1];   // charged after this bucket ended
+        owed = b.t + bucketMs <= from ? 0 : Math.max(0, owed);
+        b.upnl -= owed; b.equity -= owed; owedEnd[k] = owed;
+        let inside = 0; while (i >= 0 && ch[i][0] >= b.t) inside += ch[i--][1];
+        owed -= inside - (b.posFee || 0);   // at the bucket's start: less what was charged in it, plus what settled in it
+      }
+      const start0 = out[0].t <= from ? 0 : Math.max(0, owed);   // owed at the first bucket's start (nothing before `from`)
+      for (let k = 0; k < out.length; k++) out[k].posFeeCharged = (out[k].posFee || 0) + owedEnd[k] - (k ? owedEnd[k - 1] : start0);
+      out.posNetted = true;
+    }
     return out;
   };
+
+  /** A series from AN.loadSeries on the live figures' basis (AN.accountState's equity and net uPnL): every bucket net of
+   *  the funding and the mPerp position fees owed at its end, as far as their charges could be read. */
+  AN.netLive = (series, acct, bucketMs) => (!series ? series : AN.netOfUnsettled(series, series.charges, acct.unsettledFunding, bucketMs,
+    series.posCharges ? { charges: series.posCharges.rows, owed: acct.unsettledPositionFee, from: series.posCharges.from } : null));
 
   /**
    * Stats over buckets with t >= start. live: {upnl, equity} for the current moment (optional).
@@ -98,8 +159,10 @@
     const eqStart = prev ? prev.equity : 0;
     let realized = 0, fees = 0, posFees = 0, funding = 0, volume = 0, deposits = 0, withdrawals = 0;
     for (const b of inRange) { realized += b.pnl; fees += b.fee; posFees += b.posFee || 0; funding += b.funding; volume += b.volume; deposits += b.deposit; withdrawals += b.withdrawal; }
-    // funding charged inside the interval (+ = received), known once AN.netOfUnsettled has put the series on that basis
+    // funding charged inside the interval (+ = received), known once AN.netOfUnsettled has put the series on that basis;
+    // likewise the mPerp position fees charged inside it (+ = paid): those its PnL books, settled or still owed
     const fundingCharged = series.netted ? U.sum(inRange, (b) => b.fundingCharged || 0) : null;
+    const posFeesCharged = series.posNetted ? U.sum(inRange, (b) => b.posFeeCharged || 0) : null;
     const last = inRange.length ? inRange[inRange.length - 1] : prev;
     const upnlEnd = live && live.upnl != null ? live.upnl : last ? last.upnl : 0;
     const pnl = realized + (upnlEnd - upnlStart);
@@ -149,7 +212,7 @@
     }
     const capital = Math.max(eqStart, 0) + deposits;
     const roi = capital > 1 ? (pnl / capital) * 100 : null;
-    return { pnl, realized, fees, posFees, funding, fundingCharged, volume, deposits, withdrawals, upnlStart, upnlEnd, eqStart, ddUsd, ddPct, sharpe, roi, buckets: inRange.length, curve };
+    return { pnl, realized, fees, posFees, posFeesCharged, funding, fundingCharged, volume, deposits, withdrawals, upnlStart, upnlEnd, eqStart, ddUsd, ddPct, sharpe, roi, buckets: inRange.length, curve };
   };
 
   /** A flow-adjusted cumulative PnL curve (intervalStats' `curve`) as at most `max` [unix seconds, USD] pairs from 0,
@@ -201,6 +264,10 @@
     };
   };
 
+  /** Meridian's margin ratio: maintenance margin ÷ equity, the pool (or account) liquidated at 1. 0 with no margin held,
+   *  1 at an equity of 0 or less, as the app computes it (it shows "100%+" from 1 on). */
+  AN.marginRatio = (mm, equity) => (!(mm > 0) ? 0 : !(equity > 0) ? 1 : mm / equity);
+
   /**
    * Live margin state from balances + open positions + prices. Mirrors the app's pool maths:
    * pool equity = balance + Σ(uPnL − unapplied funding − unapplied position fee);
@@ -210,7 +277,9 @@
     const pools = {};
     for (const b of balances) {
       const key = String(b.tokenAddress).toLowerCase();
-      pools[key] = { key, name: b.tokenName, balance: U.num(b.amount), available: U.num(b.available), used: U.num(b.totalUsed), upnl: 0, mm: 0, notional: 0, positions: [] };
+      // available as the app reads it: never below 0. A pool whose losses exceed its free margin reports a negative figure,
+      // and summed raw it took that from the other pools' (−$2,175.58 isolated plus $75.96 cross showed −$2,099.62)
+      pools[key] = { key, name: b.tokenName, balance: U.num(b.amount), available: Math.max(0, U.num(b.available)), used: U.num(b.totalUsed), upnl: 0, mm: 0, notional: 0, positions: [] };
     }
     const rows = [];
     for (const p of positions) {
@@ -234,7 +303,7 @@
     const poolList = Object.values(pools);
     for (const pool of poolList) {
       pool.equity = pool.balance + pool.upnl;
-      pool.ratio = pool.mm > 0 ? pool.equity / pool.mm : null;
+      pool.marginRatio = pool.mm > 0 ? AN.marginRatio(pool.mm, pool.equity) : null;   // null: no position, nothing held
       pool.leverage = pool.equity > 0 ? pool.notional / pool.equity : null;
       for (const r of pool.positions) {
         const eqFor = pool.equity - pool.mm + r.mm;
@@ -251,8 +320,13 @@
       }
       equity += pool.equity; balance += pool.balance; upnl += pool.upnl; notional += pool.notional; used += pool.used; available += pool.available; mmTotal += pool.mm;
     }
-    // unsettledFunding: the open positions' funding not yet in the balance (fundingUsd, + = paid), for AN.netOfUnsettled
-    return { equity, balance, upnl, notional, used, available, unsettledFunding: U.sum(rows, (r) => r.funding), leverage: equity > 0 ? notional / equity : null, marginRatio: mmTotal > 0 ? equity / mmTotal : null, pools: poolList.sort((a, b) => b.equity - a.equity), positions: rows.sort((a, b) => b.notional - a.notional) };
+    // unsettledFunding / unsettledPositionFee: the open positions' funding and mPerp position fees not yet in the balance
+    // (fundingUsd, positionFeeUsd; + = paid), for AN.netOfUnsettled. leverage as Meridian's app ("Trade Account
+    // Leverage"): notional ÷ the pools' balance, not equity (its tooltip says equity; its code divides by the balance);
+    // leverageEquity the notional ÷ equity. marginRatio: AN.marginRatio of the whole account, as the app's trade panel
+    return { equity, balance, upnl, notional, used, available, mm: mmTotal, unsettledFunding: U.sum(rows, (r) => r.funding), unsettledPositionFee: U.sum(rows, (r) => r.positionFee),
+      leverage: balance > 0 ? notional / balance : null, leverageEquity: equity > 0 ? notional / equity : null, marginRatio: mmTotal > 0 ? AN.marginRatio(mmTotal, equity) : null,
+      pools: poolList.sort((a, b) => b.equity - a.equity), positions: rows.sort((a, b) => b.notional - a.notional) };
   };
 
   /**
@@ -283,13 +357,20 @@
       AN.loadSeries(sid, Object.assign({ start: s30, resolution: 'hour8' }, so)),
       A.fundingCharges(sid, sAll - U.DAY, so).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; }),   // unreadable: the rows keep the settled basis
     ]);
-    const net = (s, ms) => AN.netOfUnsettled(s, charges, acct.unsettledFunding, ms);
+    // the mPerp position fees charged, read from where they can matter to the 30-day series on (AN.positionFeeFrom: none
+    // for an account never charged one). All-time days before that keep the settled basis: a fee charged then and still
+    // owed is booked on that day, and the all-time figure is the same either way
+    const pfFrom = AN.positionFeeFrom(positions, h8.length ? h8[0].t : s30, acct.unsettledPositionFee);
+    const pfRows = pfFrom == null ? null : await A.positionFeeCharges(sid, pfFrom, so).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; });
+    const pf = pfRows ? { charges: pfRows, owed: acct.unsettledPositionFee, from: pfFrom } : null;
+    const net = (s, ms) => AN.netOfUnsettled(s, charges, acct.unsettledFunding, ms, pf);
     const dailyN = net(daily, U.DAY);
     const ps = AN.positionStats(positions, ref);
     row.winRate = ps.winRate; row.positionsCount = ps.count; row.style = ps.style; row.closedCount = ps.closed.length; row.liquidated = ps.liquidated;
     const live = { upnl: acct.upnl, equity: acct.equity };
-    // funding as charged when the charges were readable (else as settled); fees are trading fees, posFees mPerp position fees
-    const pick = (s) => ({ pnl: s.pnl, volume: s.volume, roi: s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, posFees: s.posFees, funding: s.fundingCharged != null ? s.fundingCharged : s.funding });
+    // funding and posFees (mPerp position fees) as charged when the charges were readable, else as settled, so that
+    // pnl = realized − fees − posFees + funding + the change in price uPnL; fees are trading fees
+    const pick = (s) => ({ pnl: s.pnl, volume: s.volume, roi: s.roi, sharpe: s.sharpe, ddPct: s.ddPct, fees: s.fees, posFees: s.posFeesCharged != null ? s.posFeesCharged : s.posFees, funding: s.fundingCharged != null ? s.fundingCharged : s.funding });
     row.stats['24h'] = pick(AN.intervalStats(net(hourly, U.HOUR), s24, live, U.HOUR));
     row.stats['7d'] = pick(AN.intervalStats(net(h2, 2 * U.HOUR), s7, live, 2 * U.HOUR));
     row.stats['30d'] = pick(AN.intervalStats(net(h8, 8 * U.HOUR), s30, live, 8 * U.HOUR));
@@ -595,6 +676,15 @@
     }
     return rows;
   };
+
+  // ---------- the order book ----------
+  /** The book's centre as Meridian's app shows it: the mid price, (best ask + best bid) ÷ 2, and the spread as a percent
+   *  of it. Nulls while a side is empty. */
+  AN.bookMid = (bestAsk, bestBid) => (bestAsk > 0 && bestBid > 0 ? { mid: (bestAsk + bestBid) / 2, spreadPct: ((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 100 } : { mid: null, spreadPct: null });
+  /** One side's levels, [[price, size]] from the touch outwards, with Meridian's Total: the size from the touch out to the
+   *  level (c, in the base asset). usd: the same levels' value, each at its own price (a running size × the level's
+   *  price would turn a dust bid far from the touch into a few dollars). [{p, q, c, usd}] */
+  AN.bookDepth = (levels) => { let c = 0, usd = 0; return (levels || []).map(([p, q]) => { c += q; usd += q * p; return { p, q, c, usd }; }); };
 
   // ---------- the order book, order by order ----------
   // The public book (L2Book, market-liquidity) has every price level but not who rests there. Every subaccount's

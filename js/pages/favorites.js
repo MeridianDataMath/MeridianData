@@ -48,7 +48,8 @@
             { key: 'pos', label: 'Open positions', num: true, render: (r) => (r.error ? '—' : String(r.st.positions.length)) },
             { key: 'notional', label: 'Notional', num: true, render: (r) => (r.error ? '—' : UI.usd(r.st.notional, { compact: true })) },
             { key: 'vol', label: 'Volume (all)', num: true, render: (r) => (r.vol == null ? '—' : UI.usd(r.vol, { compact: true })) },
-            { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? U.pnlEl(r.lb.stats['30d'].pnl) : h('span.dim', '—')) },
+            // a row the snapshot carried over from an earlier build is marked "older", as on the Leaderboard
+            { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? h('span', U.pnlEl(r.lb.stats['30d'].pnl), r.lb.carried && LB ? [' ', LB.carriedChip(r.lb)] : null) : h('span.dim', '—')) },
             { key: 'added', label: 'Added', render: (r) => h('span.dim', U.fmtAgo(r.f.addedAt)) },
             { key: 'rm', label: '', render: (r) => h('button.btn.sm.icon.ghost', { title: 'Remove', onclick: () => U.favorites.remove(r.f.subaccountId) }, U.icon('trash')) },
           ],

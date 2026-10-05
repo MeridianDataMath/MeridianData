@@ -111,7 +111,7 @@
         // under a week old, perWeek is the plain count, not a weekly rate
         ['Activity', h('span', (c.lastAt ? 'last trade ' + U.fmtAgo(c.lastAt) : '—') + (c.tenureD != null ? (c.tenureD < 1 ? ' · less than a day on the exchange' : ` · ${U.fmtNum(c.tenureD, 0)} day${Math.round(c.tenureD) === 1 ? '' : 's'} on the exchange`) : '') + (c.perWeek != null ? (c.tenureD < 7 ? ` · ${c.closed} closed in its first ${U.fmtDuration(Date.now() - c.firstAt)}` : ` · ${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} closed / week`) : ''))]])));
     UI.modal({ wide: true,
-      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), MD.bellBtn({ sid: r.sid, address: r.account, name: r.name }), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
+      title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), MD.router.pages.leaderboard ? MD.router.pages.leaderboard.carriedChip(r) : null, MD.bellBtn({ sid: r.sid, address: r.account, name: r.name }), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
         h('div.dim.small', `Copyability ${sc.total}. Before caps: 35% track record (${sc.track}) + 45% copy friction (${sc.friction}) + 20% activity (${sc.activity}) = ${sc.raw}` + (sc.losing ? ', then scaled down by 40% and capped at 45 while the account is not profitable' : sc.raw !== sc.total ? `, capped at ${sc.total} (reasons below)` : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
@@ -173,7 +173,7 @@
             sort: state.sort, onSort,
             cols: [
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.total >= 70 ? 'top' : '' }, String(i)); } },
-              { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)) },
+              { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account), LB ? LB.carriedChip(x.r) : null) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: '0–100: track record, copy friction and activity; click a row for the breakdown', render: (x) => scorePill(x.sc, x.c) },
               { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their most recent fills (up to 400) and slippage at the leader\'s median position size, capped at $2K', render: (x) => (x.c && x.c.leaderBps != null && x.c.leaderBps <= 0 ? h('span.dim', { title: 'The leader\'s positions do not make money after fees and funding: there is no edge to keep' }, '—') : x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg'), title: `per position: leader ${U.fmtNum(x.c.leaderBps, 1)} bps, copier ${U.fmtNum(x.c.copyBps, 1)} bps` }, x.c.edgeLeft > 100 ? '>100%' : U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'pnl', label: 'All-time PnL', num: true, sortVal: 1, render: (x) => U.pnlEl(x.r.stats.all.pnl, { dp: 0 }) },
@@ -191,7 +191,8 @@
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },
           }));
         const copyable = scored.filter((x) => x.sc && x.sc.total >= 70).length, nScored = scored.filter((x) => x.sc).length;
-        U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot ${U.fmtAgo(data.builtAt)}`, UI.staleNote(data.builtAt, 'the publishing job may be down'));
+        // as the Leaderboard says it: accounts missing from the snapshot, rows carried over from an earlier build, staleness
+        U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot ${U.fmtAgo(data.builtAt)}`, LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));
       }
       render();
       // keep the page current with the published snapshot

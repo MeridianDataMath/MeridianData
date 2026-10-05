@@ -13,6 +13,8 @@
  *   node scripts/build-snapshot.mjs --perps         # leaderboard only (what GitHub Actions runs: the Predict API
  *                                                   #   returns 403 to datacenter IPs, so that snapshot is built on a PC)
  *   node scripts/build-snapshot.mjs --predict --out <dir>
+ *
+ * The pure helpers below are exported for tests/snapshot-build.test.mjs; importing this file builds and writes nothing.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,9 +24,11 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const flag = (n) => args.includes('--' + n);
+// run as a script (by this file's name, so a different drive-letter case or a linked folder still builds), or imported
+const asScript = /(^|[\\/])build-snapshot\.mjs$/i.test(process.argv[1] || '');
 const outDir = args.includes('--out') ? path.resolve(args[args.indexOf('--out') + 1]) : path.join(root, 'data');
-const doPredict = flag('predict') || !flag('perps');
-const doPerps = flag('perps') || !flag('predict');
+const doPredict = asScript && (flag('predict') || !flag('perps'));
+const doPerps = asScript && (flag('perps') || !flag('predict'));
 
 // minimal browser shims for the classic-script modules
 globalThis.window = globalThis;
@@ -35,7 +39,7 @@ for (const f of ['js/util.js', 'js/api.js', 'js/analytics.js', 'js/predict/api.j
 const { MD } = globalThis;
 const A = MD.api, AN = MD.analytics, U = MD.util, P = MD.predict;
 const KC = MD.cards.make({ U, P });   // the wallet curve the pages draw (curveFromPredictions), for the truncated wallet files
-fs.mkdirSync(outDir, { recursive: true });
+if (asScript) fs.mkdirSync(outDir, { recursive: true });
 
 // Wallet addresses and condition ids come from the Predict API and become file names (bettors/<address>.json,
 // questions/<id>.json): only well-formed ones do, so a malformed or hostile value can never point outside the output
@@ -304,6 +308,90 @@ async function attachRedemptions(norms, trades) {
   return rd;
 }
 
+// ---------------------------------------------------------------- claimable winnings (the app's Claimable Payout)
+// The app's Claim card sums positions(holder, claimable: true): the position tokens a wallet still holds on a pick
+// configuration whose verdict pays their side, by balance (a claim burns the whole balance). It reads the token, not
+// prediction.settled: a prediction can be settled while its winner still holds the tokens (settling and redeeming are
+// separate calls) and unsettled after the winner's tokens were sold or redeemed through another prediction on the same
+// picks, so the flag alone misstates what is left to claim in both directions. P.aggregate takes the balances (a
+// wallet's win is unclaimed while it still holds the winning token), each wallet file gets claim: [{pc, side, bal}]
+// (empty when nothing is claimable) and predict.json agg.claimAt, the read's time; a failed read leaves all of it out, so
+// the pages keep their older rule. The API answers the query only with a holder ("Claimable positions require holder"),
+// caps one field at 3 aliases a request and refuses batched requests, so one request asks about three wallets, and only
+// wallets that can hold a paying token: the winner of a decided prediction (the bettor of a win, the maker of a loss)
+// and a buyer on the secondary market once the pick configuration is decided. A wallet whose
+// last answer was empty and that has won or bought nothing since is not asked again until that answer is CLAIM_RECHECK_MS
+// old (CLAIM_REFRESH of those a run, the oldest first; a token sent to it outside the market shows up then): a run asks
+// about the wallets with winnings still to claim, the new winners and a slice of the rest. Kept under 'claimRead' in the
+// price cache: {w: {address: {at, k, n}}}, k the wallet's decided wins and buys when asked, n its claimable positions.
+export const CLAIM_RECHECK_MS = 12 * 3600000;
+export const CLAIM_REFRESH = 30;
+const CLAIM_MAX_REQUESTS = 400;   // ~160 on a first run (no cache) with 480 wallets to ask; past this the read fails
+/** address → how many decided predictions it won (either side; a void one pays nothing in the app) and decided pick
+ *  configurations it bought on: the count changes whenever it may have come to hold a paying token since. */
+export function claimCandidates(norms, trades) {
+  const k = dict();
+  for (const n of norms) { if (!n.decided || n.nd) continue; const w = n.won ? n.predictor : n.counterparty; if (isAddr(w)) k[w] = (k[w] || 0) + 1; }
+  for (const t of trades || []) if (t.pc && (t.vP != null || t.vC != null) && isAddr(t.buyer)) k[t.buyer] = (k[t.buyer] || 0) + 1;
+  return k;
+}
+/** Which candidates to ask this run (seen: the cache's {address: {at, k, n}}): every one never asked, holding something
+ *  claimable at its last answer, or with a new win or buy since; then up to `refresh` of the others whose answer is
+ *  older than `recheckMs`, the oldest first. */
+export function claimPlan(cand, seen, now, { recheckMs = CLAIM_RECHECK_MS, refresh = CLAIM_REFRESH } = {}) {
+  const must = [], old = [];
+  for (const a of Object.keys(cand)) { const s = seen[a]; if (!s || !(s.n === 0) || s.k !== cand[a]) must.push(a); else if (now - s.at > recheckMs) old.push(a); }
+  old.sort((a, b) => seen[a].at - seen[b].at);
+  return must.concat(old.slice(0, refresh));
+}
+/** One page of positions(holder, claimable: true) → [{pc, side, bal}] as the app counts them: a row with its
+ *  prediction, a balance above zero, on the side the verdict pays (NON_DECISIVE pays nothing in the app); bal in USDe
+ *  (a winning token pays 1). */
+export function claimEntries(nodes) {
+  const out = [];
+  for (const p of nodes || []) {
+    if (!p || !p.prediction || !p.prediction.predictionId) continue;
+    let wei; try { wei = BigInt(p.balance); } catch (_) { continue; }
+    const side = p.side === 'PREDICTOR' ? 'P' : p.side === 'COUNTERPARTY' ? 'C' : null, res = p.pickConfig && p.pickConfig.result;
+    if (!(wei > 0n) || !(side === 'P' ? res === 'PREDICTOR_WINS' : side === 'C' && res === 'COUNTERPARTY_WINS')) continue;
+    out.push({ pc: p.pickConfigId || p.pickConfig.pickConfigId, side, bal: Math.round(P.usd(p.balance) * 1e6) / 1e6 });
+  }
+  return out;
+}
+const claimQuery = (k) => `query Claimable(${Array.from({ length: k }, (_, i) => `$h${i}: Address!, $a${i}: String`).join(', ')}) { ${Array.from({ length: k }, (_, i) => `h${i}: positions(first: ${P.PAGE}, after: $a${i}, filter: { holder: $h${i}, chainId: ${P.CHAIN}, claimable: true }, orderBy: { field: CREATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { side balance pickConfigId prediction { predictionId } pickConfig { result } } }`).join(' ')} }`;
+/** → {at, of: {address: [{pc, side, bal}]}} for every candidate (an empty list for one not asked: nothing claimable at
+ *  its last answer and nothing new since); throws when a request fails, after keeping the answers already complete. */
+async function attachClaims(norms, trades) {
+  const at = Date.now();
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const seen = Object.assign(dict(), cache.claimRead && cache.claimRead.w);
+  const cand = claimCandidates(norms, trades);
+  const ask = claimPlan(cand, seen, at);
+  // three wallets a request; a wallet with more than a page goes back in the queue with its cursor
+  const of = dict(), queue = ask.map((a) => [a, null]); let requests = 0, failure = null;
+  while (queue.length && !failure) {
+    if (requests >= CLAIM_MAX_REQUESTS) { failure = new Error(`over ${CLAIM_MAX_REQUESTS} requests`); break; }
+    const batch = queue.splice(0, 3); const vars = {};
+    batch.forEach(([a, after], i) => { vars['h' + i] = a; vars['a' + i] = after; });
+    let d = null; requests++;
+    try { d = await P.gql(claimQuery(batch.length), vars); } catch (e) { failure = e; break; }
+    batch.forEach(([a], i) => {
+      const pg = d && d['h' + i]; if (!pg || !Array.isArray(pg.nodes)) { failure = failure || new Error('no answer for ' + a); return; }
+      (of[a] || (of[a] = [])).push(...claimEntries(pg.nodes));
+      if (pg.pageInfo && pg.pageInfo.hasNextPage && pg.pageInfo.endCursor) queue.push([a, pg.pageInfo.endCursor]);
+      else seen[a] = { at, k: cand[a], n: of[a].length };   // complete: remembered
+    });
+  }
+  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.claimRead = { w: seen }; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
+  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ claimRead: { w: seen } })); }
+  if (failure) throw new Error(`${failure.message} (${requests} requests, ${ask.length} wallets to ask)`);
+  for (const a of Object.keys(cand)) if (!of[a]) of[a] = [];
+  const holders = Object.values(of).filter((l) => l.length).length, total = Object.values(of).reduce((s, l) => s + l.reduce((x, e) => x + e.bal, 0), 0);
+  console.log(`  predict: claimable winnings ${total.toFixed(2)} USDe in ${holders} wallets (asked ${ask.length} of ${Object.keys(cand).length} that can hold a paying token, ${requests} requests)`);
+  return { at, of };
+}
+
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
   const t0 = Date.now();
@@ -338,7 +426,13 @@ async function buildPredict() {
   // when each trading wallet redeemed the tokens it still held at a verdict (rd in its file; the tax center's claim dates)
   let rdOf = dict();
   try { rdOf = await attachRedemptions(norms, trades); } catch (e) { console.warn('predict: own redemptions failed, the tax center keeps the latest claim for now:', e.message); }
-  const agg = P.aggregate(norms, { tapeSize: 25, trades });   // the Overview's tape shows 25
+  // the app's Claimable Payout per wallet (claim in its file, agg.claimAt): with these balances P.aggregate counts a win
+  // as unclaimed while its winner still holds the winning tokens; a failed read leaves all of it out (the settled flag)
+  let claims = null;
+  try { claims = await attachClaims(norms, trades); }
+  catch (e) { console.warn('predict: claimable positions failed, the files go out without them:', e.message); }
+  const agg = P.aggregate(norms, { tapeSize: 25, trades, claims: claims ? claims.of : null });   // the Overview's tape shows 25
+  if (claims) agg.claimAt = claims.at;
   if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
@@ -447,9 +541,11 @@ async function buildPredict() {
       try { const myPcs = new Set((tradesOf[addr] || []).map((t) => t.pc).filter(Boolean)); rows = P.taxRows(list, addr, (n) => !!(n.pcTraded && myPcs.has(n.pc))); }
       catch (e) { rows = undefined; console.warn('  predict: tax rows failed for', addr, e.message); }
     }
+    // what it can claim now, as the app's Claim card counts it (attachClaims; [] for nothing, left out when the read failed)
+    const claim = claims ? claims.of[addr] || [] : undefined;
     // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do, so
     // its prediction opened from the maker's page shows the bettor's side as it stood
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined }));
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id
@@ -476,38 +572,91 @@ if (doPredict) {
     if (!doPerps) process.exit(1);
   }
 }
-if (!doPerps) process.exit(0);
+if (asScript && !doPerps) process.exit(0);
 
 // ------------------------------------------------------------------- Perps
-const started = Date.now();
-const ctx = { signal: new AbortController().signal };
-const ref = await A.ref(ctx);
-const subs = await A.allSubaccounts({ signal: ctx.signal, ttl: 0 });
-const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
-// copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
-// the price drift after each account's fills, shared across accounts
-ctx.copy = await AN.copyContext(ref, ctx);
-console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
+// An account whose row fails twice (or is not reached in the time budget) keeps its row from the newest earlier snapshot
+// that has one, so the file lists every account and the pages rank the whole exchange: the row is marked carried with
+// the time it was built (a row carried again keeps that time), and the pages say how many rows are older than the
+// snapshot and how old. A row older than CARRY_MAX_MS is not carried (the account counts as missing): a week-old PnL
+// ranked among current ones misleads more than a gap the pages point out.
+export const CARRY_MAX_MS = 7 * 86400000;
+/** The rows to publish, in the account list's order: each account's row from this run (built: sid → row), else its
+ *  newest row in the earlier snapshots `prevs` (any of them null) no older than CARRY_MAX_MS, else none.
+ *  → {rows, carried, missing} */
+export function mergeRows(subs, built, prevs, now = Date.now()) {
+  const old = new Map();
+  for (const s of prevs || []) {
+    if (!s || !Array.isArray(s.rows)) continue;
+    for (const r of s.rows) {
+      if (!r || typeof r.sid !== 'string') continue;
+      const at = r.carried && r.builtAt ? r.builtAt : s.builtAt;
+      const o = old.get(r.sid);
+      if (at > 0 && now - at <= CARRY_MAX_MS && (!o || at > o.at)) old.set(r.sid, { r, at });
+    }
+  }
+  const rows = []; let carried = 0, missing = 0;
+  for (const sa of subs) {
+    const r = built.get(sa.id), o = r ? null : old.get(sa.id);
+    if (r) rows.push(r);
+    else if (o) { rows.push(Object.assign({}, o.r, { carried: true, builtAt: o.at })); carried++; }
+    else missing++;
+  }
+  return { rows, carried, missing };
+}
+/** The snapshots this build replaces: the one in the output directory (a local run's) and the published one (an
+ *  Action's checkout has no data/). Either can be absent; nothing here fails the build. */
+async function previousSnapshots() {
+  const out = [];
+  try { out.push(JSON.parse(fs.readFileSync(path.join(outDir, 'leaderboard.json'), 'utf8'))); } catch (_) {}
+  try {
+    const r = await fetch(A.SITE_URL + '/data/leaderboard.json', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+    if (r.ok) out.push(await r.json()); else console.warn(`published leaderboard.json not read: HTTP ${r.status}`);
+  } catch (e) { console.warn('published leaderboard.json not read:', e.message); }
+  return out;
+}
+async function buildPerps() {
+  const started = Date.now();
+  const ctx = { signal: new AbortController().signal };
+  const ref = await A.ref(ctx);
+  const subs = await A.allSubaccounts({ signal: ctx.signal, ttl: 0 });
+  const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
+  // copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
+  // the price drift after each account's fills, shared across accounts
+  ctx.copy = await AN.copyContext(ref, ctx);
+  console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
 
-// A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
-// built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
-// with fills and candles more, and an older one more again, since its funding charges are read three days at a time, one
-// request after another (five to seven seconds at four to five weeks old). So past several hundred accounts the build
-// would outlast the job. Accounts not reached are left out and the snapshot is marked partial rather than the whole deploy
-// failing.
-const budgetMs = (args.includes('--budget') ? Number(args[args.indexOf('--budget') + 1]) : 540) * 1000;
-let skipped = 0;
-const results = await U.pLimit(
-  subs.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
-  4,
-  (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
-);
-const rows = []; let failed = 0;
-results.forEach((r, i) => { if (r.ok) { if (r.value) rows.push(r.value); } else { failed++; console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
-if (skipped) console.warn(`time budget of ${budgetMs / 1000}s reached: ${skipped} of ${subs.length} accounts not built this run`);
+  // A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
+  // built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
+  // with fills and candles more, and an older one more again, since its funding charges are read three days at a time, one
+  // request after another (five to seven seconds at four to five weeks old). So past several hundred accounts the build
+  // would outlast the job. Accounts not reached keep their earlier row (mergeRows) and the snapshot is marked partial
+  // rather than the whole deploy failing.
+  const budgetMs = (args.includes('--budget') ? Number(args[args.indexOf('--budget') + 1]) : 540) * 1000;
+  let skipped = 0;
+  const results = await U.pLimit(
+    subs.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
+    4,
+    (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
+  );
+  const built = new Map(), failedAt = [];
+  results.forEach((r, i) => { if (r.ok) { if (r.value) built.set(subs[i].id, r.value); } else { failedAt.push(i); console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
+  if (skipped) console.warn(`time budget of ${budgetMs / 1000}s reached: ${skipped} of ${subs.length} accounts not built this run`);
+  // a failed row is built once more, after a pause and two at a time (one of its many requests timed out or was refused
+  // under load), while the budget lasts
+  if (failedAt.length) {
+    await sleep(3000);
+    const again = await U.pLimit(failedAt.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 2);
+    again.forEach((r, j) => { const sa = subs[failedAt[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else console.warn(`row failed again ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); });
+  }
+  const failed = failedAt.filter((i) => !built.has(subs[i].id)).length;
 
-const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, skipped, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
-fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
-const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
-console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed, ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
-if (!rows.length) process.exit(1);
+  const { rows, carried, missing } = mergeRows(subs, built, built.size < subs.length ? await previousSnapshots() : []);
+  // partial: not every account was built by this run (carried: rows from an earlier snapshot; missing: accounts without a row)
+  const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
+  fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
+  const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
+  console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  if (!built.size) process.exit(1);   // nothing built this run: the step fails (the file still carries the earlier rows)
+}
+if (doPerps) await buildPerps();

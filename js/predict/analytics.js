@@ -72,7 +72,9 @@
   /** Compact row for the tape: the fields the Overview's tape has always read, plus every leg (k, as in P.slim, with its
    *  question id), the transaction, the claim time and the traded pick configuration, so a row can be opened (P.full). */
   P.compact = (n) => ({ id: n.id, t: n.t, predictor: n.predictor, counterparty: n.counterparty, stake: r4(n.stake), cp: r4(n.cp), odds: n.odds == null ? null : r4(n.odds), fair: n.fair == null ? null : r4(n.fair), legs: n.legs, q: n.picks[0] ? n.picks[0].q : '', yes: n.picks[0] ? n.picks[0].yes : null, cat: n.cat, settled: n.settled, decided: n.decided, unclaimed: n.unclaimed, nd: n.nd, won: n.won, pnl: r4(n.pnl),
-    k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, da: n.decidedAt || undefined, pc: n.pcTraded ? n.pc : undefined, stx: n.stx || undefined });
+    k: slimLegs(n, true), tx: n.tx || undefined, sa: n.settledAt || undefined, da: n.decidedAt || undefined, pc: n.pcTraded ? n.pc : undefined, stx: n.stx || undefined, tc: tcOf(n) });
+  // tc: the winner still holds its winning tokens (1) or not (0), where the snapshot read the balances (P.aggregate's claims)
+  const tcOf = (n) => (n.toClaim == null ? undefined : n.toClaim ? 1 : 0);
   /** A big win: the bettor won and its net PnL (payout − stake; for a bettor who sold its tokens, its own result with the
    *  sale) is above this many dollars (the Overview lists them). */
   P.BIG_WIN = 500;
@@ -96,10 +98,93 @@
    *  not sold on the secondary market): a loss is simply lost, whether or not the winner has claimed. */
   P.resultFor = (n, asMaker, held = 1) => {
     if (!n.decided) return { label: 'open', tone: 'accent' };
-    const won = asMaker ? n.lost : n.won; const mineToClaim = n.unclaimed && held > 1e-6;
+    // where the winner's token balance is known (n.toClaim, P.applyClaims): still held is still to claim, as Meridian's
+    // app counts it, whatever the API's settled flag says; elsewhere that flag and the share not sold
+    const won = asMaker ? n.lost : n.won; const left = n.toClaim != null ? n.toClaim : n.unclaimed;
+    const mineToClaim = n.toClaim != null && won ? n.toClaim : n.unclaimed && held > 1e-6;
     if (n.nd) return { label: mineToClaim ? 'void · refund unclaimed' : 'void', tone: 'amber' };
     if (won) return { label: mineToClaim ? 'won · unclaimed' : 'won', tone: 'green' };
-    return { label: 'lost', tone: 'red', title: n.unclaimed ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : null };
+    return { label: 'lost', tone: 'red', title: left ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : null };
+  };
+
+  /** A ledger entry's share of the side's tokens the verdict still settles (P.ledger's atRisk: not sold, not matched
+   *  with the other side), what a balance on Meridian is; an entry from before atRisk, its held share. */
+  const riskOf = (bp) => (bp.atRisk != null ? bp.atRisk : bp.held);
+  P.riskOf = riskOf;
+  /** The position a prediction's tokens belong to, as Meridian counts positions: its pick configuration and a side ('P'
+   *  the bettor's, 'C' the maker's); every prediction on the same picks and side shares it. A record that carries no pick
+   *  configuration id (an older wallet file kept it only where its tokens were traded) goes by its picks, which are
+   *  what a pick configuration is. */
+  const lc = (s) => String(s || '').toLowerCase();
+  const pcOf = (n) => (n.pc || n.pk ? lc(n.pc || n.pk) : null);
+  P.posKey = (n, side) => (pcOf(n) || 'k:' + n.picks.map((k) => (k.id || 'q:' + k.q) + (k.yes ? '+' : '-')).sort().join(',')) + '|' + side;
+  /** Open position rows grouped as Meridian's app shows them (its Open Positions: one per holder, pick configuration and
+   *  side; Stake = the collateral summed, Payout = the pots summed, ×payout ÷ stake): rows [{key (P.posKey), id, stake,
+   *  payout, t, …}] → one row per key, in the order of each key's first row, with n (its bets), ids, stake and payout
+   *  summed, odds = stake ÷ payout, t the earliest bet and id its largest bet (the one a click opens). */
+  P.groupPositions = function (rows) {
+    const by = new Map();
+    for (const r of rows || []) {
+      const g = by.get(r.key);
+      if (!g) { by.set(r.key, Object.assign({}, r, { n: 1, ids: [r.id], top: r })); continue; }
+      g.n++; g.ids.push(r.id); g.stake += r.stake; g.payout += r.payout; if (r.t < g.t) g.t = r.t;
+      if (r.stake > g.top.stake) g.top = r;
+    }
+    return Array.from(by.values()).map((g) => { g.id = g.top.id; g.odds = g.payout > 0 ? g.stake / g.payout : null; delete g.top; return g; });
+  };
+
+  /** Claimable positions as [{pc, side 'P' | 'C', bal}] (USDe: a winning token pays 1), from the API's positions(holder,
+   *  claimable: true) rows or a wallet file's claim entries ({pc, side, bal}). Like Meridian's Claim card, only a token
+   *  on its pick configuration's winning side with a balance counts (a 50/50 pays nothing there). */
+  P.claimRows = (list) => (list || []).map((x) => {
+    if (x.pickConfig || x.balance != null) {
+      const side = x.side === 'COUNTERPARTY' ? 'C' : x.side === 'PREDICTOR' ? 'P' : null; const res = x.pickConfig && x.pickConfig.result;
+      const wins = res ? (side === 'P' ? res === 'PREDICTOR_WINS' : res === 'COUNTERPARTY_WINS') : true;
+      return { pc: lc(x.pickConfig && x.pickConfig.pickConfigId), side, bal: wins ? P.usd(x.balance) : 0 };
+    }
+    return { pc: lc(x.pc), side: x.side === 'C' ? 'C' : x.side === 'P' ? 'P' : null, bal: Number(x.bal) || 0 };
+  }).filter((c) => c.pc && c.side && c.bal > 1e-9);
+  /** The side that collects a decided prediction ('P' its bettor, 'C' its maker), null while open or void. */
+  const winnerSide = (n) => (n.decided && !n.nd ? (n.won ? 'P' : n.lost ? 'C' : null) : null);
+  /**
+   * A wallet's winnings to claim as Meridian's app counts them (its Predict portfolio's Claimable Payout): the balance of
+   * every winning position token it still holds. A claim redeems the whole balance, so a decided prediction the wallet won
+   * is still to claim exactly while its token is held, and n.toClaim says so on each of them. The API's settled flag is
+   * not that: anyone's settlement sets it (0x67b3…: settled, 1,055.18 winning tokens still held, $1,055.18 to claim in the
+   * app) and a twin paid by a claim on its token keeps it unset (0x44db…: $0 in the app, $38.87 by the flag).
+   * claim: P.claimRows' rows; o.self: the wallet's self-matched predictions (left out of every site figure: their pot,
+   * the wallet's on both sides, is set apart from a balance it shares); o.pcs: pick configurations the wallet traded tokens
+   * on; o.dropUnknown: a balance on none of the wallet's predictions or trades is set apart (a snapshot leaves out the
+   * wallet's pre-launch predictions). Returns {total (the app's figure), payout (the site's: total − self − other),
+   * positions (balances in payout), wonP / wonC (predictions to claim as the bettor / the maker), self, selfN, other, otherN}.
+   */
+  P.applyClaims = function (norms, addr, claim, o = {}) {
+    addr = lc(addr);
+    const rows = P.claimRows(claim); const left = new Map();
+    for (const c of rows) { const k = c.pc + '|' + c.side; left.set(k, (left.get(k) || 0) + c.bal); }
+    const own = new Set(); let wonP = 0, wonC = 0;
+    for (const n of norms || []) {
+      const pc = pcOf(n); if (!pc) continue;
+      if (n.predictor === addr) own.add(pc + '|P'); if (n.counterparty === addr) own.add(pc + '|C');
+      const s = winnerSide(n); if (!s || (s === 'P' ? n.predictor : n.counterparty) !== addr) continue;
+      n.toClaim = (left.get(pc + '|' + s) || 0) > 1e-9;
+      if (n.toClaim) { if (s === 'P') wonP++; else wonC++; }
+    }
+    let self = 0, selfN = 0;
+    for (const n of o.self || []) {
+      const s = winnerSide(n), pc = pcOf(n); if (!s || !pc) continue;
+      const k = pc + '|' + s, b = left.get(k) || 0; if (b <= 1e-9) continue;
+      const take = Math.min(b, n.pool); left.set(k, b - take); self += take; selfN++;
+    }
+    const pcs = new Set(Array.from(o.pcs || []).map(lc));
+    let other = 0, otherN = 0, positions = 0;
+    for (const [k, b] of left) {
+      if (b <= 1e-9) continue;
+      if (o.dropUnknown && !own.has(k) && !pcs.has(k.split('|')[0])) { other += b; otherN++; continue; }
+      positions++;
+    }
+    const total = U.sum(rows, (c) => c.bal);
+    return { total, payout: Math.max(0, total - self - other), positions, wonP, wonC, self, selfN, other, otherN };
   };
 
   /** ROI in percent on one base, for the snapshot's rows (P.aggregate) and a wallet page (P.bettorFigures): the PnL (secondary market included) over the stakes that have met their result, i.e. decided predictions' stakes plus the sold share of open ones (a sale books its result before the verdict, so its stake belongs in the base). Null with neither. */
@@ -114,11 +199,16 @@
    * ROI is this PnL as the snapshot's rows count it (P.roiOf; soldOpen: the sold share of open stakes in its base). Avg
    * odds and legs come from the wallet's own row for its role: a maker's are its bettors' odds, as on the Market makers page.
    * Open counts the loaded predictions when they are all loaded; otherwise (truncated) the exchange's pending count, less
-   * the unclaimed ones and its self-matched ones still pending (selfPending: the site leaves a self-match out).
+   * the unclaimed ones and its self-matched ones still pending (selfPending: the site leaves a self-match out). openPos
+   * counts them as Meridian's Open Positions do (one per pick configuration and side, P.posKey, with tokens still held:
+   * six bets on one pick are one position, a position sold out is none), null when not all are loaded.
+   * claim (P.applyClaims, when the wallet's token balances are known): the winnings to claim are its balances, in place
+   * of the decided predictions the API has not flagged settled.
    */
-  P.bettorFigures = function ({ mine, hist, isMaker, live, ledger, truncated, selfPending }) {
+  P.bettorFigures = function ({ mine, hist, isMaker, live, ledger, truncated, selfPending, claim }) {
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
     const heldOf = (n) => { const bp = ledger && ledger.byPrediction[n.id]; return bp ? bp.held : 1; };
+    const riskShare = (n) => { const bp = ledger && ledger.byPrediction[n.id]; return bp ? riskOf(bp) : 1; };   // what a balance holds (openPos)
     // the wallet's own row: mine is one role of one wallet, so a maker's row is makers[0] (bettors[0] of the predictions a
     // maker took is its most profitable counterparty, whose ROI and odds the page used to show)
     const sm = P.bettorSummary(mine); const s = (isMaker ? (sm.makers || [])[0] : sm.stats) || {};
@@ -133,11 +223,15 @@
     const stakeOf = (n) => (isMaker ? n.cp : n.stake);
     const decided = mine.filter((n) => n.decided);
     const soldOpen = U.sum(mine.filter((n) => !n.decided), (n) => stakeOf(n) * (1 - heldOf(n)));
+    // with the balances: this role's won predictions still held, or where none is (tokens bought, a truncated file) the
+    // positions, so a payout to claim always comes with a count (the account page shows the line on it)
+    const cWon = claim ? (isMaker ? claim.wonC : claim.wonP) || (claim.payout > 0.005 ? claim.positions : 0) : 0;
     return {
       pnl,
       won: totals.won + unflagged.filter((n) => (isMaker ? n.lost : n.won)).length, lost: totals.lost + unflagged.filter((n) => !n.nd && !(isMaker ? n.lost : n.won)).length, nd: totals.nd,
       open: truncated ? Math.max(0, totals.pending - unflagged.length - (selfPending || 0)) : mine.filter((n) => !n.decided).length,
-      unclaimedWon: uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: U.sum(uWon, (n) => n.pool * heldOf(n)),
+      openPos: truncated ? null : new Set(mine.filter((n) => !n.decided && riskShare(n) > 1e-6).map((n) => P.posKey(n, isMaker ? 'C' : 'P'))).size,
+      unclaimedWon: claim ? cWon : uWon.filter((n) => heldOf(n) > 1e-6).length, unclaimedPayout: claim ? claim.payout : U.sum(uWon, (n) => n.pool * heldOf(n)), claim: claim || null,
       roi: P.roiOf(pnl, U.sum(decided, stakeOf), soldOpen, decided.length > 0), soldOpen, avgOdds: s.avgOdds, avgLegs: s.avgLegs,
     };
   };
@@ -359,12 +453,28 @@
   };
   /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
    *  tape (the newest tapeSize) and bigWins (every win whose net PnL is above P.BIG_WIN, latest verdict first) are slim records
-   *  with every leg's question id, so a page can show and open each one. */
-  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true, records = true } = {}) {
+   *  with every leg's question id, so a page can show and open each one.
+   *  claims (optional): wallet → its claimable positions (the API's positions(holder, claimable: true) rows or P.claimRows'
+   *  entries), read for every wallet at once, so a wallet missing has none. With them a decided prediction is unclaimed
+   *  while its winner still holds the winning tokens (n.toClaim, kept in the records as tc), as Meridian's app counts a
+   *  payout to claim, and a row's unclaimedPayout is its balances; without them, the API's settled flag as before.
+   *  A row's openPos: its open positions as Meridian counts them (P.posKey, tokens still held). */
+  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true, records = true, claims = null } = {}) {
     // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
     // making; counted in its figures it made its wallet a "market maker" with one prediction
     const selfMatched = norms.filter(P.selfMatch).length;
     if (selfMatched) norms = norms.filter((n) => !P.selfMatch(n));
+    // claimable balances by wallet, pick configuration and side; every decided prediction learns whether its winner still
+    // holds the winning tokens (one balance pays all of the wallet's predictions on that token)
+    let claimBal = null;
+    if (claims) {
+      claimBal = new Map();
+      const each = claims instanceof Map ? Array.from(claims.entries()) : Object.entries(claims);
+      for (const [a, list] of each) for (const c of P.claimRows(list)) { const k = lc(a) + '|' + c.pc + '|' + c.side; claimBal.set(k, (claimBal.get(k) || 0) + c.bal); }
+      for (const n of norms) { const s = winnerSide(n), pc = pcOf(n); if (s && pc) n.toClaim = (claimBal.get((s === 'P' ? n.predictor : n.counterparty) + '|' + pc + '|' + s) || 0) > 1e-9; }
+    }
+    // still to claim: the winner's tokens where they are known, else the API's flag (a void, a record without its pick configuration)
+    const toClaim = (n) => (n.toClaim != null ? n.toClaim : !n.settled);
     const bettors = {}, makers = {}, cats = {}, combos = {}, daily = {}, weeks = {};
     const acc = (m, k, init) => m[k] || (m[k] = init());
     // decided = verdict in (claimed or not); settled = claimed; unclaimed = decided, not claimed (unclaimedWon / unclaimedPayout: money this side can collect)
@@ -374,8 +484,8 @@
       s.n++; s.wagered += asMaker ? n.cp : n.stake; s.legs += n.legs; if (n.combo) s.combos++;
       if (n.odds != null) { s.oddsSum += n.odds; s.oddsN++; }
       if (cleanVig(n)) { s.vigSum += n.vig; s.vigN++; }
-      if (n.decided) { s.decided++; if (n.settled) s.settled++; else { s.unclaimed++; const w = asMaker ? n.lost : n.won; if (w) { s.unclaimedWon++; s.unclaimedPayout += n.pool; } } if (n.nd) s.nd = (s.nd || 0) + 1; else { const w = asMaker ? n.lost : n.won; if (w) s.won++; else s.lost++; } const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if (pnl > s.biggestWin) s.biggestWin = pnl; }
-      else { s.open++; s.openWagered += asMaker ? n.cp : n.stake; }
+      if (n.decided) { s.decided++; if (!toClaim(n)) s.settled++; else { s.unclaimed++; const w = asMaker ? n.lost : n.won; if (w) { s.unclaimedWon++; s.unclaimedPayout += n.pool; if (claimBal) (s.claimKeys || (s.claimKeys = new Set())).add(pcOf(n) + '|' + (asMaker ? 'C' : 'P')); } } if (n.nd) s.nd = (s.nd || 0) + 1; else { const w = asMaker ? n.lost : n.won; if (w) s.won++; else s.lost++; } const pnl = asMaker ? -n.pnl : n.pnl; s.pnl += pnl; if (pnl > s.biggestWin) s.biggestWin = pnl; }
+      else { s.open++; s.openWagered += asMaker ? n.cp : n.stake; (s.openNs || (s.openNs = [])).push(n); }
       const st = asMaker ? n.cp : n.stake; if (st > s.biggestStake) s.biggestStake = st;
       // the record against the odds (bettors; recordOf): a leg is its question id, or its text where a file dropped the id
       if (!asMaker && n.decided && !n.nd && n.odds > 0 && n.odds < 1) s.rBets.push({ id: n.id, t: n.t, p: n.odds, won: n.won, stake: n.stake, legs: n.picks.map((k) => k.id || 'q:' + k.q) });
@@ -383,9 +493,16 @@
       s.cats[n.cat] = (s.cats[n.cat] || 0) + 1;
       s.catW[n.cat] = (s.catW[n.cat] || 0) + (asMaker ? n.cp : n.stake);
     };
-    const finish = (s, isBettor) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = P.roiOf(s.pnl, s.wagered - s.openWagered, s.soldOpen || 0, s.decided > 0); s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = P.topCategory(s.cats, s.catW);
+    const finish = (s, isBettor, addr) => { const decided = s.won + s.lost; s.winRate = decided ? (s.won / decided) * 100 : null; s.roi = P.roiOf(s.pnl, s.wagered - s.openWagered, s.soldOpen || 0, s.decided > 0); s.avgOdds = s.oddsN ? s.oddsSum / s.oddsN : null; s.avgVig = s.vigN ? s.vigSum / s.vigN : null; s.avgLegs = s.n ? s.legs / s.n : null; s.topCat = P.topCategory(s.cats, s.catW);
       s.rec = isBettor && records ? recordOf(s.rBets) : null;
-      for (const k of ['oddsSum', 'oddsN', 'vigSum', 'legs', 'rBets', 'catW', 'soldOpen']) delete s[k]; return s; };   // vigN stays: how many predictions avgVig covers
+      // open positions as Meridian counts them: one per pick configuration and side with a balance; one this wallet sold
+      // out of, or matched in full with the other side's tokens it bought (a maker buying the bettor's side back burns
+      // both at once: checked 2026-10-05, 0x79cb…'s 33 such positions are none in the API), is none (its ledger's atRisk)
+      const bp = addr && ledgerOf[addr]; const side = isBettor ? 'P' : 'C';
+      s.openPos = new Set((s.openNs || []).filter((n) => !(bp && bp[n.id] && riskOf(bp[n.id]) < 1e-6)).map((n) => P.posKey(n, side))).size;
+      // with the balances, what this row has to claim is what its winning tokens still held pay
+      if (claimBal) s.unclaimedPayout = U.sum(Array.from(s.claimKeys || []), (k) => claimBal.get(addr + '|' + k) || 0);
+      for (const k of ['oddsSum', 'oddsN', 'vigSum', 'legs', 'rBets', 'catW', 'soldOpen', 'openNs', 'claimKeys']) delete s[k]; return s; };   // vigN stays: how many predictions avgVig covers
     // The record against the odds (bettors): rec = { n bets, of them won, expected wins (the sum of their locked chances),
     // luck, predictions }, luck = P.luckOf: how likely that many wins or more would be if every bet's true chance were
     // exactly its locked odds. Counted in wins, not money: one 50× long shot that hit weighs one win, not fifty.
@@ -418,7 +535,7 @@
     let totals = { n: 0, wagered: 0, cpCommitted: 0, decided: 0, settled: 0, unclaimed: 0, unclaimedWon: 0, unclaimedWonPayout: 0, unclaimedLost: 0, won: 0, lost: 0, bettorPnl: 0, open: 0, openWagered: 0, combos: 0 };
     for (const n of norms) {
       totals.n++; totals.wagered += n.stake; totals.cpCommitted += n.cp; if (n.combo) totals.combos++;
-      if (n.decided) { totals.decided++; if (n.settled) totals.settled++; else { totals.unclaimed++; if (n.won) { totals.unclaimedWon++; totals.unclaimedWonPayout += n.pool; } else if (!n.nd) totals.unclaimedLost++; } if (n.nd) totals.nd = (totals.nd || 0) + 1; else if (n.won) totals.won++; else totals.lost++; totals.bettorPnl += n.pnl; } else { totals.open++; totals.openWagered += n.stake; }
+      if (n.decided) { totals.decided++; if (!toClaim(n)) totals.settled++; else { totals.unclaimed++; if (n.won) { totals.unclaimedWon++; totals.unclaimedWonPayout += n.pool; } else if (!n.nd) totals.unclaimedLost++; } if (n.nd) totals.nd = (totals.nd || 0) + 1; else if (n.won) totals.won++; else totals.lost++; totals.bettorPnl += n.pnl; } else { totals.open++; totals.openWagered += n.stake; }
       const b = acc(bettors, n.predictor, side); bump(b, n, false);
       const m = acc(makers, n.counterparty, side); bump(m, n, true);
       const c = acc(cats, n.cat, () => ({ cat: n.cat, n: 0, wagered: 0, settled: 0, won: 0, pnl: 0, vig: [] })); c.n++; c.wagered += n.stake; if (n.decided) { c.settled++; if (n.won) c.won++; c.pnl += n.pnl; } if (cleanVig(n)) c.vig.push(n.vig);
@@ -447,15 +564,16 @@
         const row = b && (!m || b.n >= m.n) ? b : m;
         if (row) { row.pnl += L.adj; row.secondary = (row.secondary || 0) + L.adj; if (row === b) { totals.bettorPnl += L.adj; secondary.toBettors += L.adj; } else secondary.toMakers += L.adj; }
         else secondary.toOthers += L.adj;
-        // a won prediction whose tokens were sold is not this wallet's to claim any more
-        if (row) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || !n.unclaimed) continue; const ownWin = row === b ? n.won : n.lost; if (ownWin && bp.held < 1) { row.unclaimedPayout -= n.pool * (1 - bp.held); if (bp.held < 1e-6) row.unclaimedWon--; } }
+        // a won prediction whose tokens were sold is not this wallet's to claim any more (with the balances, finish counts
+        // what is still held)
+        if (row && !claimBal) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || !n.unclaimed) continue; const ownWin = row === b ? n.won : n.lost; if (ownWin && bp.held < 1) { row.unclaimedPayout -= n.pool * (1 - bp.held); if (bp.held < 1e-6) row.unclaimedWon--; } }
         // a sale out of a still-open prediction is realized at the sale, so its stake joins the ROI base (finish, P.roiOf)
         if (row) for (const n of byW[w] || []) { const bp = L.byPrediction[n.id]; if (!bp || n.decided || !(bp.held < 1)) continue; if ((row === b ? n.predictor : n.counterparty) === w) row.soldOpen = (row.soldOpen || 0) + (row === b ? n.stake : n.cp) * (1 - bp.held); }
         // the best win counts the bettor's own result where it traded the tokens (as big wins do): a win sold before the verdict is not its win
         if (b) { let best = 0; for (const n of decidedBy[w] || []) { const bp = L.byPrediction[n.id]; const v = bp ? bp.pnl : n.pnl; if (v > best) best = v; } b.biggestWin = best; }
       }
     }
-    const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a], m === bettors)));
+    const rowsOf = (m, key) => Object.keys(m).map((a) => Object.assign({ [key]: a }, finish(m[a], m === bettors, a)));
     const vigSummary = (list) => ({ n: list.length, avg: avg(list), median: median(list), share: list.length ? list.filter((v) => v > 0).length / list.length : null });
     const vig = {
       overall: vigSummary(vigAll.map((n) => n.vig)),
@@ -533,6 +651,10 @@
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
       bigWins: bigWins ? bigList() : undefined,
     };
+    // with the balances the bettors' payout to claim is theirs, not the pots of the predictions they won (a pot shared
+    // with a twin, or partly sold, pays only what is held)
+    // (fromBalances: the unclaimed counts follow the balances, so a page can say so)
+    if (claimBal) { out.totals.unclaimedWonPayout = U.sum(out.bettors, (b) => b.unclaimedPayout || 0); out.totals.fromBalances = true; }
     // the same {h, lp} for any record the caller writes (the snapshot's slip files); not enumerable, so not in the JSON
     Object.defineProperty(out, 'soldOf', { value: sold, enumerable: false });
     return out;
@@ -631,10 +753,14 @@
   // Meridian's result for a settled question (9th element) says which legs won or lost a decided prediction.
   // leg = [question, yes, sourcePriceNow, endTime, category, conditionId, priceAtBet, polymarket event, result (1 YES, 0 NO, 2 50/50),
   //        Meridian settlement (s), source-market resolution (s, vt: only where o.vt asks, the wallet files)]
-  // o.stx adds the claim's transaction (the wallet files; slips and question files stay small)
+  // o.stx adds the claim's transaction (the wallet files; slips and question files stay small), and there the pick
+  // configuration of a prediction whose tokens were not traded (pk; pc stays the mark of a traded one): a wallet page
+  // groups its open bets into Meridian's positions by it and finds the balances it still has to claim (P.applyClaims)
+  // tc: P.compact's (the winner still holds its winning tokens, where the balances were read)
   const legResult = (k) => (k.settled ? (k.nonDecisive ? 2 : k.resolvedToYes ? 1 : 0) : null);
   function slimLegs(n, ids, vt) { return n.picks.map((k) => { const a = [k.q, k.yes ? 1 : 0, k.ep, k.endTime, k.cat, (ids || !n.settled) && k.id ? k.id : null, k.priceAtBet == null ? null : r4(k.priceAtBet), n.picks.length > 1 ? k.event || null : null, legResult(k), k.settled && k.settledAt ? Math.round(k.settledAt / 1000) : null, vt && k.verdictAt ? Math.round(k.verdictAt / 1000) : null]; while (a.length > 5 && a[a.length - 1] == null) a.pop(); return a; }); }
-  P.slim = (n, o) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, da: n.decidedAt || undefined, k: slimLegs(n, !!(o && o.ids), !!(o && o.vt)), stx: o && o.stx && n.stx ? n.stx : undefined });
+  P.slim = (n, o) => ({ id: n.id, t: n.t, sa: n.settledAt, p: n.predictor, c: n.counterparty, s: r4(n.stake), cp: r4(n.cp), st: n.settled ? 1 : 0, pc: n.pcTraded ? n.pc : undefined, dv: n.decided && !n.settled ? (n.won ? 1 : n.nd ? 2 : 0) : undefined, r: n.result, tx: n.tx, cat: n.cat, da: n.decidedAt || undefined, k: slimLegs(n, !!(o && o.ids), !!(o && o.vt)), stx: o && o.stx && n.stx ? n.stx : undefined,
+    pk: o && o.stx && !n.pcTraded && n.pc ? n.pc : undefined, tc: tcOf(n) });
   P.unslim = function (s) {
     if (s.picks) return s;                               // already a full record
     const stake = s.s || 0, cp = s.cp || 0, pool = stake + cp;
@@ -646,6 +772,8 @@
       // big wins and tape rows: when it was decided (from the source markets' resolution), and for a bettor who traded its
       // position tokens the share it still held at the verdict and its own result, the sale included (P.aggregate)
       decidedAt: s.da || null, held: s.h == null ? null : s.h, tradedPnl: s.lp == null ? null : s.lp,
+      // an untraded prediction's pick configuration (wallet files), and whether its winner still holds the winning tokens
+      pk: s.pk || null, toClaim: s.tc == null ? null : !!s.tc,
       // big wins: a traded position (its bets on the same picks, counted together) and its sales (P.aggregate's bigList)
       group: s.gp || null, cashOut: s.co || null };
     return P.applyAtBet(n, picks.map((k) => k.priceAtBet));
@@ -658,7 +786,7 @@
     if (x.p) return P.unslim(x);
     const decided = !!x.decided, settled = !!x.settled;
     const n = P.unslim({ id: x.id, t: x.t, sa: x.sa, p: x.predictor, c: x.counterparty, s: x.stake, cp: x.cp, st: settled ? 1 : 0, pc: x.pc, dv: decided && !settled ? (x.won ? 1 : x.nd ? 2 : 0) : undefined,
-      r: settled ? (x.won ? 'PREDICTOR_WINS' : x.nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, tx: x.tx, stx: x.stx, cat: x.cat, h: x.h, lp: x.lp, da: x.da, k: x.k || [[x.q || '', x.yes ? 1 : 0]] });
+      r: settled ? (x.won ? 'PREDICTOR_WINS' : x.nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, tx: x.tx, stx: x.stx, cat: x.cat, h: x.h, lp: x.lp, da: x.da, tc: x.tc, k: x.k || [[x.q || '', x.yes ? 1 : 0]] });
     if (!x.k) Object.assign(n, { legs: x.legs || 1, combo: (x.legs || 1) > 1, partial: true });
     return n;
   };

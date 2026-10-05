@@ -192,6 +192,26 @@
     for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end)) { seen.add(k); rows.push(c); } }
     return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
   };
+  /** mPerp position-fee charges on a subaccount's positions since `start` (archive; positionFeeCharge: + = paid; a row per
+   *  position and charge, at most every 15 minutes), read as A.fundingCharges reads funding. The archive aggregates them in
+   *  5-minute buckets and serves at most 5 hours per request, so the windows are 5 hours each, back from the next whole
+   *  hour, six at a time (a month is about 150 requests: callers ask only from where a fee can matter, AN.positionFeeFrom).
+   *  Both ends of a window are inclusive, so the 5-minute bucket two windows share comes back in both: kept once. Null
+   *  when a window holds more rows than are read (10 pages, 2,000 rows: a 5-hour window has 20 charges per position);
+   *  o.end, o.onProgress as for A.fundingCharges. */
+  A.positionFeeCharges = async function (sid, start, o) {
+    const now = Date.now(), end = o && o.end != null ? Math.min(U.num(o.end), now) : null;
+    const W = 5 * U.HOUR, top = Math.ceil((end != null ? end : now) / U.HOUR) * U.HOUR;
+    const ends = []; for (let e = top; e > start; e -= W) ends.push(e);
+    // the window reaching the archive's clock sends no endTime (it rejects one past its clock); its span is then under 5 hours
+    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/position-fee', { subaccountId: sid, startTime: e - W, endTime: e >= now - 2 * 60000 ? null : e, order: 'asc' }, { maxPages: 10, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 6, o && o.onProgress);
+    const bad = res.find((r) => !r.ok); if (bad) throw bad.error;
+    const parts = res.map((r) => r.value);
+    if (parts.some((p) => !p || p.truncated)) return null;
+    const seen = new Set(); const rows = [];
+    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end)) { seen.add(k); rows.push(c); } }
+    return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+  };
   /**
    * History rows for kind in {balance, unrealized-pnl, volume}, automatically chunked to the
    * resolution's max range and paginated. Returns rows sorted ascending by time.

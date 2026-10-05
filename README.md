@@ -204,8 +204,11 @@ The perps build has a time budget (`--budget` seconds, 9 minutes by default: fou
 built at a time and one takes two to three seconds from a PC, about half that on the Action's
 runner; an active one with fills and candles takes more, and an older one more again, since its
 funding charges are read three days at a time, one request after another; the job has 15 minutes in all);
-accounts not reached are left out and the snapshot is marked partial (`skipped`) rather than the
-deploy failing. `#/status` (**Data status**, linked from the home page's footer and from every
+a row that fails is built once more after a pause, and an account still not built (or not reached)
+keeps its newest row from an earlier snapshot no older than 7 days, marked `carried` with its own
+`builtAt` (`mergeRows`); the snapshot is marked partial and counts `failed`, `skipped`, `retried`,
+`carried` and `missing` (no row at all) rather than the deploy failing. The Leaderboard, Copy
+trading and Home say how many rows are carried or missing, and a carried row reads "older". `#/status` (**Data status**, linked from the home page's footer and from every
 "stale" note) shows both snapshots' age, builder, counts and build time, plus the exchange's
 round trip, maintenance flag and clock offset; the Predict builder writes a few hundred bytes to
 `data/predict-status.json` for it so the page does not need the 1 MB snapshot.
@@ -1584,11 +1587,13 @@ rather than a trader of its style.
 
 * **PnL** (interval) = realized PnL − trading fees − mPerp position fees + funding over the
   interval, plus the change in unrealized PnL from the start of the interval to now. Funding counts
-  when the exchange charges it each hour, including funding charged to open positions and not yet
-  settled into the balance; unrealized PnL is net of that unsettled funding at both ends (and of
-  unsettled position fees at the end): the archive's unrealized PnL is price-only, so each bucket
-  is put on that basis from the archive's hourly funding history (`AN.netOfUnsettled`). Position
-  fees are not in the exchange's daily ledger: they are the balance change it records no deposit,
+  when the exchange charges it each hour, and mPerp position fees when it charges them, including
+  what is charged to open positions and not yet settled into the balance; unrealized PnL is net of
+  both at both ends: the archive's unrealized PnL is price-only, so each bucket is put on that
+  basis from the archive's hourly funding history and its position-fee charges
+  (`AN.netOfUnsettled`, `AN.netLive`; the position-fee charges are read from where they can matter,
+  `AN.positionFeeFrom`, and where they cannot be read the fees owed now come off at the end only).
+  Settled position fees are not in the exchange's daily ledger: they are the balance change it records no deposit,
   withdrawal, conversion, trade, fee or funding entry for (`posFee` in `AN.buildSeries`; the tax
   center books the same residual, from the mPerp pools only, in `js/tax/ledger.js`). An interval starts at the first
   archive bucket boundary at or after its nominal start (within 1 hour for 24h, 2 hours for 7d,

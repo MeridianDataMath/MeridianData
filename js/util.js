@@ -185,8 +185,11 @@
     return fmtN(n, dp);
   };
   U.fmtNum = (x, dp = 2) => fmtN(U.num(x), dp);
-  U.fmtQty = (x) => {
+  /** A size. With the product's lotSize: at its decimals, padded, as Meridian's app shows sizes (a size off the lot grid
+   *  cannot exist, and rounding one to 4 dp showed 1.19645 BTC as 1.1965); without: up to 6 dp, trailing zeros dropped. */
+  U.fmtQty = (x, lot) => {
     const n = U.num(x); const a = Math.abs(n);
+    if (lot != null && lot !== '') { const t = String(lot); const dp = t.includes('.') ? t.split('.')[1].length : 0; return fmtN(n, dp, dp); }
     const dp = a >= 1000 ? 2 : a >= 1 ? 4 : 6;
     return fmtN(n, dp, 0);
   };

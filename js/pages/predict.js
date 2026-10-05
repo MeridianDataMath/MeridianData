@@ -14,6 +14,13 @@
   const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m < 1.01 ? 4 : m >= 100 ? 0 : 2) + '×');
   // money on the Predict pages: whole dollars from $100 up (cents on a five-figure total are noise), cents only on small stakes
   const usd = (x, o) => U.fmtUsd(x, Math.abs(U.num(x)) >= 100 && !(o && o.dp != null) ? Object.assign({ dp: 0 }, o) : o);
+  // one slip's stake, payout and result keep their cents, as Meridian's own slip shows them ($150.41 paying $151.97, not
+  // $150 paying $152, which also hid what it pays over the stake)
+  const cents = (x, o) => usd(x, Object.assign({ dp: 2 }, o));
+  // win rates to two decimals, as Meridian's app shows them (24.01 %)
+  const winPct = (x) => (x == null || !Number.isFinite(x) ? '—' : U.fmtPct(x, { dp: 2 }));
+  // the launch (P.LAUNCH_SEC) as its UTC day: what the snapshot starts from
+  const LAUNCH_DAY = new Date(P.LAUNCH_SEC * 1000).toISOString().slice(0, 10);
   const pnlEl = (x) => h('span', { class: 'num ' + U.pnlClass(x) }, usd(x, { sign: true }));
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
@@ -22,7 +29,7 @@
    *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
   const resultChip = (n, asMaker, held = 1) => { const r = P.resultFor(n, asMaker, held); return h('span.chip', { class: r.tone, title: r.title || '' }, r.label); };
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same match or asset: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
-  const probBar = (p, label) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : (label || 'YES: ') + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, 1))); };
+  const probBar = (p, label, dp = 1) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : (label || 'YES: ') + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, dp))); };
   // a question's source market is a link the API hands over: only a web address becomes a button
   const webUrl = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
   const srcBtn = (u) => h('a.btn.sm.ghost', { href: u, target: '_blank', rel: 'noopener', title: u }, U.icon('external'), /polymarket/i.test(u) ? 'Polymarket' : 'Source');
@@ -33,7 +40,7 @@
     committed: { key: 'c', label: 'Collateral committed', num: true, title: 'Sum of collateral put up against bettors', render: (r) => usd(r.wagered, { compact: true }) },
     open: { key: 'o', label: 'Open collateral', num: true, title: 'Maker collateral in predictions not decided yet. It includes predictions whose bettor-side tokens the maker has since bought: holding both sides, it is paid stake + collateral whatever the result, so that part is not at risk.', render: (r) => usd(r.openWagered, { compact: true }) },
     pnl: { key: 'p', label: 'Maker PnL', num: true, title: 'Decided predictions, claimed or not: + the bettor\'s stake on wins, − own collateral on losses' + (a.secondary ? ', plus secondary-market trades' : ''), render: (r) => pnlEl(r.pnl) },
-    winRate: { key: 'wr', label: 'Maker win rate', num: true, title: 'Won ÷ (won + lost) over decided predictions, from the maker\'s side', render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) },
+    winRate: { key: 'wr', label: 'Maker win rate', num: true, title: 'Won ÷ (won + lost) over decided predictions, from the maker\'s side', render: (r) => winPct(r.winRate) },
     vig: { key: 'v', label: 'Avg vig quoted', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet (quoted, not what the maker realized), averaged over the singles and the combos with every leg on a different match that this maker took. Combos with legs on the same match or asset are left out: those legs are correlated, so the product of their prices is not a fair price (see Vig & edge).', render: (r) => vigCell(r.avgVig) },
     odds: { key: 'ao', label: 'Avg bettor odds', num: true, title: 'Average locked odds of the bettors it took: stake ÷ (stake + collateral)', render: (r) => pct(r.avgOdds, 0) },
     topCat: { key: 'cat', label: 'Top category', title: 'The category with the most predictions taken (a tie goes to the larger stake). Mixed: a combo with legs in more than one category.', render: (r) => r.topCat || '—' },
@@ -167,6 +174,13 @@
         { v: 'mult', label: 'Multiplier', title: 'Highest return on the stake first: payout ÷ stake (a bettor who traded its tokens: what came back ÷ what it staked)', val: (n) => bigMult(n) || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
       const bigPnl = (n) => (n.group ? n.group.lp : n.tradedPnl != null ? n.tradedPnl : n.pnl);
+      // a win still to claim: where the snapshot read the balances (tc, agg.claimAt), the bettor still holds its winning
+      // tokens, as Meridian's app counts a payout to claim; an older snapshot, the API's settled flag (which anyone's
+      // settlement sets, and a claim through a twin prediction leaves unset)
+      const toClaim = (n) => (n.toClaim != null ? n.won && n.toClaim : !(n.settled && n.settledAt) && n.unclaimed && n.won && !soldOut(n));
+      // (said only where the aggregate's counts followed the balances: T.fromBalances, P.aggregate's claims)
+      const byBal = !!(T.fromBalances && a.claimAt);
+      const claimAsOf = byBal ? ' (winning tokens still held, as read ' + U.fmtDateTime(a.claimAt) + ')' : '';
       const bwBody = h('div.feed.bigwins'), bwNote = h('span.dim.small');
       const bwCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Big wins'), bwNote, h('span.grow'), UI.seg(BW_SORTS, bwSort, (v) => { bwSort = v; renderBig(); bwBody.scrollTop = 0; }, 'sm')), h('div.feed-fill', bwBody));
       // the tables count each prediction's own result; only the Bettor net result tile adds the secondary-market trades
@@ -214,7 +228,7 @@
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,
-        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the Polymarket price for the same picks at the moment of the bet (a combo multiplies its legs); positive means the bettor paid above fair' + (a.vig.coverage && a.vig.coverage.sameEvent ? `; the vig averages leave out the ${U.fmtNum(a.vig.coverage.sameEvent, 0)} combos with legs on the same match or asset` : '') + '. Predictions, stakes and the per-day charts count at placement; win rates and PnL count a prediction at its verdict, claimed or not' + (T.unclaimed ? ` (${U.fmtNum(T.unclaimed, 0)} are not claimed yet, ${U.fmtNum(T.unclaimedLost || 0, 0)} of them maker wins)` : '') + ': claiming only moves the cash.' + (withSec ? ` The bettor net result and maker PnL also count position tokens traded on the secondary market (a sale when it happens, tokens still held at the verdict): ${usd(a.secondary.toBettors, { sign: true })} for bettors. The category and singles-vs-combos tables count each prediction's own result without those trades, so their Bettor PnL adds up to ${usd(T.bettorPnl - a.secondary.toBettors, { sign: true })}.` : '')));
+        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the Polymarket price for the same picks at the moment of the bet (a combo multiplies its legs); positive means the bettor paid above fair' + (a.vig.coverage && a.vig.coverage.sameEvent ? `; the vig averages leave out the ${U.fmtNum(a.vig.coverage.sameEvent, 0)} combos with legs on the same match or asset` : '') + '. Predictions, stakes and the per-day charts count at placement; win rates and PnL count a prediction at its verdict, claimed or not' + (T.unclaimed ? ` (${U.fmtNum(T.unclaimed, 0)} are not claimed yet${T.fromBalances && a.claimAt ? ': their winners still held the winning tokens when the snapshot read them, ' + U.fmtDateTime(a.claimAt) : ''}; ${U.fmtNum(T.unclaimedLost || 0, 0)} of them maker wins)` : '') + ': claiming only moves the cash.' + (withSec ? ` The bettor net result and maker PnL also count position tokens traded on the secondary market (a sale when it happens, tokens still held at the verdict): ${usd(a.secondary.toBettors, { sign: true })} for bettors. The category and singles-vs-combos tables count each prediction's own result without those trades, so their Bettor PnL adds up to ${usd(T.bettorPnl - a.secondary.toBettors, { sign: true })}.` : '')));
       const col = C.colors();
       // a.daily is keyed by UTC day: the tooltip names that day, not a local clock time
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered', titleFmt: U.fmtDayUTC });
@@ -236,7 +250,7 @@
         const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = winTime(n), paid = !!(n.settled && n.settledAt); const pl = bigPnl(n);
         const co = n.cashOut, g = n.group, dec = decidedTime(n), lost = n.decided && !n.won && !n.nd;
         const when = (co ? 'Cashed out ' + U.fmtDateTime(co.t) + '\n' + (n.decided ? 'Settled ' + U.fmtDateTime(dec || n.t) : 'Not settled yet') : 'Settled ' + U.fmtDateTime(at))
-          + (n.won && !soldOut(n) ? (paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout not claimed yet') : '') + '\nPlaced ' + U.fmtDateTime(n.t);
+          + (n.won && !soldOut(n) ? (toClaim(n) ? '\nPayout not claimed yet' : paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout claimed') : '') + '\nPlaced ' + U.fmtDateTime(n.t);
         // tokens sold before the verdict: what they fetched and cost, from how many bets, and how the picks then went
         const coTitle = co ? `The bettor sold ${U.fmtNum(co.tok, 2)} position tokens before the verdict for ${usd(co.cash)} (they cost ${usd(co.cost)})`
           + (g && g.n > 1 ? `. From ${g.n} bets on these picks, ${usd(g.s)} staked (the row opens the largest)` : '') + (soldOut(n) ? '' : n.decided ? '; the rest it held to the verdict' : '; it still holds the rest')
@@ -246,7 +260,7 @@
           : n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: soldOut(n) ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, soldOut(n) ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
         // settled in the bettor's favour, but nobody has collected the payout yet: listed all the same, marked (a payout
         // the bettor sold is the buyer's to collect, and a loss has none)
-        const waiting = !paid && n.unclaimed && n.won && !soldOut(n) ? h('span.chip.amber', { title: 'Settled as a win, not claimed yet: the payout is waiting for the bettor' }, 'unclaimed') : null;
+        const waiting = toClaim(n) ? h('span.chip.amber', { title: 'Settled as a win, not claimed yet: the payout is waiting for the bettor' + claimAsOf }, 'unclaimed') : null;
         const bets = g && g.n > 1 ? h('span.dim.xs', { title: `${g.n} bets by this bettor on the same picks, counted together (they share one position token)` }, g.n + ' bets') : null;
         return predRow(n, 'big', '',
           h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), bets, waiting, sold,
@@ -257,8 +271,8 @@
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        const waiting = bigWins ? bigWins.filter((n) => n.unclaimed && n.won && !soldOut(n)).length : 0;
-        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
+        const waiting = bigWins ? bigWins.filter(toClaim).length : 0;
+        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' + (waiting ? (byBal ? ' Not claimed yet: the bettor still holds the winning tokens, as read ' + U.fmtDateTime(a.claimAt) + '.' : ' Not claimed yet: by the API\'s settled flag.') : '') }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
@@ -347,11 +361,13 @@
         U.replace(wrap, UI.table({ sort: st.sort, onSort, cols: [
           { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
           { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
-          { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => h('span', U.fmtNum(r.n, 0), r.open ? h('span.dim.xs', ' (' + r.open + ' open)') : null) },
+          // open: Meridian's Open Positions where the snapshot counts them (one per pick configuration and side with tokens
+          // still held), else (an older snapshot) the undecided predictions
+          { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => { const o = r.openPos != null ? r.openPos : r.open; return h('span', U.fmtNum(r.n, 0), o ? h('span.dim.xs', { title: r.openPos != null ? `${o} open position${o === 1 ? '' : 's'} as Meridian counts them: one per pick configuration and side with tokens still held (bets on the same picks share one; a position sold out is none)` + (r.open !== r.openPos ? ` · ${r.open} undecided prediction${r.open === 1 ? '' : 's'}` : '') : 'Undecided predictions' }, ' (' + o + ' open)') : null); } },
           { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
           { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => pnlEl(r.pnl) },
           { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ the stakes of decided predictions (claimed or not), plus the sold share of open predictions\' stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
-          { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, title: 'Won ÷ (won + lost) over its decided predictions, claimed or not, each counted by its verdict, including predictions whose tokens it sold before the verdict (the sale is counted in Net PnL)', render: (r) => (r.winRate == null ? h('span.dim', '—') : U.fmtPct(r.winRate, { dp: 0 })) },
+          { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, title: 'Won ÷ (won + lost) over its decided predictions, claimed or not, each counted by its verdict, including predictions whose tokens it sold before the verdict (the sale is counted in Net PnL)', render: (r) => (r.winRate == null ? h('span.dim', '—') : winPct(r.winRate)) },
           { key: 'avgOdds', label: 'Avg odds', num: true, sortVal: 1, title: 'Average locked odds, stake ÷ (stake + maker collateral), over all its predictions, open ones included', render: (r) => pct(r.avgOdds, 0) },
           { key: 'combos', label: 'Combos', num: true, sortVal: 1, title: 'Share of its predictions with two or more legs', render: (r) => U.fmtPct((r.combos / r.n) * 100, { dp: 0 }) },
           // vigN: how many predictions the average covers (older snapshots have none: no title)
@@ -380,12 +396,30 @@
     ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic, question: c.question }
     : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, pub: c.pub, question: c.q, op: c.op });   // op: open predictions with their legs (snapshot rows); pub false = unlisted
   const qId = (c) => c.conditionId || c.id;
-  // Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors); before Polymarket has loaded, the
-  // estimatedPrice Meridian's API reported, which stops following the market once a game starts
-  const probNow = (c) => { const m = R.get(qId(c)).m; if (m && m.prices && m.prices.length && Number.isFinite(m.prices[0])) return { p: m.prices[0], live: true }; const ep = c.ep != null ? c.ep : c.estimatedPrice; return ep == null ? null : { p: Number(ep), live: false }; };
-  // a settled question shows its result, not a price
-  const probCell = (c) => { const v = qView(c); if (v.settled) return h('span.dim', v.nd ? 'resolved 50/50' : v.yes === true ? 'resolved YES' : v.yes === false ? 'resolved NO' : 'settled'); const x = probNow(c); return probBar(x && x.p, x && (x.live ? 'Polymarket now: ' : 'Meridian estimate (may lag): ')); };
-  const PROB_TITLE = 'Polymarket\'s price for YES now; until Polymarket has loaded, Meridian\'s own estimate, which stops moving once a game starts. Settled questions show their result';
+  // Polymarket's order book: the chance Meridian's app shows for a question is the midpoint of its YES token on
+  // Polymarket's CLOB while no older than two minutes (Gamma's outcome price, which the resolution tracker loads, is the
+  // last trade and can sit points away in a live match: 36.5 % against the app's 39 %). Kept per token; asked again
+  // after a minute at most, by whichever list is on screen.
+  const MID_FRESH_MS = 2 * 60000, MID_ASK_MS = 60000;
+  const mids = new Map();   // YES token → { p, at }
+  const yesToken = (id) => { const m = id ? R.get(id).m : null; return m && !m.closed && m.tokens && m.tokens[0] ? String(m.tokens[0]) : null; };
+  const midNow = (id) => { const t = yesToken(id); const x = t && mids.get(t); return x && x.p != null && Date.now() - x.at <= MID_FRESH_MS ? x.p : null; };
+  /** Ask the midpoints of these questions' YES tokens (their Polymarket markets loaded first, R.load); true when any came. */
+  async function loadMids(ids, signal) {
+    const now = Date.now();
+    const want = Array.from(new Set((ids || []).map(yesToken).filter(Boolean))).filter((t) => { const x = mids.get(t); return !x || now - x.asked > MID_ASK_MS; });
+    if (!want.length) return false;
+    for (const t of want) mids.set(t, Object.assign(mids.get(t) || { p: null, at: 0 }, { asked: now }));
+    let got = {}; try { got = await P.midpoints(want, { signal }); } catch (e) { if (isAbort(e)) throw e; return false; }
+    for (const [t, p] of Object.entries(got)) mids.set(t, { p, at: Date.now(), asked: now });
+    return Object.keys(got).length > 0;
+  }
+  // YES now: the CLOB midpoint (as the app), else Polymarket's last price (Gamma), else the estimatedPrice Meridian's API
+  // reported, which stops following the market once a game starts
+  const probNow = (c) => { const mid = midNow(qId(c)); if (mid != null) return { p: mid, live: true }; const m = R.get(qId(c)).m; if (m && m.prices && m.prices.length && Number.isFinite(m.prices[0])) return { p: m.prices[0], live: true }; const ep = c.ep != null ? c.ep : c.estimatedPrice; return ep == null ? null : { p: Number(ep), live: false }; };
+  // a settled question shows its result, not a price; a price in whole percent, as Meridian's app rounds it
+  const probCell = (c) => { const v = qView(c); if (v.settled) return h('span.dim', v.nd ? 'resolved 50/50' : v.yes === true ? 'resolved YES' : v.yes === false ? 'resolved NO' : 'settled'); const x = probNow(c); return probBar(x && x.p, x && (x.live ? 'Polymarket now: ' : 'Meridian estimate (may lag): '), 0); };
+  const PROB_TITLE = 'The chance of YES now as Meridian\'s app shows it: the midpoint of Polymarket\'s order book, rounded to a whole percent; until that has loaded, Polymarket\'s last price, else Meridian\'s own estimate, which stops moving once a game starts. Settled questions show their result';
   /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
    *  at what odds, and where each leg stands, so a "won" leg can be read together with the rest of the combo. */
   async function openQuestion(c, ctx) {
@@ -508,7 +542,7 @@
     const open = () => !ctx.signal.aborted && document.body.contains(body);
     const legView = (k) => { const q = snapQuestion(k.id); return q ? qView(q) : { end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: !!k.nonDecisive, question: k.q }; };
     const render = () => {
-      const payout = usd(n.pool), stake = usd(n.stake);
+      const payout = cents(n.pool), stake = cents(n.stake);
       // the bettor's position tokens: the share it still held at the verdict and its own result, the sale included (from
       // the caller's ledger, else the snapshot's); a bettor who sold them does not collect the payout
       const { held, ownPnl, soldAll, soldPart, soldPct } = ownership(n, opts);
@@ -537,6 +571,11 @@
       // a one-off counterparty (P.MAKER_MIN) is no market maker; without the snapshot (a slip page opened directly) the
       // plain 'Counterparty' is never wrong
       const makerRow = P._snap && P._snap.agg ? P._snap.agg.makers.find((r) => r.address === n.counterparty) : null;
+      // claimed or not: where the winner's token balance is known (n.toClaim: its own wallet page, or a snapshot that read
+      // the balances), by that, as Meridian's app counts a payout to claim (0x67b3…: settled on Meridian, its 1,055.18
+      // winning tokens still held: not claimed); else by the API's settled flag
+      const tc = n.toClaim != null && !n.nd ? n.toClaim : null;
+      const claimedAt = n.settled && n.settledAt ? U.fmtDateTime(n.settledAt) : null;
       U.replace(body,
         h('div.row.wrap', { style: { gap: '8px', marginBottom: '12px' } }, pv ? pendingChip(pv) : resultChip(n, false, held), h('span', U.capitalize(what)), h('span.grow'),
           // an open slip can be copied: Meridian's page for it (Add To Slip), under the site's referral code
@@ -550,19 +589,22 @@
           UI.stat('Payout', payout, n.decided ? (n.won ? (soldAll ? 'to the token buyer' : soldPart ? `${U.fmtPct(held * 100, { dp: 0 })} to the bettor` : 'to the bettor') : n.nd ? 'split back' : 'to the market maker') : pv === 'lost' ? 'had it won' : 'if it wins'),
           UI.stat('Odds', oddsPct(n.odds), mult(n.multiple) + ' the stake'),
           // a self-match moves no money: the wallet's two sides cancel out
-          self ? UI.stat('Wallet PnL', usd(0), n.decided ? 'bettor ' + usd(n.pnl, { sign: true }) + ', maker ' + usd(-n.pnl, { sign: true }) + ': the same wallet' : 'the same wallet on both sides')
-            : ownPnl != null && (n.decided || soldAll || soldPart) ? UI.stat(n.decided ? 'Bettor PnL' : 'Bettor PnL so far', usd(ownPnl, { sign: true }), 'incl. selling its tokens · ' + (n.decided ? usd(n.pnl, { sign: true }) + ' had it kept them' : pv === 'lost' ? usd(-n.stake, { sign: true }) + ' had it kept them' : usd(n.cp, { sign: true }) + ' had it kept them and won'), U.pnlClass(ownPnl))
-              : n.decided ? UI.stat('Bettor PnL', usd(n.pnl, { sign: true }), n.won ? 'payout − stake' : null, U.pnlClass(n.pnl))
+          self ? UI.stat('Wallet PnL', cents(0), n.decided ? 'bettor ' + cents(n.pnl, { sign: true }) + ', maker ' + cents(-n.pnl, { sign: true }) + ': the same wallet' : 'the same wallet on both sides')
+            : ownPnl != null && (n.decided || soldAll || soldPart) ? UI.stat(n.decided ? 'Bettor PnL' : 'Bettor PnL so far', cents(ownPnl, { sign: true }), 'incl. selling its tokens · ' + (n.decided ? cents(n.pnl, { sign: true }) + ' had it kept them' : pv === 'lost' ? cents(-n.stake, { sign: true }) + ' had it kept them' : cents(n.cp, { sign: true }) + ' had it kept them and won'), U.pnlClass(ownPnl))
+              : n.decided ? UI.stat('Bettor PnL', cents(n.pnl, { sign: true }), n.won ? 'payout − stake' : null, U.pnlClass(n.pnl))
                 // lost on its legs, only the settlement pending: what the bettor stands to lose, not what it could win
-                : pv === 'lost' ? UI.stat('Bettor PnL', usd(-n.stake * held || 0, { sign: true }), (held < 0.999 ? 'on the tokens it still holds, ' : '') + 'once Meridian settles it', 'neg')
-                  : UI.stat('To win', usd(n.cp * held, { sign: true }), held < 0.999 ? 'on the tokens it still holds' : 'the maker\'s collateral'),
+                : pv === 'lost' ? UI.stat('Bettor PnL', cents(-n.stake * held || 0, { sign: true }), (held < 0.999 ? 'on the tokens it still holds, ' : '') + 'once Meridian settles it', 'neg')
+                  : UI.stat('To win', cents(n.cp * held, { sign: true }), held < 0.999 ? 'on the tokens it still holds' : 'the maker\'s collateral'),
           UI.stat('Vig', n.vig == null || self ? '—' : pp(n.vig), self ? 'not counted: one wallet on both sides' : 'odds vs Polymarket at bet time' + (n.sameEvent ? ' · some legs on one match or asset' : ''))),
         h('div.kv', { style: { marginBottom: '14px' } },
           kv('Bettor', who(n.predictor)), kv(makerRow && P.isMarketMaker(makerRow.n) ? 'Market maker' : 'Counterparty', n.counterparty ? who(n.counterparty) : null),
           kv('Note', self ? 'Self-matched: the same wallet is the bettor and the market maker, so it nets to zero. It is left out of the Predict figures (totals, leaderboards, vig, the wallet\'s own page and the Questions page).' : null),
           kv('Placed', U.fmtDateTimeS(n.t) + ' · ' + U.fmtAgo(n.t)),
           kv('Settled', decidedAt ? h('span', { title: 'When the slip settled on Meridian, claimed or not: a win when its last leg settled, a loss when the first leg settled against the bettor (each leg at Meridian\'s own settlement time where known, else its Polymarket resolution or listed end)' }, U.fmtDateTime(decidedAt)) : null),
-          n.won || n.nd ? kv('Paid out', n.settled && n.settledAt ? 'claimed ' + U.fmtDateTime(n.settledAt) : n.unclaimed ? (soldAll ? 'the buyer\'s to claim' : 'not claimed yet') : null) : kv('Claimed', n.settled && n.settledAt ? 'by the market maker, ' + U.fmtDateTime(n.settledAt) : null),
+          n.won || n.nd ? kv('Paid out', tc === true ? 'not claimed yet' + (claimedAt ? ` (settled on Meridian ${claimedAt}, the winning tokens still held)` : '')
+            : tc === false ? (claimedAt ? 'claimed ' + claimedAt : soldAll ? 'the buyer\'s to claim' : 'claimed: the bettor no longer holds the winning tokens')
+              : claimedAt ? 'claimed ' + claimedAt : n.unclaimed ? (soldAll ? 'the buyer\'s to claim' : 'not claimed yet') : null)
+            : kv('Claimed', tc === true ? 'not yet by the market maker' : claimedAt ? 'by the market maker, ' + claimedAt : tc === false ? 'by the market maker' : null),
           kv('Category', n.cat || null),
           kv('Secondary market', soldAll ? 'the bettor sold all its position tokens before the verdict' : soldPart ? `the bettor sold ${soldPct} of its position tokens before the verdict`
             : !traded ? null
@@ -635,14 +677,16 @@
     return rec ? { n: P.full(rec), builtAt: f.builtAt } : mem || { n: null, builtAt: f.builtAt };
   }
   /** The pick's chance now, { p, live }: 1 or 0 once its question is settled on Meridian (a 50/50 is a loss) or resolved
-   *  on Polymarket; else Polymarket's price once loaded and open; else (live false) the snapshot's estimate (k.ep,
-   *  Meridian's estimatedPrice, which freezes once a game starts). */
+   *  on Polymarket; else the order book's midpoint as Meridian's app shows it (midNow, while fresh), else Polymarket's
+   *  last price once loaded and open; else (live false) the snapshot's estimate (k.ep, Meridian's estimatedPrice, which
+   *  freezes once a game starts). */
   const pickNow = (k) => {
     if (k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false)) return { p: !k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0, live: true };
     const m = k.id ? R.get(k.id).m : null;
     if (m && (m.closed || m.uma === 'resolved')) { const y = R.resolvedYes(m); if (y === 'void') return { p: 0, live: true }; if (y === true || y === false) return { p: y === !!k.yes ? 1 : 0, live: true }; }
-    const live = !!(m && m.prices && m.prices.length && Number.isFinite(m.prices[0]) && !m.closed);
-    const yes = live ? m.prices[0] : k.ep;
+    const mid = midNow(k.id);
+    const live = mid != null || !!(m && m.prices && m.prices.length && Number.isFinite(m.prices[0]) && !m.closed);
+    const yes = mid != null ? mid : live ? m.prices[0] : k.ep;
     return { p: yes == null ? null : k.yes ? yes : 1 - yes, live };
   };
   const pickProb = (k) => pickNow(k).p;
@@ -652,7 +696,7 @@
   const legNow = (k) => (k.settled ? (!k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0) : k.ep == null ? null : k.yes ? k.ep : 1 - k.ep);
   const winProb = (picks) => (picks.length && picks.every((k) => legNow(k) != null) ? picks.reduce((p, k) => p * legNow(k), 1) : null);
   // live false: Polymarket has not answered (yet), so the chance is Meridian's estimate from the snapshot (pickNow)
-  const gauge = (p, live) => h('span.gauge-wrap', { title: live ? 'Polymarket now: the chance of this pick' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
+  const gauge = (p, live) => h('span.gauge-wrap', { title: live ? 'Polymarket now: the chance of this pick (its order book\'s midpoint, as Meridian\'s app shows it, once loaded)' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
   const slipHowTo = () => h('div.slip-note', 'Copying opens this slip on Meridian Predict. Press ', h('b', 'Add To Slip'), ' there: its picks join whatever is already in your Meridian slip (clear that first to place exactly this one). Choose your amount and place it; Meridian\'s market makers quote fresh odds, so yours can differ from the ones locked here.');
   const slipBrand = () => h('span.slip-brand', 'Meridian', h('span', 'DataHub'));
 
@@ -720,14 +764,16 @@
         : own.soldPart ? ` · the bettor ${n.decided ? 'had' : 'has'} sold ${own.soldPct} of its tokens` : '';
       const selfNote = !self ? '' : n.decided ? ' · self-matched: the same wallet was the market maker, so it nets to $0 and is left out of the Predict figures' : ' · self-matched: the same wallet is the market maker';
       const ownLabel = own.ownPnl != null ? ' · the bettor\'s PnL, incl. selling its tokens' : '';
+      // not claimed: the bettor still holds its winning tokens where the snapshot read them (tc), else the API's flag
+      const unclaimedWin = n.toClaim != null ? n.toClaim : n.unclaimed && !own.soldAll;
       const [heroK, heroV, heroCls, heroS] = !n.decided
         // lost on its legs, only the settlement pending: what the bettor loses (its own result where it sold them all)
-        ? (pv === 'lost' ? (own.soldAll && own.ownPnl != null ? ['Lost' + ownLabel, usd(own.ownPnl, { sign: true }), U.pnlClass(own.ownPnl)] : [own.soldPart ? 'Lost · on the tokens it still holds' : 'Lost', usd(-n.stake * own.held || 0, { sign: true }), 'neg'])
-          .concat(`a leg resolved against the bettor on Polymarket; Meridian has not settled the prediction yet · it would have paid ${usd(n.pool)}` + sold)
-          : ['Pays', usd(n.pool), '', (pv === 'won' ? 'every leg has resolved in the bettor\'s favour on Polymarket · Meridian has not settled the prediction yet' : `on a ${usd(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`) + sold])
-        : n.won ? [self ? 'Won · bettor side' : 'Won' + ownLabel, usd(pnl, { sign: true }), U.pnlClass(pnl), `${usd(n.pool)} paid on a ${usd(n.stake)} stake` + (n.unclaimed && !own.soldAll ? ' · not claimed yet' : '') + sold]
-          : n.nd ? ['Void', usd(pnl, { sign: true }), '', 'the stake goes back to the bettor']
-            : [self ? 'Lost · bettor side' : 'Lost' + ownLabel, usd(pnl, { sign: true }), U.pnlClass(pnl), `the ${usd(n.stake)} stake went to the market maker · it would have paid ${usd(n.pool)}` + sold];
+        ? (pv === 'lost' ? (own.soldAll && own.ownPnl != null ? ['Lost' + ownLabel, cents(own.ownPnl, { sign: true }), U.pnlClass(own.ownPnl)] : [own.soldPart ? 'Lost · on the tokens it still holds' : 'Lost', cents(-n.stake * own.held || 0, { sign: true }), 'neg'])
+          .concat(`a leg resolved against the bettor on Polymarket; Meridian has not settled the prediction yet · it would have paid ${cents(n.pool)}` + sold)
+          : ['Pays', cents(n.pool), '', (pv === 'won' ? 'every leg has resolved in the bettor\'s favour on Polymarket · Meridian has not settled the prediction yet' : `on a ${cents(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`) + sold])
+        : n.won ? [self ? 'Won · bettor side' : 'Won' + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `${cents(n.pool)} paid on a ${cents(n.stake)} stake` + (unclaimedWin ? ' · not claimed yet' : '') + sold]
+          : n.nd ? ['Void', cents(pnl, { sign: true }), '', 'the stake goes back to the bettor']
+            : [self ? 'Lost · bettor side' : 'Lost' + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `the ${cents(n.stake)} stake went to the market maker · it would have paid ${cents(n.pool)}` + sold];
       // the whole slip's chance on Polymarket now (legs as independent), against the odds this bettor locked; until
       // Polymarket answers, Meridian's estimates from the snapshot, and the labels say so
       const probs = n.decided ? [] : n.picks.map(pickProb);
@@ -753,7 +799,7 @@
           h('div.v', { class: heroCls }, heroV),
           h('div.s', heroS + selfNote)),
         h('div.slip-strip',
-          cell('Stake', usd(n.stake)),
+          cell('Stake', cents(n.stake)),
           cell('Multiplier', mult(n.multiple), 'Payout ÷ stake'),
           cell('Odds', oddsPct(n.odds, 0), 'Locked odds: stake ÷ payout, the price of one USDe of payout'),
           n.decided ? cell('Settled', decidedAt ? U.fmtDate(decidedAt).replace(', ' + new Date().getFullYear(), '') : '—', decidedAt ? U.fmtDateTime(decidedAt) : null)
@@ -777,7 +823,8 @@
     // a button in the card has the keyboard focus
     const ids = Array.from(new Set(n.picks.filter((k) => k.id && !k.settled).map((k) => k.id)));
     const kbdInside = () => { const a = document.activeElement; return !!a && a !== wrap && wrap.contains(a) && a.matches(':focus-visible'); };
-    const refresh = () => R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !kbdInside()) render(); }).catch(() => {});
+    // (the markets, then their order books' midpoints: the chance as Meridian's app shows it)
+    const refresh = () => R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !kbdInside()) render(); return loadMids(ids, ctx.signal); }).then((ok) => { if (ok && !ctx.signal.aborted && !kbdInside()) render(); }).catch(() => {});
     if (ids.length) refresh();
     // a decided slip without the snapshot's settlement time: its legs' Polymarket resolutions date it (decidedTime), once
     const done = n.decided && !P.legVerdictAt(n) && !n.decidedAt ? Array.from(new Set(n.picks.filter((k) => k.id && k.settled).map((k) => k.id))) : [];
@@ -883,7 +930,7 @@
     };
     // Polymarket for their legs: the chance now, and legs whose market has closed or whose game has finished (no longer
     // shown); R keeps markets five minutes, so asking every minute costs a request at most every five
-    const refreshMarkets = () => { if (ids.length) R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !quiet()) render(); }).catch(() => {}); };
+    const refreshMarkets = () => { if (ids.length) R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !quiet()) render(); return loadMids(ids, ctx.signal); }).then((ok) => { if (ok && !ctx.signal.aborted && !quiet()) render(); }).catch(() => {}); };
     const load = async () => {
       let f = null; try { f = await P.snapshotFile('predict-ideas.json', { signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; }
       if (ctx.signal.aborted || !f || !Array.isArray(f.bettors) || !Array.isArray(f.ideas)) { if (!file) render(); return; }
@@ -911,7 +958,8 @@
     if (!ids.length) return;
     (async () => {
       resLoading++;
-      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); }
+      // the markets first (each row's state and its YES token), then the order book's midpoints (the chance as the app shows it), then the oracle
+      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); if (await loadMids(ids, ctx.signal) && isCurrent()) rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); }
       catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); }
       finally { resLoading--; }
       if (isCurrent()) rerender();
@@ -977,7 +1025,8 @@
       loading = false; renderRows();
       trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
-    resTicker(ctx, () => { if (!loading) renderRows(); });
+    // the countdowns, and the midpoints of the rows on screen (asked again once a minute is up)
+    resTicker(ctx, () => { if (loading) return; renderRows(); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(); }).catch(() => {}); });
     function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
@@ -1032,7 +1081,7 @@
         U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('unresolved on Meridian', 'amber'),
           h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian has not settled the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}.${why} (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
       };
-      let renderSeq = 0; const tracked = new Set();
+      let renderSeq = 0, shown = []; const tracked = new Set();
       const loadEnded = () => {
         const t = Date.now();
         const ids = Array.from(new Set(all.filter((q) => exposure(q) && q.end && q.end < t).flatMap((q) => [qId(q)].concat(R.legIds(q))))).filter((id) => !loadedEnded.has(id));
@@ -1053,7 +1102,7 @@
         if (st.status === 'ended') rows = rows.filter(alive);
         rows = st.status === 'ended' && !headerSorted ? byStage(rows) : U.sortBy(rows, SORTS[st.col.key] || SORTS.sw, st.col.desc);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
-        const slice = rows.slice((page - 1) * PAGE, page * PAGE);
+        const slice = rows.slice((page - 1) * PAGE, page * PAGE); shown = slice;
         U.replace(wrap, UI.table({ sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
           { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
           { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
@@ -1071,7 +1120,8 @@
       }
       U.replace(body, controls, backlog, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
       render();
-      resTicker(ctx, () => { loadEnded(); refreshEndedLabel(); render(true); });
+      // (shown: the rows on screen, whose midpoints are asked again once a minute is up)
+      resTicker(ctx, () => { loadEnded(); refreshEndedLabel(); render(true); loadMids(shown.map(qId), ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) render(true); }).catch(() => {}); });
     });
   }
 
@@ -1109,7 +1159,7 @@
         h('div.stats', UI.stat('Market makers', String(MK.makers.length), MK.oneOff.length ? `+ ${MK.oneOff.length} one-off counterpart${MK.oneOff.length === 1 ? 'y' : 'ies'}` : null),
           UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), snap.remote ? 'committed since launch' : `on predictions placed in the last ${snap.windowDays} days`),
           UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toMakers) >= 1 ? ' · incl. ' + usd(a.secondary.toMakers, { sign: true, compact: true }) + ' from secondary-market trades' : ''), U.pnlClass(makerPnl)),
-          UI.stat('Maker win rate', T.winRate == null ? '—' : U.fmtPct(100 - T.winRate, { dp: 1 })),
+          UI.stat('Maker win rate', T.winRate == null ? '—' : winPct(100 - T.winRate)),
           UI.stat('Avg vig quoted', pp(a.vig.overall.avg), a.vig.coverage ? `locked odds vs Polymarket at bet time · ${U.fmtNum(a.vig.coverage.clean, 0)} of ${U.fmtNum(a.vig.coverage.total, 0)} predictions; combos with legs on the same match or asset left out` : 'locked odds vs Polymarket at bet time'),
           UI.stat('Stake-weighted vig', pp(a.vig.weighted), 'same predictions · big bets count more')),
         h('div.card.tight', tbl, oneOffNote),
@@ -1222,15 +1272,22 @@
     if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.error', 'Invalid address'))); return; }
     await P.renderBettor(body, addr, ctx);
   }
-  /** Bettor model from live queries, or from the per-wallet snapshot file when the API refuses this origin. */
+  /** Bettor model from live queries, or from the per-wallet snapshot file when the API refuses this origin. Besides the
+   *  predictions and history: claim, the winning position tokens the wallet still holds (P.claimRows; live the API's
+   *  claimable positions, offline the file's claim where the snapshot read them; null when unknown), selfNorms / selfN /
+   *  selfVol, its self-matched predictions (left out of every figure; the app counts them, both sides in its volume), and
+   *  pre, its launch-day tests where the figures leave them out (offline: P.PRE_LAUNCH; live they are in, as in the app). */
   async function loadBettor(addr, ctx) {
     const live = await P.live();
     if (live) {
-      const [acct, raw, openPos, tf] = await Promise.all([
-        P.account(addr, { interval: 'DAY', fromSec: P.LAUNCH_SEC, signal: ctx.signal, ttl: 60000 }),
+      const [acct, raw, openPos, tf, claimRaw] = await Promise.all([
+        // from the exchange's start, as the app's all-time figures: the launch-day tests are booked before the launch
+        P.account(addr, { interval: 'DAY', fromSec: P.EXCHANGE_START_SEC, signal: ctx.signal, ttl: 60000 }),
         P.predictionsOf(addr, { maxPages: 12, signal: ctx.signal }),
-        P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: 0 })),
+        P.positionsOf(addr, { settled: false, signal: ctx.signal }).catch(() => ({ nodes: [], totalCount: null })),
         P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal }).catch(() => null),   // the wallet's secondary-market trades, tied to their predictions by the snapshot builder
+        // its Claimable Payout as the app reads it (a list cut short would understate it: then the old way)
+        P.claimableOf(addr, { signal: ctx.signal, maxPages: 40 }).then((r) => (r.truncated ? null : r)).catch((e) => { if (isAbort(e)) throw e; return null; }),
       ]);
       const all = raw.map(P.norm);
       const norms = all.filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n));   // a bet against itself moves no money
@@ -1243,21 +1300,29 @@
       const undecided = (openPos.nodes || []).filter((p) => !(p.pickConfig && p.pickConfig.resolved) && P.usd(p.balance) > 1e-9);
       // the API's picks are the bettor's on either side, so a maker's position wins when they do not all win
       const posRows = undecided.map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null, nonDecisive: !!(k.condition && k.condition.nonDecisive) })); const f = winProb(picks); const fair = f == null ? null : p.side === 'COUNTERPARTY' ? 1 - f : f; return { id: (p.prediction && p.prediction.predictionId) || null, side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
-      return { live: true, norms, truncated: !!raw.truncated, hist, totalVolume: Math.max(0, acct.totalVolume - U.sum(self, (n) => n.stake + n.cp)), selfPending: self.filter((n) => !n.settled).length, balance: acct.balance, posRows, openCount: undecided.length, posCapped: (openPos.totalCount || 0) > (openPos.nodes || []).length, builtAt: Date.now(), trades: (tf && tf.trades) || [], curve: null, daily: null, older: null, windowFrom: null };
+      // openPosTotal: Meridian's Open Positions, the API's own count (positions with a balance, undecided)
+      return { live: true, norms, truncated: !!raw.truncated, hist, totalVolume: Math.max(0, acct.totalVolume - U.sum(self, (n) => n.stake + n.cp)), selfPending: self.filter((n) => !n.settled).length, balance: acct.balance, posRows, openCount: undecided.length, openPosTotal: openPos.totalCount != null ? openPos.totalCount : null, posCapped: (openPos.totalCount || 0) > (openPos.nodes || []).length, builtAt: Date.now(), trades: (tf && tf.trades) || [], curve: null, daily: null, older: null, windowFrom: null,
+        claim: claimRaw ? P.claimRows(claimRaw) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: null };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
-    const norms = f.predictions.map(P.unslim).filter((n) => !P.selfMatch(n));
+    const every = f.predictions.map(P.unslim);
+    // (a self-match is filed under both of its sides, the same wallet: once here)
+    const self = Array.from(new Map(every.filter((n) => n.predictor === addr && P.selfMatch(n)).map((n) => [n.id, n])).values());
+    const norms = every.filter((n) => !P.selfMatch(n));
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
     const open = mine.filter((n) => !n.decided);
     // an open prediction's legs keep Meridian's result where it has settled the question (P.unslim), and a settled leg
-    // counts as won or lost in its chance: its estimatedPrice froze before the settlement
-    const posRows = open.map((n) => ({ id: n.id, side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: !!k.settled, resolvedToYes: k.settled ? k.resolvedToYes : null, nonDecisive: !!k.nonDecisive })), fair: ((p) => (p == null ? null : asMaker ? 1 - p : p))(winProb(n.picks)), t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
+    // counts as won or lost in its chance: its estimatedPrice froze before the settlement; key: the position it belongs
+    // to (P.posKey), so the page can show them as Meridian's positions
+    const posRows = open.map((n) => ({ id: n.id, key: P.posKey(n, asMaker ? 'C' : 'P'), side: asMaker ? 'COUNTERPARTY' : 'PREDICTOR', stake: asMaker ? n.cp : n.stake, payout: n.pool, odds: asMaker ? (n.pool ? n.cp / n.pool : null) : n.odds, picks: n.picks.map((k) => ({ id: k.id, q: k.q, yes: k.yes, ep: k.ep, endTime: k.endTime, settled: !!k.settled, resolvedToYes: k.settled ? k.resolvedToYes : null, nonDecisive: !!k.nonDecisive })), fair: ((p) => (p == null ? null : asMaker ? 1 - p : p))(winProb(n.picks)), t: n.t, ends: n.picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }));
     // build-snapshot.mjs keeps the newest f.newest predictions, then every older one on a pick configuration the wallet
     // traded; a truncated file also carries the curve and the stake per UTC day from every prediction (older files: neither)
     const nHead = f.newest != null ? f.newest : f.truncated ? Math.min(600, f.predictions.length) : f.predictions.length;
     return { live: false, norms, truncated: !!f.truncated, hist: P.historyFromPredictions(mine, addr, asMaker), totalVolume: U.sum(mine, (n) => (asMaker ? n.cp : n.stake)), balance: null, posRows, openCount: open.length, builtAt: f.builtAt, trades: f.trades || [],
+      // the snapshot's read of the wallet's winning tokens still held (an older file has none: then the old way)
+      claim: Array.isArray(f.claim) ? P.claimRows(f.claim) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: P.preLaunchOf(addr),
       curve: Array.isArray(f.curve) && f.curve.length >= 2 ? f.curve : null, daily: Array.isArray(f.daily) ? f.daily : null,
       older: f.truncated ? new Set(f.predictions.slice(nHead).map((p) => p.id)) : null, windowFrom: f.truncated && nHead ? f.predictions[nHead - 1].t : null };
   }
@@ -1273,6 +1338,13 @@
     // the secondary market: PnL follows the position tokens, so a sold prediction's result is no longer (all) this wallet's
     const L = P.ledger(norms, m.trades || [], addr);
     if (!mine.length && !hist.some((x) => x.total) && !L.trades.length) return null;
+    // the winnings to claim from the wallet's winning tokens still held, where read (P.applyClaims; it also marks each won
+    // prediction n.toClaim for the chips and the dialog): a self-matched prediction's pot is set apart, and offline a
+    // balance on none of the file's predictions or trades too where the snapshot leaves out the wallet's launch-day tests
+    // (only where every record names its pick configuration: a file from before pk could not tell its own balances apart)
+    const claim = m.claim ? P.applyClaims(norms, addr, m.claim, { self: m.selfNorms || [], pcs: L.trades.map((t) => t.pc).filter(Boolean), dropUnknown: !m.live && !m.truncated && !!m.pre && norms.every((n) => n.pc || n.pk) }) : null;
+    // a truncated file counts only its newest won predictions: the positions to claim stand for them
+    const claimWon = (c) => (m.truncated ? c.positions : (isMaker ? c.wonC : c.wonP) || (c.payout > 0.005 ? c.positions : 0));
     // The headline figures count from the verdict (claimed or not). The exchange's own history counts only claimed
     // predictions, so the decided-but-unclaimed ones come from the predictions loaded here, which is exact while they are
     // all loaded (up to 300 live, 600 in a snapshot file). A larger account (every market maker, heavy bettors) would
@@ -1285,11 +1357,16 @@
     // snapshot fallback rebuilds its history from claims, so there the unclaimed results are added to the PnL too.
     const totals = hist.reduce((a, x) => { a.won += x.won; a.lost += x.lost; a.pending += x.pending; a.nd += x.nonDecisive; a.pnl += x.pnl; return a; }, { won: 0, lost: 0, pending: 0, nd: 0, pnl: 0 });
     const marketMaker = isMaker && P.isMarketMaker(agg ? agg.n : asMaker.length);   // a one-off counterparty (P.MAKER_MIN) is not a market maker, as on the Market makers page
-    const fig = agg ? null : P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L, truncated: m.truncated, selfPending: m.selfPending || 0 });
+    const fig = agg ? null : P.bettorFigures({ mine, hist, isMaker, live: m.live, ledger: L, truncated: m.truncated, selfPending: m.selfPending || 0, claim });
     const F = agg
-      ? { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: agg.unclaimedWon, unclaimedPayout: agg.unclaimedPayout, roi: agg.roi, roiNote: 'on decided stakes and any sold share of open ones · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true }
+      ? { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: agg.won, lost: agg.lost, nd: agg.nd || 0, open: agg.open, unclaimedWon: claim ? claimWon(claim) : agg.unclaimedWon, unclaimedPayout: claim ? claim.payout : agg.unclaimedPayout, claim, roi: agg.roi, roiNote: 'on decided stakes and any sold share of open ones · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true }
       : Object.assign(fig, { pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''),
         roiNote: 'on decided stakes' + (fig.soldOpen > 0.005 ? ' and the sold share of open ones' : '') + (L.trades.length ? ' · incl. the secondary market' : ''), fromSnap: false });
+    // Open as Meridian's Open Positions (one per pick configuration and side with tokens still held): live the API's own
+    // count, else from the loaded predictions, or the snapshot's row where they are not all loaded (an older snapshot has
+    // none: then undecided predictions, as before). openPreds keeps the undecided predictions (the share card counts them).
+    const openPos = m.live && m.openPosTotal != null ? m.openPosTotal : agg ? (agg.openPos != null ? agg.openPos : null) : fig.openPos;
+    F.openPreds = F.open; F.openIsPos = openPos != null; if (openPos != null) F.open = openPos;
     return { asBettor, asMaker, isMaker, marketMaker, mine, L, agg, F };
   }
   /** Headline figures of a wallet for a summary elsewhere (the perps account's Overview): { m, isMaker, marketMaker, mine, L, F } or null. */
@@ -1313,26 +1390,45 @@
       if (ctx.signal.aborted || !r || !r.via || !r.active || r.address === addr) return;
       U.toast(U.shortAddr(addr, 4) + ' places its predictions from its Predict wallet ' + U.shortAddr(r.via, 4)); location.replace('#/predict/bettor?address=' + r.via);
     };
-    if (!m) { noActivity('No Meridian Predict activity for this address (as of the last snapshot).'); return; }
+    // a wallet whose only predictions are launch-day tests has no file: say so rather than "no activity" (the app counts them)
+    const preOnly = P.preLaunchOf(addr);
+    if (!m) { noActivity(preOnly ? `Only ${preOnly.n} launch-day test prediction${preOnly.n === 1 ? '' : 's'}, dated before ${LAUNCH_DAY}: the snapshot leaves those out (Meridian's app counts them).` : 'No Meridian Predict activity for this address (as of the last snapshot).'); return; }
     const x = await headline(addr, m, ctx.signal);
     if (ctx.signal.aborted) return;
     if (!x) { noActivity('No Meridian Predict activity for this address.'); return; }
     const { norms, hist } = m;
     const { asBettor, asMaker, isMaker, marketMaker, mine, L, agg, F } = x;
     const heldOf = (n) => { const bp = L.byPrediction[n.id]; return bp ? bp.held : 1; };
-    // live positions already carry the balance the wallet holds; the snapshot's open predictions leave out what was sold
-    const posRows = m.posRows.filter((r) => !r.id || m.live || heldOf(r) > 1e-6);
-    // open predictions missing from the table: sold on the secondary market, or (a truncated file) older than its newest predictions
-    const soldOut = m.live ? 0 : m.posRows.length - posRows.length;
-    const older = !m.live && m.truncated ? Math.max(0, F.open - m.posRows.length) : 0;
-    const openNote = posRows.length >= F.open ? String(posRows.length) : [`${posRows.length} of ${U.fmtNum(F.open, 0)} open`, soldOut ? `${U.fmtNum(soldOut, 0)} sold on the secondary market` : null, older ? `${U.fmtNum(older, 0)} older ones not loaded` : null, m.live && m.posCapped ? `the newest ${P.PAGE} positions` : null].filter(Boolean).join(' · ');
+    // live positions already carry the balance the wallet holds; the snapshot's open predictions leave out what was sold,
+    // and become Meridian's positions (P.groupPositions: one per pick configuration and side, its bets' stakes and pots
+    // summed: 0xaedd…'s six bets on one Clarity Act YES are one position, $138 paying $726.72)
+    // (a position matched in full with the other side's tokens it bought back pays the same whatever the verdict and
+    // holds no balance on Meridian, which burns the pair: like one sold out, it is not open; P.riskOf)
+    const riskOf = (r) => { const bp = L.byPrediction[r.id]; return bp ? P.riskOf(bp) : 1; };
+    const heldRows = m.posRows.filter((r) => !r.id || m.live || riskOf(r) > 1e-6);
+    const posRows = m.live ? heldRows : P.groupPositions(heldRows);
+    // open positions missing from the table: sold out or bought back on the secondary market, or (a truncated file)
+    // older than its newest predictions (F.open counts positions held where it can, else undecided predictions, sold
+    // ones included)
+    const soldOut = m.live ? 0 : P.groupPositions(m.posRows.filter((r) => r.id && heldOf(r) <= 1e-6)).length;
+    const matched = m.live ? 0 : P.groupPositions(m.posRows).length - posRows.length - soldOut;
+    const older = !m.live && m.truncated ? Math.max(0, F.open - (F.openIsPos ? posRows.length : m.posRows.length)) : 0;
+    const openNote = [posRows.length >= F.open ? String(posRows.length) : `${posRows.length} of ${U.fmtNum(F.open, 0)} open`, soldOut ? `${U.fmtNum(soldOut, 0)} sold on the secondary market` : null, matched > 0 ? `${U.fmtNum(matched, 0)} closed by buying the other side back` : null, older ? `${U.fmtNum(older, 0)} older ones not loaded` : null, m.live && m.posCapped ? `the newest ${P.PAGE} positions` : null].filter(Boolean).join(' · ');
     // a truncated file holds its newest predictions and the older ones on positions it traded (loadBettor: older)
     const nOlder = m.older ? mine.filter((n) => m.older.has(n.id)).length : 0, nNewest = mine.length - nOlder;
     const loaded = 'newest ' + U.fmtNum(nNewest, 0) + (nOlder ? ` and ${U.fmtNum(nOlder, 0)} older ones on positions it traded on the secondary market` : '');
     // a row's dialog: this wallet's own ledger entry where it is the bettor (what it still held, its result with the sale)
     const openRow = (n) => { const bp = L.byPrediction[n.id]; openPrediction(n, ctx, bp && n.predictor === addr ? { here: addr, traded: true, held: bp.held, ledgerPnl: bp.pnl } : { here: addr, traded: !!bp }); };
-    const last = hist.length ? hist[hist.length - 1] : null;
-    const claimable = last ? last.claimable : 0;
+    // what the site leaves out of a wallet's figures, said on each figure it changes (the app counts them): its
+    // self-matched predictions (one wallet on both sides: no money moves) and, offline, its launch-day tests (P.PRE_LAUNCH)
+    const selfN = m.selfN || 0, pre = m.live ? null : m.pre;
+    const leftN = selfN + (pre ? pre.n : 0);
+    const exclText = leftN ? 'excl. ' + [selfN ? selfN + ' self-matched' : null, pre ? pre.n + ' pre-launch' : null].filter(Boolean).join(' and ') + ' prediction' + (leftN === 1 ? '' : 's') : '';
+    const exclTitle = [selfN ? `${selfN} self-matched prediction${selfN === 1 ? '' : 's'}: this wallet on both sides, which moves no money, so the site leaves ${selfN === 1 ? 'it' : 'them'} out of every figure` : null,
+      pre ? `${pre.n} launch-day test prediction${pre.n === 1 ? '' : 's'}, dated on-chain before ${LAUNCH_DAY}, which the snapshot leaves out` : null].filter(Boolean).join('; ') + '. Meridian\'s app counts them.';
+    const exclEl = (extra) => (exclText ? h('span', { title: exclTitle + (extra || '') }, exclText) : null);
+    // the app's Claimable Payout and the site's share of it (P.applyClaims), where the balances were read
+    const CL = F.claim || null;
     // offline: the cumulative result from the predictions themselves, each at its settlement (js/cards.js
     // curveFromPredictions). A truncated file's curve is the one the snapshot built from every prediction; a file built
     // before it carried one gets none (its loaded predictions are not the whole history). A wallet on both sides is drawn
@@ -1358,29 +1454,48 @@
         const cats = {}, catW = {}; for (const n of mine) { cats[n.cat] = (cats[n.cat] || 0) + 1; catW[n.cat] = (catW[n.cat] || 0) + (isMaker ? n.cp : n.stake); }
         const topCat = agg ? agg.topCat : P.topCategory(cats, catW);
         const decided = (F.won || 0) + (F.lost || 0);
-        const row = { address: addr, pnl: F.pnl, roi: F.roi, won: F.won, lost: F.lost, winRate: decided ? (F.won / decided) * 100 : null, wagered: agg && !m.live ? agg.wagered : m.totalVolume, n: agg ? agg.n : mine.length, avgOdds: F.avgOdds, open: F.open, topCat, first: agg ? agg.first : mine.length ? Math.min(...mine.map((n) => n.t)) : null };
+        // open: undecided predictions, as the cards the snapshot draws count them
+        const row = { address: addr, pnl: F.pnl, roi: F.roi, won: F.won, lost: F.lost, winRate: decided ? (F.won / decided) * 100 : null, wagered: agg && !m.live ? agg.wagered : m.totalVolume, n: agg ? agg.n : mine.length, avgOdds: F.avgOdds, open: F.openPreds != null ? F.openPreds : F.open, topCat, first: agg ? agg.first : mine.length ? Math.min(...mine.map((n) => n.t)) : null };
         const inp = K.walletInput(row, curve && curve.length >= 2 ? curve : null, isMaker);
         if (!inp.curve && !m.live && m.truncated) inp.noCurveText = 'Curve not drawn: over 600 predictions';
         return inp;
       } });
     };
+    // the Volume tile and Meridian's Volume, which also counts both sides of a self-match and the launch-day tests
+    const volume = agg && !m.live ? agg.wagered : m.totalVolume;   // a snapshot file holds only the newest predictions; the aggregate has them all
+    const appVolume = volume + (m.selfVol || 0) + (pre ? pre.v : 0);
+    // the open stake held, and Meridian's Active Stake (its deployed collateral), which still counts open positions whose
+    // tokens were sold (0xaca4…: $0 held, $182 in the app); a truncated file still holds every prediction on a pick
+    // configuration the wallet traded, so the aggregate's open stake less the open ones it sold out of is exact
+    const openAll = m.truncated && agg && !m.live ? agg.openWagered : U.sum(m.posRows, (r) => r.stake);
+    const openHeld = m.truncated && agg && !m.live ? agg.openWagered - U.sum(m.posRows.filter((r) => r.id && riskOf(r) <= 1e-6), (r) => r.stake) : U.sum(posRows, (r) => r.stake);
+    const nPos = (k) => `${U.fmtNum(k, 0)} position${k === 1 ? '' : 's'}`;
     const tiles = h('div.stats',
-      UI.stat(isMaker ? (marketMaker ? 'Maker PnL' : 'Counterparty PnL') : 'Net PnL', usd(F.pnl, { sign: true }), F.pnlNote, U.pnlClass(F.pnl)),
+      // (the exchange's PnL live, from its start: launch-day tests included, as in the app)
+      UI.stat(isMaker ? (marketMaker ? 'Maker PnL' : 'Counterparty PnL') : 'Net PnL', usd(F.pnl, { sign: true }), pre ? h('span', F.pnlNote + ' · ', exclEl()) : F.pnlNote, U.pnlClass(F.pnl)),
       // a wallet that only trades tokens has placed nothing: what it paid and was paid on the secondary market instead
       !mine.length && L.trades.length ? UI.stat('Traded', usd(U.sum(L.trades, (t) => t.paid), { compact: true }), 'on the secondary market · no predictions placed')
-        : UI.stat('Volume', usd(agg && !m.live ? agg.wagered : m.totalVolume, { compact: true }), 'all time'),   // a snapshot file holds only the newest predictions; the aggregate has them all
+        : UI.stat('Volume', usd(volume, { compact: true }), exclText ? h('span', 'all time · ', exclEl(` Meridian's Volume, with them: ${cents(appVolume)}.`)) : 'all time'),
       // a decided loss is a loss whether or not the winner has claimed: only this side's own wins waiting to be collected are called out
       // (a maker's uncollected wins are its own business and change none of these figures: not called out)
-      UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, [F.open ? U.fmtNum(F.open, 0) + ' open' : null, F.unclaimedWon && !isMaker ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · ') || null),
-      UI.stat('Win rate', F.won + F.lost ? U.fmtPct((F.won / (F.won + F.lost)) * 100, { dp: 0 }) : '—', 'of decided predictions'),
+      UI.stat('Record', `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`, ((s) => (s || exclText ? h('span', s, exclText ? [s ? ' · ' : '', exclEl()] : null) : null))([F.open ? (F.openIsPos ? nPos(F.open) : U.fmtNum(F.open, 0)) + ' open' : null, F.unclaimedWon && !isMaker ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · '))),
+      UI.stat('Win rate', F.won + F.lost ? winPct((F.won / (F.won + F.lost)) * 100) : '—', 'of decided predictions'),
       UI.stat('ROI', F.roi == null ? '—' : U.fmtPct(F.roi, { sign: true, dp: 0 }), F.roiNote, U.pnlClass(F.roi)),
       UI.stat(isMaker ? 'Avg bettor odds' : 'Avg odds', pct(F.avgOdds, 0), F.avgLegs ? 'avg ' + U.fmtNum(F.avgLegs, 1) + ' legs' : null),
-      // a truncated file still holds every prediction on a pick configuration the wallet traded, so the aggregate's open
-      // stake less the open ones it sold out of is exact
-      m.balance == null ? UI.stat('Open stake', usd(m.truncated && agg && !m.live ? agg.openWagered - U.sum(m.posRows.filter((r) => r.id && heldOf(r) <= 1e-6), (r) => r.stake) : U.sum(posRows, (r) => r.stake)), m.truncated && !agg && !m.live ? 'in open positions held · among the predictions loaded' : 'in open positions held') : UI.stat('Collateral', usd(m.balance), claimable ? usd(claimable) + ' claimable' : 'in Predict'),
-      UI.stat('Open', U.fmtNum(F.open, 0), F.open === 1 ? 'prediction, not yet decided' : 'predictions, not yet decided'),
-      // winnings are collected in the Meridian app (its Predict portfolio claims them all at once)
-      F.unclaimedWon && !isMaker ? UI.stat('Unclaimed winnings', usd(F.unclaimedPayout), h('span', `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
+      m.balance == null ? UI.stat('Open stake', usd(openHeld), h('span', { title: 'The stakes of its open positions it still holds. Meridian\'s Active Stake (its deployed collateral) also counts open positions whose tokens were sold, or matched with the other side bought back, on the secondary market' + (openAll - openHeld > 0.005 ? `: ${cents(openAll)}` : '') + '.' },
+        (m.truncated && !agg && !m.live ? 'in open positions held · among the predictions loaded' : 'in open positions held') + (openAll - openHeld > 0.005 ? ` · Meridian's Active Stake ${usd(openAll)} counts sold ones too` : '')))
+        // the claimable part is the app's Claimable Payout (its winning tokens still held, read now), not the daily
+        // history's claimable collateral (0x21a6…: $11,582 there, nothing left to claim)
+        : UI.stat('Collateral', usd(m.balance), CL && CL.total > 0.005 ? h('span', { title: 'Meridian\'s Claimable Payout: the winning position tokens this wallet still holds' }, cents(CL.total) + ' claimable') : 'in Predict'),
+      UI.stat('Open', U.fmtNum(F.open, 0), F.openIsPos
+        ? h('span', { title: 'Meridian\'s Open Positions: one per pick configuration and side with tokens still held. Bets on the same picks share one position, and a position whose tokens were all sold is none.' }, `position${F.open === 1 ? '' : 's'} held, not yet decided` + (F.openPreds != null && F.openPreds !== F.open ? ` · ${U.fmtNum(F.openPreds, 0)} undecided prediction${F.openPreds === 1 ? '' : 's'}` : ''))
+        : F.open === 1 ? 'prediction, not yet decided' : 'predictions, not yet decided'),
+      // winnings are collected in the Meridian app (its Predict portfolio claims them all at once). With the balances
+      // (CL) it is the app's Claimable Payout, less a self-matched prediction's pot and, offline, the launch-day tests',
+      // which the site leaves out and names with the app's figure; to the cent, as the app shows what there is to claim
+      !isMaker && (CL ? CL.total > 0.005 : F.unclaimedWon) ? UI.stat('Unclaimed winnings', CL ? cents(F.unclaimedPayout) : usd(F.unclaimedPayout), h('span',
+        CL ? h('span', { title: 'The winning position tokens this wallet still holds: one per pick configuration and side, each pays $1' + (m.live ? '' : `, as the snapshot read them ${U.fmtAgo(m.builtAt)}`) }, `${nPos(CL.positions)} to claim`) : `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
+        CL && (CL.self > 0.005 || CL.other > 0.005) ? h('div.xs', { title: exclTitle }, [CL.self > 0.005 ? `excl. ${cents(CL.self)} on ${CL.selfN === 1 ? 'a self-matched prediction' : CL.selfN + ' self-matched predictions'}` : null, CL.other > 0.005 ? `excl. ${cents(CL.other)} on pre-launch predictions` : null].filter(Boolean).join(' · ') + ` · Meridian's Claimable Payout ${cents(CL.total)}`) : null,
         h('div', { style: { marginTop: '8px' } }, h('a.btn.sm', { href: P.CLAIM_URL, target: '_blank', rel: 'noopener', title: 'Opens the Predict portfolio in the Meridian app, where the wallet\'s owner claims every payout at once' }, U.icon('external'), 'Claim on Meridian'))), 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');
     // Cumulative PnL, every result at its settlement (the verdict), never at its claim. Live: the exchange's own daily
@@ -1405,6 +1520,10 @@
       : m.live ? h2.map((x) => ({ x: x.t, y: Math.max(0, x.volume - (tradeDay[x.t] || 0)) }))
         : (windowDay ? h2.filter((x) => x.t >= windowDay) : h2).map((x) => ({ x: x.t, y: x.volume }));
     const volNote = !m.live && m.truncated && !m.daily && windowDay ? 'since ' + U.fmtDayUTC(windowDay) + ' · newest ' + U.fmtNum(nNewest, 0) + ' predictions' : null;
+    // Meridian's Volume bars are its daily account volume, the wallet's token sales and purchases included (0xc1ce…, Jul
+    // 16: $369.07 there, $170.61 of stakes): the chart says it shows stakes, and how much trading it leaves out
+    const tradedAll = U.sum(L.trades, (t) => t.paid);
+    const volTitle = 'The stakes this wallet placed each UTC day' + (isMaker ? ' (its collateral, as the maker)' : '') + '. Meridian\'s Volume bars also count its sales and purchases of position tokens on the secondary market' + (tradedAll > 0.005 ? ` (${usd(tradedAll)} in all)` : ' (none here)') + '; they are left out so the bars add up to the Volume tile.';
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: !!k.nonDecisive, question: k.q });
     const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id
@@ -1420,13 +1539,15 @@
     // the chance now: the legs' results and Polymarket's prices once loaded (pickProb), else the row's stored chance
     const fairNow = (r) => { const ps = r.picks.map(pickProb); if (!ps.length || ps.some((p) => p == null)) return r.fair; const f = ps.reduce((a, p) => a * p, 1); return r.side === 'COUNTERPARTY' ? 1 - f : f; };
     const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replace(openWrap, UI.table({ cols: [
-      { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q))) },
+      // a position holding several bets on the same picks says so (the row opens the largest of them)
+      { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q)), r.n > 1 ? h('div.xs.dim', { title: 'Bets on the same picks and side share one position token: Meridian shows them as one position, their stakes and payouts summed. A click opens the largest.' }, `${r.n} bets, one position`) : null) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip(marketMaker ? 'maker' : 'counterparty', 'blue') : UI.chip('bettor', '')) },
-      { key: 's', label: 'Stake', num: true, render: (r) => usd(r.stake) },
+      // one position each: its stake and what it pays to the cent, as Meridian's position cards show them ($138 paying $726.72)
+      { key: 's', label: 'Stake', num: true, render: (r) => cents(r.stake) },
       { key: 'o', label: 'Locked odds', num: true, render: (r) => oddsPct(r.odds) },
       { key: 'f', label: 'Chance now', num: true, title: 'This position\'s chance to win now: its legs multiplied, taken as independent. A leg Meridian has settled counts as won or lost, an open one at Polymarket\'s price; until Polymarket has loaded, Meridian\'s estimate' + (m.live ? '' : ' from the snapshot') + ' (marked), which stops moving once a game starts',
         render: (r) => { const f = fairNow(r); if (f == null) return h('span.dim', '—'); const live = r.picks.every(pickLive); return h(live ? 'span' : 'span.dim', pct(f, 1), live ? null : h('span.xs', m.live ? ' (estimate)' : ' (snapshot)')); } },
-      { key: 'p', label: 'Pays', num: true, render: (r) => h('span', usd(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
+      { key: 'p', label: 'Pays', num: true, render: (r) => h('span', cents(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
       { key: 'e', label: 'Resolution', title: 'Where each leg is in the Polymarket / UMA resolution pipeline', render: legCell },
     ], rows, empty: lost.length ? 'Nothing still in play' : soldOut ? 'No open position still held: sold on the secondary market' : 'No open positions', onRow: byId.size ? (r) => { const n = r.id && byId.get(r.id); if (n) openRow(n); } : null }), lost.length ? h('div.footer-note', { style: { textAlign: 'left', padding: '10px 14px' } }, `${lost.length} position${lost.length > 1 ? 's' : ''} (${usd(U.sum(lost, (r) => r.stake))} staked) with a leg already resolved against this bettor (settled on Meridian, or resolved on Polymarket) only await the prediction's settlement on Meridian.`) : null); };
     renderOpen();
@@ -1434,8 +1555,10 @@
     // row also says whether a leg already decided it (pendingVerdict)
     const legIds = posRows.flatMap((r) => r.picks.map((k) => k.id)).filter(Boolean);
     const allIds = Array.from(new Set(legIds.concat(mine.filter((n) => !n.decided).flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean))));
-    if (allIds.length) (async () => { try { await R.load(allIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); if (mine.some((n) => !n.decided && pendingVerdict(n))) renderHist(); if (legIds.length) { await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
-    resTicker(ctx, renderOpen);
+    // (then the open legs' order-book midpoints, for the chance now as Meridian's app shows it, asked again each minute)
+    const openLegIds = Array.from(new Set(legIds));
+    if (allIds.length) (async () => { try { await R.load(allIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); if (mine.some((n) => !n.decided && pendingVerdict(n))) renderHist(); if (await loadMids(openLegIds, ctx.signal) && !ctx.signal.aborted) renderOpen(); if (legIds.length) { await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
+    resTicker(ctx, () => { renderOpen(); if (openLegIds.length) loadMids(openLegIds, ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) renderOpen(); }).catch(() => {}); });
     let hpage = 1; const histWrap = h('div');
     const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ cols: [
       { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
@@ -1507,10 +1630,10 @@
     if (!opts.embedded) P.wallets.ownerOf(addr).then((o) => { if (o && !ctx.signal.aborted) U.replace(ownerEl, h('span.dim', 'Predict wallet of '), h('a.addr', { href: U.accountUrl(o, null, 'predict'), title: 'Owner ' + o + ' · its account page (its perps account, if it has one)' }, U.shortAddr(o, 4)), U.copyBtn(o)); }).catch(() => {});
     const nPred = (k) => `${U.fmtNum(k, 0)} prediction${k === 1 ? '' : 's'}`;
     U.replace(el, h('div.stack',
-      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip(marketMaker ? 'market maker' : 'one-off counterparty', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? `${nPred(agg.n)} · the tables show the ${loaded}; the figures below cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${nPred(mine.length)} · figures from Meridian's own account history` : `${nPred(mine.length)} · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip(marketMaker ? 'market maker' : 'one-off counterparty', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? `${nPred(agg.n)} · the tables show the ${loaded}; the figures below cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${nPred(mine.length)} · figures from Meridian's own account history` : `${nPred(mine.length)} · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`, exclText ? [' · ', exclEl()] : null), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       // offline, a truncated file's curve and daily volume are the snapshot's, from every prediction; say what is shown when they are not
-      h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), noCurve ? h('div.empty.small', 'This wallet has more predictions than its file holds; its curve comes with the next snapshot') : h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Daily volume (UTC)'), h('span.grow'), volNote ? h('span.dim.xs', volNote) : null), h('div.chart-box.sm', cVol))),
+      h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), noCurve ? h('div.empty.small', 'This wallet has more predictions than its file holds; its curve comes with the next snapshot') : h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: volTitle }, 'Stakes per day (UTC)'), h('span.grow'), h('span.dim.xs', { title: volTitle }, (volNote ? volNote + ' · ' : '') + 'excl. token trades')), h('div.chart-box.sm', cVol))),
       UI.card('Open positions', openWrap, h('span.dim.small', openNote)),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
@@ -1520,6 +1643,6 @@
     // the daily history (live: statsHistory; offline without a verdict curve: rebuilt per day) is in UTC days, a verdict
     // curve in exact settlement times
     if (!noCurve) C.timeSeries(cPnl, { points: pnlPts, color: endPnl >= 0 ? col.green : col.red, label: 'PnL', titleFmt: vc ? undefined : U.fmtDayUTC });
-    C.timeSeries(cVol, { points: volPts, type: 'bar', color: col.accent, label: 'Volume', titleFmt: U.fmtDayUTC });
+    C.timeSeries(cVol, { points: volPts, type: 'bar', color: col.accent, label: isMaker ? 'Collateral' : 'Stakes', titleFmt: U.fmtDayUTC });
   };
 })();

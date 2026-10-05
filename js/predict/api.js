@@ -8,6 +8,23 @@
   P.CHAIN = 4663;
   P.PAGE = 25;                        // hard cap of the API
   P.LAUNCH_SEC = 1782691200;          // 2026-06-29 00:00 UTC, day before the first prediction
+  // where Meridian's app starts a wallet's all-time history (its Predict portfolio: All Time P&L sums the daily account
+  // history from 2026-06-22). A live wallet page reads from here, so its PnL is the app's: the launch-day tests below are
+  // booked on 06-26 and 06-28 (0xd461…: −$8.86 from here, −$9.21 from the launch)
+  P.EXCHANGE_START_SEC = 1782086400;  // 2026-06-22 00:00 UTC
+  /** The launch-day test predictions, dated on-chain before P.LAUNCH_SEC (the API files them there, with no questions
+   *  attached; their createdAt reads 2026-06-30): the snapshot leaves them out, while the app's figures count them. A
+   *  closed set: read 2026-10-05, the 15 the snapshot's preLaunch counts, every one against 0xa386…642e. Per wallet: n
+   *  predictions, v its own collateral in them (what the app's Volume adds). A page from the snapshot says what it leaves
+   *  out with these. */
+  P.PRE_LAUNCH = {
+    '0xd4612bd63dbe6beea4a5c8fecb5011ddbd8fb976': { n: 9, v: 9 },
+    '0x06b96f1c2ebe7090b67f44e1bd632eb6cece7524': { n: 3, v: 3 },
+    '0xcfe62de3d326483be5ce261005e87fbb65175631': { n: 2, v: 2 },
+    '0x9b5b33cd190a97d152ad4a2caa06aca8d076af0d': { n: 1, v: 0.53 },
+    '0xa3868b2baf1fd8e1baf036abf5055815563b642e': { n: 15, v: 1.010346939, maker: true },
+  };
+  P.preLaunchOf = (addr) => P.PRE_LAUNCH[String(addr || '').toLowerCase()] || null;
   P.APP_URL = 'https://app.meridian.xyz/predict?ref=' + MD.api.REF;
   P.CLAIM_URL = 'https://app.meridian.xyz/portfolio/prediction-stats?ref=' + MD.api.REF;   // the app's Predict portfolio: "Claimable Payout" and its claim button
   /** A prediction id as the exchange writes it (and as a slip link carries it). */
@@ -158,10 +175,41 @@
     return { totalVolume: P.usd(acc.stats && acc.stats.totalVolume), balance: P.usd(acc.collateralBalance && acc.collateralBalance.amount), history: hist };
   };
   P.predictionsOf = (address, o = {}) => P.predictionsAll({ filter: Object.assign({ participant: address.toLowerCase() }, o.filter || {}), maxPages: o.maxPages || 12, signal: o.signal, onPage: o.onPage });
+  // positions(settled: false).totalCount is Meridian's Open Positions: it counts the rows with a balance (checked
+  // 2026-10-05: 0xaca4… lists 7 rows sold to 0 and counts 0), one per pick configuration and side, undecided only
   P.positionsOf = async function (holder, { settled = false, first = 25, after, signal } = {}) {
     const d = await P.gql(`query Pos($h: Address!, $s: Boolean, $first: Int!, $after: String) { positions(first: $first, after: $after, filter: { holder: $h, settled: $s }, orderBy: { field: CREATED_AT, direction: DESC }) { totalCount pageInfo { hasNextPage endCursor } nodes { ${P.F.position} } } }`,
       { h: holder.toLowerCase(), s: settled, first: Math.min(P.PAGE, first), after: after || null }, { signal });
     return d.positions;
+  };
+  /** Every position token the holder can claim now, as Meridian's app reads them for its Claim card (positions(holder,
+   *  claimable: true): decided, with a balance; P.claimRows keeps the winning side). All pages, up to maxPages. */
+  P.claimableOf = async function (holder, { signal, maxPages = 20 } = {}) {
+    const rows = []; let after = null, pages = 0;
+    do {
+      const d = await P.gql('query Claim($h: Address!, $first: Int!, $after: String) { positions(first: $first, after: $after, filter: { holder: $h, claimable: true }) { totalCount pageInfo { hasNextPage endCursor } nodes { side balance pickConfig { pickConfigId result } prediction { predictionId } } } }',
+        { h: holder.toLowerCase(), first: P.PAGE, after }, { signal });
+      rows.push(...d.positions.nodes); pages++;
+      after = d.positions.pageInfo.hasNextPage ? d.positions.pageInfo.endCursor : null;
+    } while (after && pages < maxPages);
+    rows.truncated = !!after;
+    return rows;
+  };
+
+  // ---------- Polymarket order book ----------
+  /** Polymarket's CLOB midpoints, the chance Meridian's app shows for a question (the YES token's midpoint while no older
+   *  than two minutes, else Meridian's estimatedPrice): token id → midpoint, for up to 100 tokens a request. Public, any
+   *  origin (checked 2026-10-05: POST /midpoints answers with Access-Control-Allow-Origin *). */
+  P.CLOB_MIDPOINTS = 'https://clob.polymarket.com/midpoints';
+  P.midpoints = async function (tokens, { signal } = {}) {
+    const out = {}; const list = Array.from(new Set((tokens || []).map(String).filter(Boolean)));
+    for (let i = 0; i < list.length; i += 100) {
+      const r = await fetch(P.CLOB_MIDPOINTS, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(list.slice(i, i + 100).map((t) => ({ token_id: t }))), signal });
+      if (!r.ok) throw new GqlError('midpoints ' + r.status, r.status);
+      const j = await r.json();
+      for (const [t, v] of Object.entries(j || {})) { const p = Number(v); if (Number.isFinite(p) && p >= 0 && p <= 1) out[t] = p; }
+    }
+    return out;
   };
 
   // ---------- questions ----------

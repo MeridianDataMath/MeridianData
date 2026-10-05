@@ -15,6 +15,9 @@
     return st;
   };
   const usd0 = (v) => U.fmtUsd(v, { dp: 0 });
+  /** The agent's leverage two ways, from its status: as Meridian's app shows it (positions at the mark ÷ the balance, i.e.
+   *  every pool's amount) and on equity, the one the agent's max leverage caps; null when the divisor is not above 0 */
+  const leverage = (S) => ({ balance: U.num(S.balance) > 0 ? U.num(S.notional) / U.num(S.balance) : null, equity: U.num(S.equity) > 0 ? U.num(S.notional) / U.num(S.equity) : null });
   const code = (text) => h('pre.code', h('code', text));
   const files = ['copy-agent.mjs', 'package.json', 'package-lock.json', 'config.example.json'];
 
@@ -54,6 +57,7 @@
   }
 
   MD.copyagentPage = {
+    leverage,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Copy agent'));
       const st = load(); const save = () => U.storage.set(KEY, st); save();   // a token made just now must be the one next time too
@@ -72,7 +76,7 @@
         h('details', { style: { marginTop: '6px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'What the agent does and does not do'), h('ul.small.muted', { style: { margin: '6px 0 0 18px', padding: 0, lineHeight: '1.6' } },
           h('li', 'It mirrors position changes it sees on the leader\'s fill stream, sized by your rule; it reads its own fills back from the exchange after every order rather than assuming them, and re-reads the leaders every five minutes and on every hint, so a close or a reduction missed over a disconnect is caught up. An opening missed over a disconnect, heard of late, or filled far from the mark is listed as not copied and never chased.'),
           h('li', 'It sizes every opening and add and checks every limit at the exchange\'s mark, not at the leader\'s price, with a hard ceiling per order and per position in every sizing mode. Openings, adds and reductions need a mark price and go out as limit IOC orders capped at the mark ± your slippage (or as market orders if you choose); closes (the leader closed or reversed, a re-read found the leader flat, Close all, a risk stop set to close everything, an orphan you set to be closed) always go out as market orders. It never chases an unfilled opening (an unfilled reduction is added to the next one), never opens a position in a market another followed leader already occupies, and never opens or adds while its view of your own account is more than two minutes old.'),
-          h('li', 'Stops: today\'s loss and the drawdown from the peak, both with deposits and withdrawals taken out so a transfer cannot trip or mask them. A stop blocks new and larger positions (or closes everything, by config) until you resume.'),
+          h('li', 'Stops: today\'s loss and the drawdown from the peak, both on Meridian\'s Trade Equity (funding and position fees count when they are charged, not when they settle) and both with deposits and withdrawals taken out so a transfer cannot trip or mask them. A stop blocks new and larger positions (or closes everything, by config) until you resume.'),
           h('li', 'What it cannot protect you from: the leader being wrong; a partial fill leaving you smaller than intended (later reductions scale to what you actually hold); the exchange rejecting a close because it would breach a limit; your machine, network or the exchange going down while positions are open (they stay open; the next start adopts them). The dashboard lists its latest 30 orders with what the exchange reported; the daily log files in its logs folder keep every one.'))));
 
       // ---- step 1: install
@@ -210,7 +214,7 @@
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxNotionalPerMarket', { type: 'number', min: 0, step: 100, style: { width: '100px' } }), h('span.dim.small', 'USD max per market')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxPriceDeviationPct', { type: 'number', min: 0.5, max: 50, step: 0.5, style: { width: '70px' } }), h('span.dim.small', '% max leader price off the mark')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxOpenPositions', { type: 'number', min: 1, step: 1, style: { width: '70px' } }), h('span.dim.small', 'open positions max')),
-              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxLeverage', { type: 'number', min: 1, step: 0.5, style: { width: '70px' } }), h('span.dim.small', '× max leverage on equity')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxLeverage', { type: 'number', min: 1, step: 0.5, style: { width: '70px' }, title: 'Positions at the mark ÷ equity (Meridian\'s Trade Equity). Meridian\'s own account leverage divides by the balance instead, so this one is the higher of the two whenever the positions\' uPnL, less the funding and position fees charged on them and not yet settled, is negative' }), h('span.dim.small', '× max leverage on equity')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'dailyLossStop', { type: 'number', min: 0, step: 10, style: { width: '90px' } }), h('span.dim.small', 'USD daily loss stop')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'drawdownStopPct', { type: 'number', min: 0, step: 1, style: { width: '70px' } }), h('span.dim.small', '% drawdown stop')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'minOrderUsd', { type: 'number', min: 0, step: 5, style: { width: '70px' } }), h('span.dim.small', 'USD min order')),
@@ -265,7 +269,8 @@
           { key: 'l', label: 'Leader', render: (r) => (r.leader ? who(r.leader) : h('span.dim', '—')) },
           { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
           { key: 's', label: 'Side', render: (r) => U.sideEl(r.e.side > 0, true) },
-          { key: 'sz', label: 'Size', num: true, render: (r) => U.fmtUsd(r.entryNotional, { dp: 0 }) },
+          // entry notional with the quantity opened beside it; Meridian's Size (that quantity at the exit price) in the tooltip
+          { key: 'sz', label: 'Entry notional', num: true, title: 'What the agent put into the position: the opening order plus every add, each at its own fill price, with the quantity opened beside it. Meridian\'s Closed P&L "Size" is that quantity valued at the exit price instead: hover a row for it', render: (r) => { const prod = MD._agentRef && MD._agentRef.byId[r.e.pid]; return h('span', { title: MD.copysimPage.sizeTitle(r.e, r.entryNotional, prod) }, U.fmtUsd(r.entryNotional, { dp: 0 }), h('span.dim.xs', ' · ' + U.fmtQty(MD.copysimPage.closedSize(r.e).qty, prod && prod.lotSize))); } },
           { key: 'h', label: 'Held', num: true, render: (r) => U.fmtDuration(r.hold) },
           { key: 'net', label: 'Net', num: true, render: (r) => h('span', U.pnlEl(r.net, { dp: 2 }), r.liq ? UI.chip('LIQ', 'red') : null) },
           { key: 'sl', label: 'Slippage', num: true, title: 'your fill price against the leader\'s, size-weighted over the position\'s fills; "at mark" when the leader\'s price was unknown (a close after a resync)', render: (r) => (r.slipBps == null ? h('span.dim', r.standIn ? 'at mark' : '—') : h('span', { class: r.slipBps > 0 ? 'neg' : 'pos' }, (r.slipBps > 0 ? '+' : '') + U.fmtNum(r.slipBps, 1) + ' bps', r.standIn ? h('span.dim.xs', ' · part at mark') : null)) },
@@ -290,6 +295,10 @@
         const lpRows = [];
         for (const l of S.leaders || []) for (const [pid, q] of Object.entries((S.leaderPos || {})[l.sid] || {})) if (q) lpRows.push({ l, pid, ticker: ref && ref.byId[pid] ? ref.byId[pid].displayTicker : pid, q, mine: (S.own || {})[pid], owner: (S.marketOwner || {})[pid] === l.sid });
         const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : '—');
+        // equity is Meridian's Trade Equity (balance + gross uPnL − funding and position fees charged and not yet settled);
+        // an agent from before that sends no `unsettled`, and its equity is the gross one: said, not hidden
+        const netEq = S.unsettled != null; const upnl = U.sum(Object.values(S.own || {}), (o) => U.num(o.upnl));
+        const lev = leverage(S);
         U.replace(dash,
           h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } },
             UI.chip(S.paused ? 'paused' : S.tripped ? 'risk stop' : 'running', S.paused ? 'amber' : S.tripped ? 'red' : 'green'), S.dry ? UI.chip('DRY RUN · nothing is placed', 'amber') : UI.chip('LIVE · real orders', 'red'), UI.chip('socket ' + S.ws + (S.reconnects ? ' · ' + S.reconnects + ' reconnect' + (S.reconnects > 1 ? 's' : '') : ''), S.ws === 'open' ? 'green' : 'amber'),
@@ -303,10 +312,13 @@
           Date.now() - (S.ownAt || 0) > 120000 ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, 'The agent has not managed to read the copy account for over two minutes: no new positions until it can.') : null,
           S.flowsErr ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, 'The agent cannot read deposits and withdrawals right now: the loss stops wait until it can.') : null,
           h('div.stats',
-            UI.stat('Equity', usd0(S.equity || 0), `${usd0(S.balance || 0)} balance · ${usd0(S.notional || 0)} in positions`),
-            UI.stat('Today', U.fmtUsd(S.dayPnl || 0, { sign: true, dp: 0 }), 'since 00:00 UTC, or since the agent\'s first reading today if that was later · deposits and withdrawals taken out' + (S.risk && S.risk.dailyLossStop ? ` · stop at −${usd0(S.risk.dailyLossStop)}` : ''), U.pnlClass(S.dayPnl || 0)),
+            UI.stat(h('span', { title: 'Meridian\'s Trade Equity: the balance (every margin pool), plus the open positions\' uPnL at the mark, less the funding and position fees charged on them and not yet settled into the balance. Today, From peak and the leverage cap count on it.' }, 'Equity'), usd0(S.equity || 0),
+              `${usd0(S.balance || 0)} balance · ${U.fmtUsd(upnl, { sign: true, dp: 0 })} uPnL` + (!netEq ? ' · before unsettled funding and position fees, which Meridian takes out (an older agent: download copy-agent.mjs again)' : S.unsettled ? ` · ${U.fmtUsd(-S.unsettled, { sign: true, dp: 0 })} funding & position fees not yet settled` : '')),
+            UI.stat('Today', U.fmtUsd(S.dayPnl || 0, { sign: true, dp: 0 }), 'since 00:00 UTC, or since the agent\'s first reading today if that was later · deposits and withdrawals taken out' + (netEq ? ' · funding and position fees count when charged' : '') + (S.risk && S.risk.dailyLossStop ? ` · stop at −${usd0(S.risk.dailyLossStop)}` : ''), U.pnlClass(S.dayPnl || 0)),
             UI.stat('From peak', S.ddPct != null ? U.fmtPct(-S.ddPct, { dp: 1 }) : '—', (S.peakSince ? 'since ' + U.fmtDateTime(S.peakSince) : 'since the agent started') + ' · deposits and withdrawals taken out' + (S.risk && S.risk.drawdownStopPct ? ` · stop at −${S.risk.drawdownStopPct}%` : ''), S.ddPct > 0 ? 'neg' : ''),
-            UI.stat('Leverage', S.equity > 0 ? U.fmtNum((S.notional || 0) / S.equity, 2) + '×' : '—', 'positions ÷ equity' + (S.risk && S.risk.maxLeverage ? ` · max ${S.risk.maxLeverage}×` : '')),
+            // Meridian's account leverage divides by the balance; the agent's cap divides by equity (stricter while losing)
+            UI.stat(h('span', { title: 'As Meridian\'s Trade Account Leverage: the open positions at the mark ÷ the balance (every margin pool), not ÷ equity. The agent\'s max leverage counts on equity instead, so its figure is the higher of the two whenever the positions\' uPnL, less the funding and position fees charged on them and not yet settled, is negative.' }, 'Leverage'), lev.balance != null ? U.fmtNum(lev.balance, 2) + '×' : '—',
+              `${usd0(S.notional || 0)} in positions ÷ balance, as Meridian shows it · ${lev.equity != null ? U.fmtNum(lev.equity, 2) + '×' : '—'} on equity` + (S.risk && S.risk.maxLeverage ? `, the agent's max ${S.risk.maxLeverage}×` : '')),
             UI.stat('Signer expires', S.signerExpiresAt ? U.fmtDate(U.num(S.signerExpiresAt)) : (S.dry ? 'dry run' : '—'), 'the agent cannot extend its signer (the exchange currently sets 90 days from linking): before then make a new key (node copy-agent.mjs keygen --force), link it in step 2 and restart the agent')),
           h('div.grid.cols-2', { style: { marginTop: '12px' } },
             UI.card('My positions', UI.table({ cols: [
@@ -314,7 +326,8 @@
               { key: 's', label: 'Side', render: (r) => U.sideEl(r.o.size > 0, true) },
               { key: 'q', label: 'Size', num: true, render: (r) => h('span', U.fmtQty(Math.abs(r.o.size)), h('span.dim.xs', ' · ' + usd0(r.o.notional)), (S.carry || {})[r.pid] > 0 ? h('span.xs', { style: { color: 'var(--amber)' }, title: 'A reduction the exchange would not take yet (below its minimum, or unfilled); it is added to the next reduction of this market' }, ' · −' + U.fmtQty(S.carry[r.pid]) + ' owed') : null) },
               { key: 'e', label: 'Entry', num: true, render: (r) => U.fmtPrice(r.o.entry) },
-              { key: 'u', label: 'uPnL', num: true, render: (r) => U.pnlEl(r.o.upnl, { dp: 2 }) },
+              // gross, as Meridian's positions table shows it; what is charged and not yet settled is what Equity takes out
+              { key: 'u', label: 'uPnL', num: true, title: 'At the mark, before funding and position fees, as Meridian\'s positions table shows it. Beside it: the funding and position fees charged on the position and not yet settled into the balance, which Equity takes out', render: (r) => { const due = U.num(r.o.funding) + U.num(r.o.posFee); return h('span', U.pnlEl(r.o.upnl, { dp: 2 }), Math.abs(due) >= 0.005 ? h('span.dim.xs', { title: `funding ${U.fmtUsd(-U.num(r.o.funding), { sign: true, dp: 2 })} · position fee ${U.fmtUsd(-U.num(r.o.posFee), { sign: true, dp: 2 })}, charged and not yet settled` }, ' · ' + U.fmtUsd(-due, { sign: true, dp: 2 }) + ' unsettled') : null); } },
               { key: 'l', label: 'Following', render: (r) => (r.leader ? who(r.leader) : h('span.dim', 'not from a leader')) },
             ], rows: posRows, empty: 'No open position' })),
             UI.card('Leaders\' positions', UI.table({ cols: [

@@ -9,7 +9,35 @@
   const usd0 = (v, o) => U.fmtUsd(v, Object.assign({ dp: 0 }, o));
   const bpsEl = (v) => (v == null ? h('span.dim', '—') : h('span.dim.xs', ' ' + (v > 0 ? '+' : '') + U.fmtNum(v, 0) + ' bps'));
 
+  /**
+   * Meridian's "Size" for a position episode, as its Closed P&L tab shows it: the quantity opened (the opening order plus
+   * every add) and, in USD, that quantity at the exit price, the exit being the record's liquidationPrice when it has one,
+   * else the average closing price (totalDecreaseNotional ÷ totalDecreaseQuantity). The exchange's own record gives it when
+   * it is this episode's whole position (closed, the same quantity opened); otherwise the episode's fills do (the same
+   * figure when they are the whole position). The site's entry notional prices every opening fill at its own price
+   * instead, so the two differ by the move from entry to exit. An open episode has no exit: usd and exitPx are null.
+   */
+  const closedSize = (e) => {
+    const opened = e.fills.filter((f) => Math.sign(f.q) === e.side), closing = e.fills.filter((f) => Math.sign(f.q) === -e.side);
+    const qty = U.sum(opened, (f) => Math.abs(f.q)); const p = e.pos;
+    if (!e.qty && p && !U.num(p.size) && U.num(p.totalDecreaseQuantity) > 0 && Math.abs(U.num(p.totalIncreaseQuantity) - qty) <= 1e-9 * Math.max(1, qty)) {
+      const exitPx = U.num(p.liquidationPrice) > 0 ? U.num(p.liquidationPrice) : U.num(p.totalDecreaseNotional) / U.num(p.totalDecreaseQuantity);
+      return { qty: U.num(p.totalIncreaseQuantity), exitPx, usd: U.num(p.totalIncreaseQuantity) * exitPx };
+    }
+    const xq = U.sum(closing, (f) => Math.abs(f.q));
+    const exitPx = e.qty || !xq ? null : U.sum(closing, (f) => Math.abs(f.q) * f.px) / xq;
+    return { qty, exitPx, usd: exitPx == null ? null : qty * exitPx };
+  };
+  /** The tooltip of an entry-notional cell: what the figure is, and Meridian's Size for the same position beside it */
+  const sizeTitle = (e, entryNotional, prod) => {
+    const z = closedSize(e); const lot = prod && prod.lotSize, tick = prod && prod.tickSize;
+    return `Entry notional ${U.fmtUsd(entryNotional, { dp: 2 })}: every opening and adding fill at its own price. ` + (z.usd != null
+      ? `Meridian's Closed P&L shows Size as the quantity opened, ${U.fmtQty(z.qty, lot)}, and that quantity at the ${U.fmtPrice(z.exitPx, tick)} exit: ${U.fmtUsd(z.usd, { dp: 2 })}.`
+      : `Still open: ${U.fmtQty(z.qty, lot)} opened; Meridian's positions table shows the size now held at the oracle price instead.`);
+  };
+
   MD.copysimPage = {
+    closedSize, sizeTitle,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Simulator'));
       const addr = String(route.params.address || '').toLowerCase();
@@ -141,9 +169,10 @@
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
             { key: 's', label: 'Side', render: (r) => U.sideEl(r.long, true) },
             { key: 'h', label: 'Held', num: true, render: (r) => h('span', U.fmtDuration(r.hold), r.open ? UI.chip('open', 'blue') : r.liq ? UI.chip('LIQ', 'red') : null) },
-            { key: 'ls', label: 'Leader size', num: true, title: 'Everything the leader put into the position: the opening order plus every add, at its fill prices', render: (r) => usd0(r.L.entryNotional) },
+            // entry notional, not Meridian's Size (quantity opened × the exit price): each cell's tooltip gives that one too
+            { key: 'ls', label: 'Leader entry notional', num: true, title: 'Everything the leader put into the position: the opening order plus every add, each at its own fill price. Meridian\'s Closed P&L "Size" is the quantity opened, valued at the exit price instead: hover a row for it', render: (r) => h('span', { title: sizeTitle(r.e, r.L.entryNotional, ref.byId[r.e.pid]) }, usd0(r.L.entryNotional)) },
             { key: 'ln', label: 'Leader net', num: true, render: (r) => h('span', U.pnlEl(r.L.net, { dp: 2 }), bpsEl(r.leaderBps)) },
-            { key: 'cs', label: 'Copier size', num: true, title: 'Everything the copier would have put in: the opening order plus every add. The maximum per position limits what is held at once, so a position trimmed and added to again can total more than it', render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
+            { key: 'cs', label: 'Copier entry notional', num: true, title: 'Everything the copier would have put in: the opening order plus every add, each at its own price. The maximum per position limits what is held at once, so a position trimmed and added to again can total more than it', render: (r) => h('span', usd0(r.C.entryNotional), r.C.capped ? h('span.dim.xs', { title: 'the leader added beyond the maximum per position; the copier stopped adding' }, ' capped') : null) },
             { key: 'cn', label: 'Copier net', num: true, render: (r) => h('span', U.pnlEl(r.C.net, { dp: 2 }), bpsEl(r.copierBps)) },
             { key: 'dr', label: 'Drift cost', num: true, title: 'What the price move between each of the leader\'s fills and the copier\'s fill cost the copier (+ = a worse price, − = a better one)', render: (r) => (Math.abs(r.C.driftCost) < 0.005 ? h('span.dim', '—') : h('span', { class: r.C.driftCost > 0 ? 'neg' : 'pos' }, U.fmtUsd(r.C.driftCost, { sign: true, dp: 2 }))) },
             { key: 'sl', label: 'Slippage', num: true, render: (r) => (r.C.slipCost ? U.fmtUsd(r.C.slipCost, { dp: 2 }) : h('span.dim', '—')) },
