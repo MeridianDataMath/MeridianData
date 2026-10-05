@@ -78,9 +78,15 @@
   }
 
   // column tooltips shared by the Overview's and the Live tab's open positions
-  const UPNL_TITLE = 'Price PnL at the mark, plus the unsettled funding in the Funding column (received +, paid −), minus unsettled mPerp position fees: the amount that counts in equity, with the Funding column already in it. Meridian\'s app and API show unrealized PnL without these.';
+  const UPNL_TITLE = 'Price PnL at the mark, plus the funding charged since the position\'s last fill and not settled yet (received +, paid −; the unsettled part of the Funding column), minus unsettled mPerp position fees: the amount that counts in equity. Funding settled at earlier fills is already in the balance. Meridian\'s app and API show unrealized PnL without these.';
   const RPNL_TITLE = 'Gross PnL booked on partial closes of this position, before fees and funding (Positions history shows the net)';
-  const FUND_TITLE = 'Unsettled funding (negative = paid); already included in Net unrealized PnL';
+  const FUND_TITLE = 'Funding since the position opened (received +, paid −), as Meridian\'s app shows it: settled into the balance at its fills, plus charged every hour since its last fill and not settled yet. Only the unsettled part is in Net unrealized PnL. Hover a cell for the split';
+  // an open position's funding since it opened: settled at its fills (fundingAccruedUsd) and charged since its last fill,
+  // not settled yet (fundingUsd, the row's funding); both fields are positive when paid
+  const fundCell = (r) => {
+    const settled = -U.num(r.p.fundingAccruedUsd), unsettled = -U.num(r.funding);
+    return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in Net unrealized PnL)` }, U.pnlEl(settled + unsettled));
+  };
   /** liquidation price cell — / none: no price, or a long the pool keeps above maintenance even at zero */
   const liqCell = (r) => {
     if (r.liqPrice == null) return '—';
@@ -317,7 +323,7 @@
             { key: 'tp', label: 'Take profit', num: true, title: 'Nearest take-profit level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.tp) },
             { key: 'sl', label: 'Stop loss', num: true, title: 'Nearest stop-loss level from the account\'s stop / reduce-only orders', render: (r) => exitCell(r, r.sl) },
             { key: 'rpnl', label: 'Realized PnL', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
-            { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: (r) => U.pnlEl(-r.funding) },
+            { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
             { key: 'liq', label: 'Liq. price', num: true, title: 'Estimated liquidation price (pool maintenance margin)', render: (r) => liqCell(r) },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
           ], rows: a.positions, empty: 'No open positions',
@@ -523,7 +529,7 @@
           { key: 'tp', label: 'Take profit', num: true, render: (r) => exitCell(r, r.tp) },
           { key: 'sl', label: 'Stop loss', num: true, render: (r) => exitCell(r, r.sl) },
           { key: 'rpnl', label: 'Realized', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
-          { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: (r) => U.pnlEl(-r.funding) },
+          { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
         ], rows: acct.positions, empty: 'No open positions',
       }));
