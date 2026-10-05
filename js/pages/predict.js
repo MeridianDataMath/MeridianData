@@ -146,14 +146,27 @@
       const tapeNote = h('span.dim.small', 'newest first · refreshes every 20 s');
       const tapeCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live predictions'), tapeNote, h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')), h('div.feed-fill', tapeBody));
       // Recent = the latest settlement first: when the win was decided, never when its payout was claimed, which can be
-      // weeks later (0x4a72…: settled Sep 13, claimed Sep 29); a win counts from its settlement whether claimed or not
-      const winTime = (n) => decidedTime(n) || n.t;
+      // weeks later (0x4a72…: settled Sep 13, claimed Sep 29); a win counts from its settlement whether claimed or not.
+      // A cash-out counts from its last sale when the bettor sold everything or nothing is decided yet (the profit was
+      // made then)
+      // a row on picks whose tokens the bettor traded is its position there (n.group, P.positions): its bets counted
+      // together, its result (sales included) and the share of its tokens it still held; an older snapshot's rows have
+      // the slip's own figures only
+      const soldOut = (n) => (n.group ? n.group.h < 1e-6 : n.held != null && n.held < 1e-6);
+      const fromSale = (n) => !!(n.cashOut && (soldOut(n) || !n.decided));
+      const winTime = (n) => (fromSale(n) ? n.cashOut.t : decidedTime(n) || n.t);
+      const bigStake = (n) => (n.group ? n.group.s : n.stake);
+      // what came back for what went in (stakes and tokens bought); a part cash-out on open picks: what its sales fetched
+      // for what the tokens sold had cost (the rest is still at stake)
+      const bigMult = (n) => { const g = n.group; if (!g) return n.tradedPnl != null ? (n.stake > 0 ? (n.stake + n.tradedPnl) / n.stake : null) : n.multiple;
+        if (n.cashOut && !n.decided && !soldOut(n)) return n.cashOut.cost > 0 ? n.cashOut.cash / n.cashOut.cost : null;
+        return g.in > 0 ? (g.in + g.lp) / g.in : null; };
       const BW_SORTS = [
-        { v: 'recent', label: 'Recent', title: 'Latest settlement first (claimed or not)', val: winTime },
-        { v: 'pnl', label: 'PnL', title: withSec ? 'Largest profit first: payout − stake (a bettor who sold its tokens: its own result)' : 'Largest profit first: payout − stake', val: (n) => bigPnl(n) },
-        { v: 'mult', label: 'Multiplier', title: 'Highest payout ÷ stake first', val: (n) => n.multiple || 0 }];
+        { v: 'recent', label: 'Recent', title: 'Latest settlement first (claimed or not); a cash-out from its last sale when it sold everything or the picks are still open', val: winTime },
+        { v: 'pnl', label: 'PnL', title: withSec ? 'Largest profit first: payout − stake (a bettor who traded its tokens: its own result, sales included)' : 'Largest profit first: payout − stake', val: (n) => bigPnl(n) },
+        { v: 'mult', label: 'Multiplier', title: 'Highest return on the stake first: payout ÷ stake (a bettor who traded its tokens: what came back ÷ what it staked)', val: (n) => bigMult(n) || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
-      const bigPnl = (n) => (n.tradedPnl != null ? n.tradedPnl : n.pnl);
+      const bigPnl = (n) => (n.group ? n.group.lp : n.tradedPnl != null ? n.tradedPnl : n.pnl);
       const bwBody = h('div.feed.bigwins'), bwNote = h('span.dim.small');
       const bwCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Big wins'), bwNote, h('span.grow'), UI.seg(BW_SORTS, bwSort, (v) => { bwSort = v; renderBig(); bwBody.scrollTop = 0; }, 'sm')), h('div.feed-fill', bwBody));
       // the tables count each prediction's own result; only the Bettor net result tile adds the secondary-market trades
@@ -221,21 +234,31 @@
       // its PnL is its own result, the sale included.
       const bigRow = (n) => {
         const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = winTime(n), paid = !!(n.settled && n.settledAt); const pl = bigPnl(n);
-        const when = 'Settled ' + U.fmtDateTime(at) + (paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout not claimed yet') + '\nPlaced ' + U.fmtDateTime(n.t);
-        const sold = n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: n.held < 1e-6 ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, n.held < 1e-6 ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
-        // settled in the bettor's favour, but nobody has collected the payout yet: listed all the same, marked
-        const waiting = !paid && n.unclaimed ? h('span.chip.amber', { title: n.held != null && n.held < 1e-6 ? 'Settled as a win, not claimed yet: the payout is the token buyer\'s to collect' : 'Settled as a win, not claimed yet: the payout is waiting for the bettor' }, 'unclaimed') : null;
+        const co = n.cashOut, g = n.group, dec = decidedTime(n), lost = n.decided && !n.won && !n.nd;
+        const when = (co ? 'Cashed out ' + U.fmtDateTime(co.t) + '\n' + (n.decided ? 'Settled ' + U.fmtDateTime(dec || n.t) : 'Not settled yet') : 'Settled ' + U.fmtDateTime(at))
+          + (n.won && !soldOut(n) ? (paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout not claimed yet') : '') + '\nPlaced ' + U.fmtDateTime(n.t);
+        // tokens sold before the verdict: what they fetched and cost, from how many bets, and how the picks then went
+        const coTitle = co ? `The bettor sold ${U.fmtNum(co.tok, 2)} position tokens before the verdict for ${usd(co.cash)} (they cost ${usd(co.cost)})`
+          + (g && g.n > 1 ? `. From ${g.n} bets on these picks, ${usd(g.s)} staked (the row opens the largest)` : '') + (soldOut(n) ? '' : n.decided ? '; the rest it held to the verdict' : '; it still holds the rest')
+          + (!n.decided ? '. The picks are not decided yet.' : n.won ? (soldOut(n) ? '. The picks won: the payout went to the buyer.' : '. The picks won.') : lost ? (soldOut(n) ? '. The picks lost: it sold before they did.' : '. The picks lost, and with them what it still held.') : '.')
+          + ' PnL is its own result, sales included.' : null;
+        const sold = co ? h('span.chip.amber', { title: coTitle }, soldOut(n) ? 'cashed out' : 'part cashed out')
+          : n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: soldOut(n) ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, soldOut(n) ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
+        // settled in the bettor's favour, but nobody has collected the payout yet: listed all the same, marked (a payout
+        // the bettor sold is the buyer's to collect, and a loss has none)
+        const waiting = !paid && n.unclaimed && n.won && !soldOut(n) ? h('span.chip.amber', { title: 'Settled as a win, not claimed yet: the payout is waiting for the bettor' }, 'unclaimed') : null;
+        const bets = g && g.n > 1 ? h('span.dim.xs', { title: `${g.n} bets by this bettor on the same picks, counted together (they share one position token)` }, g.n + ' bets') : null;
         return predRow(n, 'big', '',
-          h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), waiting, sold,
-          h('span.num.dim.fix.stk.opt', { title: 'Stake' }, usd(n.stake)),
-          h('span.num.fix.mul', { class: on('mult'), title: 'Multiplier: payout ÷ stake (the payout, ' + usd(n.pool) + ', is in the dialog)' }, mult(n.multiple)),
-          h('span.num.fix.pl', { class: on('pnl') + ' ' + U.pnlClass(pl), title: n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
+          h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), bets, waiting, sold,
+          h('span.num.dim.fix.stk.opt', { title: g && g.n > 1 ? `Staked on these picks (${g.n} bets)` : 'Stake' }, usd(bigStake(n))),
+          h('span.num.fix.mul', { class: on('mult'), title: g ? (n.cashOut && !n.decided && !soldOut(n) ? 'What its sales fetched ÷ what the tokens sold had cost (the rest is still at stake)' : 'What came back ÷ what went in (stakes and tokens bought), sales included') : n.tradedPnl != null ? 'What came back ÷ what was staked, sales included' : 'Multiplier: payout ÷ stake (the payout, ' + usd(n.pool) + ', is in the dialog)' }, mult(bigMult(n))),
+          h('span.num.fix.pl', { class: on('pnl') + ' ' + U.pnlClass(pl), title: g ? 'The bettor\'s PnL on these picks, the sale of its tokens included' + (g.n > 1 ? ' (all ' + g.n + ' bets; the opened slip shows its own share)' : n.tradedPnl != null && Math.abs(n.tradedPnl - g.lp) > 0.005 ? ' (the opened slip shows its share of everything this bettor did on these picks, later bets included)' : '') : n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
       };
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        const waiting = bigWins ? bigWins.filter((n) => n.unclaimed).length : 0;
-        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake; for a bettor who sold its position tokens before the verdict, its own result with the sale.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
+        const waiting = bigWins ? bigWins.filter((n) => n.unclaimed && n.won && !soldOut(n)).length : 0;
+        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
@@ -528,7 +551,7 @@
           UI.stat('Odds', oddsPct(n.odds), mult(n.multiple) + ' the stake'),
           // a self-match moves no money: the wallet's two sides cancel out
           self ? UI.stat('Wallet PnL', usd(0), n.decided ? 'bettor ' + usd(n.pnl, { sign: true }) + ', maker ' + usd(-n.pnl, { sign: true }) + ': the same wallet' : 'the same wallet on both sides')
-            : ownPnl != null && (n.decided || soldAll) ? UI.stat(n.decided ? 'Bettor PnL' : 'Bettor PnL so far', usd(ownPnl, { sign: true }), 'incl. selling its tokens · ' + (n.decided ? usd(n.pnl, { sign: true }) + ' had it kept them' : pv === 'lost' ? usd(-n.stake, { sign: true }) + ' had it kept them' : usd(n.cp, { sign: true }) + ' had it kept them and won'), U.pnlClass(ownPnl))
+            : ownPnl != null && (n.decided || soldAll || soldPart) ? UI.stat(n.decided ? 'Bettor PnL' : 'Bettor PnL so far', usd(ownPnl, { sign: true }), 'incl. selling its tokens · ' + (n.decided ? usd(n.pnl, { sign: true }) + ' had it kept them' : pv === 'lost' ? usd(-n.stake, { sign: true }) + ' had it kept them' : usd(n.cp, { sign: true }) + ' had it kept them and won'), U.pnlClass(ownPnl))
               : n.decided ? UI.stat('Bettor PnL', usd(n.pnl, { sign: true }), n.won ? 'payout − stake' : null, U.pnlClass(n.pnl))
                 // lost on its legs, only the settlement pending: what the bettor stands to lose, not what it could win
                 : pv === 'lost' ? UI.stat('Bettor PnL', usd(-n.stake * held || 0, { sign: true }), (held < 0.999 ? 'on the tokens it still holds, ' : '') + 'once Meridian settles it', 'neg')
@@ -1437,13 +1460,22 @@
     const secWrap = h('div'); let spage = 1;
     const saleOf = new Map(L.events.filter((e) => e.kind === 'sale' && e.trade).map((e) => [e.trade, e]));
     const tokValue = (t) => (t.side === 'P' ? t.vP : t.vC);
+    // the bets behind a sale: those of its position (P.positions: this wallet's bets on the picks and side, which share
+    // one token, until a sale leaves it holding nothing), never a bet placed after that
+    const positions = L.trades.length ? P.positions(norms, L, addr, 'P').concat(P.positions(norms, L, addr, 'C')) : [];
+    // (and placed by the time of the sale: a minute's grace for the trade clock running ahead of the bet's)
+    const ownBets = (t) => { const e = saleOf.get(t); const p = e && positions.find((x) => x.sales.includes(e)); return p ? p.bets.filter((n) => n.t <= t.t + 60000) : []; };
+    const betsNote = (t) => { const b = ownBets(t); if (!b.length) return null; const s = U.sum(b, (n) => (t.side === 'C' ? n.cp : n.stake));
+      return h('div.dim.xs', { title: 'This wallet\'s bets on these picks and side: they share one position token, which is what it sold' }, `from ${b.length} bet${b.length === 1 ? '' : 's'} · ${usd(s)} ${t.side === 'C' ? 'collateral' : 'staked'}`); };
     const renderSec = () => { const slice = L.trades.slice((spage - 1) * PAGE, spage * PAGE); U.replace(secWrap, UI.table({ cols: [
       { key: 't', label: 'When', render: (t) => h('span.dim', U.fmtDateTimeS(t.t)) },
-      { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + (t.legs === 2 ? ' leg' : ' legs')) : null) },
+      { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + (t.legs === 2 ? ' leg' : ' legs')) : null, t.seller === addr ? betsNote(t) : null) },
       { key: 'k', label: 'Trade', render: (t) => h('span', t.seller === addr ? UI.chip('sold', 'amber') : UI.chip('bought', 'blue'), h('span.dim.xs', t.seller === addr ? ' to ' : ' from '), bettorLink(t.seller === addr ? t.buyer : t.seller, 3)) },
       { key: 'n', label: 'Tokens', num: true, title: 'A token pays $1 if its side wins', render: (t) => U.fmtNum(t.tokens, 2) },
       { key: 'x', label: 'Price', num: true, title: 'Paid per token, i.e. per $1 of payout', render: (t) => (t.tokens ? U.fmtNum((t.paid / t.tokens) * 100, 1) + '¢' : '—') },
-      { key: 'a', label: 'Amount', num: true, render: (t) => usd(t.paid) },
+      { key: 'a', label: 'Amount', num: true, title: 'A sale: what the buyer paid for the tokens. A purchase: what this wallet paid', render: (t) => usd(t.paid) },
+      // what the tokens sold had cost: the stakes behind them, at this wallet's average cost per token on these picks
+      { key: 'c', label: 'Cost', num: true, title: 'A sale: what the tokens sold had cost this wallet (its stakes on these picks, or what it paid for tokens it bought, at its average cost per token). The result is the amount minus this', render: (t) => { if (t.seller !== addr) return h('span.dim', '—'); const e = saleOf.get(t); return e ? usd(e.cost) : h('span.dim', '—'); } },
       { key: 'o', label: 'Outcome', render: (t) => { const v = tokValue(t); return v == null ? UI.chip('open', 'accent') : v >= 0.999 ? UI.chip('won', 'green') : v <= 1e-9 ? UI.chip('lost', 'red') : UI.chip('void', 'amber'); } },
       { key: 'r', label: 'Result', num: true, title: 'A sale: its price minus what the tokens cost this wallet. A purchase: the payout minus the price, once decided', render: (t) => { if (t.seller === addr) { const e = saleOf.get(t); return e ? h('span', { title: `sold for ${usd(e.cash)} · cost ${usd(e.cost)}` }, pnlEl(e.pnl)) : h('span.dim', '—'); } const v = tokValue(t); return v == null ? h('span.dim', 'open') : pnlEl(t.tokens * v - t.paid); } },
     ], rows: slice, empty: 'No trades' }), L.trades.length > PAGE ? UI.pager({ page: spage, pageSize: PAGE, total: L.trades.length, onPage: (p) => { spage = p; renderSec(); } }) : null); };

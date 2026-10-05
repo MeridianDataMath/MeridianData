@@ -297,6 +297,47 @@
     return { events, pnl, replaced, adj: pnl - replaced, byPrediction, open, trades: mine.slice().sort((a, b) => b.t - a.t) };
   };
 
+  /**
+   * A wallet's positions on the pick configurations it traded, from its ledger L (P.ledger) on one side (P: its bets as
+   * the bettor, C: as the market maker): its bets there and the tokens of that side it bought and sold, split where a
+   * sale leaves it holding nothing, so a bet placed after that starts a new position. Returns [{pc, side, bets (norms),
+   * sales (L's sale events), buys (trades), t0, t1 (its first event and its last sale, or its first event), stake (its
+   * bets' stake or collateral), in (that plus what it paid for tokens), pnl (its sales and matched sets at the ledger's
+   * average cost, and on the last position the verdict on what it still held), held (share of its tokens still held at
+   * its end), out (a sale left it holding nothing), decided}]. A sale out of tokens the wallet did not have yet (the
+   * trade clock running seconds ahead of its own bet) does not split.
+   */
+  P.positions = function (norms, L, addr, side = 'P') {
+    addr = String(addr || '').toLowerCase();
+    const EPS = 1e-6, out = [];
+    const pcs = new Set((L && L.trades || []).filter((t) => t.pc && t.side === side).map((t) => t.pc));
+    for (const pc of pcs) {
+      const bets = (norms || []).filter((n) => n.pc === pc && (side === 'P' ? n.predictor : n.counterparty) === addr && !P.selfMatch(n));
+      const items = bets.map((n) => ({ t: n.t, k: 0, q: n.pool, cash: side === 'P' ? n.stake : n.cp, n }))
+        .concat(L.trades.filter((t) => t.pc === pc && t.side === side && t.buyer === addr && t.seller !== addr).map((t) => ({ t: t.t, k: 1, q: t.tokens, cash: t.paid, buy: t })))
+        .concat(L.events.filter((e) => e.kind === 'sale' && e.pc === pc && e.side === side).map((e) => ({ t: e.t, k: 2, q: e.tokens, sale: e })))
+        .sort((x, y) => x.t - y.t || x.k - y.k);
+      const sets = L.events.filter((e) => e.kind === 'set' && e.pc === pc);
+      const verdict = L.events.find((e) => e.kind === 'verdict' && e.pc === pc) || null;
+      let cur = null, hold = 0;
+      const start = (t) => { cur = { pc, side, bets: [], sales: [], buys: [], t0: t, t1: t, stake: 0, in: 0, got: 0, pnl: 0, held: 0, out: false, decided: !!verdict }; out.push(cur); };
+      for (const it of items) {
+        if (!cur || (cur.out && it.k !== 2)) start(it.t);
+        if (it.k === 2) { hold -= it.q; cur.sales.push(it.sale); cur.pnl += it.sale.pnl; cur.t1 = it.t; if (Math.abs(hold) <= EPS && cur.got > EPS) { hold = 0; cur.out = true; } continue; }
+        hold += it.q; cur.got += it.q; cur.in += it.cash;
+        if (it.n) { cur.bets.push(it.n); cur.stake += it.cash; } else cur.buys.push(it.buy);
+        if (!cur.sales.length) cur.t1 = it.t;
+      }
+      const list = out.filter((p) => p.pc === pc);
+      for (const e of sets) { const p = list.filter((x) => x.t0 <= e.t).pop() || list[0]; if (p) p.pnl += e.pnl; }
+      const last = list[list.length - 1];
+      if (last && verdict) last.pnl += verdict.pnl;
+      if (last && !last.out) last.held = last.got > EPS ? Math.max(0, Math.min(1, hold / last.got)) : 0;
+      for (const p of list) delete p.got;
+    }
+    return out;
+  };
+
   /** A prediction a wallet made against itself. */
   P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
   /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are
@@ -392,6 +433,7 @@
     // when it only makes markets; a wallet in neither (a buyer who never bet) is counted apart.
     let secondary = null;
     const ledgerOf = Object.create(null);   // wallet → its ledger's byPrediction (the wallets that traded)
+    const ledgerAll = Object.create(null);  // wallet → its whole ledger (big wins: its positions, P.positions)
     if (trades && trades.length) {
       const tradedPc = new Set(trades.map((t) => t.pc).filter(Boolean));
       const decidedBy = {}; for (const n of norms) if (n.decided) (decidedBy[n.predictor] || (decidedBy[n.predictor] = [])).push(n);   // each bettor's decided predictions (its best win)
@@ -399,7 +441,7 @@
       const wallets = new Set(); for (const t of trades) if (t.pc) { wallets.add(t.seller); wallets.add(t.buyer); }
       secondary = { trades: trades.length, mapped: trades.filter((t) => t.pc).length, volume: U.sum(trades, (t) => t.paid), toBettors: 0, toMakers: 0, toOthers: 0 };
       for (const w of wallets) {
-        const L = P.ledger(byW[w] || [], trades, w); ledgerOf[w] = L.byPrediction;
+        const L = P.ledger(byW[w] || [], trades, w); ledgerOf[w] = L.byPrediction; ledgerAll[w] = L;
         if (Math.abs(L.adj) < 1e-9 && !Object.keys(L.byPrediction).length) continue;
         const b = bettors[w], m = makers[w];
         const row = b && (!m || b.n >= m.n) ? b : m;
@@ -489,7 +531,7 @@
       vig,
       secondary,
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
-      bigWins: bigWins ? norms.filter((n) => n.won && netPnl(n) > P.BIG_WIN).sort((a, b) => P.decidedAt(b) - P.decidedAt(a)).map((n) => Object.assign(P.slim(n, { ids: true }), sold(n))) : undefined,
+      bigWins: bigWins ? bigList() : undefined,
     };
     // the same {h, lp} for any record the caller writes (the snapshot's slip files); not enumerable, so not in the JSON
     Object.defineProperty(out, 'soldOf', { value: sold, enumerable: false });
@@ -497,8 +539,33 @@
     // a bettor who sold its position tokens before the verdict does not collect the payout: its share still held (h) and
     // its own result on the prediction, the sale included (lp), from its ledger
     function sold(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? { h: r4(bp.held), lp: r4(bp.pnl) } : null; }
-    // what the bettor made on it: payout − stake, or its own result where it traded the tokens (a win sold for little is none)
-    function netPnl(n) { const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id]; return bp ? bp.pnl : n.pnl; }
+    // Big wins: what a bettor made, above P.BIG_WIN. A slip it kept: payout − stake, at its verdict. On picks whose
+    // position tokens it traded, its bets share one token, so a position (P.positions: its bets until a sale leaves it
+    // holding nothing) counts once, at its largest bet, with its own result: its sales, and the verdict on what it still
+    // held. Listed when over P.BIG_WIN as a cash-out (it sold), whatever the verdict, or as a win (it held to a win). A
+    // cash-out counts from its last sale when it sold everything or the picks are still open. Records keep the slip's
+    // own h and lp (sold) and add gp {n, s, pool, in (stakes + tokens bought), lp, h (share still held)} and, for the
+    // sales, co {t, cash, cost, tok} (P.unslim: group, cashOut). Newest first.
+    function bigList() {
+      const out = [];
+      for (const n of norms) {
+        const bp = ledgerOf[n.predictor] && ledgerOf[n.predictor][n.id];
+        if (!bp && n.won && n.pnl > P.BIG_WIN) out.push({ at: P.decidedAt(n) || n.t, rec: P.slim(n, { ids: true }) });
+      }
+      for (const w of Object.keys(ledgerAll)) {
+        for (const pos of P.positions(norms, ledgerAll[w], w, 'P')) {
+          if (!(pos.pnl > P.BIG_WIN) || !pos.bets.length) continue;
+          const cashed = pos.sales.length > 0, won = !!pos.bets[0].won;
+          if (!cashed && !(pos.decided && won)) continue;   // nothing sold and no win: no result of its own yet (or a hedge's)
+          const top = pos.bets.slice().sort((x, y) => y.stake - x.stake || x.t - y.t)[0];
+          const rec = Object.assign(P.slim(top, { ids: true }), sold(top));
+          rec.gp = { n: pos.bets.length, s: r4(pos.stake), pool: r4(U.sum(pos.bets, (x) => x.pool)), in: r4(pos.in), lp: r4(pos.pnl), h: r4(pos.held) };
+          if (cashed) rec.co = { t: pos.t1, cash: r4(U.sum(pos.sales, (e) => e.cash)), cost: r4(U.sum(pos.sales, (e) => e.cost)), tok: r4(U.sum(pos.sales, (e) => e.tokens)) };
+          out.push({ at: cashed && (pos.out || !pos.decided) ? pos.t1 : P.decidedAt(top) || top.t, rec });
+        }
+      }
+      return out.sort((a, b) => b.at - a.at).map((x) => x.rec);
+    }
   };
 
   /** How likely `won` or more wins out of bets with these chances would be by luck alone, if each bet's true chance were
@@ -578,7 +645,9 @@
     const n = { id: s.id, t: s.t, settledAt: s.sa || null, predictor: s.p, counterparty: s.c, stake, cp, pool, odds, multiple: stake > 0 ? pool / stake : null, legs: picks.length, combo: picks.length > 1, picks, fair, fairNow: fair, vigNow: odds != null && fair != null ? odds - fair : null, fairAtBet: null, vig: null, vigPct: null, cat: s.cat, cats: Array.from(new Set(picks.map((k) => k.cat))), settled, decided, unclaimed: decided && !settled, result: settled ? (s.r || null) : decided ? (won ? 'PREDICTOR_WINS' : nd ? 'NON_DECISIVE' : 'COUNTERPARTY_WINS') : null, won, lost: decided && !won && !nd, nd, pnl: decided && !nd ? (won ? cp : -stake) : 0, endsAt: null, tx: s.tx || null, stx: s.stx || null, pc: s.pc || null, pcTraded: !!s.pc,   // a file keeps pc only where its tokens were traded
       // big wins and tape rows: when it was decided (from the source markets' resolution), and for a bettor who traded its
       // position tokens the share it still held at the verdict and its own result, the sale included (P.aggregate)
-      decidedAt: s.da || null, held: s.h == null ? null : s.h, tradedPnl: s.lp == null ? null : s.lp };
+      decidedAt: s.da || null, held: s.h == null ? null : s.h, tradedPnl: s.lp == null ? null : s.lp,
+      // big wins: a traded position (its bets on the same picks, counted together) and its sales (P.aggregate's bigList)
+      group: s.gp || null, cashOut: s.co || null };
     return P.applyAtBet(n, picks.map((k) => k.priceAtBet));
   };
   /** Any stored prediction row as a full record: a full record as it is, a slim one (big wins, wallet and question

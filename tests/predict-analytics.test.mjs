@@ -420,3 +420,65 @@ test('P.taxRows: a compact row per prediction of the wallet in either role, sign
   const est = P.fromTaxRow(P.taxRows([pred('r7', 5, 5, 'PREDICTOR_WINS', false)], ME)[0]);
   assert.equal(est.claimable.exact, false); assert.equal(est.verdict.exact, false);
 });
+
+test('a cash-out with a profit over $500 is a big win whatever the verdict, from its sale', () => {
+  const BUYER = '0x00000000000000000000000000000000000000c1', H = 3600000;
+  const mk = (id, stake, cp, verdict) => Object.assign(pred(id, stake, cp, verdict, false), { pcTraded: true });
+  // sold before a loss: 2,000 tokens for $800 on a $100 stake (+$700); sold out of an open bet (+$600); a sale of a
+  // tenth of an open bet (+$80); a cash-out of +$300
+  const ls = mk('ls', 100, 1900, 'COUNTERPARTY_WINS'), os = mk('os', 100, 900, null), oh = mk('oh', 100, 900, null), sm = mk('sm', 100, 900, 'PREDICTOR_WINS');
+  const sale = (n, t, tokens, paid, v) => Object.assign({ t, seller: ME, buyer: BUYER, tokens, paid, pc: n.pc, side: 'P' }, v == null ? { vP: null, vC: null } : { vP: v, vC: 1 - v, dAt: T0 + DAY });
+  const trades = [sale(ls, T0 + H, 2000, 800, 0), sale(os, T0 + 2 * H, 1000, 700), sale(oh, T0 + 3 * H, 100, 90), sale(sm, T0 + 4 * H, 1000, 400, 1)];
+  const a = P.aggregate([ls, os, oh, sm], { trades });
+  assert.deepEqual(a.bigWins.map((s) => s.id), ['os', 'ls'], 'newest sale first; the small ones are not big wins');
+  const l = P.full(JSON.parse(JSON.stringify(a.bigWins[1])));
+  assert.equal(l.won, false); assert.equal(l.held, 0); near(assert, l.tradedPnl, 700, 1e-6);
+  assert.deepEqual(l.cashOut, { t: T0 + H, cash: 800, cost: 100, tok: 2000 });
+  assert.deepEqual(l.group, { n: 1, s: 100, pool: 2000, in: 100, lp: 700, h: 0 }, 'one bet: the position is the slip');
+  assert.equal(P.full(a.bigWins[0]).decided, false, 'an open bet sold out: listed from its sale');
+});
+
+test('a bettor\'s bets on the same picks count once, together, at the largest of them', () => {
+  const BUYER = '0x00000000000000000000000000000000000000c1', H = 3600000;
+  // three bets on the Rams (one position token): $250, $500 and $500 staked for 6,847.24 tokens, all sold before they won
+  const rams = (id, stake, cp, t) => Object.assign(pred(id, stake, cp, 'PREDICTOR_WINS', false, t), { pc: 'pc-rams', pcTraded: true });
+  const bets = () => [rams('r1', 250, 3321.28, T0), rams('r2', 500, 1305.41, T0 + H), rams('r3', 500, 970.55, T0 + 2 * H)];
+  const sold = (paid) => [{ t: T0 + 3 * H, seller: ME, buyer: BUYER, tokens: 6847.24, paid, pc: 'pc-rams', side: 'P', vP: 1, vC: 0, dAt: T0 + DAY }];
+  // for $1,371.59: +$121.59 over the three, none a big win (each slip won over $500 on its own)
+  assert.deepEqual(P.aggregate(bets(), { trades: sold(1371.59) }).bigWins, []);
+  // for $2,000: +$750, listed once, at the largest bet (the earlier of the two $500s)
+  const a = P.aggregate(bets(), { trades: sold(2000) });
+  assert.deepEqual(a.bigWins.map((s) => s.id), ['r2']);
+  const n = P.full(JSON.parse(JSON.stringify(a.bigWins[0])));
+  assert.equal(n.held, 0);
+  assert.deepEqual(n.group, { n: 3, s: 1250, pool: 6847.24, in: 1250, lp: 750, h: 0 });
+  // the slip keeps its own share (as its page, its file and its card have it): 1,805.41 of the 6,847.24 tokens
+  near(assert, n.tradedPnl, 750 * 1805.41 / 6847.24, 1e-3);
+  assert.deepEqual(n.cashOut, { t: T0 + 3 * H, cash: 2000, cost: 1250, tok: 6847.24 });
+});
+
+test('a position ends where a sale leaves the bettor holding nothing: a later bet on the same picks is a new one', () => {
+  const BUYER = '0x00000000000000000000000000000000000000c1', H = 3600000;
+  const on = (id, stake, cp, verdict, t) => Object.assign(pred(id, stake, cp, verdict, false, t), { pc: 'pc-x', pcTraded: true });
+  // A: $100 for 1,000 tokens, all sold for $800 (+$700); B: $300 on the same picks after that, lost (−$300)
+  const A = on('A', 100, 900, 'COUNTERPARTY_WINS', T0), B = on('B', 300, 300, 'COUNTERPARTY_WINS', T0 + 5 * H);
+  const trades = [{ t: T0 + H, seller: ME, buyer: BUYER, tokens: 1000, paid: 800, pc: 'pc-x', side: 'P', vP: 0, vC: 1, dAt: T0 + DAY }];
+  const L = P.ledger([A, B], trades, ME), pos = P.positions([A, B], L, ME);
+  assert.deepEqual(pos.map((p) => [p.bets.map((n) => n.id).join(), p.out, Math.round(p.pnl)]), [['A', true, 700], ['B', false, -300]]);
+  const a = P.aggregate([A, B], { trades });
+  assert.deepEqual(a.bigWins.map((s) => s.id), ['A'], 'the +$700 cash-out, not netted with the later loss');
+  assert.equal(P.full(a.bigWins[0]).group.lp, 700);
+});
+
+test('no sale and no win: a hedge\'s profit on a lost bet is no big win; bought tokens count in what went in', () => {
+  const BUYER = '0x00000000000000000000000000000000000000c1', SELLER = '0x00000000000000000000000000000000000000c2', H = 3600000;
+  // a $100 bet that lost, hedged with 1,000 maker-side tokens bought for $150 (+$850 on them)
+  const lost = Object.assign(pred('h', 100, 900, 'COUNTERPARTY_WINS', false), { pcTraded: true });
+  assert.deepEqual(P.aggregate([lost], { trades: [{ t: T0 + H, seller: SELLER, buyer: ME, tokens: 1000, paid: 150, pc: lost.pc, side: 'C', vP: 0, vC: 1, dAt: T0 + DAY }] }).bigWins, []);
+  // a $100 bet that won (1,000 tokens), plus 4,000 more of its tokens bought for $1,000: in $1,100, back $5,000
+  const won = Object.assign(pred('w', 100, 900, 'PREDICTOR_WINS', false), { pcTraded: true });
+  const a = P.aggregate([won], { trades: [{ t: T0 + H, seller: SELLER, buyer: ME, tokens: 4000, paid: 1000, pc: won.pc, side: 'P', vP: 1, vC: 0, dAt: T0 + DAY }] });
+  const g = P.full(a.bigWins[0]).group;
+  assert.deepEqual([g.in, g.lp, g.s], [1100, 3900, 100]);
+  assert.equal(P.full(a.bigWins[0]).cashOut, null, 'it sold nothing');
+});
