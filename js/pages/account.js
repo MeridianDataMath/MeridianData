@@ -122,6 +122,14 @@
     const settled = -U.num(r.p.fundingAccruedUsd), unsettled = -U.num(r.funding);
     return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in equity and the site's net unrealized figure)` }, U.pnlEl(settled + unsettled));
   };
+  const PFEE_TITLE = 'Position fees since the position opened (paid −), as Meridian\'s app shows them: the isolated markets (XAU, XAG, SPY, QQQ) charge them, crypto perps do not. Settled into the balance at its fills, plus charged since its last fill and not settled yet (that part counts in equity). Hover a cell for the split; the Position fees tab lists every charge';
+  // an open position's mPerp position fees since it opened, as the app's Position Fee column: settled at its fills
+  // (positionFeeAccruedUsd) and charged since its last fill (positionFeeUsd, the row's positionFee); positive when paid
+  const pfeeCell = (r) => {
+    const settled = -U.num(r.p.positionFeeAccruedUsd), unsettled = -U.num(r.positionFee);
+    if (!settled && !unsettled && r.prod && r.prod.marginMode === 'CROSS') return h('span.dim', { title: 'Crypto perps charge no position fee' }, '—');
+    return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in equity)` }, U.pnlEl(settled + unsettled));
+  };
   // Meridian's P&L and P&L % (gross, the price move); the site's net figure and its return on initial margin in the tooltip
   const upnlCell = (r) => h('span', { title: `Site's net figure incl. unsettled funding and position fees: ${fmtS(r.net)}` + (r.roe != null ? `\nIts return on initial margin: ${U.fmtUsd(r.net)} ÷ (${U.fmtUsd(r.notional)} ÷ ${r.maxLev}×) = ${U.fmtPct(r.roe, { sign: true, dp: 1 })}` : '') },
     U.pnlEl(r.upnl), r.pnlPct != null ? h('span.dim.xs', ' (' + U.fmtPct(r.pnlPct, { sign: true, dp: 2 }) + ')') : null);
@@ -351,7 +359,60 @@
     }
 
     // ---- tables ----
-    const TT = [['positions', 'Open positions'], ['orders', 'Orders & stops'], ['fills', 'Fills history'], ['history', 'Positions history'], ['transfers', 'Deposits, withdrawals & conversions']];
+    const TT = [['positions', 'Open positions'], ['orders', 'Orders & stops'], ['fills', 'Fills history'], ['history', 'Positions history'], ['funding', 'Funding payments'], ['posfees', 'Position fees'], ['transfers', 'Deposits, withdrawals & conversions']];
+    // ---- funding and position-fee payments, as Meridian's Portfolio lists them: every hourly funding charge of the
+    // last 30 days and every mPerp position-fee charge of the last 7 days (the archive), newest first; read when the tab
+    // opens and kept a minute
+    const CHARGE_DAYS = { funding: 30, posfees: 7 };
+    const charges = {};   // tab → a read in flight (promise), or {at, rows (null: more than one read holds), err}
+    const loadCharges = (k) => {
+      const c = charges[k];
+      if (c && typeof c.then === 'function') return c;
+      if (c && !c.err && Date.now() - c.at < 60000) return Promise.resolve(c);
+      const start = Date.now() - CHARGE_DAYS[k] * U.DAY;
+      const p = (k === 'funding' ? A.fundingCharges(sid, start, { signal: cx.signal }) : A.positionFeeCharges(sid, start, { signal: cx.signal }))
+        .then((rows) => (charges[k] = { at: Date.now(), rows: rows ? rows.slice().reverse() : null }),
+          (e) => { if (isAbort(e)) throw e; return (charges[k] = { at: Date.now(), rows: null, err: e }); });
+      charges[k] = p;
+      return p;
+    };
+    const chargePage = { funding: 1, posfees: 1 };
+    // charges of $0.00 (a position-fee rate of 0 outside the markets' closures) are hidden unless asked for
+    let showZero = false;
+    function renderCharges(k) {
+      const c = charges[k];
+      if (!c || typeof c.then === 'function') {
+        U.replace(ttBody, UI.loading('Reading the archive…'));
+        loadCharges(k).then(() => { if (tt === k && !cx.signal.aborted) renderCharges(k); }, () => {});
+        return;
+      }
+      if (!c.rows) { U.replace(ttBody, UI.error(c.err || 'More charges than one read holds: the list would be incomplete', () => { delete charges[k]; renderCharges(k); })); return; }
+      const fund = k === 'funding';
+      // the archive's charge is positive when paid: a payment is its negative, as the app shows it
+      const pay = (r) => -U.num(fund ? r.fundingCharge : r.positionFeeCharge);
+      const paid = U.sum(c.rows, (r) => Math.min(0, pay(r))), got = U.sum(c.rows, (r) => Math.max(0, pay(r)));
+      const zero = c.rows.filter((r) => !pay(r)).length, list = showZero ? c.rows : c.rows.filter((r) => pay(r));
+      const pg = Math.min(chargePage[k], Math.max(1, Math.ceil(list.length / 25))), slice = list.slice((pg - 1) * 25, pg * 25);
+      const prodOf = (r) => ref.byId[r.productId];
+      U.replace(ttBody,
+        h('div.dim.small', { style: { padding: '8px 12px 2px' } }, `${U.fmtNum(c.rows.length, 0)} ${fund ? 'hourly funding charges' : 'position-fee charges'} in the last ${CHARGE_DAYS[k]} days (newest first)`
+          + (c.rows.length ? ` · paid ${U.fmtUsd(-paid)}` + (fund ? ` · received ${U.fmtUsd(got)}` : '') + ` · net ${U.fmtUsd(paid + got, { sign: true })}` : '')
+          + (fund ? '' : ' · the isolated markets (XAU, XAG, SPY, QQQ) charge them; crypto perps do not'),
+          zero ? h('span', ' · ', UI.checkbox(`show the ${U.fmtNum(zero, 0)} charges of $0.00`, showZero, (v) => { showZero = v; chargePage[k] = 1; renderCharges(k); })) : null),
+        UI.table({
+          cols: [
+            { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.time)) },
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(prodOf(r) ? prodOf(r).displayTicker : r.productTicker || '—') },
+            { key: 'side', label: 'Side', render: (r) => U.sideEl(r.positionSide, true) },
+            { key: 'size', label: 'Size', num: true, render: (r) => h('span', U.fmtQty(r.positionQuantity, prodOf(r) && prodOf(r).lotSize),
+              !fund && r.referencePrice != null ? h('div.dim.xs', U.fmtUsd(Math.abs(U.num(r.positionQuantity) * U.num(r.referencePrice)))) : null) },
+            { key: 'rate', label: fund ? 'Funding rate' : 'Rate', num: true, title: fund ? 'The hour\'s funding rate (positive: longs pay shorts)' : 'The position-fee rate of the charge (both sides pay)',
+              render: (r) => U.fmtPct(U.num(fund ? r.fundingRate : r.rate) * 100, { dp: 4 }) },
+            { key: 'pay', label: 'Payment', num: true, title: 'Received +, paid −', render: (r) => U.pnlEl(pay(r)) },
+          ], rows: slice, empty: fund ? 'No funding charged in the last 30 days' : zero ? 'Only charges of $0.00 in the last 7 days' : 'No position fees charged in the last 7 days',
+        }),
+        list.length > 25 ? UI.pager({ page: pg, pageSize: 25, total: list.length, onPage: (p) => { chargePage[k] = p; renderCharges(k); } }) : null);
+    }
     let tt = 'positions';
     const ttBody = h('div');
     function renderTables() {
@@ -374,6 +435,7 @@
             { key: 'tpsl', label: 'TP / SL', num: true, title: TPSL_TITLE, render: tpslCell },
             { key: 'rpnl', label: 'Realized PnL', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
             { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
+            { key: 'pfee', label: 'Position fee', num: true, title: PFEE_TITLE, render: pfeeCell },
             { key: 'liq', label: 'Liq. price', num: true, title: 'Estimated liquidation price (pool maintenance margin)', render: (r) => liqCell(r) },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
           ], rows: a.positions, empty: 'No open positions',
@@ -416,6 +478,8 @@
             { key: 'closed', label: 'Closed', render: (r) => h('span.dim', U.num(r.size) !== 0 ? '—' : U.fmtDateTimeS(r.updatedAt)) },
           ],
         }));
+      } else if (tt === 'funding' || tt === 'posfees') {
+        renderCharges(tt);
       } else if (tt === 'transfers') {
         U.replace(ttBody, cursorTable({
           fetchPage: (cursor, n) => A.transfersPage(sid, cursor, n, cx), empty: 'No transfers yet',
@@ -622,6 +686,7 @@
           { key: 'tpsl', label: 'TP / SL', num: true, title: TPSL_TITLE, render: tpslCell },
           { key: 'rpnl', label: 'Realized', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
           { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
+          { key: 'pfee', label: 'Position fee', num: true, title: PFEE_TITLE, render: pfeeCell },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
         ], rows: acct.positions, empty: 'No open positions',
       }));
