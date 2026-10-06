@@ -96,7 +96,7 @@ jobs:
       - name: Assemble the site (dist/)
         run: |
           mkdir -p dist
-          cp -r index.html css js vendor assets _headers dist/
+          cp -r index.html css js vendor assets x-bot _headers dist/
           mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/package-lock.json agent/config.example.json dist/agent/
           cp -r data dist/
           echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"

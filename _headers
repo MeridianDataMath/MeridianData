@@ -26,3 +26,7 @@
   Cache-Control: public, max-age=300
 /s/*
   Cache-Control: public, max-age=300
+# the X bot's preview page (/x-bot/: the page, its stylesheet, the cards and cover.png, the link preview's image; built by
+# hand from a bot preview run, its image URL carries ?v=<hash> like the cards')
+/x-bot/*
+  Cache-Control: public, max-age=300
