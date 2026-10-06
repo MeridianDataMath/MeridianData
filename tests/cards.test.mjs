@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { load, root } from './_load.mjs';
-import { makeCards, esc } from '../scripts/cards.mjs';
+import { makeCards, esc, siteCardVersion } from '../scripts/cards.mjs';
 
 const MD = load(['js/util.js', 'js/api.js', 'js/predict/api.js', 'js/predict/analytics.js']);
 const K = makeCards({ U: MD.util, P: MD.predict, site: 'https://example.test' });
@@ -163,6 +163,19 @@ test('the CSP in _headers allows index.html\'s inline script by its hash, and no
   assert.deepEqual(hosts, ['https://api.frankfurter.dev', 'https://coins.llama.fi']);
   for (const x of hosts) assert.ok(dir['connect-src'].includes(x), x + ' in connect-src');
   assert.match(fs.readFileSync(path.join(root, 'Start-MeridianData.ps1'), 'utf8'), /\$headersFile = Join-Path \$root '_headers'/);
+});
+
+test('the home page\'s link preview points at the site card by its version, so an unfurler fetches new figures', () => {
+  const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const v1 = siteCardVersion(index, 'abc123');
+  assert.match(v1, /<meta property="og:image" content="https:\/\/meridian\.thedatahub\.xyz\/cards\/site\.png\?v=abc123">/);
+  assert.match(v1, /<meta name="twitter:image" content="https:\/\/meridian\.thedatahub\.xyz\/cards\/site\.png\?v=abc123">/);
+  const v2 = siteCardVersion(v1, 'def456');
+  assert.equal((v2.match(/site\.png\?v=def456"/g) || []).length, 2, 'a later build replaces the version');
+  assert.doesNotMatch(v2, /abc123/);
+  const scripts = (h) => [...h.matchAll(/<script>[\s\S]*?<\/script>/g)].map((m) => m[0]);
+  assert.deepEqual(scripts(v2), scripts(index), 'the inline script (pinned by its hash in the CSP) is untouched');
+  assert.equal(v2.replace(/\?v=def456/g, ''), index, 'nothing else changes');
 });
 
 // a prediction as the slip files carry it (P.slim), legs [question, YES?] each

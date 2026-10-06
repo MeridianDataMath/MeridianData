@@ -9,6 +9,6 @@ globalThis.window = globalThis.window || globalThis;
 vm.runInThisContext(fs.readFileSync(new URL('../js/cards.js', import.meta.url), 'utf8'), { filename: 'js/cards.js' });
 const cards = globalThis.MD.cards;   // kept here, so a later loader replacing MD cannot lose it
 
-export const { W, H, SITE, esc } = cards;
+export const { W, H, SITE, esc, siteCardVersion } = cards;
 /** makeCards({ U, P, site }) → the builders (see js/cards.js). */
 export const makeCards = (o) => cards.make(o);

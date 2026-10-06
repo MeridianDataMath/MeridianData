@@ -2,6 +2,7 @@
 /**
  * Link-preview cards for the published site (see scripts/cards.mjs). Reads the snapshots in <dist>/data and writes
  *   <dist>/cards/site.png                        the card of the home page and every page without its own
+ *                                                (<dist>/index.html's og:image and twitter:image get its ?v=<version>)
  *   <dist>/cards/a/<address>.png, <dist>/a/<address>.html   one per perps account on the leaderboard
  *   <dist>/cards/p/<address>.png, <dist>/p/<address>.html   one per Predict bettor and market maker
  *   <dist>/cards/s/<id>.png, <dist>/s/<id>.html             one per Predict slip worth sharing (open, just decided, a win)
@@ -21,7 +22,7 @@ import vm from 'node:vm';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeCards, SITE } from './cards.mjs';
+import { makeCards, SITE, siteCardVersion } from './cards.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -77,7 +78,14 @@ const lb = readJson(path.join(dist, 'data', 'leaderboard.json'));
 const pr = readJson(path.join(dist, 'data', 'predict.json'));
 // perps rows are checked before the site card adds them up, so a broken row cannot cost that card either
 if (lb && Array.isArray(lb.rows)) lb.rows = lb.rows.filter((r) => isAddr(String((r && r.account) || '').toLowerCase()) || skip('account', r && r.account));
-if (first) each('site card', 'site', () => card('cards/site.png', K.siteSvg({ lb, pr })));
+if (first) each('site card', 'site', () => {
+  const image = card('cards/site.png', K.siteSvg({ lb, pr })); if (!image) return false;
+  // the home page's link preview (and every page's without a card of its own) points at this card: its URL takes the
+  // card's version, so an unfurler that kept an older image fetches the new figures (the repo's index.html stays as is)
+  const index = path.join(dist, 'index.html');
+  if (dist !== root && fs.existsSync(index)) fs.writeFileSync(index, siteCardVersion(fs.readFileSync(index, 'utf8'), image.split('?v=')[1]));
+  return true;
+});
 
 // perps accounts: one card per address (the leaderboard has one row per subaccount; the busiest one represents it)
 let accounts = 0;

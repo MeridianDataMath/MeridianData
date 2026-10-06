@@ -16,6 +16,10 @@
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const isAddr = (a) => /^0x[0-9a-f]{40}$/.test(String(a || ''));
   const f1 = (x) => (Math.round(x * 10) / 10).toString();
+  /** index.html with its link preview's image (cards/site.png, the home page's card) at version v. An unfurler keeps an
+   *  image by its URL (Discord kept showing a card from the site's first days), so the deploy gives the URL the card's version, as the share
+   *  pages' images have: a new card is a new URL. */
+  const siteCardVersion = (html, v) => String(html).replace(/(<meta (?:property|name)="(?:og|twitter):image" content="[^"]*\/cards\/site\.png)(?:\?v=[0-9a-z]+)?"/g, `$1?v=${v}"`);
 
   function make({ U, P, site = SITE }) {
     const short = (a) => a.slice(0, 6) + '…' + a.slice(-4);
@@ -441,5 +445,5 @@ ${t(W - 64, 610, copyable ? 'Copy this slip on MeridianDataHub' : 'Meridian Pred
     return { flexSvg, accountInput, accountSvg, accountText, walletInput, walletSvg, walletText, walletCurve, curveFromPredictions, siteSvg, slipSvg, slipText, slipState, slipCardWanted, sharePage, money, short, range, date };
   }
 
-  MD.cards = { W, H, SITE, esc, make };
+  MD.cards = { W, H, SITE, esc, make, siteCardVersion };
 })();
