@@ -39,7 +39,7 @@
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
   /** A prediction's result from one side (the bettor's unless asMaker). "Unclaimed" is shown only where that side has
    *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
-  const resultChip = (n, asMaker, held = 1) => { const r = P.resultFor(n, asMaker, held); return h('span.chip', { class: r.tone, title: r.title || '' }, r.label); };
+  const resultChip = (n, asMaker, held = 1, claims = true) => { const r = P.resultFor(n, asMaker, held, claims); return h('span.chip', { class: r.tone, title: r.title || '' }, r.label); };
   const vigCell = (v, n) => (v == null ? h('span.dim', '—') : h('span', { class: v > 0.02 ? 'neg' : v < -0.02 ? 'pos' : '' }, pp(v), n && n.sameEvent ? h('span.dim.xs', { title: 'Legs on the same match or asset: fair assumes independence, so this includes correlation pricing' }, ' corr.') : null));
   const probBar = (p, label, dp = 1) => { const v = p == null ? null : U.clamp(Number(p), 0, 1); return h('div.prob', { title: v == null ? '' : (label || 'YES: ') + pct(v) }, h('i', { style: { width: (v == null ? 0 : v * 100) + '%' } }), h('span', v == null ? '—' : pct(v, dp))); };
   // a question's source market is a link the API hands over: only a web address becomes a button
@@ -192,9 +192,6 @@
       // tokens, as Meridian's app counts a payout to claim; an older snapshot, the API's settled flag (which anyone's
       // settlement sets, and a claim through a twin prediction leaves unset)
       const toClaim = (n) => (n.toClaim != null ? n.won && n.toClaim : !(n.settled && n.settledAt) && n.unclaimed && n.won && !soldOut(n));
-      // (said only where the aggregate's counts followed the balances: T.fromBalances, P.aggregate's claims)
-      const byBal = !!(T.fromBalances && a.claimAt);
-      const claimAsOf = byBal ? ' (winning tokens still held, as read ' + U.fmtDateTime(a.claimAt) + ')' : '';
       const bwBody = h('div.feed.bigwins'), bwNote = h('span.dim.small');
       const bwCard = h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Big wins'), bwNote, h('span.grow'), UI.seg(BW_SORTS, bwSort, (v) => { bwSort = v; renderBig(); bwBody.scrollTop = 0; }, 'sm')), h('div.feed-fill', bwBody));
       // the tables count each prediction's own result; only the Bettor net result tile adds the secondary-market trades
@@ -272,12 +269,10 @@
           + ' PnL is its own result, sales included.' : null;
         const sold = co ? h('span.chip.amber', { title: coTitle }, soldOut(n) ? 'cashed out' : 'part cashed out')
           : n.held != null && n.held < 0.999 ? h('span.chip.amber', { title: soldOut(n) ? 'The bettor sold these position tokens before the verdict: the payout went to the buyer. PnL is the bettor\'s own result, the sale included.' : `The bettor sold ${U.fmtPct((1 - n.held) * 100, { dp: 0 })} of these position tokens before the verdict. PnL is its own result, the sale included.` }, soldOut(n) ? 'sold' : U.fmtPct((1 - n.held) * 100, { dp: 0 }) + ' sold') : null;
-        // settled in the bettor's favour, but nobody has collected the payout yet: listed all the same, marked (a payout
-        // the bettor sold is the buyer's to collect, and a loss has none)
-        const waiting = toClaim(n) ? h('span.chip.amber', { title: 'Settled as a win, not claimed yet: the payout is waiting for the bettor' + claimAsOf }, 'unclaimed') : null;
+        // a win not claimed yet is listed like any other (its time's tooltip says so; no mark on the row)
         const bets = g && g.n > 1 ? h('span.dim.xs', { title: `${g.n} bets by this bettor on the same picks, counted together (they share one position token)` }, g.n + ' bets') : null;
         return predRow(n, 'big', '',
-          h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), bets, waiting, sold,
+          h('span.t', { title: when }, U.fmtFeedTime(at)), bettorLink(n.predictor), picksCell(n), bets, sold,
           h('span.num.dim.fix.stk.opt', { title: g && g.n > 1 ? `Staked on these picks (${g.n} bets)` : 'Stake' }, usd(bigStake(n))),
           h('span.num.fix.mul', { class: on('mult'), title: g ? (n.cashOut && !n.decided && !soldOut(n) ? 'What its sales fetched ÷ what the tokens sold had cost (the rest is still at stake)' : 'What came back ÷ what went in (stakes and tokens bought), sales included') : n.tradedPnl != null ? 'What came back ÷ what was staked, sales included' : 'Multiplier: payout ÷ stake (the payout, ' + usd(n.pool) + ', is in the dialog)' }, mult(bigMult(n))),
           h('span.num.fix.pl', { class: on('pnl') + ' ' + U.pnlClass(pl), title: g ? 'The bettor\'s PnL on these picks, the sale of its tokens included' + (g.n > 1 ? ' (all ' + g.n + ' bets; the opened slip shows its own share)' : n.tradedPnl != null && Math.abs(n.tradedPnl - g.lp) > 0.005 ? ' (the opened slip shows its share of everything this bettor did on these picks, later bets included)' : '') : n.tradedPnl != null ? 'The bettor\'s PnL, the sale of its tokens included' : 'PnL: payout − stake' }, usd(pl, { sign: true })));
@@ -285,8 +280,7 @@
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        const waiting = bigWins ? bigWins.filter(toClaim).length : 0;
-        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' + (waiting ? (byBal ? ' Not claimed yet: the bettor still holds the winning tokens, as read ' + U.fmtDateTime(a.claimAt) + '.' : ' Not claimed yet: by the API\'s settled flag.') : '') }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '') + (waiting ? ` · ${U.fmtNum(waiting, 0)} not claimed yet` : '')));
+        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
@@ -297,7 +291,7 @@
       if (!live) { tapeNote.textContent = 'as of the snapshot · checked every minute'; tapeNote.title = offlineNote; }
       const tapeRow = (n, flash) => predRow(n, 'tape', flash ? 'flash' : '',
         h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.picks[0] ? n.picks[0].yes : null), picksCell(n),
-        h('span.num', usd(n.stake)), h('span.num.dim.opt', '@ ' + oddsPct(n.odds)), h('span.num', mult(n.multiple)), h('span.dim.xs.opt2', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: (MK.oneOff.some((x) => x.address === n.counterparty) ? 'One-off counterparty ' : 'Market maker ') + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n, false, n.held == null ? 1 : n.held));
+        h('span.num', usd(n.stake)), h('span.num.dim.opt', '@ ' + oddsPct(n.odds)), h('span.num', mult(n.multiple)), h('span.dim.xs.opt2', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: (MK.oneOff.some((x) => x.address === n.counterparty) ? 'One-off counterparty ' : 'Market maker ') + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n, false, n.held == null ? 1 : n.held, false));
       const renderTape = (fresh) => U.replaceLive(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
       let tT = null;

@@ -207,6 +207,12 @@ test('result chips: a loss is simply lost; "unclaimed" only where this side has 
   assert.equal(P.resultFor(pred('v', 3, 4, 'NON_DECISIVE', false), false).label, 'void · refund unclaimed');
   assert.equal(P.resultFor(pred('v2', 3, 4, 'NON_DECISIVE', true), false).label, 'void');
   assert.equal(P.resultFor(pred('o', 3, 4, null, false), false).label, 'open');
+  // claims = false (the Overview's live feed): won, lost or void, nothing about claiming, not even in the tooltip
+  assert.equal(P.resultFor(wonUnclaimed, false, 1, false).label, 'won');
+  assert.equal(P.resultFor(pred('v3', 3, 4, 'NON_DECISIVE', false), false, 1, false).label, 'void');
+  assert.deepEqual(P.resultFor(lostUnclaimed, false, 1, false), { label: 'lost', tone: 'red', title: null });
+  assert.equal(P.resultFor(lostUnclaimed, true, 1, false).label, 'won');
+  assert.notEqual(P.resultFor(lostUnclaimed, false).title, null, 'elsewhere the loss still says the maker has not collected');
 });
 
 test('headline figures: the exchange\'s PnL already counts unclaimed results, so live nothing is added (0x86b0…: +$7.42, not +$22.35)', () => {

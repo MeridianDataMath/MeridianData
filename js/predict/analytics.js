@@ -95,13 +95,14 @@
 
   /** A prediction's result from one side (the bettor's unless asMaker): {label, tone, title}. "Unclaimed" is shown only
    *  where that side has something to collect (its win, or a void's refund) and still holds the tokens (held: the share
-   *  not sold on the secondary market): a loss is simply lost, whether or not the winner has claimed. */
-  P.resultFor = (n, asMaker, held = 1) => {
+   *  not sold on the secondary market): a loss is simply lost, whether or not the winner has claimed. claims = false
+   *  leaves the claim out altogether (the Overview's live feed: just won, lost or void). */
+  P.resultFor = (n, asMaker, held = 1, claims = true) => {
     if (!n.decided) return { label: 'open', tone: 'accent' };
     // where the winner's token balance is known (n.toClaim, P.applyClaims): still held is still to claim, as Meridian's
     // app counts it, whatever the API's settled flag says; elsewhere that flag and the share not sold
-    const won = asMaker ? n.lost : n.won; const left = n.toClaim != null ? n.toClaim : n.unclaimed;
-    const mineToClaim = n.toClaim != null && won ? n.toClaim : n.unclaimed && held > 1e-6;
+    const won = asMaker ? n.lost : n.won; const left = claims && (n.toClaim != null ? n.toClaim : n.unclaimed);
+    const mineToClaim = claims && (n.toClaim != null && won ? n.toClaim : n.unclaimed && held > 1e-6);
     if (n.nd) return { label: mineToClaim ? 'void · refund unclaimed' : 'void', tone: 'amber' };
     if (won) return { label: mineToClaim ? 'won · unclaimed' : 'won', tone: 'green' };
     return { label: 'lost', tone: 'red', title: left ? (asMaker ? 'The bettor has not collected the payout yet' : 'The market maker has not collected the pool yet') : null };
