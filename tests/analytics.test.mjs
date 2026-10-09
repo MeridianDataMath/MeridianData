@@ -181,62 +181,55 @@ test('book slippage walks the book from the mid; an order the book cannot absorb
   assert.equal(huge.bps, null); near(assert, huge.filled, 2030 / 1e6, 1e-9, 'share it could fill');
 });
 
-// a profile that is copyable on every count; each test breaks one thing and expects its cap
+// a profile that is copyable on every count; each test breaks one thing and expects its limit
 const good = () => ({ stats: { all: { pnl: 5000, roi: 25, ddPct: 8 } }, copy: { closed: 60, hold: { scalp: 2, intra: 10, swing: 40, long: 8 }, holdMed: 2 * D, tStat: 5, netTrimBps: 60, weeksActive: 12, weeksPos: 10, liq: 0, top: 12, edgeLeft: 85, slipBps: 2, copySize: 2000, notMed: 3000, slipOwnBps: 3, depthOk: 100, notP90: 6000, lastAt: Date.now() - D, perWeek: 5, tenureD: 120 } });
 const with_ = (patch, stats) => { const r = good(); Object.assign(r.copy, patch); if (stats) Object.assign(r.stats.all, stats); return r; };
 
-test('copyability: a steady, copyable account scores as Copyable', () => {
-  const sc = AN.copyScore(good()); assert.equal(sc.verdict, 'Copyable'); assert.ok(sc.total >= 70, 'score ' + sc.total);
+test('copyability: results first; a profitable, steady account is Copyable and a bigger result scores higher', () => {
+  const sc = AN.copyScore(good()); assert.equal(sc.verdict, 'Copyable'); assert.ok(sc.total >= AN.COPY.copyableAt, 'score ' + sc.total);
+  assert.ok(AN.copyScore(with_({}, { pnl: 50000 })).total > AN.copyScore(with_({}, { pnl: 1000 })).total, 'more PnL, higher score');
+  // a scalper with a thin edge but a big result stays copyable: friction is a fifth of the score, not a veto
+  const busy = AN.copyScore(with_({ hold: { scalp: 50, intra: 10, swing: 0, long: 0 }, edgeLeft: 20, tStat: 1 }, { pnl: 20000, roi: 60 }));
+  assert.equal(busy.verdict, 'Copyable', 'score ' + busy.total);
 });
 
-test('copyability caps: one disqualifier is never averaged away', () => {
+test('copyability limits: only the hard ones cap the score, each with its reason; a small winner is listed, never Copyable', () => {
   const cases = [
-    [with_({}, { pnl: -10 }), 45, 'not profitable'],
-    [with_({ edgeLeft: -20 }), 40, 'nothing survives copying'],
-    [with_({ edgeLeft: 30 }), 30 + 0.7 * 30, 'graded by edge left'],
-    [with_({ closed: 8 }), 55, 'fewer than 10 closed'],
-    [with_({ closed: 15 }), 65, 'fewer than 20 closed'],
-    [with_({ tStat: 1.2 }), 60, 'not clear of the noise'],
-    [with_({ lastAt: Date.now() - 45 * D }), 60, 'quiet for 30+ days'],
-    [with_({ lastAt: Date.now() - 90 * D }), 45, 'quiet for 60+ days'],
-    [with_({ liq: 8 }), 55, 'a tenth liquidated'],
-    [with_({ top: 70 }), 60, 'one jackpot'],
-    [with_({}, { ddPct: 55 }), 60, 'deep drawdown'],
-    [with_({ depthOk: 30 }), 60, 'sizes beyond the books'],
+    [with_({}, { pnl: -10 }), 30, /not profitable/],
+    [with_({ lastAt: Date.now() - 45 * D }), 50, /no trade for 45 days/],
+    [with_({}, { ddPct: 65 }), 50, /max drawdown/],
+    [with_({ liq: 15 }), 50, /15 of 60 positions ended in liquidation/],
+    [with_({}, { pnl: 120 }), AN.COPY.copyableAt - 1, /under \$500 made all-time/],
   ];
-  for (const [row, cap, why] of cases) { const sc = AN.copyScore(row); assert.ok(sc.total <= Math.round(cap), `${why}: ${sc.total} > ${cap}`); }
+  for (const [row, at, why] of cases) {
+    const sc = AN.copyScore(row);
+    assert.ok(sc.total <= at, `${why}: ${sc.total} > ${at}`);
+    assert.ok(sc.caps.some((x) => x.at === at && why.test(x.why)), `${why}: reason shown`);
+  }
   assert.equal(AN.copyScore(with_({}, { pnl: -10 })).verdict, 'Losing so far');
-  assert.equal(AN.copyScore(with_({ closed: 4 })), null, 'fewer than 5 closed: no score');
+  assert.notEqual(AN.copyScore(with_({}, { pnl: 120 })).verdict, 'Copyable');
+  assert.equal(AN.copyScore(with_({ closed: 2 })), null, 'fewer than 3 closed: no score');
+  assert.ok(AN.copyScore(with_({ closed: 3 })), '3 closed: scored');
+  // no longer limits: few positions, a noisy mean, one jackpot, sizes beyond the books, a thin edge left
+  for (const row of [with_({ closed: 8 }), with_({ tStat: 1.2 }), with_({ top: 70 }), with_({ depthOk: 30 }), with_({ edgeLeft: 30 })]) assert.equal(AN.copyScore(row).caps.length, 0);
 });
 
-test('copyability: a leader without a positive result is capped for that, not for a copier\'s costs; the score keeps its pre-cap total', () => {
+test('copyability: a leader without a positive per-position result says so in its friction; nothing capped keeps raw = total', () => {
   const sc = AN.copyScore(with_({ leaderBps: -3, copyBps: -1, edgeLeft: 0 }));
-  const cap = sc.caps.find((x) => x.at === 40);
-  assert.ok(cap && /not positive/.test(cap.why), 'cap reason: ' + (cap && cap.why));
-  assert.ok(!sc.caps.some((x) => /exceed the per-position result/.test(x.why)), 'no "costs exceed" reason');
   assert.match(sc.parts.find((p) => p.key === 'edge').note, /do not make money/);
-  assert.ok(sc.total <= 40); assert.ok(sc.raw >= sc.total, `raw ${sc.raw} ≥ total ${sc.total}`);
-  assert.equal(sc.parts.find((p) => p.key === 'signal').label, 'Clear of noise');
+  assert.ok(sc.raw >= sc.total, `raw ${sc.raw} ≥ total ${sc.total}`);
   // a copier who keeps more than the leader: no ratio as a "share"
   assert.match(AN.copyScore(with_({ leaderBps: 0.1, copyBps: 3.6, edgeLeft: 3600 })).parts.find((p) => p.key === 'edge').note, /keeps more per position than the leader \(3\.6 vs 0\.1 bps\)/);
-  const plain = AN.copyScore(with_({ edgeLeft: 100 })); assert.equal(plain.caps.length, 0); assert.equal(plain.raw, plain.total, 'nothing capped: raw = total');
-  const capped = AN.copyScore(good()); assert.ok(capped.raw > capped.total, '85% edge left caps at 90');
-});
-
-test('copyability notes: an account under a week old shows its count, not a weekly rate; one day is singular', () => {
-  const young = AN.copyScore(with_({ closed: 110, perWeek: 110, tenureD: 0.9, firstAt: Date.now() - 0.9 * D }));
-  assert.match(young.parts.find((p) => p.key === 'cadence').note, /^110 positions closed in its first 21\.6h$/);
-  assert.equal(young.parts.find((p) => p.key === 'tenure').note, 'less than a day on the exchange');
-  assert.equal(AN.copyScore(with_({ tenureD: 1.2, firstAt: Date.now() - 1.2 * D })).parts.find((p) => p.key === 'tenure').note, '1 day on the exchange');
-  assert.match(AN.copyScore(good()).parts.find((p) => p.key === 'steady').note, /weeks start Monday 00:00 UTC/);
+  const plain = AN.copyScore(good()); assert.equal(plain.caps.length, 0); assert.equal(plain.raw, plain.total, 'nothing capped: raw = total');
 });
 
 test('copyability notes say which PnL they read: Meridian\'s on a row with that basis, the site\'s net figure on an older one', () => {
   const app = Object.assign(good(), { basis: 'app' });
-  assert.match(AN.copyScore(app).parts.find((p) => p.key === 'profit').note, /^all-time PnL \+\$5,000 \(as Meridian's app\) · ROI 25%$/);
+  assert.match(AN.copyScore(app).parts.find((p) => p.key === 'profit').note, /^all-time PnL \+\$5,000 \(as Meridian's app\) \(\$10,000\+ for full marks\)$/);
   assert.match(AN.copyScore(good()).parts.find((p) => p.key === 'profit').note, /\(the site's net figure\)/);
   assert.match(AN.copyScore(Object.assign(with_({}, { pnl: -10 }), { basis: 'app' })).parts.find((p) => p.key === 'profit').note, /^not profitable so far \(as Meridian's app\)$/);
   assert.match(AN.copyScore(app).parts.find((p) => p.key === 'dd').note, /on the site's net PnL/);
+  assert.match(AN.copyScore(good()).parts.find((p) => p.key === 'steady').note, /weeks start Monday 00:00 UTC/);
 });
 
 // ---- the copy profile (AN.buildCopyProfile) on closed positions of $1,000 entry each

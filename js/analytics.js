@@ -676,62 +676,60 @@
   };
 
   /**
-   * Copyability score, 0–100, from a snapshot row's copy profile. Three pillars a copier cares about, each 0–100 with
-   * its parts exposed for the page: track record (is there an edge, and is it steady), copy friction (how much of that
-   * edge survives being copied a minute later at this size), activity (is the account still trading). Null when there
-   * is not enough history to say anything (fewer than 5 closed positions).
+   * Copyability score, 0–100, from a snapshot row's copy profile. Results first, as the large exchanges rank their lead
+   * traders (PnL and ROI up front, drawdown beside them), then how hard the account is to copy. Three pillars, each 0–100
+   * with its parts exposed for the page:
+   *   results  55%  how much it made (all-time PnL on a log scale, AN.COPY.fullPnl for full marks) and how efficiently
+   *                 (ROI on deposits, AN.COPY.fullRoi for full marks)
+   *   risk     25%  drawdown, liquidations, profitable weeks, how much of the wins is one position
+   *   friction 20%  how much of the per-position result survives being copied a minute later at this size, hold times,
+   *                 slippage, depth
+   * Only hard limits cap it, each with its reason: not profitable (30), no trade for 30+ days, a drawdown of 60%+ or a
+   * quarter of positions liquidated (50 each), and under AN.COPY.minPnl made all-time (59: listed, never Copyable).
+   * Copyable from AN.COPY.copyableAt. Null with fewer than AN.COPY.minClosed closed positions.
    */
+  AN.COPY = { minClosed: 3, minPnl: 500, copyableAt: 60, careAt: 45, fullPnl: 10000, fullRoi: 50 };
   AN.copyScore = function (row) {
     const c = row.copy; const s = (row.stats && row.stats.all) || {};
-    if (!c || c.closed < 5) return null;
+    const K = AN.COPY;
+    if (!c || !(c.closed >= K.minClosed)) return null;
     const cl = (x, a, b) => Math.min(b, Math.max(a, x));
     const parts = [];
     const daysSince = c.lastAt ? (Date.now() - c.lastAt) / U.DAY : null;
     const add = (pillar, key, label, v, w, note) => { parts.push({ pillar, key, label, v: v == null ? null : cl(v, 0, 1), w, note }); };
-    // track record
-    add('track', 'sample', 'Sample size', cl(c.closed / 40, 0, 1), 0.15, `${c.closed} closed positions (40+ for full marks)`);
-    // profitability on the all-time PnL the pages show beside the score: Meridian's (row.basis 'app'), or the site's net
-    // figure on a row built before; drawdown and consistency stay on the site's net PnL
+    // results, on the all-time PnL the pages show beside the score: Meridian's (row.basis 'app'), or the site's net figure
+    // on a row built before; drawdown and consistency stay on the site's net PnL
     const basisTxt = AN.isAppBasis(row) ? ' (as Meridian\'s app)' : ' (the site\'s net figure)';
-    add('track', 'profit', 'Profitability', s.pnl > 0 ? cl(0.3 + (s.roi || 0) / 30, 0.3, 1) : 0, 0.15, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })}${basisTxt} · ROI ${s.roi == null ? '—' : U.fmtPct(s.roi, { dp: 0 })}` : 'not profitable so far' + basisTxt);
-    add('track', 'signal', 'Clear of noise', c.tStat == null ? null : cl(c.tStat / 4, 0, 1), 0.2, c.tStat == null ? 'too few positions to tell' : `per-position result ${U.fmtNum(c.netTrimBps, 1)} bps after fees and funding, t = ${U.fmtNum(c.tStat, 1)} (4+ for full marks: the mean is well clear of the noise)`);
-    add('track', 'steady', 'Consistency', c.weeksActive >= 3 ? c.weeksPos / c.weeksActive : null, 0.2, c.weeksActive >= 3 ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable (weeks start Monday 00:00 UTC)` : 'fewer than 3 active weeks');
-    add('track', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 40, 0, 1), 0.15, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)} (on the site's net PnL)`);
-    add('track', 'liq', 'Liquidations', cl(1 - (c.liq / Math.max(c.closed, 1)) * 5, 0, 1), 0.1, c.liq ? `${c.liq} liquidated of ${c.closed}` : 'never liquidated');
-    add('track', 'conc', 'Concentration', c.top == null ? null : cl(1 - (c.top - 30) / 70, 0, 1), 0.1, c.top == null ? 'no winning position yet' : `largest win is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
+    add('results', 'profit', 'Profit', s.pnl > 0 ? cl(Math.log10(s.pnl) / Math.log10(K.fullPnl), 0, 1) : 0, 0.6, s.pnl > 0 ? `all-time PnL ${U.fmtUsd(s.pnl, { sign: true, dp: 0 })}${basisTxt} (${U.fmtUsd(K.fullPnl, { dp: 0 })}+ for full marks)` : 'not profitable so far' + basisTxt);
+    add('results', 'roi', 'Return on deposits', s.roi == null ? null : cl(s.roi / K.fullRoi, 0, 1), 0.4, s.roi == null ? 'no deposits on record' : `ROI ${U.fmtPct(s.roi, { dp: 0 })} (${K.fullRoi}%+ for full marks)`);
+    // risk
+    add('risk', 'dd', 'Drawdown', s.ddPct == null ? null : cl(1 - s.ddPct / 60, 0, 1), 0.35, s.ddPct == null ? 'no drawdown on record' : `max drawdown ${U.fmtDd(s.ddPct)} (on the site's net PnL)`);
+    add('risk', 'liq', 'Liquidations', cl(1 - (c.liq / Math.max(c.closed, 1)) * 4, 0, 1), 0.25, c.liq ? `${c.liq} liquidated of ${c.closed}` : 'never liquidated');
+    add('risk', 'steady', 'Consistency', c.weeksActive >= 2 ? c.weeksPos / c.weeksActive : null, 0.25, c.weeksActive >= 2 ? `${c.weeksPos} of ${c.weeksActive} active weeks profitable (weeks start Monday 00:00 UTC)` : 'fewer than 2 active weeks');
+    add('risk', 'conc', 'Concentration', c.top == null ? null : cl(1 - (c.top - 30) / 70, 0, 1), 0.15, c.top == null ? 'no winning position yet' : `largest win is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
     // copy friction
     const scalp = c.closed ? c.hold.scalp / c.closed : 0, intra = c.closed ? c.hold.intra / c.closed : 0;
     const noEdge = c.leaderBps != null && c.leaderBps <= 0;   // edge left is 0 then, but not because of a copier's costs
-    add('friction', 'edge', 'Edge left after copying', c.edgeLeft == null ? null : cl(c.edgeLeft / 100, 0, 1), 0.4, c.edgeLeft == null ? 'not measurable yet' : noEdge ? 'the leader\'s positions do not make money after fees and funding: no edge to keep' : c.edgeLeft > 100 ? `the copier keeps more per position than the leader (${U.fmtNum(c.copyBps, 1)} vs ${U.fmtNum(c.leaderBps, 1)} bps)` : c.edgeLeft <= 0 ? 'nothing survives a copier\'s fees, drift and slippage' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's per-trade result survives fees, drift and slippage`);
+    add('friction', 'edge', 'Edge left after copying', c.edgeLeft == null ? null : cl(c.edgeLeft / 100, 0, 1), 0.45, c.edgeLeft == null ? 'not measurable yet' : noEdge ? 'the leader\'s positions do not make money after fees and funding: no edge to keep' : c.edgeLeft > 100 ? `the copier keeps more per position than the leader (${U.fmtNum(c.copyBps, 1)} vs ${U.fmtNum(c.leaderBps, 1)} bps)` : c.edgeLeft <= 0 ? 'nothing survives a copier\'s fees, drift and slippage' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's per-trade result survives fees, drift and slippage`);
     add('friction', 'hold', 'Hold times', cl(1 - scalp - intra * 0.4, 0, 1), 0.25, `median hold ${c.holdMed == null ? '—' : U.fmtDuration(c.holdMed)} · ${U.fmtPct(scalp * 100, { dp: 0 })} scalps`);
-    add('friction', 'slip', 'Slippage for a copier', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.2, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.copySize || AN.COPY_SIZE, { compact: true, dp: 0 })} at today's depth` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` (${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })})` : ''));
+    add('friction', 'slip', 'Slippage for a copier', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.15, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.copySize || AN.COPY_SIZE, { compact: true, dp: 0 })} at today's depth` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` (${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })})` : ''));
     add('friction', 'depth', 'Depth for their big trades', c.depthOk == null ? null : c.depthOk / 100, 0.15, c.depthOk == null ? 'no book data' : `${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%`);
-    add('activity', 'recent', 'Recently active', daysSince == null ? 0 : cl(1 - daysSince / 14, 0, 1), 0.4, daysSince == null ? 'no activity' : `last trade ${U.fmtAgo(c.lastAt)}`);
-    // under a week old, perWeek is the plain count (the week is not over): say so rather than call it a weekly rate
-    add('activity', 'cadence', 'Cadence', c.perWeek == null ? 0 : cl(c.perWeek / 3, 0, 1), 0.3, c.perWeek == null ? '—' : c.tenureD < 7 ? `${c.closed} position${c.closed === 1 ? '' : 's'} closed in its first ${U.fmtDuration(Date.now() - c.firstAt)}` : `${U.fmtNum(c.perWeek, c.perWeek >= 10 ? 0 : 1)} positions closed per week`);
-    add('activity', 'tenure', 'Track length', c.tenureD == null ? 0 : cl(c.tenureD / 30, 0, 1), 0.3, c.tenureD == null ? '—' : c.tenureD < 1 ? 'less than a day on the exchange' : `${U.fmtNum(c.tenureD, 0)} day${Math.round(c.tenureD) === 1 ? '' : 's'} on the exchange`);
     // a pillar is the weighted mean of its known parts (unknown parts are left out, not counted as zero)
     const pillar = (name) => { const ps = parts.filter((p) => p.pillar === name && p.v != null); const w = U.sum(ps, (p) => p.w); return w ? (U.sum(ps, (p) => p.v * p.w) / w) * 100 : 0; };
-    const track = pillar('track'), friction = pillar('friction'), activity = pillar('activity');
-    let total = 0.35 * track + 0.45 * friction + 0.2 * activity;
+    const results = pillar('results'), risk = pillar('risk'), friction = pillar('friction');
+    let total = 0.55 * results + 0.25 * risk + 0.2 * friction;
     const raw = total;   // before the caps, for the page's formula line
-    // caps: a single disqualifier must not be averaged away by strong pillars. Each carries its reason for the page.
+    // the hard limits: a single one must not be averaged away by strong pillars. Each carries its reason for the page.
     const caps = [];
     const cap = (at, why) => { if (total > at) { total = at; } caps.push({ at, why }); };
     const losing = !(s.pnl > 0);
-    if (losing) { total = Math.min(total * 0.6, 45); caps.push({ at: 45, why: 'not profitable so far' }); }
-    if (noEdge) cap(40, 'the per-position result after fees and funding is not positive: no edge to copy');
-    else if (c.edgeLeft != null && c.edgeLeft <= 0) cap(40, 'nothing survives copying: fees, drift and slippage exceed the per-position result');
-    else if (c.edgeLeft != null && c.edgeLeft < 100) cap(Math.round(30 + c.edgeLeft * 0.7), `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the per-position result survives copying`);   // graded: 57% left is the least that can be Copyable
-    if (c.closed < 10) cap(55, `only ${c.closed} closed positions`); else if (c.closed < 20) cap(65, `only ${c.closed} closed positions`);
-    if (c.tStat != null && c.tStat < 2 && c.closed >= 10) cap(60, `the per-position result is not clear of the noise (t = ${U.fmtNum(c.tStat, 1)})`);
-    if (c.depthOk != null && c.depthOk < 50) cap(60, `their sizes exceed today's books (${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%)`);
-    if (daysSince != null && daysSince > 60) cap(45, `no trade for ${Math.round(daysSince)} days`); else if (daysSince != null && daysSince > 30) cap(60, `no trade for ${Math.round(daysSince)} days`);
-    if (c.closed && c.liq / c.closed >= 0.1) cap(55, `${c.liq} of ${c.closed} positions ended in liquidation`);
-    if (c.top != null && c.top >= 60) cap(60, `one position is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
-    if (s.ddPct != null && s.ddPct >= 40) cap(60, `max drawdown ${U.fmtDd(s.ddPct)}`);
-    const verdict = losing ? 'Losing so far' : total >= 70 ? 'Copyable' : total >= 50 ? 'Copy with care' : 'Hard to copy';
-    return { total: Math.round(total), raw: Math.round(raw), track: Math.round(track), friction: Math.round(friction), activity: Math.round(activity), verdict, losing, parts, caps: caps.filter((x) => x.at <= Math.round(total) + 0.5 || x.at === 45 && losing) };
+    if (losing) cap(30, 'not profitable so far');
+    if (daysSince != null && daysSince > 30) cap(50, `no trade for ${Math.round(daysSince)} days`);
+    if (s.ddPct != null && s.ddPct >= 60) cap(50, `max drawdown ${U.fmtDd(s.ddPct)}`);
+    if (c.closed && c.liq / c.closed >= 0.25) cap(50, `${c.liq} of ${c.closed} positions ended in liquidation`);
+    if (!losing && s.pnl < K.minPnl) cap(K.copyableAt - 1, `under ${U.fmtUsd(K.minPnl, { dp: 0 })} made all-time: listed, not counted as copyable`);
+    const verdict = losing ? 'Losing so far' : total >= K.copyableAt ? 'Copyable' : total >= K.careAt ? 'Copy with care' : 'Hard to copy';
+    return { total: Math.round(total), raw: Math.round(raw), results: Math.round(results), risk: Math.round(risk), friction: Math.round(friction), verdict, losing, parts, caps: caps.filter((x) => x.at <= Math.round(total) + 0.5) };
   };
 
   /** Describe an order's stop / grouping semantics. */

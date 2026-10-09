@@ -134,17 +134,21 @@ test('a record counts bets: predictions that share a question are one bet (0xec7
   assert.equal(P.bettorSummary(norms).stats.rec, null);
 });
 
-test('record tiers: strong at 1 in 50 by luck, good at 1 in 10, and the best record is good when none reaches that', () => {
-  const rows = (lucks) => lucks.map((luck, i) => ({ address: '0x' + String(i).padStart(40, '0'), pnl: 10, roi: 5, wagered: 100, last: T0, topCat: 'Sports', rec: { n: 12, won: 7, expected: 5, luck, predictions: 12 } }));
+test('winning bettors: $500+ of profit, the biggest first; the tier is a badge (strong at 1 in 50 by luck, good at 1 in 10, only with more wins than the odds implied)', () => {
+  const rows = (lucks, pnl = 1000) => lucks.map((luck, i) => ({ address: '0x' + String(i).padStart(40, '0'), pnl, roi: 5, wagered: 100, last: T0, topCat: 'Sports', rec: { n: 12, won: 7, expected: 5, luck, predictions: 12 } }));
   const out = P.ideas([], { bettors: rows([0.001, 0.02, 0.03, 0.08, 0.3, 0.9]), soldOf: () => null }, Date.now());
-  assert.deepEqual(out.bettors.map((b) => b.tier), ['strong', 'strong', 'good', 'good', null, null]);
+  assert.deepEqual(out.bettors.map((b) => b.tier), ['strong', 'strong', 'good', 'good', null, null], 'the same PnL: the rarer record first');
   assert.equal(out.tested, 6);
   const none = P.ideas([], { bettors: rows([0.5, 0.25, 0.4]), soldOf: () => null }, Date.now());
-  assert.deepEqual(none.bettors.map((b) => [b.luck, b.tier]), [[0.25, 'good'], [0.4, null], [0.5, null]], 'the best record counts as good');
+  assert.deepEqual(none.bettors.map((b) => [b.luck, b.tier]), [[0.25, null], [0.4, null], [0.5, null]], 'no record reaches good: no tier is handed out');
   assert.deepEqual(P.ideas([], { bettors: [], soldOf: () => null }).bettors, []);
   // the cutoff applies to the luck itself, not to a rounded one (0x7dbb…: 0.100174 is not good; it read as 0.1)
   const edge = P.ideas([], { bettors: rows([0.100174, 0.0999]), soldOf: () => null }, Date.now());
   assert.deepEqual(edge.bettors.map((b) => [b.luck, b.tier]), [[0.0999, 'good'], [0.100174, null]]);
+  // the biggest PnL first, whatever the luck; under $500 not listed; fewer wins than the odds implied: listed, no badge
+  const one = (address, luck, pnl, rec) => Object.assign(rows([luck], pnl)[0], { address }, rec ? { rec } : {});
+  const mixed = [one('a', 0.01, 600), one('b', 0.5, 9000), one('c', 0.001, 499), one('d', 0.05, 2000, { n: 12, won: 4, expected: 5, luck: 0.05, predictions: 12 })];
+  assert.deepEqual(P.ideas([], { bettors: mixed, soldOf: () => null }, Date.now()).bettors.map((b) => [b.address, b.tier]), [['b', null], ['d', null], ['a', 'strong']]);
 });
 
 test('top category: the most predictions; a tie goes to the larger stake, not the newest prediction (0xfdc7…: Crypto)', () => {
@@ -161,38 +165,41 @@ test('top category: the most predictions; a tie goes to the larger stake, not th
 
 test('the record against the odds, and the ideas from winning bettors: slips that can still be placed', () => {
   const OTHER = '0x00000000000000000000000000000000000000b2';
-  // ME: 10 decided at even odds (stake 10 to win 10), 7 won where 5 were expected: +$40, luck 176 / 1024
-  const decided = Array.from({ length: 10 }, (_, i) => pred('d' + i, 10, 10, i < 7 ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', true));
-  // OTHER: one 49× long shot that hit and nine even-money losses: +$390, yet 1 win where 4.5 were expected: no record
-  // (money-weighted, this looked like a 5-sigma record; counted in wins it is what it is: a lucky hit)
-  const lucky = [pred('x0', 10, 480, 'PREDICTOR_WINS', true)].concat(Array.from({ length: 9 }, (_, i) => pred('x' + (i + 1), 10, 10, 'COUNTERPARTY_WINS', true))).map((n) => Object.assign(n, { predictor: OTHER }));
+  // ME: 10 decided at even odds (stake 150 to win 150), 7 won where 5 were expected: +$600, luck 176 / 1024
+  const decided = Array.from({ length: 10 }, (_, i) => pred('d' + i, 150, 150, i < 7 ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', true));
+  // OTHER: one 49× long shot that hit and nine even-money losses: +$3,900, yet 1 win where 4.5 were expected: listed for
+  // what it made, with no record badge (counted in wins it is what it is: a lucky hit)
+  const lucky = [pred('x0', 100, 4800, 'PREDICTOR_WINS', true)].concat(Array.from({ length: 9 }, (_, i) => pred('x' + (i + 1), 100, 100, 'COUNTERPARTY_WINS', true))).map((n) => Object.assign(n, { predictor: OTHER }));
   const now = Date.now();
   const openNow = pred('open', 5, 20, null, false, now), closed = pred('closed', 5, 20, null, false, T0), othersOpen = Object.assign(pred('oo', 5, 20, null, false, now), { predictor: OTHER });
   const norms = decided.concat(lucky, [openNow, closed, othersOpen]);
   const a = P.aggregate(norms);
   const me = a.bettors.find((b) => b.address === ME).rec, other = a.bettors.find((b) => b.address === OTHER).rec;
   assert.equal(me.n, 10); assert.equal(me.won, 7); near(assert, me.expected, 5, 1e-9); near(assert, me.luck, 176 / 1024, 1e-3);
-  assert.equal(other.won, 1); near(assert, other.expected, 10 / 490 + 4.5, 1e-4); assert.ok(other.luck > 0.9, String(other.luck));
+  assert.equal(other.won, 1); near(assert, other.expected, 100 / 4900 + 4.5, 1e-4); assert.ok(other.luck > 0.9, String(other.luck));
   assert.equal(a.makers[0].rec, null, 'makers carry no record');
   const { bettors, ideas } = P.ideas(norms, a, now);
-  assert.deepEqual(bettors.map((b) => b.address), [ME], 'in profit with 10 decided and more wins than the odds implied; the lucky hit is not a record');
-  assert.equal(bettors[0].ideas, 1);
+  assert.deepEqual(bettors.map((b) => [b.address, b.tier]), [[OTHER, null], [ME, null]], 'both $500+ in profit with 10 decided: the bigger PnL first; neither record reaches good');
+  const mine = bettors.find((b) => b.address === ME);
+  assert.equal(mine.ideas, 1);
   // beside the record against the odds, the record the page shows: Meridian's app's, from the bettor's row (claimed only)
-  assert.deepEqual([bettors[0].won, bettors[0].n, bettors[0].appWon, bettors[0].appLost, bettors[0].appWinRate], [7, 10, 7, 3, 70]);
-  const unclaimed = norms.map((n) => (n.id === 'd0' || n.id === 'd9' ? pred(n.id, 10, 10, n.id === 'd0' ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', false) : n));
-  const u = P.ideas(unclaimed, P.aggregate(unclaimed), now).bettors[0];
+  assert.deepEqual([mine.won, mine.n, mine.appWon, mine.appLost, mine.appWinRate], [7, 10, 7, 3, 70]);
+  const unclaimed = norms.map((n) => (n.id === 'd0' || n.id === 'd9' ? pred(n.id, 150, 150, n.id === 'd0' ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', false) : n));
+  const u = P.ideas(unclaimed, P.aggregate(unclaimed), now).bettors.find((b) => b.address === ME);
   assert.deepEqual([u.won, u.n, u.appWon, u.appLost, u.appWinRate], [7, 10, 6, 2, 75], 'a decided prediction nobody has claimed is in the record against the odds, pending in the app\'s');
-  assert.deepEqual(P.ideas([], { bettors: [{ address: ME, pnl: 1, rec: { n: 10, won: 7, expected: 5, luck: 0.1, predictions: 10 } }], soldOf: () => null }).bettors.map((b) => b.appWon), [undefined], 'a row without the app\'s counts adds none');
-  assert.deepEqual(ideas.map((x) => x.id), ['open'], 'only slips still before their cutoff, from winning bettors');
+  assert.deepEqual(P.ideas([], { bettors: [{ address: ME, pnl: 600, rec: { n: 10, won: 7, expected: 5, luck: 0.1, predictions: 10 } }], soldOf: () => null }).bettors.map((b) => b.appWon), [undefined], 'a row without the app\'s counts adds none');
+  assert.deepEqual(ideas.map((x) => x.id), ['oo', 'open'], 'only slips still before their cutoff, from winning bettors, the bigger winner first');
   // the same picks placed again are one idea, the newest, with the count
   const again = pred('again', 5, 20, null, false, now + 1000);
   again.picks = openNow.picks.map((k) => Object.assign({}, k));   // the same question and side as 'open'
   const twice = P.ideas(norms.concat([again]), P.aggregate(norms.concat([again])), now);
-  assert.deepEqual(twice.ideas.map((x) => [x.id, x.x]), [['again', 2]]); assert.equal(twice.bettors[0].ideas, 1);
-  assert.equal(P.full(ideas[0]).picks[0].id, 'copen', 'ideas keep their legs\' question ids');
-  // nine decided is not a record yet; a bettor out of profit is not a winning one
+  assert.deepEqual(twice.ideas.map((x) => [x.id, x.x]), [['oo', 1], ['again', 2]]); assert.equal(twice.bettors.find((b) => b.address === ME).ideas, 1);
+  assert.equal(P.full(ideas.find((x) => x.id === 'open')).picks[0].id, 'copen', 'ideas keep their legs\' question ids');
+  // nine decided is not a record yet; a bettor under $500 of profit is not a winning one
   assert.equal(P.ideas(norms.filter((n) => n.id !== 'd0'), P.aggregate(norms.filter((n) => n.id !== 'd0')), now).bettors.some((b) => b.address === ME), false);
-  const losing = decided.map((n, i) => (i < 7 ? pred('l' + i, 10, 10, 'COUNTERPARTY_WINS', true) : n));
+  const small = decided.map((n, i) => (i === 6 ? pred('s6', 150, 150, 'COUNTERPARTY_WINS', true) : n));   // 6 won, 4 lost: +$300
+  assert.equal(P.ideas(small, P.aggregate(small), now).bettors.length, 0);
+  const losing = decided.map((n, i) => (i < 7 ? pred('l' + i, 150, 150, 'COUNTERPARTY_WINS', true) : n));
   assert.equal(P.ideas(losing, P.aggregate(losing), now).bettors.length, 0);
 });
 

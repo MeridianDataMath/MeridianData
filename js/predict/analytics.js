@@ -733,29 +733,30 @@
     return Math.min(1, Math.max(0, d[won]));
   };
 
-  /** Winning bettors and their ideas to copy (the Copy trading page, from the snapshot's predict-ideas.json). A winning
-   *  bettor has at least minDecided decided bets (rec.n: predictions linked by a shared question count once), is in
-   *  profit, and has won more of them than its locked odds implied. Its tier says how rarely luck alone gives that
-   *  record: strong at strongLuck or rarer, good at goodLuck; when no winning bettor reaches good, the best record counts
-   *  as good, so the list always has one to point at. (Plain thresholds, not a cut across every bettor tested: with some
-   *  140 bettors ranked by luck, luck alone is expected to give up to a tenth of them a good record, so the tiers rank
-   *  records and do not establish skill.) */
-  P.IDEAS = { minDecided: 10, strongLuck: 0.02, goodLuck: 0.1 };
-  /** { bettors, ideas, tested }: every winning bettor, least likely by luck first, with its tier, its record as the app
+  /** Winning bettors and their ideas to copy (the Copy trading page, from the snapshot's predict-ideas.json), ranked by
+   *  what they made, as the large exchanges rank their lead traders: a winning bettor has at least minDecided decided
+   *  bets (rec.n: predictions linked by a shared question count once) and at least minPnl of profit, the biggest first.
+   *  Its tier is a badge on top: whether it has also won more of its bets than its locked odds implied, and how rarely
+   *  luck alone gives that record (strong at strongLuck or rarer, good at goodLuck). Plain thresholds, not a cut across
+   *  every bettor tested: with some 150 bettors, luck alone is expected to give up to a tenth of them a good record, so a
+   *  tier ranks records and does not establish skill. */
+  P.IDEAS = { minDecided: 10, minPnl: 500, strongLuck: 0.02, goodLuck: 0.1 };
+  /** { bettors, ideas, tested }: every winning bettor, the biggest PnL first, with its tier, its record as the app
    *  counts it and the number of its ideas; those ideas, the bettor's predictions the site still offers to copy at `now` (undecided, every leg before the
    *  end time Meridian lists for it, a listed end and no betting cutoff, and not settled, the bettor still holding at
    *  least half its tokens), best record first, then newest; tested = bettors with a record. agg: P.aggregate over the
    *  same norms (its bettor rows and soldOf). */
   P.ideas = function (norms, agg, now = Date.now()) {
     const tested = agg.bettors.filter((b) => b.rec && b.rec.n >= P.IDEAS.minDecided);
-    const tierOf = (luck) => (luck <= P.IDEAS.strongLuck ? 'strong' : luck <= P.IDEAS.goodLuck ? 'good' : null);
-    const winning = tested.filter((b) => b.pnl > 0 && b.rec.won > b.rec.expected);
+    // (a record at goodLuck or rarer has more wins than its odds implied: luckOf is P(that many wins or more))
+    const tierOf = (b) => (b.rec.won <= b.rec.expected ? null : b.rec.luck <= P.IDEAS.strongLuck ? 'strong' : b.rec.luck <= P.IDEAS.goodLuck ? 'good' : null);
+    const winning = tested.filter((b) => b.pnl >= P.IDEAS.minPnl);
     const byAddr = new Map(winning.map((b) => [b.address, b]));
     const sold = (n) => (agg.soldOf ? agg.soldOf(n) : null);
     const held = (n) => { const s = sold(n); return s && s.h != null ? s.h : 1; };
     const open = norms.filter((n) => byAddr.has(n.predictor) && !n.decided && !P.selfMatch(n) && n.picks.length && n.picks.every((k) => k.endTime && k.endTime > now && !k.settled) && held(n) >= 0.5);
     const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
-    const ranked = winning.slice().sort((a, b) => a.rec.luck - b.rec.luck || b.pnl - a.pnl);
+    const ranked = winning.slice().sort((a, b) => b.pnl - a.pnl || a.rec.luck - b.rec.luck);
     const rank = new Map(ranked.map((b, i) => [b.address, i]));
     // one idea per bettor and set of picks: the same slip placed again (0x2dc3… put the same 97% favourite on four
     // times) is the newest of them, with the count (x)
@@ -769,8 +770,7 @@
     // won / n / expected: the record against the odds, which the tier rests on; appWon / appLost / appWinRate: the row's
     // record as Meridian's app counts it (P.appRecord, claimed predictions only), the one the page shows (added: a file
     // from before them has none, and the page shows the record against the odds as it did)
-    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b.rec.luck), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, appWon: b.appWon, appLost: b.appLost, appWinRate: r2(b.appWinRate), pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
-    if (bettors.length && !bettors.some((b) => b.tier)) bettors[0].tier = 'good';   // the best record, when none reaches good
+    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, appWon: b.appWon, appLost: b.appLost, appWinRate: r2(b.appWinRate), pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
     return { bettors, ideas, tested: tested.length };
   };
 

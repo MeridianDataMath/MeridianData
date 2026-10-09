@@ -1,10 +1,14 @@
-/* MeridianDataHub — Copy trading: leaders ranked by copyability (what a follower would actually keep), with the full
-   breakdown behind every score. Nothing here places orders; that is the copy agent (#/copytrade/agent). */
+/* MeridianDataHub — Copy trading: leaders ranked by copyability, results first (PnL and ROI, as the large exchanges rank
+   their lead traders), then risk and how much of it a follower would keep, with the full breakdown behind every score.
+   Nothing here places orders; that is the copy agent (#/copytrade/agent). */
 (function () {
   const MD = window.MD; const U = MD.util; const AN = MD.analytics; const UI = MD.ui; const AL = MD.alerts; const h = U.h;
 
   const VERDICT_CLS = { 'Copyable': 'green', 'Copy with care': 'amber', 'Hard to copy': 'red', 'Losing so far': 'red' };
-  const PILLARS = [['track', 'Track record', 'is there an edge, and is it steady'], ['friction', 'Copy friction', 'how much of it survives being copied a minute later at this size'], ['activity', 'Activity', 'is the account still trading']];
+  const PILLARS = [['results', 'Results', 'how much it made, and how efficiently'], ['risk', 'Risk', 'how deep it fell, how often it was liquidated, how steady its weeks are'], ['friction', 'Copy friction', 'how much of it survives being copied a minute later at this size']];
+  // the PnL and ROI columns' window, as the exchanges offer it (the score itself reads all-time figures)
+  const WINDOWS = [{ v: '7d', label: '7D' }, { v: '30d', label: '30D' }, { v: 'all', label: 'All' }];
+  const WIN_TXT = { '7d': 'last 7 days', '30d': 'last 30 days', all: 'all-time' };
   const usd0 = (v) => U.fmtUsd(v || 0, { compact: true, dp: 0 });
   const bps = (v, opts) => (v == null ? h('span.dim', '—') : h('span', { class: 'num ' + (opts && opts.cost ? (v > 0 ? 'neg' : '') : U.pnlClass(v)) }, (opts && opts.sign && v > 0 ? '+' : '') + U.fmtNum(v, 1) + ' bps'));
 
@@ -64,8 +68,8 @@
 
   /** The score as a pill: number + verdict; "—" with the reason when there is none. */
   function scorePill(sc, c) {
-    if (!sc) return h('span.dim.small', { title: 'Fewer than 5 closed positions: nothing to score yet' }, c ? `${c.closed} closed · too few` : 'no profile');
-    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `track ${sc.track} · friction ${sc.friction} · activity ${sc.activity}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
+    if (!sc) return h('span.dim.small', { title: `Fewer than ${AN.COPY.minClosed} closed positions: nothing to score yet` }, c ? `${c.closed} closed · too few` : 'no profile');
+    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
   }
 
   /** The full story behind one leader's score. */
@@ -114,12 +118,12 @@
     UI.modal({ wide: true,
       title: h('div.row', { style: { gap: '10px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), h('span', U.shortAddr(r.account, 6)), U.copyBtn(r.account), scorePill(sc, c), MD.router.pages.leaderboard ? MD.router.pages.leaderboard.carriedChip(r) : null, MD.bellBtn({ sid: r.sid, address: r.account, name: r.name }), h('span.grow'), h('a.btn.sm.primary', { href: '#/copytrade/sim?address=' + r.account + '&sub=' + r.sid }, 'Simulate'), h('a.btn.sm', { href: U.accountUrl(r.account, r.sid) }, 'Account page'), h('a.btn.sm.ghost', { href: '#/tax?address=' + r.account + '&sub=' + r.sid }, 'Tax')),
       body: h('div.stack',
-        h('div.dim.small', `Copyability ${sc.total}. Before caps: 35% track record (${sc.track}) + 45% copy friction (${sc.friction}) + 20% activity (${sc.activity}) = ${sc.raw}` + (sc.losing ? ', then scaled down by 40% and capped at 45 while the account is not profitable' : sc.raw !== sc.total ? `, capped at ${sc.total} (reasons below)` : '') + '. Parts that cannot be measured are left out of their pillar, not counted as zero.'),
+        h('div.dim.small', `Copyability ${sc.total}. Before caps: 55% results (${sc.results}) + 25% risk (${sc.risk}) + 20% copy friction (${sc.friction}) = ${sc.raw}` + (sc.raw !== sc.total ? `, capped at ${sc.total} (reasons below)` : '') + `. Copyable from ${AN.COPY.copyableAt} with at least ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })} made all-time. Parts that cannot be measured are left out of their pillar, not counted as zero.`),
         sc.caps.length ? h('div.small', { style: { color: 'var(--amber)' } }, 'Capped: ', sc.caps.map((x, i) => [i ? ' · ' : null, `${x.at} — ${x.why}`])) : null,
         pillars,
         UI.card('What is left for a copier', wfTbl, h('span.dim.small', `the same moves one minute later, at taker fees, with a ${usd0(c.copySize || AN.COPY_SIZE)} position`)),
         facts,
-        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after its most recent fills (up to 400), and the order books as they were when the snapshot was built. Past results are not a promise of future returns. Copyability combines how much of a result a copier could have kept with the track record and recent activity behind it; it does not say whether there will be a result.')) });
+        h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'From the public Meridian API: this account\'s positions and fills, one-minute oracle candles after its most recent fills (up to 400), and the order books as they were when the snapshot was built. Past results are not a promise of future returns. Copyability puts what an account made first, then the risk it took and how much of its result a copier could have kept; it does not say whether there will be a result.')) });
   }
 
   MD.router.pages.copytrade = {
@@ -130,18 +134,20 @@
       const LB = MD.router.pages.leaderboard;
       const tableWrap = h('div');
       const summary = h('span.dim.small');
-      const state = { filter: route.params.show || 'scored', sort: { key: 'score', desc: true } };
+      const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: { key: 'score', desc: true } };
       // Predict: open slips from winning bettors (js/pages/predict.js), under the perps leaders
       const ideas = MD.predict && MD.predict.ideasCard ? MD.predict.ideasCard(ctx) : null;
       const hero = h('div.card.ct-hero',
         h('h1', 'Copy trading on Meridian'),
-        h('p', 'A leaderboard tells you who made money. Copying needs a different question: how much of a leader\'s result would a follower keep, entering a minute later, at taker fees, against today\'s order books, with a position the size of the leader\'s median one but no more than $2,000? Every wallet with at least 5 closed positions is scored on that, together with its track record and recent activity, and the numbers behind each score are one click away.'),
+        h('p', `Leaders are ranked the way the large exchanges rank their lead traders: by what they made first (all-time PnL and ROI), then by the risk they took (drawdown, liquidations, steady weeks), then by how much of it a follower would keep, entering a minute later at taker fees against today's order books with a position the size of the leader's median one but no more than $2,000. Copyable: a score of ${AN.COPY.copyableAt} or more and at least ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })} made all-time. Every wallet with at least ${AN.COPY.minClosed} closed positions is scored, and the numbers behind each score are one click away.`),
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
-        h('p', 'Predict is copied by hand, one slip at a time: further down are open slips of bettors whose record beats their own odds; each opens on Meridian Predict, where Add To Slip adds its picks to your slip.'),
+        h('p', `Predict is copied by hand, one slip at a time: further down are open slips of bettors at least ${U.fmtUsd(MD.predict && MD.predict.IDEAS ? MD.predict.IDEAS.minPnl : 500, { dp: 0 })} in profit, the biggest winners first; each opens on Meridian Predict, where Add To Slip adds its picks to your slip.`),
         h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first'), h('span.grow'),
           ideas ? h('button.btn.sm', { type: 'button', onclick: () => ideas.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, U.icon('target'), 'Predict ideas') : null));
       const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
-      const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), filterSeg, MD.defsLink()), tableWrap);
+      const winSeg = UI.seg(WINDOWS, state.win, (v) => { state.win = v; MD.router.setParams({ window: v === 'all' ? null : v }, { silent: true }); render(); }, 'sm');
+      winSeg.title = 'The window of the PnL and ROI columns (the score reads all-time figures)';
+      const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), winSeg, filterSeg, MD.defsLink()), tableWrap);
       U.replace(root, h('div.page', h('div.stack', hero, leaders, ideas, alertsCard(ctx), h('div.footer-note', 'Scores come from the published snapshot (rebuilt every 30 minutes): the same positions and PnL as the Leaderboard, plus each account\'s fills, one-minute oracle candles after them, and the order books at build time. Past performance is not a promise of future returns.'))));
       ctx.onCleanup(U.on('favorites', () => render()));
       ctx.onCleanup(U.on('alerts', () => render()));
@@ -161,9 +167,11 @@
         const scored = traders.map((r) => ({ r, sc: AN.copyScore(r), c: r.copy }));
         let rows = scored;
         if (state.filter === 'scored') rows = rows.filter((x) => x.sc);
-        if (state.filter === 'copyable') rows = rows.filter((x) => x.sc && x.sc.total >= 70);
+        if (state.filter === 'copyable') rows = rows.filter((x) => x.sc && x.sc.verdict === 'Copyable');
+        // the PnL and ROI columns' window (a row without that window's figures counts as none)
+        const win = (x) => x.r.stats[state.win] || null;
         // edge left over 100% shows as '>100%', so those rows sort as one value rather than by a ratio never shown
-        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': return c.edgeLeft == null ? null : Math.min(c.edgeLeft, 100.5); case 'pnl': return s.pnl; case 'roi': return s.roi; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
+        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': return c.edgeLeft == null ? null : Math.min(c.edgeLeft, 100.5); case 'pnl': return win(x) ? win(x).pnl : null; case 'roi': return win(x) ? win(x).roi : null; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
         rows = U.sortBy(rows, (x) => val(x, state.sort.key), state.sort.desc);
         if (state.sort.key === 'score') rows = rows.slice().sort((a, b) => { const d = (b.sc ? b.sc.total : -1) - (a.sc ? a.sc.total : -1); return (state.sort.desc ? d : -d) || (b.r.stats.all.pnl - a.r.stats.all.pnl); });
         const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; render(); };
@@ -173,13 +181,13 @@
           UI.table({
             sort: state.sort, onSort,
             cols: [
-              { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.total >= 70 ? 'top' : '' }, String(i)); } },
+              { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return h('span.rank', { class: i <= 3 && x.sc && x.sc.verdict === 'Copyable' ? 'top' : '' }, String(i)); } },
               { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account), LB ? LB.carriedChip(x.r) : null) },
-              { key: 'score', label: 'Copyability', sortVal: 1, title: '0–100: track record, copy friction and activity; click a row for the breakdown', render: (x) => scorePill(x.sc, x.c) },
+              { key: 'score', label: 'Copyability', sortVal: 1, title: `0–100: results (all-time PnL and ROI) 55%, risk 25%, copy friction 20%; Copyable from ${AN.COPY.copyableAt} with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time; click a row for the breakdown`, render: (x) => scorePill(x.sc, x.c) },
               { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their most recent fills (up to 400) and slippage at the leader\'s median position size, capped at $2K', render: (x) => (x.c && x.c.leaderBps != null && x.c.leaderBps <= 0 ? h('span.dim', { title: 'The leader\'s positions do not make money after fees and funding: there is no edge to keep' }, '—') : x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg'), title: `per position: leader ${U.fmtNum(x.c.leaderBps, 1)} bps, copier ${U.fmtNum(x.c.copyBps, 1)} bps` }, x.c.edgeLeft > 100 ? '>100%' : U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
               // PnL and ROI as Meridian's app (the Leaderboard's, row basis 'app'); the site's net figures in a cell's tooltip
-              { key: 'pnl', label: 'All-time PnL', num: true, sortVal: 1, title: 'As Meridian\'s Trade Stats (All): realized PnL, settled funding and trading fees, plus unrealized PnL; mPerp position fees are not in it. Hover a cell for the site\'s net figure', render: (x) => h('span', { title: AN.sitePnlTitle(x.r, 'all') }, U.pnlEl(x.r.stats.all.pnl, { dp: 0 })) },
-              { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'All-time PnL (as Meridian\'s app) ÷ deposits', render: (x) => h('span', { title: AN.siteRowNote(x.r, 'all') }, UI.pct(x.r.stats.all.roi, { dp: 1 })) },
+              { key: 'pnl', label: state.win === 'all' ? 'All-time PnL' : `PnL ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]}, as Meridian's Trade Stats: realized PnL, settled funding and trading fees, plus unrealized PnL; mPerp position fees are not in it. Hover a cell for the site's net figure`, render: (x) => (win(x) ? h('span', { title: AN.sitePnlTitle(x.r, state.win) }, U.pnlEl(win(x).pnl, { dp: 0 })) : h('span.dim', '—')) },
+              { key: 'roi', label: state.win === 'all' ? 'ROI' : `ROI ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]} (as Meridian's app) ÷ deposits`, render: (x) => (win(x) ? h('span', { title: AN.siteRowNote(x.r, state.win) }, UI.pct(win(x).roi, { dp: 1 })) : h('span.dim', '—')) },
               { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, render: (x) => (x.r.winRate == null ? h('span.dim', '—') : U.fmtPct(x.r.winRate, { dp: 0 })) },
               { key: 'closed', label: 'Closed', num: true, sortVal: 1, title: 'Closed positions · last trade', render: (x) => h('div', { style: { lineHeight: '1.25' } }, String(val(x, 'closed') || 0), x.c && x.c.lastAt ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, U.fmtAgo(x.c.lastAt)) : null) },
               { key: 'hold', label: 'Median hold', num: true, sortVal: 1, render: (x) => (x.c && x.c.holdMed != null ? U.fmtDuration(x.c.holdMed) : h('span.dim', '—')) },
@@ -189,10 +197,10 @@
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, title: 'All-time drawdown on the site\'s net PnL (funding and mPerp position fees as charged), deposits and withdrawals left out', render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
               { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],
-            rows, empty: state.filter === 'copyable' ? 'No wallet scores 70 or more yet' : state.filter === 'scored' ? 'No wallet has 5 closed positions yet' : 'No traders in the snapshot',
+            rows, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },
           }));
-        const copyable = scored.filter((x) => x.sc && x.sc.total >= 70).length, nScored = scored.filter((x) => x.sc).length;
+        const copyable = scored.filter((x) => x.sc && x.sc.verdict === 'Copyable').length, nScored = scored.filter((x) => x.sc).length;
         // as the Leaderboard says it: accounts missing from the snapshot, rows carried over from an earlier build, staleness
         U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot ${U.fmtAgo(data.builtAt)}`, LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));
       }
