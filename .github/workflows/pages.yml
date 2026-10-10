@@ -72,7 +72,8 @@ jobs:
       # are read, the newer snapshot is used. Required: the Predict pages cannot query the API from the site's origin, so a
       # run without a snapshot fails here and the live deploy keeps the last one.
       - name: Fetch the Predict snapshot (MeridianData-snapshots, public)
-        run: GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo || echo "MeridianData-snapshots: no snapshot there"
+        run: |
+          GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo || echo "MeridianData-snapshots: no snapshot there"
 
       # (once MeridianData-snapshots carries the snapshot, the "snapshots" branch can be deleted and this step with it)
       - name: Check out the Predict snapshot (branch "snapshots", from before MeridianData-snapshots)
