@@ -1,7 +1,8 @@
-# Builds the perps snapshot, adds the Predict snapshot pushed from a PC, and deploys the site to the Cloudflare Worker
-# with static assets (project "meridiandatahub", see wrangler.jsonc; works from a private repo). Needs the repository
-# secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID: without them the run fails instead of deploying anywhere else.
-# Runs on every push to main, every 30 minutes, and on demand.
+# Builds the perps snapshot, adds the Predict snapshot published from a home connection (to a repository of its own,
+# see below), and deploys the site to the Cloudflare Worker with static assets (project "meridiandatahub", see
+# wrangler.jsonc; works from a private repo). Needs the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
+# without them the run fails instead of deploying anywhere else. Runs on every push to main, every 30 minutes (at :17 and
+# :47, a few minutes after the snapshot machine's runs at :09 and :39), and on demand.
 #
 # The Cloudflare token reaches the deploy step only, never the tests, the builders, npm or git. Third-party actions are
 # pinned to commits (a moved tag cannot swap in other code) and wrangler to one version. To update an action:
@@ -13,7 +14,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '17,47 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -64,24 +65,53 @@ jobs:
         run: node scripts/build-snapshot.mjs --perps
         continue-on-error: true   # an API hiccup must not take the site down; visitors fall back to a browser build
 
-      # The Predict snapshot published from a PC (scripts/Update-PredictSnapshot.ps1). Required: the Predict pages cannot
-      # query the API from the site's origin, so a run without it fails here and the live deploy keeps the last one.
-      - name: Check out the Predict snapshot (branch "snapshots")
+      # The Predict snapshot, built on a home connection (scripts/Update-PredictSnapshot.ps1 on the PC, or the Mac kit's
+      # copy) and published to a repository of its own, MeridianDataMath/MeridianData-snapshots: the machine that builds it
+      # holds a token for that repository only, so nothing on it can change this site's code, and what it publishes is
+      # taken as data only. Before that repository existed, the PC published to this repository's "snapshots" branch: both
+      # are read, the newer snapshot is used. Required: the Predict pages cannot query the API from the site's origin, so a
+      # run without a snapshot fails here and the live deploy keeps the last one.
+      - name: Fetch the Predict snapshot (MeridianData-snapshots, public)
+        run: GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo || echo "MeridianData-snapshots: no snapshot there"
+
+      # (once MeridianData-snapshots carries the snapshot, the "snapshots" branch can be deleted and this step with it)
+      - name: Check out the Predict snapshot (branch "snapshots", from before MeridianData-snapshots)
+        continue-on-error: true
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
           ref: snapshots
-          path: .snapshots
+          path: .snap-branch
           persist-credentials: false
 
       - name: Add the Predict snapshot (data/predict.json, bettors/, questions/, slips/)
         run: |
-          # Only regular files named as the PC publishes them. A link would publish whatever it points at (the runner's
-          # environment, say), any other file would be served from the site's origin, and leaderboard.json is built above.
+          # the newer of the two by predict-status.json's build time
+          src=$(node -e "
+            const fs = require('fs');
+            const at = (d) => { try { return Number(JSON.parse(fs.readFileSync(d + '/predict-status.json', 'utf8')).builtAt) || 0; } catch (e) { return -1; } };
+            const r = at('.snap-repo'), b = at('.snap-branch');
+            console.log(r < 0 && b < 0 ? '' : r >= b ? '.snap-repo' : '.snap-branch');")
+          if [ -z "$src" ]; then echo "::error::no Predict snapshot in MeridianData-snapshots or the snapshots branch"; exit 1; fi
+          echo "Predict snapshot from $src"
+          # Only regular files named as the snapshot machine publishes them. A link would publish whatever it points at (the
+          # runner's environment, say), any other file would be served from the site's origin, and leaderboard.json is
+          # built above.
           mkdir -p data
-          (cd .snapshots && find . -regextype posix-extended -type f \
+          (cd "$src" && find . -regextype posix-extended -type f \
             -regex '\./(predict\.json|predict-status\.json|predict-ideas\.json|bettors/0x[0-9a-f]{40}\.json|questions/0x[0-9a-fA-F]{64}\.json|slips/[0-9a-f]{2}\.json)' \
             -print0 | xargs -0 -r cp --parents -t ../data)
-          node -e "const j = JSON.parse(require('fs').readFileSync('data/predict.json', 'utf8')); if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }"
+          # and each of them JSON, at most 25 MB (Cloudflare's limit for one file)
+          node -e "
+            const fs = require('fs'), path = require('path'); let n = 0;
+            const files = ['predict.json', 'predict-status.json', 'predict-ideas.json'].map((f) => 'data/' + f).filter((f) => fs.existsSync(f));
+            for (const d of ['bettors', 'questions', 'slips']) if (fs.existsSync('data/' + d)) for (const f of fs.readdirSync('data/' + d)) files.push(path.join('data', d, f));
+            for (const f of files) {
+              if (fs.statSync(f).size > 25e6) { console.error(f + ' is over 25 MB'); process.exit(1); }
+              try { JSON.parse(fs.readFileSync(f, 'utf8')); n++; } catch (e) { console.error(f + ' is not JSON: ' + e.message); process.exit(1); }
+            }
+            const j = JSON.parse(fs.readFileSync('data/predict.json', 'utf8'));
+            if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }
+            console.log(n + ' snapshot files, all JSON');"
           echo "snapshot copied: $(find data -path 'data/bettors/*' -type f | wc -l) wallet files, $(find data -path 'data/questions/*' -type f | wc -l) question files, $(find data -path 'data/slips/*' -type f | wc -l) slip files"
 
       # The Tax center's official exchange rates (data/fx/*.json): the ECB's euro reference rates, NBP table A for USD/PLN
@@ -126,3 +156,20 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4.141.0'   # the one package-lock.json installs above (the action's default, wrangler 3, cannot deploy an assets-only Worker)
           command: deploy
+
+  # GitHub turns a public repository's schedule off after 60 days without a commit. With the Predict snapshot published to
+  # its own repository, weeks can pass without one here, so once a day a scheduled run enables this workflow again, as
+  # the keepalive actions do. Its token may only manage this repository's workflows.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the schedule on
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$(date -u +%H)" = "03" ] || { echo "only in the 03:00 UTC hour"; exit 0; }
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/enable" && echo "schedule kept on" || echo "::warning::could not re-enable the workflow"

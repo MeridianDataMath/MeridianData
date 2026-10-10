@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Builds the Meridian Predict snapshot on this PC and publishes it to the repo's "snapshots" branch.
+    Builds the Meridian Predict snapshot on this PC and publishes it to its own repository,
+    MeridianDataMath/MeridianData-snapshots (until that repository exists: this repo's "snapshots" branch).
 
 .DESCRIPTION
     The Predict API (api.predict.meridian.xyz) answers 403 to datacenter IPs, so GitHub Actions cannot
@@ -10,9 +11,12 @@
          under the API's 200 requests/minute; about 2-3 minutes)
       2. checks the result (Test-Snapshot below): the push replaces the only published snapshot, so a short or
          incomplete build is logged and dropped instead
-      3. publishes predict.json, predict-status.json, predict-ideas.json, bettors/, questions/ and slips/ as a brand-new single-commit branch
-         "snapshots" (force-pushed, no parent), so the repository's history never grows: only the latest snapshot
-         is ever kept.
+      3. publishes predict.json, predict-status.json, predict-ideas.json, bettors/, questions/ and slips/ as a brand-new
+         single commit (force-pushed, no parent), so no history ever grows: only the latest snapshot is kept. It goes to
+         the "main" branch of MeridianData-snapshots, a repository of its own, so that a machine publishing snapshots
+         (the Mac kit's copy of this script) needs a token for that repository only and can never change the site's
+         code. Until that repository exists, it goes to this repo's "snapshots" branch as before; the deploy reads
+         both and takes the newer.
       4. triggers the deploy workflow, which copies those files into data/ on the site.
 
     It runs this checkout's code as it is and never pulls: a hidden task that pulled and ran origin/main every
@@ -26,9 +30,10 @@
 .PARAMETER PublishOnly   Skip the build and publish the existing data\predict.json (after the same checks).
 .PARAMETER Force         Skip the two prediction-count checks, for one run when a drop is real (the API removed
                          predictions); the snapshot must still be complete.
+.PARAMETER DataRepo      The snapshot's own repository (default MeridianData-snapshots on GitHub).
 #>
 [CmdletBinding()]
-param([switch]$DryRun, [switch]$PublishOnly, [switch]$Force)
+param([switch]$DryRun, [switch]$PublishOnly, [switch]$Force, [string]$DataRepo = 'https://github.com/MeridianDataMath/MeridianData-snapshots.git')
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $OutputEncoding = New-Object System.Text.UTF8Encoding($false)   # PS 5.1 pipes a BOM to native commands otherwise (breaks git mktree)
@@ -51,7 +56,9 @@ function Test-Snapshot([string]$dir, $j) {
         $want = [int]$j.apiTotal - [int]$j.preLaunch
         if ($j.apiTotal -and $n -lt 0.98 * $want) { return "only $n of the $want predictions the API counts" }
         # the snapshot this one replaces: the count only grows (a real drop is published once with -Force)
-        $prevRaw = & cmd /c "git --git-dir=`"$gitDir`" show refs/remotes/origin/snapshots:predict-status.json 2>nul"
+        $prevRef = 'refs/remotes/origin/snapshots'
+        if ($script:toData) { $null = & cmd /c "git --git-dir=`"$gitDir`" rev-parse --verify --quiet refs/snapshot-repo/main 2>nul"; if ($LASTEXITCODE -eq 0) { $prevRef = 'refs/snapshot-repo/main' } }
+        $prevRaw = & cmd /c "git --git-dir=`"$gitDir`" show ${prevRef}:predict-status.json 2>nul"
         if ($LASTEXITCODE -eq 0 -and $prevRaw) {
             $prev = $null; try { $prev = ($prevRaw -join "`n") | ConvertFrom-Json } catch {}
             if ($prev -and $prev.predictions -gt 0 -and $n -lt 0.95 * $prev.predictions) { return "$n predictions, the published snapshot has $($prev.predictions) (run once with -Force if the drop is real)" }
@@ -80,6 +87,10 @@ try {
     foreach ($cand in @((Join-Path (Split-Path -Parent $Repo) 'tools\node\node.exe'), (Join-Path $Repo 'tools\node\node.exe'))) { if (-not $node -and (Test-Path $cand)) { $node = $cand } }
     if (-not $node) { throw 'node.exe not found (PATH or ..\tools\node\node.exe)' }
     Set-Location $Repo   # no git pull here: see the description
+    # where it goes: the snapshot's own repository once it exists, else this repo's "snapshots" branch
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $null = & cmd /c "set GCM_INTERACTIVE=never&& git ls-remote --heads `"$DataRepo`" >nul 2>nul"   # never a login window
+    $script:toData = ($LASTEXITCODE -eq 0)
     # leftovers of runs that never got to the cleanup below (the PC shut down mid-build; older versions of this script)
     Get-ChildItem $env:TEMP -Filter 'md-*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^md-(snapshot|index)-[0-9a-f]{8}' -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
         ForEach-Object { try { if ($_.PSIsContainer) { [IO.Directory]::Delete($_.FullName, $true) } else { $_.Delete() } } catch {} }
@@ -137,15 +148,22 @@ try {
     $env:GIT_AUTHOR_DATE = $utc; $env:GIT_COMMITTER_DATE = $utc
     $commit = (git -c user.name=MeridianDataMath -c user.email=MeridianDataMath@users.noreply.github.com commit-tree $tree -m $msg).Trim()
     if (-not $commit) { throw 'git commit-tree failed' }
-    $env:GIT_TERMINAL_PROMPT = '0'
     # via cmd so git's informational stderr ("remote: ...") is not turned into a PowerShell error
-    $push = & cmd /c "git push --force --quiet origin ${commit}:refs/heads/snapshots 2>&1"
-    if ($LASTEXITCODE -ne 0) { throw "git push failed: $push" }
-    Log "published snapshots branch @ $($commit.Substring(0, 8))"
+    if ($script:toData) {
+        $push = & cmd /c "git push --force --quiet `"$DataRepo`" ${commit}:refs/heads/main 2>&1"
+        if ($LASTEXITCODE -ne 0) { throw "git push failed: $push" }
+        $null = & cmd /c "git --git-dir=`"$gitDir`" update-ref refs/snapshot-repo/main $commit"   # the next run's comparison
+        Log "published to $DataRepo @ $($commit.Substring(0, 8))"
+    } else {
+        $push = & cmd /c "git push --force --quiet origin ${commit}:refs/heads/snapshots 2>&1"
+        if ($LASTEXITCODE -ne 0) { throw "git push failed: $push" }
+        Log "published snapshots branch @ $($commit.Substring(0, 8)) (no MeridianData-snapshots repository yet)"
+    }
     # The site only carries this snapshot once the deploy workflow has run. Its own schedule (every 30 minutes,
     # and GitHub often runs cron late) would leave the snapshot 20-50 minutes old on the site, so trigger the
     # workflow now with the same GitHub credential git just pushed with (Git Credential Manager).
-    try {
+    if ($script:toData -and $DataRepo -notmatch '^https://github\.com/') { Log 'deploy not triggered: the snapshot went to a repository off GitHub (a test)' }
+    else { try {
         # (through a file and cmd: a PowerShell pipe into git leaves it "missing protocol field")
         $credIn = Join-Path $env:TEMP ('md-gitcred-' + [guid]::NewGuid().ToString('N') + '.txt')
         [IO.File]::WriteAllText($credIn, "protocol=https`nhost=github.com`n`n")
@@ -156,7 +174,7 @@ try {
                 -Headers @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json' } -ContentType 'application/json' -Body '{"ref":"main"}' -TimeoutSec 30
             Log "deploy workflow triggered (HTTP $($r.StatusCode))"
         } else { Log 'deploy not triggered: no GitHub credential from git credential fill; the 30-minute schedule will pick the snapshot up' }
-    } catch { Log "deploy not triggered ($($_.Exception.Message)); the 30-minute schedule will pick the snapshot up" }
+    } catch { Log "deploy not triggered ($($_.Exception.Message)); the 30-minute schedule will pick the snapshot up" } }
 } catch {
     Log "FAILED: $($_.Exception.Message)"
     exit 1
