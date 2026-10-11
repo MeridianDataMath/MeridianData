@@ -455,11 +455,19 @@
     // each leg's own state, also on decided predictions: a combo lost on one leg still has legs that went the bettor's
     // way or are open (stamping every leg with the prediction's result made an open question read "lost")
     const legState = (k, n) => { const o = legOutcome(k, n); return o ? h('span.xs', { class: TONE_TEXT[o.tone] || 'dim', title: o.text }, o.label) : h('span.dim.xs', '—'); };
+    // a bettor who sold its position tokens (h in the file) was paid through the secondary market: no payout of its own to
+    // claim, the buyer's instead. Decided: as of the verdict; undecided: before Meridian settled (the open chip says what
+    // the legs did meanwhile)
+    const soldChip = (n, before) => {
+      const held = n.held == null ? 1 : n.held; if (!(held < 0.999)) return null;
+      const all = held < 1e-6, part = U.fmtPct((1 - held) * 100, { dp: 0 }), pays = !n.decided || n.won || n.nd;
+      return h('span.chip.amber', { title: (all ? 'The bettor sold its position tokens ' : `The bettor sold ${part} of its position tokens `) + before + (pays ? (all ? ': the payout is the buyer\'s to claim' : ': that share of the payout is the buyer\'s') : '') }, all ? 'cashed out' : part + ' cashed out');
+    };
     const predState = (n) => {
-      // the bettor's side, as it stood: a bettor who sold its position tokens has no payout of its own to claim (h in the file)
-      if (n.decided) { const held = n.held == null ? 1 : n.held; if (!(held < 0.999)) return resultChip(n, false, held); const all = held < 1e-6, pays = n.won || n.nd; return h('span', resultChip(n, false, held), ' ', h('span.chip.amber', { title: (all ? 'The bettor sold its position tokens before the verdict' : `The bettor sold ${U.fmtPct((1 - held) * 100, { dp: 0 })} of its position tokens before the verdict`) + (pays ? (all ? ': the payout is the buyer\'s to claim' : ': that share of the payout is the buyer\'s') : '') }, all ? 'sold' : U.fmtPct((1 - held) * 100, { dp: 0 }) + ' sold')); }
+      const sold = soldChip(n, n.decided ? 'before the verdict' : 'before Meridian settled');
       // undecided: as Meridian's app shows it, open until Meridian settles its legs, the source markets' verdict in the title
-      return undecidedChip(n, false) || UI.chip('open', 'accent');
+      const state = n.decided ? resultChip(n, false, n.held == null ? 1 : n.held) : undecidedChip(n, false) || UI.chip('open', 'accent');
+      return sold ? h('span', state, ' ', sold) : state;
     };
     // the mirrored Polymarket market's all-time volume, as the question's page in Meridian's app shows it ("$16.99M Vol";
     // a snapshot row from before it, or one the snapshot added from open predictions, has none)
@@ -1108,8 +1116,9 @@
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (not settled: open bets or escrow not yet claimed)
       // on the Ended tab only: an ended but unsettled question whose open predictions have all lost on Polymarket (a leg
-      // resolved against the bettor, or 50/50) is noise, only the makers are waiting for the settlement. It is left out
-      // there and counted under the list; the other tabs list every question.
+      // resolved against the bettor, or 50/50) or were cashed out to the makers (sold to them before Meridian settled) is
+      // noise, only the makers are waiting for the settlement. It is left out there and counted under the list; the other
+      // tabs list every question.
       const alive = (q) => !R.questionDead(q);
       // ended questions plus every leg of their open predictions (a combo's fate depends on all its legs); re-checked on
       // every tick, so questions that pass their end while the page is open get loaded too
@@ -1135,7 +1144,7 @@
         if (!stuck.length) { U.clear(backlog); return; }
         // predictions, not questions: a combo touching several stuck questions is one payout
         const preds = new Map(); let oldest = 0;
-        for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won') continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
+        for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won' || R.cashedOut(p)) continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
         const waiting = Array.from(preds.values()).reduce((a, x) => a + x, 0);
         // why: Meridian learns a result only when a relay transaction on Polygon sends it over LayerZero; the settlement
         // bot sends one for every listed question and skips unlisted ones (isPublic false)

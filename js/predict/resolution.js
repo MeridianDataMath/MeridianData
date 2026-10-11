@@ -266,14 +266,23 @@
   };
   /** Every leg id of a question's open predictions (q.op from the snapshot), for one R.load. */
   R.legIds = (q) => Array.from(new Set((q.op || []).flatMap((p) => p.k.map((k) => k[0])).filter(Boolean)));
-  /** An unsettled question none of whose open predictions can still win: each has a leg resolved against its bettor.
-   *  Only the makers are waiting, so lists of questions leave it out. Unknown without the open predictions. */
-  R.questionDead = (q) => { if (q.settled || !q.op || !q.op.length) return false; return q.op.every((p) => R.predictionState(p.k).code === 'lost'); };
+  /** An open prediction (q.op) whose bettor sold all its tokens to market makers (the snapshot's x): paid out through
+   *  the secondary market, the makers hold both sides and nobody else waits for its settlement. */
+  R.cashedOut = (p) => p.x === 1;
+  /** An unsettled question none of whose open predictions is anyone's money still owed: each has a leg resolved against
+   *  its bettor, or was cashed out to the makers. Only the makers are waiting, so lists of questions leave it out.
+   *  Unknown without the open predictions. */
+  R.questionDead = (q) => { if (q.settled || !q.op || !q.op.length) return false; return q.op.every((p) => R.cashedOut(p) || R.predictionState(p.k).code === 'lost'); };
   /** Open predictions on a question that are fully won, i.e. payouts owed; those won STUCK_DAYS or more ago are the
-   *  settlement backlog. Returns { won, stake, stuck, stuckStake, oldestD } */
+   *  settlement backlog. Won ones cashed out to the makers are no one's payout: counted apart (cashed), never as owed.
+   *  Returns { won, stake, stuck, stuckStake, oldestD, cashed } */
   R.owed = (q, now = Date.now()) => {
-    const out = { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0 };
-    for (const p of q.op || []) { const st = R.predictionState(p.k); if (st.code !== 'won') continue; out.won++; out.stake += p.s || 0; const d = st.at ? Math.floor((now - st.at) / 86400000) : 0; if (d >= R.STUCK_DAYS) { out.stuck++; out.stuckStake += p.s || 0; if (d > out.oldestD) out.oldestD = d; } }
+    const out = { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 0 };
+    for (const p of q.op || []) {
+      const st = R.predictionState(p.k); if (st.code !== 'won') continue;
+      if (R.cashedOut(p)) { out.cashed++; continue; }
+      out.won++; out.stake += p.s || 0; const d = st.at ? Math.floor((now - st.at) / 86400000) : 0; if (d >= R.STUCK_DAYS) { out.stuck++; out.stuckStake += p.s || 0; if (d > out.oldestD) out.oldestD = d; }
+    }
     return out;
   };
 
@@ -307,9 +316,14 @@
       const why = stuck && q.pub === false ? ' · unlisted question: Meridian\'s settlement bot does not relay these from Polygon' : '';
       // one age per row: the chip carries none, the main line dates the question's own resolution, and the payout age
       // (a combo is fully won only at its last leg) is labelled in the sub-line
-      return { code: 'resolved', stuck, unlisted: q.pub === false, stuckD, owed, chip: stuck ? ['resolved · stuck', 'amber'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''),
+      // a won prediction its bettor sold to the makers is nobody's payout: a question with only those waits for no one
+      const paidOut = !!owed && !owed.won && owed.cashed > 0;
+      const cashed = !owed || !owed.cashed ? '' : paidOut
+        ? owed.cashed + ' winning bet' + (owed.cashed > 1 ? 's' : '') + ' cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout'
+        : ' · ' + owed.cashed + ' more cashed out to a market maker';
+      return { code: 'resolved', stuck, paidOut, unlisted: q.pub === false, stuckD, owed, chip: stuck ? ['resolved · stuck', 'amber'] : paidOut ? ['resolved · cashed out', 'green'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''),
         sub: (stuck ? (owed ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' (' + U.fmtUsd(owed.stake) + ') waiting for settlement' + (owed.stuck ? ' · the oldest has been fully won on Polymarket for ' + owed.oldestD + ' days' : '') : 'on Polymarket ' + stuckD + ' days ago · still not settled on Meridian')
-          : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting settlement on Meridian' : 'on Polymarket · not settled on Meridian yet') + why, at, outcome: out, m, o };
+          : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting settlement on Meridian' : paidOut ? '' : 'on Polymarket · not settled on Meridian yet') + cashed + why, at, outcome: out, m, o };
     }
     if (o && o.paused) return { code: 'paused', chip: ['paused', 'amber'], main: 'Resolution paused by Polymarket', sub: 'under review · no timeline', m, o };
     if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };

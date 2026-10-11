@@ -208,6 +208,27 @@ test('an unlisted question resolved on Polymarket but never relayed to Meridian 
   assert.doesNotMatch(listed.sub, /unlisted/);
 });
 
+test('a won prediction its bettor sold to the makers before Meridian settled is nobody\'s payout: not stuck, not on the Ended tab', async () => {
+  // the same Spain question: its one open prediction was in fact sold to a market maker on 2026-07-02 (x: 1)
+  const id = '0xspain', other = '0xexact';
+  await R.load([id, other], { deep: false });
+  const now = Date.parse('2026-09-23T00:00:00Z'), end = Date.parse('2026-07-02T21:59:00Z');
+  const sold = { id: '0x75e3', s: 5, k: [[other, 1], [id, 1]], x: 1 };
+  const q = { end, settled: false, pub: false, op: [sold] };
+  assert.deepEqual(R.owed(q, now), { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 1 });
+  const s = R.state(q, id, now);
+  assert.equal(s.code, 'resolved'); assert.equal(s.stuck, false); assert.equal(s.paidOut, true);
+  assert.equal(s.chip[0], 'resolved · cashed out');
+  assert.match(s.sub, /^1 winning bet cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout$/);
+  assert.equal(R.questionDead(q), true, 'only the makers are waiting: left out of the Ended tab');
+  // one still owed beside it: stuck, the owed one counted, the cash-out named apart
+  const mixed = { end, settled: false, pub: false, op: [sold, { id: '0x9999', s: 20, k: [[id, 1]] }] };
+  const m = R.state(mixed, id, now);
+  assert.equal(m.stuck, true); assert.equal(m.paidOut, false);
+  assert.match(m.sub, /^1 won prediction \(\$20(\.00)?\) waiting for settlement .* · 1 more cashed out to a market maker/);
+  assert.equal(R.questionDead(mixed), false);
+});
+
 test('a leg resolved 50/50 loses the prediction on Meridian (no refund outcome)', async () => {
   const tie = '0xtie', won = '0xwon';
   market(tie, { closed: true, closedTime: '2026-08-01 00:00:00+00', outcomePrices: '["0.5", "0.5"]' });

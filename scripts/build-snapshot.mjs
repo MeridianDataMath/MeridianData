@@ -490,8 +490,23 @@ async function buildPredict() {
   for (const q of withOi) q.oi = r2(escrow[q.id] || 0);
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
+  // x: 1 marks an open prediction whose bettor has sold all its tokens to market makers (its ledger holds none of them):
+  // the bettor was paid through the secondary market and the makers hold both sides, so nobody but them waits for its
+  // settlement (the Questions page then counts it as nobody's money still owed)
+  const makerSet = new Set((agg.makers || []).map((m) => m.address));
+  const sellers = new Set(trades.filter((t) => t.side === 'P' && t.pc).map((t) => t.seller));
+  const ledgerBy = dict();
+  const cashedOut = (n) => {
+    if (!sellers.has(n.predictor)) return false;
+    const bp = (ledgerBy[n.predictor] || (ledgerBy[n.predictor] = P.ledger(norms, trades, n.predictor).byPrediction))[n.id];
+    return !!bp && bp.held < 1e-3 && trades.every((t) => t.pc !== n.pc || t.side !== 'P' || t.seller !== n.predictor || makerSet.has(t.buyer));
+  };
   const openBy = dict();
-  for (const n of qNorms) { if (n.decided) continue; for (const k of n.picks) { if (!isCond(k.id)) continue; (openBy[k.id] || (openBy[k.id] = [])).push({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((x) => [x.id, x.yes ? 1 : 0]) }); } }
+  for (const n of qNorms) {
+    if (n.decided) continue;
+    const x = cashedOut(n) ? { x: 1 } : null;
+    for (const k of n.picks) { if (!isCond(k.id)) continue; (openBy[k.id] || (openBy[k.id] = [])).push(Object.assign({ id: n.id, s: r2(n.stake), p: n.predictor, k: n.picks.map((y) => [y.id, y.yes ? 1 : 0]) }, x)); }
+  }
   for (const q of withOi) if (openBy[q.id]) q.op = openBy[q.id];
   // one file per question with all its predictions, legs keeping their ids (the bettor files drop ids of settled legs)
   const qdir = path.join(outDir, 'questions'); fs.mkdirSync(qdir, { recursive: true });
