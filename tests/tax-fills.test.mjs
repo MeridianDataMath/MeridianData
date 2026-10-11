@@ -271,7 +271,10 @@ test('the event loader: liquidated positions read from their own fills, a closed
     const asked = [];
     A.page = async (base, path, params) => { if (path === '/v1/order/fill') asked.push(params.createdAfter); return Object.assign(path === '/v1/order/fill' ? d.fills.filter((f) => U.num(f.createdAt) > U.num(params.createdAfter)) : [], { truncated: false }); };
     const run = { start: P.start, end: Date.now() + 86400000, ref: d.ref, dayRows: d.balance };
-    const e1 = await T.load.events(d.sid, run), e2 = await T.load.events(d.sid, run);
+    const e1 = await T.load.events(d.sid, run);
+    // the clock past the first read's end: a fast run finishes within that millisecond, and an empty range asks for nothing
+    while (Date.now() <= e1.to) await new Promise((r) => setTimeout(r, 1));
+    const e2 = await T.load.events(d.sid, run);
     assert.equal(asked[1], e1.to - 1, 'the second read starts where the first ended');
     assert.equal(e2.fills.length, d.fills.length, 'no fill lost or doubled');
     assert.equal(calls.positionFills.length, 2, 'the liquidated position read once per range');

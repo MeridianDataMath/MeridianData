@@ -1,6 +1,6 @@
 // Tax center, USDe lots (MD.tax.lots): FIFO, LIFO, the moving average and the UK's same-day, 30-day and s104 pooling on
 // worked examples; the three scopes and the two deposit readings; opening lots and what no lot covers; the events of a
-// real perps account and the Predict wallet's USDe; the USDe/USD price; the files; 50,000 events in well under a second.
+// real perps account and the Predict wallet's USDe; the USDe/USD price; the files; 50,000 events without a quadratic step.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -394,7 +394,7 @@ test('FX.usde: the published file when the deploy wrote one; DefiLlama from the 
 });
 
 // ---------- scale ----------
-test('50,000 events in well under a second for every method (per pool: moves, conversions and top-ups; and one pool) (no quadratic step)', () => {
+test('50,000 events without a quadratic step for every method (per pool: moves, conversions and top-ups; and one pool)', () => {
   const evs = []; let t = Date.UTC(2026, 6, 1);
   const locs = ['pool:a', 'pool:b', LO.PREDICT];
   evs.push(E(t, 'in', 1e6, 0.9e6, { loc: LO.OUT, kind: 'opening' }));
@@ -413,7 +413,9 @@ test('50,000 events in well under a second for every method (per pool: moves, co
     const t0 = performance.now();
     const r = LO.run(evs, { method, scope, reading: 'disposal', tz: 'Europe/London', cutoff: t });
     const ms = performance.now() - t0;
-    assert.ok(ms < 1000, `${method} ${scope}: ${ms.toFixed(0)} ms`);
+    // 0.2-0.4 s each on a desktop; the limit leaves room for a slow shared CI runner (a 1 s limit failed about one run
+    // in twenty there), while a quadratic step over 50,000 events takes several seconds at the least
+    assert.ok(ms < 2500, `${method} ${scope}: ${ms.toFixed(0)} ms`);
     assert.ok(r.disposals.length > 25000);
     assert.ok(!r.disposals.some((d) => d.kind === 'convert'), `${method} ${scope}: a conversion is a move`);
     assert.equal(r.short.n, 0, `${method} ${scope}: no shortfall`);
