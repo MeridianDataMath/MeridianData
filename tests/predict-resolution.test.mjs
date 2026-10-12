@@ -215,11 +215,11 @@ test('a won prediction its bettor sold to the makers before Meridian settled is 
   const now = Date.parse('2026-09-23T00:00:00Z'), end = Date.parse('2026-07-02T21:59:00Z');
   const sold = { id: '0x75e3', s: 5, k: [[other, 1], [id, 1]], x: 1 };
   const q = { end, settled: false, pub: false, op: [sold] };
-  assert.deepEqual(R.owed(q, now), { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 1 });
+  assert.deepEqual(R.owed(q, now), { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 1, cashedWon: 1, cashedLost: 0, lost: 0 });
   const s = R.state(q, id, now);
   assert.equal(s.code, 'resolved'); assert.equal(s.stuck, false); assert.equal(s.paidOut, true);
   assert.equal(s.chip[0], 'resolved · cashed out');
-  assert.match(s.sub, /^1 winning bet cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout$/);
+  assert.match(s.sub, /^1 winning bet cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout · unlisted on Meridian: its settlement bot does not relay these, so it may stay unsettled$/);
   assert.equal(R.questionDead(q), true, 'only the makers are waiting: left out of the Ended tab');
   // one still owed beside it: stuck, the owed one counted, the cash-out named apart
   const mixed = { end, settled: false, pub: false, op: [sold, { id: '0x9999', s: 20, k: [[id, 1]] }] };
@@ -227,6 +227,39 @@ test('a won prediction its bettor sold to the makers before Meridian settled is 
   assert.equal(m.stuck, true); assert.equal(m.paidOut, false);
   assert.match(m.sub, /^1 won prediction \(\$20(\.00)?\) waiting for settlement .* · 1 more cashed out to a market maker/);
   assert.equal(R.questionDead(mixed), false);
+});
+
+test('a bet cashed out before its picks lost, or bets that simply lost: nothing owed, never "settling" (FaZe vs Nemiga)', async () => {
+  // 2026-10-11: a 2-leg combo ($130) on FaZe beating Nemiga, the match and Map 1. The match settled NO on Meridian; the
+  // Map 1 question is unlisted, resolved on Polymarket and never relayed. Its bettor had sold every token to a market
+  // maker (x: 1). The question read "resolved · settling" though nobody waits for anything.
+  const match = '0xfazematch', map1 = '0xfazemap1', map2 = '0xfazemap2';
+  market(match, { question: 'FaZe beats Nemiga? (Counter-Strike, Stake Ranked Episode 4 Playoffs)', closed: true, closedTime: '2026-10-11 18:00:00+00', umaEndDate: '2026-10-11T18:00:00Z', outcomePrices: '["0", "1"]' });
+  market(map1, { question: 'FaZe beats Nemiga? (Counter-Strike, Map 1 Winner)', closed: true, closedTime: '2026-10-11 16:30:00+00', umaEndDate: '2026-10-11T16:30:00Z', outcomePrices: '["0", "1"]' });
+  market(map2, { question: 'FaZe beats Nemiga? (Counter-Strike, Map 2 Winner)' });
+  await R.load([match, map1, map2], { deep: false });
+  const now = Date.parse('2026-10-12T18:00:00Z'), end = Date.parse('2026-10-11T16:30:00Z');
+  const combo = { id: '0xbdac', s: 130, k: [[match, 1], [map1, 1]], x: 1 };
+  const q = { end, settled: false, pub: false, op: [combo] };
+  assert.deepEqual(R.owed(q, now), { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 1, cashedWon: 0, cashedLost: 1, lost: 0 });
+  const s = R.state(q, map1, now);
+  assert.equal(s.code, 'resolved'); assert.equal(s.stuck, false); assert.equal(s.paidOut, true);
+  assert.equal(s.chip[0], 'resolved · cashed out');
+  assert.match(s.sub, /^1 bet cashed out before its picks lost: sold to a market maker, so nobody is waiting for a payout · unlisted on Meridian: its settlement bot does not relay these/);
+  assert.equal(R.questionDead(q), true, 'left out of the Ended tab as before');
+  // the same bet never sold: it simply lost, so nothing is owed either (listed: no unlisted note)
+  const plain = { end, settled: false, pub: true, op: [Object.assign({}, combo, { x: undefined })] };
+  const p = R.state(plain, map1, now);
+  assert.equal(p.noneOwed, true); assert.deepEqual(p.chip, ['resolved · nothing owed', '']);
+  assert.match(p.sub, /^1 bet on it lost on Polymarket: nothing is owed, only Meridian's settlement is pending$/);
+  // beside a lost one, a sold one that is still open on another leg: cashed out, the lost one named
+  const both = { end, settled: false, pub: true, op: [Object.assign({}, combo, { x: undefined }), { id: '0x2', s: 10, k: [[map1, 0], [map2, 1]], x: 1 }] };
+  const b = R.state(both, map1, now);
+  assert.equal(b.chip[0], 'resolved · cashed out');
+  assert.match(b.sub, /^1 bet cashed out \(1 still open on other legs\): sold to a market maker, so nobody is waiting for a payout · 1 other bet lost$/);
+  // a combo that won this leg and is still open on another (not sold): money still rides on it, settling as before
+  const riding = { end, settled: false, pub: true, op: [{ id: '0x1', s: 10, k: [[map1, 0], [map2, 1]] }] };
+  assert.deepEqual(R.state(riding, map1, now).chip, ['resolved · settling', 'blue']);
 });
 
 test('a leg resolved 50/50 loses the prediction on Meridian (no refund outcome)', async () => {

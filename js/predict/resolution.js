@@ -274,13 +274,17 @@
    *  Unknown without the open predictions. */
   R.questionDead = (q) => { if (q.settled || !q.op || !q.op.length) return false; return q.op.every((p) => R.cashedOut(p) || R.predictionState(p.k).code === 'lost'); };
   /** Open predictions on a question that are fully won, i.e. payouts owed; those won STUCK_DAYS or more ago are the
-   *  settlement backlog. Won ones cashed out to the makers are no one's payout: counted apart (cashed), never as owed.
-   *  Returns { won, stake, stuck, stuckStake, oldestD, cashed } */
+   *  settlement backlog. One cashed out to the makers is no one's payout whatever its legs did (a win paid through the
+   *  sale, a loss escaped by it): counted apart (cashed: cashedWon of them won, cashedLost lost), never as owed. lost:
+   *  lost ones that were not cashed out.
+   *  Returns { won, stake, stuck, stuckStake, oldestD, cashed, cashedWon, cashedLost, lost } */
   R.owed = (q, now = Date.now()) => {
-    const out = { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 0 };
+    const out = { won: 0, stake: 0, stuck: 0, stuckStake: 0, oldestD: 0, cashed: 0, cashedWon: 0, cashedLost: 0, lost: 0 };
     for (const p of q.op || []) {
-      const st = R.predictionState(p.k); if (st.code !== 'won') continue;
-      if (R.cashedOut(p)) { out.cashed++; continue; }
+      const st = R.predictionState(p.k);
+      if (R.cashedOut(p)) { out.cashed++; if (st.code === 'won') out.cashedWon++; else if (st.code === 'lost') out.cashedLost++; continue; }
+      if (st.code === 'lost') { out.lost++; continue; }
+      if (st.code !== 'won') continue;
       out.won++; out.stake += p.s || 0; const d = st.at ? Math.floor((now - st.at) / 86400000) : 0; if (d >= R.STUCK_DAYS) { out.stuck++; out.stuckStake += p.s || 0; if (d > out.oldestD) out.oldestD = d; }
     }
     return out;
@@ -316,14 +320,23 @@
       const why = stuck && q.pub === false ? ' · unlisted question: Meridian\'s settlement bot does not relay these from Polygon' : '';
       // one age per row: the chip carries none, the main line dates the question's own resolution, and the payout age
       // (a combo is fully won only at its last leg) is labelled in the sub-line
-      // a won prediction its bettor sold to the makers is nobody's payout: a question with only those waits for no one
+      // a prediction its bettor sold to the makers is nobody's payout, whatever its picks did (a win paid through the sale,
+      // a loss escaped by it): a question with only those, and lost ones, waits for no one. Nor does one whose open bets
+      // all lost: nothing is owed, only the makers' side of Meridian's settlement is pending
       const paidOut = !!owed && !owed.won && owed.cashed > 0;
-      const cashed = !owed || !owed.cashed ? '' : paidOut
-        ? owed.cashed + ' winning bet' + (owed.cashed > 1 ? 's' : '') + ' cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout'
-        : ' · ' + owed.cashed + ' more cashed out to a market maker';
-      return { code: 'resolved', stuck, paidOut, unlisted: q.pub === false, stuckD, owed, chip: stuck ? ['resolved · stuck', 'amber'] : paidOut ? ['resolved · cashed out', 'green'] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''),
+      const noneOwed = !!owed && !owed.won && !owed.cashed && owed.lost > 0;
+      const nb = (n, w) => n + ' ' + w + (n > 1 ? 's' : '');
+      const cashed = !owed || !owed.cashed ? '' : !paidOut ? ' · ' + owed.cashed + ' more cashed out to a market maker'
+        : owed.cashedWon === owed.cashed ? nb(owed.cashed, 'winning bet') + ' cashed out: sold to a market maker before Meridian settled, so nobody is waiting for the payout'
+          : owed.cashedLost === owed.cashed ? nb(owed.cashed, 'bet') + ' cashed out before ' + (owed.cashed > 1 ? 'their' : 'its') + ' picks lost: sold to a market maker, so nobody is waiting for a payout'
+            : nb(owed.cashed, 'bet') + ' cashed out (' + [owed.cashedWon ? owed.cashedWon + ' won' : null, owed.cashedLost ? owed.cashedLost + ' lost after the sale' : null, owed.cashed - owed.cashedWon - owed.cashedLost ? (owed.cashed - owed.cashedWon - owed.cashedLost) + ' still open on other legs' : null].filter(Boolean).join(', ') + '): sold to a market maker, so nobody is waiting for a payout';
+      const lostToo = paidOut && owed.lost ? ' · ' + nb(owed.lost, 'other bet') + ' lost' : '';
+      // nothing owed and unlisted: Meridian may never settle it (said once; a stuck one says it in `why`)
+      const unlistedNote = (paidOut || noneOwed) && q.pub === false ? ' · unlisted on Meridian: its settlement bot does not relay these, so it may stay unsettled' : '';
+      return { code: 'resolved', stuck, paidOut, noneOwed, unlisted: q.pub === false, stuckD, owed, chip: stuck ? ['resolved · stuck', 'amber'] : paidOut ? ['resolved · cashed out', 'green'] : noneOwed ? ['resolved · nothing owed', ''] : ['resolved · settling', 'blue'], main: 'Resolved' + (out ? ' ' + out : '') + (at ? ' ' + cd(at) : ''),
         sub: (stuck ? (owed ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' (' + U.fmtUsd(owed.stake) + ') waiting for settlement' + (owed.stuck ? ' · the oldest has been fully won on Polymarket for ' + owed.oldestD + ' days' : '') : 'on Polymarket ' + stuckD + ' days ago · still not settled on Meridian')
-          : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting settlement on Meridian' : paidOut ? '' : 'on Polymarket · not settled on Meridian yet') + cashed + why, at, outcome: out, m, o };
+          : owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting settlement on Meridian' : paidOut ? ''
+            : noneOwed ? nb(owed.lost, 'bet') + ' on it lost on Polymarket: nothing is owed, only Meridian\'s settlement is pending' : 'on Polymarket · not settled on Meridian yet') + cashed + lostToo + why + unlistedNote, at, outcome: out, m, o };
     }
     if (o && o.paused) return { code: 'paused', chip: ['paused', 'amber'], main: 'Resolution paused by Polymarket', sub: 'under review · no timeline', m, o };
     if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };
