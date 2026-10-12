@@ -13,7 +13,7 @@ const files = (dir, ext) => fs.readdirSync(path.join(root, dir), { withFileTypes
 const MOJIBAKE = /[Â-Ãâ-ï][\u0080-¿ŒœŠšŸŽžƒˆ˜–—‘-„†-•…‰‹›€™]/;
 
 test('no double-encoded UTF-8 in the site\'s text files', () => {
-  const list = [...files('css', /\.css$/), ...files('js', /\.m?js$/), ...files('scripts', /\.m?js$/), ...files('tests', /\.mjs$/), 'index.html', '_headers', 'README.md'];
+  const list = [...files('css', /\.css$/), ...files('js', /\.m?js$/), ...files('scripts', /\.m?js$/), ...files('tests', /\.mjs$/), 'index.html', '_headers', '_redirects', 'README.md'];
   const bad = [];
   for (const f of list) {
     const buf = fs.readFileSync(path.join(root, f));

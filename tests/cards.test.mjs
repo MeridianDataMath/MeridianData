@@ -165,6 +165,16 @@ test('the CSP in _headers allows index.html\'s inline script by its hash, and no
   assert.match(fs.readFileSync(path.join(root, 'Start-MeridianData.ps1'), 'utf8'), /\$headersFile = Join-Path \$root '_headers'/);
 });
 
+test('_redirects: the X bot\'s short links forward to the Meridian app with the site\'s code, and the deploy ships the file', () => {
+  const ref = /A\.REF = '([A-Za-z0-9]+)'/.exec(fs.readFileSync(path.join(root, 'js/api.js'), 'utf8'))[1];
+  const rules = fs.readFileSync(path.join(root, '_redirects'), 'utf8').split(/\r?\n/).filter((l) => l.trim() && !l.startsWith('#')).map((l) => l.trim().split(/\s+/));
+  assert.deepEqual(rules, [
+    ['/go/predict', `https://app.meridian.xyz/predict?ref=${ref}`, '302'],
+    ['/go/p/:id', `https://app.meridian.xyz/predict/p/:id?ref=${ref}`, '302'],
+  ]);
+  assert.match(fs.readFileSync(path.join(root, '.github/workflows/pages.yml'), 'utf8'), /cp -r [^\n]*\s_redirects\s[^\n]*dist\//, 'the deploy copies _redirects into dist/');
+});
+
 test('the home page\'s link preview points at the site card by its version, so an unfurler fetches new figures', () => {
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const v1 = siteCardVersion(index, 'abc123');

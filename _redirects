@@ -1,0 +1,5 @@
+# Short links for the X bot's posts (meridian.thedatahub.xyz/go/…, the bot's "linkVia"): each forwards to the Meridian
+# app. The code in the targets is A.REF in js/api.js (tests/cards.test.mjs checks the two agree). 302, so a changed target
+# never sticks in a browser's cache. Cloudflare reads this file at deploy (copied into dist/ like _headers); not served.
+/go/predict  https://app.meridian.xyz/predict?ref=BJ9Y51H9XB1L  302
+/go/p/:id  https://app.meridian.xyz/predict/p/:id?ref=BJ9Y51H9XB1L  302
