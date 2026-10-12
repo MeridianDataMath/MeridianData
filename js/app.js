@@ -26,6 +26,7 @@
   const TITLES = { home: 'Home', account: 'Account', favorites: 'Favorites', leaderboard: 'Leaderboard', dashboard: 'Dashboard', tax: 'Tax center', copytrade: 'Copy trading', predict: 'Predict', status: 'Data status' };
   const PATH_TITLES = { '/predict': 'Predict · Overview', '/predict/bettors': 'Predict · Bettors', '/predict/questions': 'Predict · Questions', '/predict/makers': 'Predict · Market makers', '/predict/vig': 'Predict · Vig & edge', '/predict/bettor': 'Predict · Bettor' };
   const X_URL = 'https://x.com/meridiandotxyz';
+  const ALERTS_X_URL = 'https://x.com/LookonMeridian';   // this site's Meridian Predict alerts on X (the bot in bot/)
 
   MD.setTopbar = (node) => { const t = U.$('#topbar-title'); if (t) U.replace(t, node); };
 
@@ -120,8 +121,9 @@
       navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),
       h('div.sec', 'Meridian'),
       ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian'),
-      ext('https://docs.meridian.xyz', U.icon('book'), 'Docs'),
       ext(X_URL, U.icon('x'), 'Meridian on X'),
+      ext(ALERTS_X_URL, U.icon('radar'), '@LookonMeridian'),
+      ext('https://docs.meridian.xyz', U.icon('book'), 'Docs'),
       h('button.toggle', { type: 'button', onclick: () => { const c = !U.$('.app').classList.contains('rail-collapsed'); U.storage.set(RAIL_KEY, c); applyRail(c); } }));
     applyRail(railCollapsed());
     // collapsed rail: the hover label sits just right of the row it names (fixed, so the rail's overflow cannot clip it)
