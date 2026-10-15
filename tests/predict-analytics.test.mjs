@@ -547,3 +547,23 @@ test('question volume as Meridian\'s app shows it: all time on its page, the Fil
   assert.deepEqual([12345.6, 9999.99, 950, 0, 1.2e9, 3.4e12].map(P.fmtVol), ['$12.35k', '$9,999.99', '$950.00', '$0.00', '$1.20B', '$3.40T']);
   assert.equal(P.fmtVol(null), '—');
 });
+
+test('a left-out wallet (U.EXCLUDED) is in no figure, on either side of a bet, nor in a loaded snapshot', () => {
+  const OUT = '0x9aaeccaa94b7b99f6514fcc48e9e175005f19ca0';
+  assert.ok(MD.util.isExcluded(OUT.toUpperCase().replace('0X', '0x')), 'any letter case');
+  assert.ok(MD.util.isExcluded('0x9ffea49e4dcedd6427c700c6a9d98faafc24790f') && MD.util.isExcluded('0xbd4e03adcd934c692ba4eded086fc25fc5b773cd'));
+  assert.ok(!MD.util.isExcluded(ME) && !MD.util.isExcluded(''));
+  const mine = pred('m', 10, 30, 'COUNTERPARTY_WINS', true);
+  const asPredictor = Object.assign(pred('x', 5, 462, 'PREDICTOR_WINS', true), { predictor: OUT });
+  const asMaker = Object.assign(pred('y', 5, 20, 'COUNTERPARTY_WINS', true), { counterparty: OUT });
+  assert.ok(P.excluded(asPredictor) && P.excluded(asMaker) && !P.excluded(mine));
+  const agg = P.aggregate([mine, asPredictor, asMaker], { bigWins: true });
+  assert.deepEqual(agg.bettors.map((b) => b.address), [ME], 'only the wallet whose bets count');
+  assert.equal(agg.totals.n != null ? agg.totals.n : agg.bettors.reduce((s, b) => s + b.n, 0), 1, 'one bet counted');
+  assert.ok(!JSON.stringify(agg).includes(OUT), 'its address is nowhere in the figures');
+  // a snapshot built before it was left out: its rows go when the page loads it
+  const snap = { agg: { bettors: [{ address: OUT, pnl: 15947 }, { address: ME, pnl: -10 }], tape: [{ predictor: OUT, counterparty: MAKER }, { predictor: ME, counterparty: OUT }, { predictor: ME, counterparty: MAKER }], bigWins: [{ p: OUT, c: MAKER }, { p: ME, c: MAKER }] } };
+  P.dropExcluded(snap);
+  assert.deepEqual(snap.agg.bettors.map((b) => b.address), [ME]);
+  assert.equal(snap.agg.tape.length, 1); assert.equal(snap.agg.bigWins.length, 1);
+});

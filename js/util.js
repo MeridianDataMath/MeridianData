@@ -3,6 +3,15 @@
   const MD = (window.MD = window.MD || {});
   const U = (MD.util = {});
 
+  /** Wallets the site leaves out of everything it shows: perps accounts (leaderboard, account pages, stop map) and
+   *  Predict wallets (with every bet they are on). Since 2026-10-15. */
+  U.EXCLUDED = new Set([
+    '0x9aaeccaa94b7b99f6514fcc48e9e175005f19ca0',
+    '0x9ffea49e4dcedd6427c700c6a9d98faafc24790f',
+    '0xbd4e03adcd934c692ba4eded086fc25fc5b773cd',
+  ]);
+  U.isExcluded = (a) => U.EXCLUDED.has(String(a || '').toLowerCase());
+
   // ---------- DOM ----------
   U.$ = (sel, root) => (root || document).querySelector(sel);
   U.$$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));

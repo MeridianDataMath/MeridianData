@@ -204,7 +204,7 @@
       }
       function renderStopMap() {
         if (!sm) return;
-        const L = sm.levels;
+        const L = sm.levels.filter((l) => !U.isExcluded(l.account));   // left-out wallets (U.EXCLUDED)
         const byMarket = U.groupBy(L, (l) => l.productId);
         const markets = Object.keys(byMarket).filter((pid) => ref.byId[pid]).map((pid) => {
           const ls = byMarket[pid]; const p = ref.byId[pid]; const m = mark(p);

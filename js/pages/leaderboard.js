@@ -15,7 +15,9 @@
     /** newest of: local build (localStorage / memory) and the published snapshot (data/leaderboard.json) */
     cache() {
       const all = [U.storage.get(KEY, null), P._mem, P._remote].filter((c) => c && Array.isArray(c.rows));
-      return all.sort((a, b) => b.builtAt - a.builtAt)[0] || null;
+      const best = all.sort((a, b) => b.builtAt - a.builtAt)[0] || null;
+      if (best) best.rows = best.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED), a local build too
+      return best;
     },
     /** Fetch the snapshot published next to the site (built by GitHub Actions); resolves null if absent. Re-checks at most once a minute unless forced. */
     async loadRemote(force) {
@@ -23,7 +25,7 @@
       try {
         const r = await fetch('data/leaderboard.json', { cache: 'no-cache' });
         const j = r.ok ? await r.json() : null;
-        if (j && Array.isArray(j.rows)) P._remote = Object.assign(j, { remote: true });
+        if (j && Array.isArray(j.rows)) P._remote = Object.assign(j, { remote: true, rows: j.rows.filter((r) => !(r && U.isExcluded(r.account))) });   // left-out wallets (U.EXCLUDED)
         else if (P._remote === undefined) P._remote = null;
       } catch (_) { if (P._remote === undefined) P._remote = null; }
       P._remoteAt = Date.now();

@@ -429,7 +429,7 @@
     const EPS = 1e-6, out = [];
     const pcs = new Set((L && L.trades || []).filter((t) => t.pc && t.side === side).map((t) => t.pc));
     for (const pc of pcs) {
-      const bets = (norms || []).filter((n) => n.pc === pc && (side === 'P' ? n.predictor : n.counterparty) === addr && !P.selfMatch(n));
+      const bets = (norms || []).filter((n) => n.pc === pc && (side === 'P' ? n.predictor : n.counterparty) === addr && !P.selfMatch(n) && !P.excluded(n));
       const items = bets.map((n) => ({ t: n.t, k: 0, q: n.pool, cash: side === 'P' ? n.stake : n.cp, n }))
         .concat(L.trades.filter((t) => t.pc === pc && t.side === side && t.buyer === addr && t.seller !== addr).map((t) => ({ t: t.t, k: 1, q: t.tokens, cash: t.paid, buy: t })))
         .concat(L.events.filter((e) => e.kind === 'sale' && e.pc === pc && e.side === side).map((e) => ({ t: e.t, k: 2, q: e.tokens, sale: e })))
@@ -457,6 +457,20 @@
 
   /** A prediction a wallet made against itself. */
   P.selfMatch = (n) => !!n.predictor && n.predictor === n.counterparty;
+  /** Wallets the site leaves out of everything it shows (U.EXCLUDED), with every bet they are on (either side). */
+  P.EXCLUDED = U.EXCLUDED;
+  P.excluded = (n) => !!n && (P.EXCLUDED.has(n.predictor) || P.EXCLUDED.has(n.counterparty));
+  /** A loaded snapshot without the left-out wallets: their row among the bettors and the makers, their bets in the tape
+   *  and the big wins (a snapshot built before a wallet was left out still has them). */
+  P.dropExcluded = function (snap) {
+    const a = snap && snap.agg, out = (x) => P.EXCLUDED.has(x);
+    if (!a) return snap;
+    if (Array.isArray(a.bettors)) a.bettors = a.bettors.filter((r) => !out(r.address));
+    if (Array.isArray(a.makers)) a.makers = a.makers.filter((r) => !out(r.address));
+    if (Array.isArray(a.tape)) a.tape = a.tape.filter((t) => !out(t.predictor) && !out(t.counterparty));
+    if (Array.isArray(a.bigWins)) a.bigWins = a.bigWins.filter((w) => !out(w.p) && !out(w.c));
+    return snap;
+  };
   /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are
    *  shared by every prediction on the same picks), but the API flags only the prediction the claim went through as
    *  settled; the wallet's other decided predictions on that token were paid by the same claim (checked on-chain:
@@ -487,6 +501,7 @@
     // making; counted in its figures it made its wallet a "market maker" with one prediction
     const selfMatched = norms.filter(P.selfMatch).length;
     if (selfMatched) norms = norms.filter((n) => !P.selfMatch(n));
+    norms = norms.filter((n) => !P.excluded(n));   // left-out wallets (P.EXCLUDED): none of their bets counts, for either side
     // claimable balances by wallet, pick configuration and side; every decided prediction learns whether its winner still
     // holds the winning tokens (one balance pays all of the wallet's predictions on that token)
     let claimBal = null;
@@ -754,7 +769,7 @@
     const byAddr = new Map(winning.map((b) => [b.address, b]));
     const sold = (n) => (agg.soldOf ? agg.soldOf(n) : null);
     const held = (n) => { const s = sold(n); return s && s.h != null ? s.h : 1; };
-    const open = norms.filter((n) => byAddr.has(n.predictor) && !n.decided && !P.selfMatch(n) && n.picks.length && n.picks.every((k) => k.endTime && k.endTime > now && !k.settled) && held(n) >= 0.5);
+    const open = norms.filter((n) => byAddr.has(n.predictor) && !n.decided && !P.selfMatch(n) && !P.excluded(n) && n.picks.length && n.picks.every((k) => k.endTime && k.endTime > now && !k.settled) && held(n) >= 0.5);
     const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
     const ranked = winning.slice().sort((a, b) => b.pnl - a.pnl || a.rec.luck - b.rec.luck);
     const rank = new Map(ranked.map((b, i) => [b.address, i]));
@@ -874,7 +889,7 @@
   P.taxRows = function (norms, addr, isTraded) {
     addr = String(addr || '').toLowerCase();
     const s = (t) => (t ? Math.round(t / 1000) : 0);
-    return (norms || []).filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n)).sort((a, b) => b.t - a.t).map((n) => {
+    return (norms || []).filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n) && !P.excluded(n)).sort((a, b) => b.t - a.t).map((n) => {
       const mk = n.counterparty === addr;
       const res = !n.decided ? 0 : n.nd ? 3 : (mk ? n.lost : n.won) ? 1 : 2;
       const exactDec = n.decided && !!(P.legVerdictAt(n) || n.decidedAt);

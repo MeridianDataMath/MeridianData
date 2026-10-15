@@ -412,7 +412,8 @@ async function buildPredict() {
   if (raw.truncated && !limit) { console.error('predict: a time window hit its page cap, so the history is incomplete; not writing a snapshot (raise windows or maxPagesPerWindow)'); process.exit(1); }
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
   // has its file (the publish step checks that, and that the count stays close to the API's)
-  const all = (limit ? raw.slice(0, limit) : raw).map(P.norm);
+  // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads
+  const all = (limit ? raw.slice(0, limit) : raw).map(P.norm).filter((n) => !P.excluded(n));
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
@@ -666,7 +667,8 @@ async function buildPerps() {
   }
   const failed = failedAt.filter((i) => !built.has(subs[i].id)).length;
 
-  const { rows, carried, missing } = mergeRows(subs, built, built.size < subs.length ? await previousSnapshots() : []);
+  const merged = mergeRows(subs, built, built.size < subs.length ? await previousSnapshots() : []);
+  const { carried, missing } = merged, rows = merged.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED)
   // partial: not every account was built by this run (carried: rows from an earlier snapshot; missing: accounts without a row)
   const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
   fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));

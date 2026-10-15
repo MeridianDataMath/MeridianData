@@ -194,6 +194,7 @@
       try {
         if (!addr && subParam && U.isUuid(subParam)) { const sa = await A.subaccount(subParam, ctx); addr = sa.account; }
         if (!U.isAddress(addr)) { U.replace(page, h('div.card', h('div.error', 'Invalid address. Enter a 0x wallet address (40 hex characters) or a subaccount ID.'))); return; }
+        if (U.isExcluded(addr)) { U.replace(page, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }   // U.EXCLUDED
         subs = await A.subaccountsOf(addr, ctx);
       } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.dispatch())); return; }
       if (!subs.length) {

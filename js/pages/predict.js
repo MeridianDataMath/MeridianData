@@ -83,7 +83,7 @@
     const tell = (got, total) => bytesListeners.forEach((f) => f(got, total));
     const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) return null; const j = await readJson(r, tell); return j && j.agg ? j : null; } catch (e) { return null; } }));
     const best = found.filter(Boolean).sort((a, b) => b.builtAt - a.builtAt)[0];
-    if (best && (!P._snap || best.builtAt >= P._snap.builtAt)) { P._snap = Object.assign(best, { remote: true }); P._snapAt = Date.now(); return P._snap; }
+    if (best && (!P._snap || best.builtAt >= P._snap.builtAt)) { P._snap = Object.assign(P.dropExcluded(best), { remote: true }); P._snapAt = Date.now(); return P._snap; }
     if (P._snap && P._snap.builtAt > Date.now() - 15 * 60000) return P._snap;
     if (!P._building) {
       P._building = (async () => {
@@ -298,7 +298,7 @@
       const pollTape = async () => {
         try {
           let norms;
-          if (live) norms = (await P.tape(25, { signal: ctx.signal })).map(P.norm);
+          if (live) norms = (await P.tape(25, { signal: ctx.signal })).map(P.norm).filter((n) => !P.excluded(n));
           else {
             const s = await P.loadSnapshot({ force: true });
             // a newer snapshot: everything here is from the one the page was built with, so offer the new one instead of mixing them
@@ -1351,6 +1351,7 @@
    *  selfVol, its self-matched predictions (left out of every figure; the app counts them, both sides in its volume), and
    *  pre, its launch-day tests where the figures leave them out (offline: P.PRE_LAUNCH; live they are in, as in the app). */
   async function loadBettor(addr, ctx) {
+    if (P.EXCLUDED.has(addr)) return null;   // a left-out wallet (P.EXCLUDED) has no page here
     const live = await P.live();
     if (live) {
       const [acct, raw, openPos, tf, claimRaw] = await Promise.all([
@@ -1363,7 +1364,7 @@
         P.claimableOf(addr, { signal: ctx.signal, maxPages: 40 }).then((r) => (r.truncated ? null : r)).catch((e) => { if (isAbort(e)) throw e; return null; }),
       ]);
       const all = raw.map(P.norm);
-      const norms = all.filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n));   // a bet against itself moves no money
+      const norms = all.filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n) && !P.excluded(n));   // a bet against itself moves no money
       P.markTokenClaims(norms);   // decided predictions a claim on the same token already paid (P.bettorFigures still counts them as the exchange does)
       // the exchange's figures count a self-match (both sides of its volume, pending until claimed); the site leaves it out
       const self = all.filter((n) => n.predictor === addr && P.selfMatch(n));
@@ -1382,7 +1383,7 @@
     const every = f.predictions.map(P.unslim);
     // (a self-match is filed under both of its sides, the same wallet: once here)
     const self = Array.from(new Map(every.filter((n) => n.predictor === addr && P.selfMatch(n)).map((n) => [n.id, n])).values());
-    const norms = every.filter((n) => !P.selfMatch(n));
+    const norms = every.filter((n) => !P.selfMatch(n) && !P.excluded(n));
     const asMaker = norms.filter((n) => n.counterparty === addr).length > norms.filter((n) => n.predictor === addr).length;
     const mine = norms.filter((n) => (asMaker ? n.counterparty : n.predictor) === addr);
     const open = mine.filter((n) => !n.decided);
