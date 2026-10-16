@@ -118,12 +118,12 @@
       h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
       SECTIONS.map((s) => [s.rule ? h('div.rule') : h('div.sec', s.title), s.items.map(navLink), s.rule ? h('div.rule') : null]),
       h('span.spacer'),
-      navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),
       h('div.sec', 'Meridian'),
       ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian'),
       ext(X_URL, U.icon('x'), 'Meridian on X'),
       ext(ALERTS_X_URL, U.icon('radar'), '@LookonMeridian'),
       ext('https://docs.meridian.xyz', U.icon('book'), 'Docs'),
+      navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),   // last in the rail (user 10-16)
       h('button.toggle', { type: 'button', onclick: () => { const c = !U.$('.app').classList.contains('rail-collapsed'); U.storage.set(RAIL_KEY, c); applyRail(c); } }));
     applyRail(railCollapsed());
     // collapsed rail: the hover label sits just right of the row it names (fixed, so the rail's overflow cannot clip it)
