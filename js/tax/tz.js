@@ -15,6 +15,64 @@
   TZ.browser = () => { try { const z = Intl.DateTimeFormat().resolvedOptions().timeZone; return TZ.valid(z) ? z : 'UTC'; } catch (_) { return 'UTC'; } };
   /** UTC first, then every zone this browser knows (its list leaves UTC out, and may spell India Asia/Calcutta). */
   TZ.list = () => { let l = []; try { l = Intl.supportedValuesOf('timeZone'); } catch (_) {} return ['UTC'].concat(l.filter((z) => z !== 'UTC')); };
+  /** The zones the picker lists: one main place per UTC offset (standard time, as Windows labels them), every other
+   *  place on the same clock (offset and summer-time rules alike) found under it by search (user 10-16: "simple and one
+   *  major spot for each timezone"). [zone, standard offset, place, search words] */
+  TZ.MAJOR = [
+    ['Pacific/Pago_Pago', '-11:00', 'Pago Pago', 'american samoa midway sst'],
+    ['Pacific/Honolulu', '-10:00', 'Honolulu', 'hawaii hst'],
+    ['America/Anchorage', '-09:00', 'Anchorage', 'alaska juneau akst akdt'],
+    ['America/Los_Angeles', '-08:00', 'Los Angeles', 'pacific pst pdt california san francisco seattle portland las vegas vancouver tijuana'],
+    ['America/Denver', '-07:00', 'Denver', 'mountain mst mdt colorado salt lake city calgary edmonton boise albuquerque'],
+    ['America/Chicago', '-06:00', 'Chicago', 'central cst cdt texas dallas houston austin minneapolis new orleans winnipeg'],
+    ['America/New_York', '-05:00', 'New York', 'eastern est edt toronto montreal ottawa boston washington miami atlanta philadelphia detroit'],
+    ['America/Halifax', '-04:00', 'Halifax', 'atlantic ast adt nova scotia bermuda'],
+    ['America/St_Johns', '-03:30', 'St. John\'s', 'newfoundland nst ndt'],
+    ['America/Sao_Paulo', '-03:00', 'São Paulo', 'brazil brasil rio de janeiro brasilia buenos aires argentina montevideo uruguay brt art'],
+    ['America/Noronha', '-02:00', 'Fernando de Noronha', 'south georgia'],
+    ['Atlantic/Azores', '-01:00', 'Azores', 'ponta delgada'],
+    ['Europe/London', '+00:00', 'London', 'uk united kingdom britain england scotland wales belfast edinburgh manchester dublin ireland lisbon portugal porto gmt bst wet west'],
+    ['Europe/Berlin', '+01:00', 'Berlin', 'germany deutschland cet cest central european paris france rome milan italy madrid barcelona spain amsterdam netherlands brussels belgium vienna austria zurich geneva switzerland stockholm sweden oslo norway copenhagen denmark warsaw poland prague czech budapest hungary belgrade serbia zagreb croatia ljubljana slovenia bratislava slovakia luxembourg monaco malta'],
+    ['Europe/Athens', '+02:00', 'Athens', 'greece eet eest eastern european helsinki finland kyiv kiev ukraine bucharest romania sofia bulgaria riga latvia tallinn estonia vilnius lithuania nicosia cyprus'],
+    ['Europe/Istanbul', '+03:00', 'Istanbul', 'turkey turkiye ankara moscow russia msk minsk belarus riyadh saudi arabia jeddah doha qatar kuwait bahrain baghdad iraq nairobi kenya addis ababa ethiopia'],
+    ['Asia/Tehran', '+03:30', 'Tehran', 'iran irst'],
+    ['Asia/Dubai', '+04:00', 'Dubai', 'uae united arab emirates abu dhabi muscat oman baku azerbaijan tbilisi yerevan armenia mauritius gst'],
+    ['Asia/Kabul', '+04:30', 'Kabul', 'afghanistan'],
+    ['Asia/Karachi', '+05:00', 'Karachi', 'pakistan lahore islamabad pkt tashkent uzbekistan maldives yekaterinburg'],
+    ['Asia/Kolkata', '+05:30', 'New Delhi', 'india ist mumbai bombay delhi kolkata calcutta bangalore bengaluru chennai hyderabad pune colombo sri lanka'],
+    ['Asia/Kathmandu', '+05:45', 'Kathmandu', 'nepal npt'],
+    ['Asia/Dhaka', '+06:00', 'Dhaka', 'bangladesh thimphu bhutan bishkek kyrgyzstan omsk'],
+    ['Asia/Yangon', '+06:30', 'Yangon', 'myanmar burma rangoon'],
+    ['Asia/Bangkok', '+07:00', 'Bangkok', 'thailand ict jakarta indonesia hanoi ho chi minh saigon vietnam phnom penh cambodia vientiane laos novosibirsk'],
+    ['Asia/Singapore', '+08:00', 'Singapore', 'sgt hong kong hkt shanghai beijing shenzhen china taipei taiwan manila philippines kuala lumpur malaysia perth western australia awst bali'],
+    ['Asia/Tokyo', '+09:00', 'Tokyo', 'japan jst osaka seoul korea kst'],
+    ['Australia/Adelaide', '+09:30', 'Adelaide', 'south australia acst acdt'],
+    ['Australia/Sydney', '+10:00', 'Sydney', 'australia melbourne canberra hobart tasmania new south wales victoria aest aedt'],
+    ['Pacific/Noumea', '+11:00', 'Nouméa', 'noumea new caledonia solomon islands honiara vanuatu port vila'],
+    ['Pacific/Auckland', '+12:00', 'Auckland', 'new zealand nz wellington christchurch nzst nzdt'],
+    ['Pacific/Tongatapu', '+13:00', 'Nukuʻalofa', 'tonga apia samoa'],
+    ['Pacific/Kiritimati', '+14:00', 'Kiritimati', 'line islands kiribati'],
+  ];
+  /** A zone's standard offset ('+01:00'): the lower of its January and July offsets this year (summer time adds). */
+  TZ.stdOffset = (tz) => { const y = new Date().getUTCFullYear(), ms = Math.min(TZ.offset(Date.UTC(y, 0, 1), tz), TZ.offset(Date.UTC(y, 6, 1), tz)); return TZ.offsetLabel(ms).slice(3); };
+  /** What a search for an offset is typed as: 'utc+1', '+1', 'gmt+5:30', '+0530', … */
+  const offsetWords = (off) => {
+    const s = off[0], h = String(+off.slice(1, 3)), m = off.slice(4);
+    const short = s + h + (m === '00' ? '' : ':' + m), full = off;
+    return [short, full, s + off.slice(1, 3) + m].flatMap((x) => [x, 'utc' + x, 'gmt' + x]).join(' ');
+  };
+  /** The picker's choices: UTC, the browser's own zone and the one in force when the list has no such place (a city of
+   *  their own, with its standard offset), then TZ.MAJOR by offset. [{ v, label, keys, note }] */
+  TZ.choices = (current, browserZone) => {
+    const out = [{ v: 'UTC', label: '(UTC) Coordinated Universal Time', keys: 'utc gmt zulu universal ' + offsetWords('+00:00') }];
+    const have = new Set(TZ.MAJOR.map((x) => x[0]).concat('UTC'));
+    const place = (z) => z.split('/').pop().replace(/_/g, ' ');
+    const extra = (z, note) => { if (!TZ.valid(z) || have.has(z)) return; have.add(z); const off = TZ.stdOffset(z); out.push({ v: z, label: `(UTC${off}) ${place(z)}`, keys: z.replace(/[/_]/g, ' ') + ' ' + offsetWords(off), note }); };
+    extra(browserZone, 'your time zone');
+    extra(current, null);
+    for (const [z, off, city, words] of TZ.MAJOR) if (TZ.valid(z)) out.push({ v: z, label: `(UTC${off}) ${city}`, keys: words + ' ' + z.replace(/[/_]/g, ' ') + ' ' + offsetWords(off), note: z === browserZone ? 'your time zone' : null });
+    return out;
+  };
   /** A preset's zone: the browser's own when it belongs to that country, else the country's main zone; the calendar
    *  year (no country) takes the browser's. */
   TZ.defaultFor = (preset, browserZone) => {

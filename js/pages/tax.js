@@ -65,8 +65,9 @@
       // every control is named by the same text it shows
       const FY_LBL = 'Fiscal year', TZ_LBL = 'Time zone', CCY_LBL = 'Report in', SRC_LBL = 'Rate source', FROM = `From (${tz})`, TO = `To (${tz})`;
       const fySel = h('select.input.sm', { style: { width: 'auto' }, 'aria-label': FY_LBL, title: FY_LBL, onchange: (e) => MD.router.setParams({ fy: e.target.value === 'cal' ? null : e.target.value, from: null, to: null, tz: null }) }, Object.entries(TX.PRESETS).map(([k, v]) => h('option', { value: k, selected: k === fy }, v.label)));
-      const zones = TZ.list(); if (!zones.includes(tz)) zones.splice(1, 0, tz);
-      const tzSel = h('select.input.sm', { style: { width: 'auto', maxWidth: '230px' }, 'aria-label': TZ_LBL, title: TZ_LBL + ': the period, its months and quarters, and every local date and time', onchange: (e) => MD.router.setParams({ tz: e.target.value }) }, zones.map((z) => h('option', { value: z, selected: z === tz }, z)));
+      // one main place per UTC offset, searched by city, country, abbreviation or offset; the browser's own zone and the
+      // one in force are added when the list has no such place (TZ.choices)
+      const tzSel = UI.pick({ options: TZ.choices(tz, TZ.browser()), value: tz, label: TZ_LBL, title: TZ_LBL + ': the period, its months and quarters, and every local date and time', placeholder: 'City, country or UTC+1…', onChange: (v) => MD.router.setParams({ tz: v }) });
       const yearSeg = UI.seg(years.map((y) => ({ v: y, label: PER.yearName(fy, y), title: PER.fyLabel(fy, y) })), mode === 'year' ? year : null, (y) => MD.router.setParams({ year: y, from: null, to: null }), 'sm');
       // the inputs show the period in force, never a range the link had that was refused
       const fromIn = h('input.input.sm', { type: 'date', value: period.fromKey, 'aria-label': FROM, title: FROM, style: { width: 'auto' } });
@@ -77,7 +78,7 @@
         if (f && t && f <= t) MD.router.setParams({ from: f, to: t, year: null });
         else U.toast(!f || !t ? 'Choose both a start and an end date' : 'The start date must be on or before the end date');
       };
-      const ccySel = h('select.input.sm', { style: { width: 'auto' }, 'aria-label': CCY_LBL, title: 'Reporting currency, at official daily rates: ' + FX.MAP_TEXT, onchange: (e) => { U.storage.set('md.tax.ccy', e.target.value); MD.router.setParams({ ccy: e.target.value === 'USD' ? null : e.target.value, src: null }); } }, TX.CCY.map((c) => h('option', { value: c, selected: c === ccy }, c)));
+      const ccySel = UI.pick({ options: TX.ccyChoices(), value: ccy, label: CCY_LBL, title: 'Reporting currency, at official daily rates: ' + FX.MAP_TEXT, placeholder: 'Currency or country…', onChange: (v) => { U.storage.set('md.tax.ccy', v); MD.router.setParams({ ccy: v === 'USD' ? null : v, src: null }); } });
       const srcSel = srcChoices ? h('select.input.sm', { style: { width: 'auto' }, 'aria-label': SRC_LBL, title: SRC_LBL + ' for ' + ccy + ': ' + srcChoices.map((x) => x.label + ' (' + FX.SOURCES[x.v].ruleLong + ')').join(' or '), onchange: (e) => MD.router.setParams({ src: e.target.value === 'ecb' ? 'ecb' : null }) }, srcChoices.map((x) => h('option', { value: x.v, selected: x.v === FX.sourceFor(ccy, src) }, x.label))) : null;
       const controls = h('div.card.no-print', h('div.row.wrap', { style: { rowGap: '10px' } },
         h('span.dim.small', FY_LBL), fySel, h('span.dim.small', TZ_LBL), tzSel, yearSeg, h('span.dim.small', `or custom (${tz})`), fromIn, h('span.dim', '→'), toIn,

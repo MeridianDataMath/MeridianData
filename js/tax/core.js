@@ -33,6 +33,20 @@
   // PKR and EGP have no such rate, so a Pakistan or Egypt report uses the USD columns
   T.CCY = ['USD', 'EUR', 'GBP', 'CHF', 'CAD', 'AUD', 'NZD', 'JPY', 'SGD', 'HKD', 'INR', 'KRW', 'BRL', 'MXN', 'ZAR', 'SEK', 'NOK', 'ISK', 'DKK', 'PLN', 'CZK', 'HUF', 'RON', 'TRY', 'ILS', 'PHP', 'THB', 'MYR', 'IDR', 'CNY'];
   T.dp = (ccy) => (['JPY', 'KRW', 'IDR', 'ISK'].includes(ccy) ? 0 : 2);   // decimals a statement in that currency shows
+  /** where each currency is used: what a search for it may be typed as (its name and symbol come from Intl) */
+  const CCY_WORDS = {
+    USD: 'united states us usa america', EUR: 'eurozone europe germany france italy spain netherlands belgium austria ireland portugal finland greece slovakia slovenia estonia latvia lithuania luxembourg malta cyprus croatia',
+    GBP: 'sterling uk united kingdom britain england', CHF: 'switzerland swiss liechtenstein', CAD: 'canada', AUD: 'australia', NZD: 'new zealand', JPY: 'japan', SGD: 'singapore', HKD: 'hong kong',
+    INR: 'india', KRW: 'south korea korea', BRL: 'brazil brasil', MXN: 'mexico', ZAR: 'south africa', SEK: 'sweden', NOK: 'norway', ISK: 'iceland', DKK: 'denmark greenland faroe',
+    PLN: 'poland zloty zl', CZK: 'czech czechia', HUF: 'hungary', RON: 'romania', TRY: 'turkey turkiye', ILS: 'israel', PHP: 'philippines', THB: 'thailand', MYR: 'malaysia', IDR: 'indonesia', CNY: 'china renminbi rmb yuan',
+  };
+  /** The report-currency picker's choices: 'EUR · Euro' (Intl's English name), searched by code, name, symbol and the
+   *  countries using it. [{ v, label, keys }] */
+  T.ccyChoices = () => {
+    let names = null; try { names = new Intl.DisplayNames(['en'], { type: 'currency' }); } catch (_) {}
+    const sym = (c) => { try { return new Intl.NumberFormat('en', { style: 'currency', currency: c, currencyDisplay: 'narrowSymbol' }).formatToParts(0).find((p) => p.type === 'currency').value; } catch (_) { return ''; } };
+    return T.CCY.map((c) => { const name = (names && names.of(c)) || c; return { v: c, label: c + ' · ' + name, keys: [c, name, sym(c), CCY_WORDS[c] || ''].join(' ') }; });
+  };
 
   /** Meridian Predict's launch (ms), read when asked: the Predict scripts may load after this one. */
   T.LAUNCH = () => (MD.predict && MD.predict.LAUNCH_SEC ? MD.predict.LAUNCH_SEC * 1000 : Date.UTC(2026, 5, 29));

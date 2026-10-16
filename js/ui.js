@@ -63,6 +63,54 @@
     set(value); el.set = set; el.get = () => value;
     return el;
   };
+  /** A select with a search box, for long lists: a button with the chosen option's label; clicking it opens the list
+   *  under a filter field. Typing narrows it by the label and the option's keys (every word must be found, accents and
+   *  case ignored; an exact word or a word's start ranks first), arrows and Enter choose, Escape, Tab or a click
+   *  elsewhere closes. pick({ options: [{ v, label, keys?, note? }], value, onChange, label, title, placeholder }) */
+  UI.pick = function ({ options, value, onChange, label, title, placeholder }) {
+    const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const index = options.map((o, i) => { const hay = norm(o.label + ' ' + (o.keys || '') + ' ' + (o.note || '')); return { o, i, hay, toks: hay.split(/[\s,()·]+/).filter(Boolean) }; });
+    const cur = options.find((o) => o.v === value) || null;
+    const btn = h('button.input.sm.pick-btn', { type: 'button', title: title || label || null, 'aria-label': label || null, 'aria-haspopup': 'listbox', 'aria-expanded': 'false' },
+      h('span.pick-val', cur ? cur.label : String(value == null ? '' : value)), h('span.pick-caret', '▾'));
+    const search = h('input.input.sm', { type: 'search', placeholder: placeholder || 'Search…', autocomplete: 'off', spellcheck: false, 'aria-label': 'Search ' + (label || '').toLowerCase() });
+    const list = h('div.pick-list', { role: 'listbox', 'aria-label': label || null });
+    const panel = h('div.pick-panel', search, list); panel.hidden = true;
+    const wrap = h('span.pick', btn, panel);
+    let shown = [], active = 0;
+    const scrollTo = () => { const el = list.children[active]; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); };
+    const draw = () => {
+      const words = norm(search.value).split(/\s+/).filter(Boolean);
+      // every word somewhere; ranked by how many words are a whole word (2) or a word's start (1) of the option
+      shown = !words.length ? index.slice() : index.filter((x) => words.every((w) => x.hay.includes(w)))
+        .map((x) => Object.assign({ score: words.reduce((s, w) => s + (x.toks.includes(w) ? 2 : x.toks.some((t) => t.startsWith(w)) ? 1 : 0), 0) }, x))
+        .sort((a, b) => b.score - a.score || a.i - b.i);
+      if (active >= shown.length) active = Math.max(0, shown.length - 1);
+      U.replace(list, shown.length ? shown.map((x, k) => h('div.pick-opt', { role: 'option', 'aria-selected': String(x.o.v === value), class: (k === active ? 'on' : '') + (x.o.v === value ? ' sel' : ''),
+        onmousedown: (e) => { e.preventDefault(); choose(x.o); }, onmousemove: () => { if (active !== k) { active = k; U.$$('.pick-opt', list).forEach((el, j) => el.classList.toggle('on', j === k)); } } },
+      h('span', x.o.label), x.o.note ? h('span.note', x.o.note) : null)) : h('div.pick-empty', 'Nothing matches'));
+    };
+    const outside = (e) => { if (!wrap.contains(e.target)) close(); };
+    function open() {
+      panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); search.value = '';
+      // under the button, moved left as far as it must to stay in the window (16 px from either edge)
+      const r = btn.getBoundingClientRect(), w = Math.min(300, window.innerWidth - 32);
+      panel.style.width = w + 'px'; panel.style.left = (Math.max(16, Math.min(r.left, window.innerWidth - 16 - w)) - r.left) + 'px';
+      active = Math.max(0, index.findIndex((x) => x.o.v === value)); draw(); scrollTo(); search.focus();
+      document.addEventListener('mousedown', outside, true);
+    }
+    function close() { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('mousedown', outside, true); }
+    function choose(o) { close(); btn.focus(); if (o && o.v !== value) onChange(o.v); }
+    btn.addEventListener('click', () => (panel.hidden ? open() : close()));
+    search.addEventListener('input', () => { active = 0; draw(); list.scrollTop = 0; });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!shown.length) return; active = (active + (e.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length; U.$$('.pick-opt', list).forEach((el, j) => el.classList.toggle('on', j === active)); scrollTo(); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (shown[active]) choose(shown[active].o); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); }
+      else if (e.key === 'Tab') close();
+    });
+    return wrap;
+  };
   /** Thin progress bar along the bottom edge of the topbar. start() creeps towards 90 % on its own, set(0..1) pins a
    *  real value (bytes received etc.), done() completes and fades. Several loaders can overlap; the last done() hides it. */
   UI.progress = (() => {

@@ -165,3 +165,32 @@ test('zones: validation, the browser list, and each preset\'s default', () => {
   assert.equal(TZ.defaultFor('cal', 'America/Chicago'), 'America/Chicago');
   assert.equal(TZ.defaultFor('cal', 'Nowhere/Land'), 'UTC');
 });
+
+test('the time-zone picker: one main place per offset, found by city, country or offset; the browser\'s zone kept', () => {
+  const TX = MD.tax, Z = TX.tz;
+  // every listed zone is valid, one per standard offset, in offset order, and its label's offset is its real one
+  const offs = Z.MAJOR.map((x) => x[1]);
+  assert.equal(new Set(offs).size, offs.length, 'one place per offset');
+  const mins = (o) => (o[0] === '-' ? -1 : 1) * (+o.slice(1, 3) * 60 + +o.slice(4));
+  assert.deepEqual(offs.map(mins), offs.map(mins).slice().sort((a, b) => a - b));
+  for (const [z, off] of Z.MAJOR) { assert.ok(Z.valid(z), z); assert.equal(Z.stdOffset(z), off, z); }
+  // every fiscal-year preset's zone can be chosen (Johannesburg comes in as the zone in force)
+  const c0 = Z.choices('Europe/Berlin', 'Europe/Berlin');
+  assert.equal(c0[0].v, 'UTC'); assert.equal(c0.filter((c) => c.v === 'Europe/Berlin').length, 1);
+  assert.equal(c0.find((c) => c.v === 'Europe/Berlin').label, '(UTC+01:00) Berlin'); assert.equal(c0.find((c) => c.v === 'Europe/Berlin').note, 'your time zone');
+  const za = Z.choices('Africa/Johannesburg', 'America/Phoenix');
+  assert.deepEqual(za.slice(0, 3).map((c) => [c.v, c.label, c.note]), [['UTC', '(UTC) Coordinated Universal Time', undefined], ['America/Phoenix', '(UTC-07:00) Phoenix', 'your time zone'], ['Africa/Johannesburg', '(UTC+02:00) Johannesburg', null]]);
+  for (const p of Object.values(TX.PRESETS)) if (p.zone) assert.ok(Z.choices(p.zone, 'UTC').some((c) => c.v === p.zone), p.zone);
+  // what a search finds: a city or country under its offset's place, an abbreviation, an offset however typed
+  const find = (q) => c0.filter((c) => q.toLowerCase().split(/\s+/).every((w) => (c.label + ' ' + c.keys).toLowerCase().includes(w))).map((c) => c.v);
+  assert.ok(find('paris').includes('Europe/Berlin')); assert.ok(find('india').includes('Asia/Kolkata')); assert.ok(find('pst').includes('America/Los_Angeles'));
+  assert.ok(find('utc+5:30').includes('Asia/Kolkata')); assert.ok(find('+0530').includes('Asia/Kolkata')); assert.ok(find('gmt-5').includes('America/New_York'));
+});
+
+test('the report-currency picker: code and name, found by the countries using it', () => {
+  const ch = MD.tax.ccyChoices();
+  assert.equal(ch.length, MD.tax.CCY.length); assert.equal(ch[0].v, 'USD');
+  const eur = ch.find((c) => c.v === 'EUR');
+  assert.equal(eur.label, 'EUR · Euro'); assert.match(eur.keys, /germany/); assert.match(eur.keys, /€/);
+  assert.match(ch.find((c) => c.v === 'PLN').keys, /poland/); assert.match(ch.find((c) => c.v === 'JPY').label, /Japanese Yen/);
+});
