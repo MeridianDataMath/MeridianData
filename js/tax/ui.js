@@ -26,8 +26,9 @@
   /** A click handler that shows a spinner on the button while fn runs, and a toast if it fails. */
   TUI.busyFn = (btn, fn) => async () => { btn.disabled = true; const old = Array.from(btn.childNodes); U.replace(btn, h('span.spinner'), ' Preparing…'); try { await fn(); } catch (e) { if (!T.isAbort(e)) U.toast('Export failed: ' + e.message, TUI.WARN_MS); } btn.disabled = false; U.replace(btn, old); };
   /** An export button with its line of text. async: fn runs through TUI.busyFn (a spinner, and 'Export failed: …' when
-   *  it throws), as every Tax center export passes it; without it a failure would reach only the console. */
-  TUI.exBtn = (label, sub, fn, async) => { const b = h('button.btn', {}, U.icon('download'), label); b.addEventListener('click', async ? TUI.busyFn(b, fn) : fn); return h('div.metric', h('div', b), h('div.s', { style: { marginTop: '6px' } }, sub)); };
+   *  it throws), as every Tax center export passes it; without it a failure would reach only the console. .ex-btn: a
+   *  long file name wraps inside its tile instead of running out of it. */
+  TUI.exBtn = (label, sub, fn, async) => { const b = h('button.btn.ex-btn', {}, U.icon('download'), h('span', label)); b.addEventListener('click', async ? TUI.busyFn(b, fn) : fn); return h('div.metric', h('div', b), h('div.s', { style: { marginTop: '6px' } }, sub)); };
   /** money → (amount in the report currency, the same in USD for its colour) → a signed amount element */
   TUI.pnlEl = (money) => (vC, vUsd) => h('span', { class: 'num ' + U.pnlClass(vUsd != null ? vUsd : vC) }, money.fmt(vC, { sign: true }));
   /** A loading line in el that counts ('Reading hourly ledgers… 3 / 8'), with Cancel when onCancel is given. */

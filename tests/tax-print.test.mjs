@@ -207,7 +207,7 @@ test('every Tax center export button shows a spinner and says when building its 
     for (const a of cs) { n++; assert.match(a, /,\s*true\s*$/, f + ': exBtn(' + a.slice(0, 60) + '…) without the async flag'); }
   }
   assert.ok(n >= 10, String(n));
-  assert.match(read('js/tax/ui.js'), /TUI\.exBtn = \(label, sub, fn, async\) => \{ const b = h\('button\.btn', \{\}, U\.icon\('download'\), label\); b\.addEventListener\('click', async \? TUI\.busyFn\(b, fn\) : fn\);/);
+  assert.match(read('js/tax/ui.js'), /TUI\.exBtn = \(label, sub, fn, async\) => \{ const b = h\('button\.btn\.ex-btn', \{\}, U\.icon\('download'\), h\('span', label\)\); b\.addEventListener\('click', async \? TUI\.busyFn\(b, fn\) : fn\);/);
   assert.match(read('js/tax/ui.js'), /U\.toast\('Export failed: ' \+ e\.message, TUI\.WARN_MS\)/);
 });
 

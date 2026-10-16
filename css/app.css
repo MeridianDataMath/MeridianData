@@ -213,6 +213,11 @@ button.card-head.toggle-head { width: 100%; background: transparent; border: 0; 
 .btn.icon { padding: 6px; }
 .btn svg { width: 16px; height: 16px; }
 .btn.star.on { color: var(--amber); border-color: rgba(245,182,74,.4); background: var(--amber-dim); }
+/* a Tax center export button (TUI.exBtn) in its tile: a long file name wraps under itself instead of running out of the
+   tile, the icon stays at its first line */
+.btn.ex-btn { white-space: normal; text-align: left; max-width: 100%; align-items: flex-start; line-height: 1.3; }
+.btn.ex-btn svg { flex: none; margin-top: 1px; }
+.btn.ex-btn > span { min-width: 0; overflow-wrap: anywhere; }
 
 .seg { display: inline-flex; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 3px; gap: 2px; }
 .seg button {
