@@ -1115,10 +1115,11 @@
       let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (not settled: open bets or escrow not yet claimed)
-      // on the Ended tab only: an ended but unsettled question whose open predictions have all lost on Polymarket (a leg
-      // resolved against the bettor, or 50/50) or were cashed out to the makers (sold to them before Meridian settled) is
-      // noise, only the makers are waiting for the settlement. It is left out there and counted under the list; the other
-      // tabs list every question.
+      // on the Open and Ended tabs: an unsettled question whose open predictions have all lost on Polymarket (a leg
+      // resolved against the bettor, or 50/50) or were cashed out to the makers (sold to them before Meridian settled,
+      // so a maker holds both sides) has nothing at stake for anyone betting; only the makers are waiting for Meridian's
+      // settlement (user 10-16: "nothing is at stake there anymore"). It is left out there and counted under the list;
+      // Settled and All list every question.
       const alive = (q) => !R.questionDead(q);
       // ended questions plus every leg of their open predictions (a combo's fate depends on all its legs); re-checked on
       // every tick, so questions that pass their end while the page is open get loaded too
@@ -1170,8 +1171,9 @@
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
         else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
         // after the search and category filters, so the count of the ones left out follows them too
-        const deadN = st.status === 'ended' ? rows.filter((q) => !alive(q)).length : 0;
-        if (st.status === 'ended') rows = rows.filter(alive);
+        const hideDead = st.status === 'ended' || st.status === 'open';
+        const deadN = hideDead ? rows.filter((q) => !alive(q)).length : 0;
+        if (hideDead) rows = rows.filter(alive);
         rows = st.status === 'ended' && !headerSorted ? byStage(rows) : U.sortBy(rows, SORTS[st.col.key] || SORTS.sw, st.col.desc);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE); shown = slice;
@@ -1185,7 +1187,8 @@
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (webUrl(c.src) ? srcBtn(c.src) : '') },
         ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
-        U.replace(summary, st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` + (deadN ? ` · ${U.fmtNum(deadN, 0)} more not listed: every open prediction on ${deadN === 1 ? 'it' : 'them'} already has a leg resolved against the bettor (or 50/50) on Polymarket` : '') : `${U.fmtNum(total, 0)} questions with Meridian bets`);
+        const deadNote = deadN ? ` · ${U.fmtNum(deadN, 0)} more not listed: nothing is at stake on ${deadN === 1 ? 'it' : 'them'} any more (every open bet was cashed out to a market maker, or has a leg resolved against the bettor on Polymarket)` : '';
+        U.replace(summary, (st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`) + deadNote);
         // rows that move onto the page once their state is known (the Ended tab re-sorts by stage) need their oracle and
         // price checks too, not only the ones visible on the first render
         if (!keepTracking || slice.some((q) => !tracked.has(qId(q)))) { slice.forEach((q) => tracked.add(qId(q))); const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
