@@ -635,7 +635,8 @@ async function buildPerps() {
   const started = Date.now();
   const ctx = { signal: new AbortController().signal };
   const ref = await A.ref(ctx);
-  const subs = await A.allSubaccounts({ signal: ctx.signal, ttl: 0 });
+  // the left-out wallets' accounts (U.EXCLUDED) are not built at all, nor counted
+  const subs = (await A.allSubaccounts({ signal: ctx.signal, ttl: 0 })).filter((sa) => !U.isExcluded(sa.account));
   const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
   // copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
   // the price drift after each account's fills, shared across accounts
@@ -655,22 +656,33 @@ async function buildPerps() {
     4,
     (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
   );
-  const built = new Map(), failedAt = [];
-  results.forEach((r, i) => { if (r.ok) { if (r.value) built.set(subs[i].id, r.value); } else { failedAt.push(i); console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
+  const built = new Map(), failedAt = [], lastErr = new Map();
+  // why a row failed, in a form that adds up across accounts (no addresses, ids or URLs)
+  const why = (r) => (r.ok ? 'time budget reached' : String((r.error && r.error.message) || 'error').replace(/https?:\/\/\S+/g, '').replace(/0x[0-9a-f]{6,}|[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '…').replace(/\s+/g, ' ').trim().slice(0, 80));
+  results.forEach((r, i) => { if (r.ok) { if (r.value) built.set(subs[i].id, r.value); } else { failedAt.push(i); lastErr.set(i, why(r)); console.warn(`row failed ${subs[i].id}: ${r.error && r.error.message}`); } });
   if (skipped) console.warn(`time budget of ${budgetMs / 1000}s reached: ${skipped} of ${subs.length} accounts not built this run`);
   // a failed row is built once more, after a pause and two at a time (one of its many requests timed out or was refused
   // under load), while the budget lasts
   if (failedAt.length) {
     await sleep(3000);
     const again = await U.pLimit(failedAt.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 2);
-    again.forEach((r, j) => { const sa = subs[failedAt[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else console.warn(`row failed again ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); });
+    again.forEach((r, j) => { const sa = subs[failedAt[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else { lastErr.set(failedAt[j], why(r)); console.warn(`row failed again ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); } });
   }
-  const failed = failedAt.filter((i) => !built.has(subs[i].id)).length;
+  // still failing: on GitHub's runners Meridian's API refuses some requests under load (built from a PC every account
+  // builds: 2026-10-16, 325 of 325), so one last try after a longer pause, one account at a time, while the budget lasts
+  const left = failedAt.filter((i) => !built.has(subs[i].id));
+  if (left.length && Date.now() - started + 20000 < budgetMs) {
+    await sleep(20000);
+    const last = await U.pLimit(left.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 1);
+    last.forEach((r, j) => { const sa = subs[left[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else { lastErr.set(left[j], why(r)); console.warn(`row failed a third time ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); } });
+  }
+  const failedIx = failedAt.filter((i) => !built.has(subs[i].id)), failed = failedIx.length;
+  const failReasons = {}; for (const i of failedIx) { const w = lastErr.get(i) || 'error'; failReasons[w] = (failReasons[w] || 0) + 1; }
 
   const merged = mergeRows(subs, built, built.size < subs.length ? await previousSnapshots() : []);
   const { carried, missing } = merged, rows = merged.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED)
   // partial: not every account was built by this run (carried: rows from an earlier snapshot; missing: accounts without a row)
-  const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
+  const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, failReasons, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
   fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
   console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);

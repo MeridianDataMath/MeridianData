@@ -38,8 +38,9 @@
               ['Built', when(s.builtAt)],
               ['Builder', s.source === 'github-actions' ? 'GitHub Actions' : s.source === 'local' ? 'a local run' : s.source || '—'],
               // rows include the ones carried over from an earlier build (mergeRows in scripts/build-snapshot.mjs: carried,
-              // missing; an older snapshot has neither and lists only what it built); failed is after one retry
-              ['Accounts', `${U.fmtNum(s.rows.length - (s.carried || 0), 0)} of ${U.fmtNum(s.accounts || s.rows.length, 0)} built` + (s.carried ? ` · ${s.carried} carried over from an earlier build` : '') + (s.missing ? ` · ${s.missing} missing` : '') + (s.failed ? ` · ${s.failed} failed${s.retried ? ' after a retry' : ''}` : '') + (s.skipped ? ` · ${s.skipped} not reached in the ${U.fmtDuration((s.budgetS || 0) * 1000)} budget` : '') + (s.partial ? ' · partial' : ''), s.failed || s.skipped || s.missing ? 'neg' : ''],
+              // missing; an older snapshot has neither and lists only what it built); failed is after the retries, with what
+              // the exchange's API answered (failReasons, since 2026-10-16: the Action's log is for the repo's admin only)
+              ['Accounts', `${U.fmtNum(s.rows.length - (s.carried || 0), 0)} of ${U.fmtNum(s.accounts || s.rows.length, 0)} built` + (s.carried ? ` · ${s.carried} carried over from an earlier build` : '') + (s.missing ? ` · ${s.missing} missing` : '') + (s.failed ? ` · ${s.failed} failed${s.retried ? ' after retrying' : ''}` + (s.failReasons && Object.keys(s.failReasons).length ? ' (' + Object.entries(s.failReasons).sort((a, b) => b[1] - a[1]).map(([w, n]) => w + (n > 1 ? ' ×' + n : '')).join('; ') + ')' : '') : '') + (s.skipped ? ` · ${s.skipped} not reached in the ${U.fmtDuration((s.budgetS || 0) * 1000)} budget` : '') + (s.partial ? ' · partial' : ''), s.failed || s.skipped || s.missing ? 'neg' : ''],
               ['Copy profiles', `${U.fmtNum(s.rows.filter((r) => r.copy && r.copy.driftN).length, 0)} accounts with their price move after a fill measured`],
               s.durationMs ? ['Build took', U.fmtDuration(s.durationMs)] : null,
             ]) : h('div.empty', 'No published perps snapshot: the leaderboard is built in each visitor\'s browser instead.'),
