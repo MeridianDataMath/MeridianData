@@ -137,10 +137,11 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
 .topbar .search-mini input:focus { border-color: var(--accent); }
 .main { overflow: auto; padding: 20px; min-width: 0; }
 .main > .page { max-width: 1440px; margin: 0 auto; }
-/* home is full-bleed: the hero fills the whole content area on every screen size */
+/* home is full-bleed: the hero spans the whole content area; the tiles and cards under it sit centred as on any page */
 .main.home { padding: 0; }
 .main.home > .page { max-width: none; margin: 0; }
-.main.home .hero { border-radius: 0; border: 0; min-height: calc(100vh - var(--top)); }
+.main.home .hero { border-radius: 0; border: 0; }
+.home-body { padding: 20px; max-width: 1440px; margin: 0 auto; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); display: inline-block; }
 .status-dot.ok { background: var(--green); box-shadow: 0 0 0 3px var(--green-dim); }
 .status-dot.warn { background: var(--amber); }
@@ -362,12 +363,13 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 /* Hero (home) */
 .hero {
   position: relative; overflow: hidden; border-radius: 14px; border: 1px solid var(--border-2);
-  min-height: calc(100vh - var(--top) - 40px); display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: radial-gradient(900px 520px at 78% 22%, rgba(35, 212, 188, .30), rgba(35, 212, 188, .06) 45%, transparent 70%),
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  /* the glow fades into the page at the bottom, where the tiles start */
+  background: linear-gradient(180deg, transparent 55%, var(--bg-0)),
+              radial-gradient(900px 520px at 78% 22%, rgba(35, 212, 188, .30), rgba(35, 212, 188, .06) 45%, transparent 70%),
               radial-gradient(700px 500px at 20% 90%, rgba(51, 92, 255, .16), transparent 60%),
               var(--bg-0);
-  /* the bottom padding keeps the centred content clear of the ticker and footer pinned to the bottom (short windows) */
-  padding: 40px 20px 176px;
+  padding: 64px 20px 36px;
 }
 .hero h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; text-align: center; margin-bottom: 20px; }
 .hero h1 span { color: var(--accent); }
@@ -385,17 +387,24 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 .hero .quick .chipbtn { background: rgba(255,255,255,.04); border: 1px solid var(--border-3); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
 .hero .quick .chipbtn:hover { color: var(--text-1); border-color: var(--accent); text-decoration: none; }
 .hero .quick .chipbtn { display: inline-flex; align-items: center; gap: 6px; }
-.hero .quick .chipbtn svg, .hero .strip .item svg, .btn svg, .chip svg, .topbar svg { width: 14px; height: 14px; flex: none; }
-.hero .strip-title { position: absolute; left: 0; right: 0; bottom: 138px; text-align: center; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
-.hero .strip { position: absolute; left: 0; right: 0; bottom: 84px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
-.hero .strip .track { display: flex; gap: 10px; width: max-content; animation: marquee 60s linear infinite; }
-.hero .strip:hover .track { animation-play-state: paused; }
-@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-.hero .strip .item { display: inline-flex; align-items: center; gap: 8px; background: rgba(19,19,20,.9); border: 1px solid var(--border-3); border-radius: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--text-1); }
-.hero .strip .item:hover { border-color: var(--accent); text-decoration: none; }
-.hero .strip .item .tag { color: var(--text-3); font-size: 11px; }
-.hero .foot { position: absolute; left: 0; right: 0; bottom: 22px; display: flex; justify-content: center; gap: 22px; font-size: 12.5px; color: var(--text-3); flex-wrap: wrap; padding: 0 20px; }
-.hero .foot b { color: var(--text-1); font-family: var(--mono); font-weight: 500; }
+.hero .quick .chipbtn svg, .btn svg, .chip svg, .topbar svg { width: 14px; height: 14px; flex: none; }
+/* home: the tiles fill every row they take (5 tiles: no gap left in a short last row); the cards pair up only where
+   each still has room for its rows, and a narrow card drops a Predict row's address and multiplier (.opt) */
+.home-body { container: home / inline-size; }
+.home-body .stats { display: flex; flex-wrap: wrap; }
+.home-body .stats .stat { flex: 1 1 150px; }
+.home-body .card { container: homecard / inline-size; }
+@container home (max-width: 1000px) { .home-body .grid.cols-2 { grid-template-columns: minmax(0, 1fr); } }
+@container homecard (max-width: 520px) {
+  .home-body .feed .it .opt { display: none; }
+  /* every row alike: the time and the figures on one line, the question on its own line under them */
+  .home-body .feed .it { flex-wrap: wrap; row-gap: 2px; }
+  .home-body .feed .it .t { margin-right: auto; }
+  .home-body .feed .it .grow.ellipsis { flex: 1 1 100%; order: 10; min-width: 0; }
+}
+/* a few rows each, no scrolling; a Predict row's question takes the room left */
+.home-body .feed { max-height: none; }
+.home-body .feed .it .t { width: 64px; }
 
 /* Account header */
 .acct-head { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; min-width: 0; overflow: hidden; }
@@ -665,7 +674,7 @@ textarea.input:focus { border-color: var(--accent); }
   :root { --bg-0: #fff; --bg-1: #fff; --bg-2: #fff; --bg-3: #f4f4f5; --bg-4: #f4f4f5; --bg-5: #ececee; --bg-6: #e4e4e7; --border-1: #ddd; --border-2: #ddd; --border-3: #ccc; --text-1: #111; --text-2: #333; --text-3: #666; --green: #0f8a52; --red: #c22a2f; --accent: #0b8f7e; }
   body { overflow: visible; }
   .app { display: block; height: auto; }
-  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .strip, .modal-bg, .no-print, a.defs { display: none !important; }
+  .rail, .topbar, .btn, .seg, form, .footer-note, .chart-box, .pager, .quick, .modal-bg, .no-print, a.defs { display: none !important; }
   .footer-note.print-keep { display: block !important; }   /* a disclaimer or basis note the printed report needs */
   .print-only { display: block !important; }   /* the report's identity and methodology, printed only */
   span.print-only { display: inline !important; }   /* a full address or a select's value, inside its line */
@@ -696,7 +705,7 @@ textarea.input:focus { border-color: var(--accent); }
   body { font-size: 14.5px; }
   .main { padding: 24px 28px; }
   .main > .page { max-width: 1920px; }
-  .hero .strip .item { font-size: 13.5px; padding: 9px 14px; }
+  .home-body { padding: 24px 28px; max-width: 1920px; }
   .overview { grid-template-columns: 320px minmax(0, 1fr); }
   .chart-box { height: 360px; }
   .hero h1 { font-size: 40px; }
@@ -744,14 +753,12 @@ textarea.input:focus { border-color: var(--accent); }
   /* long definitions (modals) stack key over value; short figures (account state) stay on one line */
   .modal .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .modal .kv .k { white-space: normal; margin-top: 6px; }
-  /* phone: stack the hero content instead of pinning the ticker/footer to the bottom */
+  /* phone: the hero shorter, the cards with the usual phone gutter */
   .main.home { padding: 0 0 56px; }
-  .main.home .hero { min-height: calc(100vh - var(--top) - 56px); justify-content: flex-start; padding: 48px 16px 24px; }
+  .main.home .hero { padding: 36px 16px 20px; }
+  .home-body { padding: 4px 12px 12px; }
   .hero h1 { font-size: 26px; }
   .hero form input { font-size: 16px; }
-  .hero .strip-title { position: static; margin-top: 28px; }
-  .hero .strip { position: static; width: calc(100% + 32px); margin: 10px -16px 0; }
-  .hero .foot { position: static; display: flex; margin-top: 22px; gap: 12px 18px; }
   .chart-box { height: 240px; }
   /* feeds (trade tapes, fills, prediction tape): tighter cells so a row fits a phone instead of scrolling sideways */
   .feed .it { gap: 6px; padding: 7px 10px; }

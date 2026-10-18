@@ -78,6 +78,15 @@
   /** A big win: the bettor won and its net PnL (payout − stake; for a bettor who sold its tokens, its own result with the
    *  sale) is above this many dollars (the Overview lists them). */
   P.BIG_WIN = 500;
+  /** A big bet: a stake of at least this many dollars (the median stake is about $25). The snapshot keeps the newest of
+   *  them (agg.bigBets) for the home page's Latest big bets. */
+  P.BIG_BET = 100;
+  /** A big-win row's figures, shared by the Overview's Big wins and the home page. soldOut: the bettor sold every position
+   *  token before the verdict. fromSale: its profit dates from its last sale (it sold everything, or the picks are still
+   *  open). bigPnl: its PnL, its own result over its bets on the same picks where it traded its tokens, sales included. */
+  P.soldOut = (n) => (n.group ? n.group.h < 1e-6 : n.held != null && n.held < 1e-6);
+  P.fromSale = (n) => !!(n.cashOut && (P.soldOut(n) || !n.decided));
+  P.bigPnl = (n) => (n.group ? n.group.lp : n.tradedPnl != null ? n.tradedPnl : n.pnl);
   /** A market maker is a counterparty that has taken at least this many predictions. Anyone can take the other side of a
    *  prediction once (0x3106…88d1: a single $1 against $1 at 50 %, settled ten minutes later), which is a test, not a
    *  market; such one-off counterparties are named apart from the makers (their results still count in the totals). */
@@ -489,14 +498,15 @@
     return k;
   };
   /** Aggregate normalised predictions (self-matches left out). Returns plain JSON. trades: the secondary market (see P.ledger), optional.
-   *  tape (the newest tapeSize) and bigWins (every win whose net PnL is above P.BIG_WIN, latest verdict first) are slim records
-   *  with every leg's question id, so a page can show and open each one.
+   *  tape (the newest tapeSize), bigBets (the newest bigBetsSize stakes of P.BIG_BET or more) and bigWins (every win whose
+   *  net PnL is above P.BIG_WIN, latest verdict first) are slim records with every leg's question id, so a page can show
+   *  and open each one.
    *  claims (optional): wallet → its claimable positions (the API's positions(holder, claimable: true) rows or P.claimRows'
    *  entries), read for every wallet at once, so a wallet missing has none. With them a decided prediction is unclaimed
    *  while its winner still holds the winning tokens (n.toClaim, kept in the records as tc), as Meridian's app counts a
    *  payout to claim, and a row's unclaimedPayout is its balances; without them, the API's settled flag as before.
    *  A row's openPos: its open positions as Meridian counts them (P.posKey, tokens still held). */
-  P.aggregate = function (norms, { tapeSize = 25, trades = null, bigWins = true, records = true, claims = null } = {}) {
+  P.aggregate = function (norms, { tapeSize = 25, bigBetsSize = 25, trades = null, bigWins = true, records = true, claims = null } = {}) {
     // a self-match (one wallet on both sides: a test at launch, $0.50 against itself) moves no money and is no market
     // making; counted in its figures it made its wallet a "market maker" with one prediction
     const selfMatched = norms.filter(P.selfMatch).length;
@@ -692,6 +702,7 @@
       vig,
       secondary,
       tape: norms.slice().sort((a, b) => b.t - a.t).slice(0, tapeSize).map((n) => Object.assign(P.compact(n), sold(n))),
+      bigBets: norms.filter((n) => n.stake >= P.BIG_BET).sort((a, b) => b.t - a.t).slice(0, bigBetsSize).map((n) => Object.assign(P.compact(n), sold(n))),
       bigWins: bigWins ? bigList() : undefined,
     };
     // with the balances the bettors' payout to claim is theirs, not the pots of the predictions they won (a pot shared

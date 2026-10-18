@@ -306,6 +306,12 @@ test('price drift: exactly one and five minutes after the fill, a fill far off t
   assert.equal(fresh.n, 0);
 });
 
+test('the market maker is known by its wallet, in any letter case, so the home page\'s top wallets leave it out', () => {
+  assert.ok(AN.marketMaker({ account: '0x2F46C3FCE6BDA596C2771BCA618C4F69AE3E56B2', sid: 'any' }));
+  assert.equal(AN.marketMaker({ account: '0xa6b9cf0000000000000000000000000000000000' }), null);
+  assert.equal(AN.marketMaker({}), null); assert.equal(AN.marketMaker(null), null);
+});
+
 test('the exchange\'s own account is flagged on its row; the fee collector is left to "no trades"', async () => {
   const EX = '01a047c4-2be2-774c-ae58-1e45d2f2a99d', FEES = '01a047c4-2bd1-70db-9c88-6b93739534a5';
   assert.ok(AN.exchangeAccount({ sid: EX })); assert.equal(AN.exchangeAccount({ sid: FEES }), null); assert.equal(AN.exchangeAccount(null), null);

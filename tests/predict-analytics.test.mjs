@@ -72,6 +72,16 @@ test('each leg keeps Meridian\'s result, and the tape and big wins keep every le
   assert.equal(P.aggregate([big], { bigWins: false }).bigWins, undefined, 'a bettor\'s own summary skips the list');
 });
 
+test('big bets (the home page\'s list): stakes of P.BIG_BET or more, the newest first, as many as asked; a row opens like a tape row', () => {
+  const at = (id, stake, d) => pred(id, stake, stake, null, false, T0 + d * DAY);
+  const norms = [at('s1', 25, 5), at('b1', 100, 1), at('b2', 400, 3), at('b3', 99.99, 4), at('b4', 1500, 2)];
+  const a = P.aggregate(norms);
+  assert.deepEqual(a.bigBets.map((s) => s.id), ['b2', 'b4', 'b1'], '$100 and up only, the newest first');
+  assert.deepEqual(P.aggregate(norms, { bigBetsSize: 2 }).bigBets.map((s) => s.id), ['b2', 'b4']);
+  const n = P.full(JSON.parse(JSON.stringify(a.bigBets[0])));
+  assert.equal(n.stake, 400); assert.equal(n.predictor, ME); near(assert, n.multiple, 2, 1e-9, 'pays twice the stake');
+});
+
 test('big wins go by what the bettor made: a win sold for little is none, a partly sold one keeps its own result', () => {
   const BUYER = '0x00000000000000000000000000000000000000c1';
   // sold: $943 to win on $25, every token sold for $30 before the verdict (it made $5); part: 10% sold, the rest held

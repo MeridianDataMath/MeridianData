@@ -173,8 +173,7 @@
       // a row on picks whose tokens the bettor traded is its position there (n.group, P.positions): its bets counted
       // together, its result (sales included) and the share of its tokens it still held; an older snapshot's rows have
       // the slip's own figures only
-      const soldOut = (n) => (n.group ? n.group.h < 1e-6 : n.held != null && n.held < 1e-6);
-      const fromSale = (n) => !!(n.cashOut && (soldOut(n) || !n.decided));
+      const soldOut = P.soldOut, fromSale = P.fromSale;   // shared with the home page's Big Predict wins
       const winTime = (n) => (fromSale(n) ? n.cashOut.t : decidedTime(n) || n.t);
       const bigStake = (n) => (n.group ? n.group.s : n.stake);
       // what came back for what went in (stakes and tokens bought); a part cash-out on open picks: what its sales fetched
@@ -187,7 +186,7 @@
         { v: 'pnl', label: 'PnL', title: withSec ? 'Largest profit first: payout − stake (a bettor who traded its tokens: its own result, sales included)' : 'Largest profit first: payout − stake', val: (n) => bigPnl(n) },
         { v: 'mult', label: 'Multiplier', title: 'Highest return on the stake first: payout ÷ stake (a bettor who traded its tokens: what came back ÷ what it staked)', val: (n) => bigMult(n) || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
-      const bigPnl = (n) => (n.group ? n.group.lp : n.tradedPnl != null ? n.tradedPnl : n.pnl);
+      const bigPnl = P.bigPnl;
       // a win still to claim: where the snapshot read the balances (tc, agg.claimAt), the bettor still holds its winning
       // tokens, as Meridian's app counts a payout to claim; an older snapshot, the API's settled flag (which anyone's
       // settlement sets, and a claim through a twin prediction leaves unset)

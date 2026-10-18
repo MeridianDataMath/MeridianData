@@ -501,6 +501,12 @@
     '01a047c4-2be2-774c-ae58-1e45d2f2a99d': 'Created with the markets at launch, days before any user account. It took over a liquidated trader\'s position (SOL, 25 Sep 2026), and the position fees charged on mPerps are credited to it. Its PnL is not trading.',
   };
   AN.exchangeAccount = (r) => (r && AN.EXCHANGE[r.sid]) || null;
+  /** Wallets that make the markets: they quote both sides of every book, so the home page's top wallets (traders to copy)
+   *  leave them out. Keyed by wallet address. */
+  AN.MAKERS = {
+    '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2': 'Quotes both sides of every market: the exchange\'s market maker, not a trader to copy.',
+  };
+  AN.marketMaker = (r) => (r && AN.MAKERS[String(r.account || '').toLowerCase()]) || null;
 
   // ---------- Copy trading: what a follower would actually keep ----------
   /**
