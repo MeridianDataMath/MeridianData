@@ -43,22 +43,23 @@
       // starts the scan (user 10-18: "not load instantly by default … hidden by default")
       const smSummary = h('span.dim.small');
       const smSel = h('div.smap-sel');
-      const smLadder = h('div.smap', UI.loading('Collecting stop orders…'));
+      const smBands = h('div.smap-bands');   // sells below and buys above the mark, within 1, 2 and 5%
+      const smLadder = h('div.smap', UI.loading('Collecting stop orders and positions…'));
       const smTable = h('div');
       const smRescan = h('button.btn.sm', { disabled: true, onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');   // on with the first scan
-      const smBody = h('div', { style: { display: 'none' } }, h('div.card-head', smSummary, h('span.grow'), smRescan), h('div.smap-wrap', h('div', smSel, smLadder), smTable));
+      const smBody = h('div', { style: { display: 'none' } }, h('div.card-head', smSummary, h('span.grow'), smRescan), h('div.smap-wrap', h('div', smSel, smBands, smLadder), smTable));
       const stopCard = h('div.card.tight.collapsible');
       let smOpen = () => {};   // the scan needs the markets and accounts loaded below: until then opening only shows the card
       const setStops = (open) => { stopCard.classList.toggle('open', open); smBody.style.display = open ? '' : 'none'; smHead.setAttribute('aria-expanded', String(open)); smOpen(open); };
       const smHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => setStops(!stopCard.classList.contains('open')) },
-        h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'take-profit, stop-loss and entry stops of every account, by price level · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
+        h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'take-profit, stop-loss and entry stops and the liquidation price of every open position, by price level · ▼ sells / ▲ buys when the price gets there · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(stopCard, [smHead, smBody]);
       U.replace(root, h('div.page', h('div.stack', tiles,
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price · click a column to sort')), mktBody),
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate')), fundBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the highest first; click a column to sort')), fundBody),
         stopCard)));
 
       const ref = await A.ref(ctx);
@@ -110,13 +111,20 @@
       const pausedEl = (f) => h('span.dim', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): no funding is charged in the window, a position fee is charged instead · last charge ${pct4(f.lastPct)}` }, 'Paused');
       const rateEl = (x, title) => (x == null ? h('span.dim', { title: 'projected rate not available yet' }, '—') : h('span', { class: U.pnlClass(x), title: title || null }, pct4(x)));
       const projEl = (f) => (f.paused ? pausedEl(f) : rateEl(f.projPct, 'last hourly charge ' + pct4(f.lastPct)));
-      // Markets by category (AN.MARKET_CATS: RWA, Crypto, Indices, FX, Commodities), each under a header with its count and
-      // totals, a category without markets saying so; the buttons show one category (remembered in this browser), and a
-      // column header sorts the markets inside each category (24h volume, the largest first, until one is clicked)
+      // Markets by category, as Hyperliquid groups them (AN.MARKET_CATS: Crypto, Stocks, Indices, Commodities, FX, Pre-IPO),
+      // each under a header with its count and totals (a category Meridian has no market in, one line saying so); the
+      // buttons show one category (remembered in this browser), and a column header sorts the markets inside each category
+      // (24h volume, the largest first, as Hyperliquid's selector, until one is clicked)
       const CAT_KEY = 'md.dash.mktCat';
       let mktCat = U.storage.get(CAT_KEY, 'all'); if (!AN.MARKET_CATS.some(([k]) => k === mktCat)) mktCat = 'all';
       let mktSort = { key: 'vol', desc: true }, catSeen = '';
       const SORTS = { m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
+      // the Funding table: the same categories (those with markets), the highest annualized rate first until a column is
+      // clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
+      let fundSort = { key: 'apr', desc: true };
+      const FUND_SORTS = { m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? null : r.f.aprPct) };
+      const catHead = (name, list, totals) => h('div.mkt-group', h('span.name', name),
+        list.length ? h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')) : h('span.dim', 'none on Meridian yet'), list.length && totals ? h('span.dim', totals(list)) : null);
       const renderCatSel = (rows) => {
         const n = {}; for (const r of rows) n[r.cat] = (n[r.cat] || 0) + 1;
         const seen = JSON.stringify(n) + '|' + mktCat; if (seen === catSeen) return; catSeen = seen;
@@ -129,11 +137,7 @@
         renderCatSel(rows);
         const groups = AN.MARKET_CATS.filter(([k]) => mktCat === 'all' || k === mktCat).map(([k, name]) => {
           const list = U.sortBy(rows.filter((r) => r.cat === k), SORTS[mktSort.key] || SORTS.vol, mktSort.desc);
-          return {
-            head: h('div.mkt-group', h('span.name', name), h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')),
-              list.length ? h('span.dim', '24h volume ' + U.fmtUsd(U.sum(list, (r) => r.volUsd), { compact: true }) + ' · open interest ' + U.fmtUsd(U.sum(list, (r) => r.oiUsd), { compact: true })) : null),
-            rows: list, empty: 'No ' + name + ' markets on Meridian yet',
-          };
+          return { head: catHead(name, list, (l) => '24h volume ' + U.fmtUsd(U.sum(l, (r) => r.volUsd), { compact: true }) + ' · open interest ' + U.fmtUsd(U.sum(l, (r) => r.oiUsd), { compact: true })), rows: list };
         });
         U.replaceLive(mktBody, UI.table({
           cols: [
@@ -152,18 +156,22 @@
           // a new column sorts the largest first (the market name A to Z); the same column again reverses it
           onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(); },
         }));
+        const fundGroups = AN.MARKET_CATS.map(([k, name]) => ({ name, list: U.sortBy(rows.filter((r) => r.cat === k), FUND_SORTS[fundSort.key] || FUND_SORTS.apr, fundSort.desc) }))
+          .filter((g) => g.list.length).map((g) => ({ head: catHead(g.name, g.list), rows: g.list }));
         U.replaceLive(fundBody, UI.table({
+          groups: fundGroups, sort: fundSort,
+          onSort: (k) => { fundSort = { key: k, desc: fundSort.key === k ? !fundSort.desc : k !== 'm' }; renderMarkets(); },
           cols: [
-            { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
-            { key: 'proj', label: 'Projected 1h', num: true, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f) },
+            { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
+            { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f) },
             // history, so it stands in a closure too: the charge taken before the market closed
-            { key: 'fr', label: 'Last 1h', num: true, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
-            { key: 'apr', label: 'Annualized', num: true, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure', render: (r) => (r.f.paused ? pausedEl(r.f) : rateEl(r.f.aprPct)) },
+            { key: 'fr', label: 'Last 1h', num: true, sortVal: 1, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
+            { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure', render: (r) => (r.f.paused ? pausedEl(r.f) : rateEl(r.f.aprPct)) },
             { key: 'base', label: 'Baseline / clamp / max APR', num: true, render: (r) => h('span.dim', U.fmtPct(U.num(r.p.fundingBaselineApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingClampApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingMaxApr) * 100, { dp: 0 })) },
             // a per-unit index (the sum of the hourly per-unit charges), not money paid on the market
             { key: 'cum', label: 'Cumulative funding / unit', num: true, title: 'Funding paid by a one-unit long held since funding began (negative = received); the sum of the hourly per-unit charges', render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) + ' / ' + (r.p.baseTokenName || 'unit') },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.fundingUpdatedAt)) },
-          ], rows,
+          ],
         }));
         drawSparks();
       }
@@ -188,7 +196,13 @@
       };
       const restT = setInterval(refreshRest, 60000); ctx.onCleanup(() => clearInterval(restT));
 
-      // ---- stop map: TP / SL / entry stop levels of every account, per market ----
+      // ---- stop map: TP / SL / entry stop levels and liquidation prices of every account, per market ----
+      // What a level does to the market when the price reaches it (flow): closing a long (its TP, SL or liquidation) sells,
+      // closing a short buys; an entry stop buys or sells as it opens. Sells below the mark push a fall further, buys above
+      // it a rise: the bands sum those near the mark.
+      const flowOf = (kind, posSide) => (kind === 'ENTRY' ? (posSide === 'long' ? 'buy' : 'sell') : posSide === 'long' ? 'sell' : 'buy');
+      const BANDS = [1, 2, 5];   // percent from the mark
+      const pressure = (ls, m, b) => ({ sells: U.sum(ls.filter((l) => l.flow === 'sell' && l.price <= m && l.price >= m * (1 - b / 100)), (l) => l.usd), buys: U.sum(ls.filter((l) => l.flow === 'buy' && l.price > m && l.price <= m * (1 + b / 100)), (l) => l.usd) });
       let sm = null, smMarket = null, smScanning = false;
       async function scanStops() {
         if (smScanning) return; smScanning = true; smRescan.disabled = true;
@@ -211,24 +225,32 @@
             let positions = [], working = [];
             if (!k || k.openCount > 0 || pending.length) [positions, working] = await Promise.all([A.openPositions(sa.id, o).catch(() => []), A.openOrders(sa.id, o).catch(() => [])]);
             if (!pending.length && !positions.length) return;
+            // the balances give each position its liquidation price (its margin pool's equity against its maintenance margin)
+            const balances = positions.length ? await A.balances(sa.id, o).catch(() => []) : [];
             const px = {}; for (const p of positions) { const prod = ref.byId[p.productId]; px[p.productId] = { oraclePrice: prod ? mark(prod) : 0 }; }
-            const st = AN.accountState({ balances: [], positions, ref, prices: px });
+            const st = AN.accountState({ balances, positions, ref, prices: px });
             AN.attachStops(st.positions, working.concat(pending));
             const used = new Set();
-            for (const r of st.positions) for (const [kind, list] of [['TP', r.tp], ['SL', r.sl]]) for (const e of list) {
-              used.add(e.order.id); const qty = e.qty == null ? r.abs : e.qty;
-              levels.push({ productId: r.p.productId, price: e.price, kind, posSide: r.long ? 'long' : 'short', qty, usd: qty * e.price, mech: e.kind, trigger: e.trigger, oco: e.oco, account: sa.account, sid: sa.id });
+            const add = (l) => levels.push(Object.assign(l, { flow: flowOf(l.kind, l.posSide), account: sa.account, sid: sa.id }));
+            for (const r of st.positions) {
+              const posSide = r.long ? 'long' : 'short';
+              for (const [kind, list] of [['TP', r.tp], ['SL', r.sl]]) for (const e of list) {
+                used.add(e.order.id); const qty = e.qty == null ? r.abs : e.qty;
+                add({ productId: r.p.productId, price: e.price, kind, posSide, qty, usd: qty * e.price, mech: e.kind, trigger: e.trigger, oco: e.oco });
+              }
+              // where the exchange would close the whole position (read with its balances; none without them)
+              if (balances.length && r.liqPrice > 0) add({ productId: r.p.productId, price: r.liqPrice, kind: 'LIQ', posSide, qty: r.abs, usd: r.abs * r.liqPrice, mech: 'liq' });
             }
             for (const od of pending) {                          // stops that open or add to a position
               if (used.has(od.id) || od.reduceOnly || od.close) continue;
               const qty = U.num(od.quantity), price = U.num(od.stopPrice); if (!(qty > 0 && price > 0)) continue;
-              levels.push({ productId: od.productId, price, kind: 'ENTRY', posSide: String(od.side) === '0' ? 'long' : 'short', qty, usd: qty * price, mech: 'stop', trigger: AN.orderMeta(od).trigger, oco: false, account: sa.account, sid: sa.id });
+              add({ productId: od.productId, price, kind: 'ENTRY', posSide: String(od.side) === '0' ? 'long' : 'short', qty, usd: qty * price, mech: 'stop', trigger: AN.orderMeta(od).trigger, oco: false });
             }
           });
           await U.pLimit(tasks, 4);
           if (ctx.signal.aborted) return;
           sm = { at: Date.now(), scanned, skipped, total: accounts.length, levels };
-          if (!smMarket || !levels.some((l) => l.productId === smMarket)) { const by = {}; for (const l of levels) by[l.productId] = (by[l.productId] || 0) + l.usd; smMarket = Object.keys(by).sort((a, b) => by[b] - by[a])[0] || null; }
+          if (smMarket && !levels.some((l) => l.productId === smMarket)) smMarket = null;   // the first market then (renderStopMap)
           renderStopMap();
         } catch (e) { if (!isAbort(e)) U.replace(smSummary, h('span.neg', 'scan failed: ' + e.message)); }
         finally { smScanning = false; smRescan.disabled = false; }
@@ -239,55 +261,74 @@
         const byMarket = U.groupBy(L, (l) => l.productId);
         const markets = Object.keys(byMarket).filter((pid) => ref.byId[pid]).map((pid) => {
           const ls = byMarket[pid]; const p = ref.byId[pid]; const m = mark(p);
-          const agg = { pid, p, mark: m, n: ls.length, tp: ls.filter((l) => l.kind === 'TP'), sl: ls.filter((l) => l.kind === 'SL'), en: ls.filter((l) => l.kind === 'ENTRY'), usd: U.sum(ls, (l) => l.usd), accounts: new Set(ls.map((l) => l.sid)).size };
+          const agg = { pid, p, mark: m, n: ls.length, tp: ls.filter((l) => l.kind === 'TP'), sl: ls.filter((l) => l.kind === 'SL'), en: ls.filter((l) => l.kind === 'ENTRY'), lq: ls.filter((l) => l.kind === 'LIQ'), usd: U.sum(ls, (l) => l.usd), accounts: new Set(ls.map((l) => l.sid)).size, near2: pressure(ls, m, 2) };
           const near = (list) => (list.length ? list.reduce((a, l) => (Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a)) : null);
-          agg.nearSl = near(agg.sl); agg.nearTp = near(agg.tp); return agg;
-        }).sort((a, b) => b.usd - a.usd);
-        // a protected position counts in both its TP and its SL, so the dollar figure is order notional, not exposure
-        U.replace(smSummary, `${L.length} orders · ${U.fmtUsd(U.sum(L, (l) => l.usd), { compact: true })} order notional (TP + SL + entry) · ${new Set(L.map((l) => l.sid)).size} accounts · ${sm.scanned} of ${sm.total} accounts checked${sm.skipped ? ` (${sm.skipped} skipped: empty and never traded in the last snapshot)` : ''} · at ${U.fmtTime(sm.at)}`);
-        if (!markets.length) { U.replace(smSel); U.replace(smLadder, UI.empty('No stop orders on the exchange right now.')); U.replace(smTable); return; }
+          agg.nearSl = near(agg.sl); agg.nearLq = near(agg.lq); return agg;
+        });
+        // in the Markets table's order: by category, as Hyperliquid groups them, then the largest 24h volume first
+        const catIx = (p) => AN.MARKET_CATS.findIndex(([k]) => k === AN.marketCategory(p));
+        markets.sort((a, b) => catIx(a.p) - catIx(b.p) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
+        // a protected position counts in both its TP and its SL, and its liquidation too, so the dollar figure is order
+        // notional, not exposure
+        const nOrders = L.filter((l) => l.kind !== 'LIQ').length, nLiq = L.length - nOrders;
+        U.replace(smSummary, `${nOrders} orders · ${nLiq} liquidation prices · ${new Set(L.map((l) => l.sid)).size} accounts · ${sm.scanned} of ${sm.total} accounts checked${sm.skipped ? ` (${sm.skipped} skipped: empty and never traded in the last snapshot)` : ''} · at ${U.fmtTime(sm.at)}`);
+        if (!markets.length) { U.replace(smSel); U.replace(smBands); U.replace(smLadder, UI.empty('No stop orders or open positions on the exchange right now.')); U.replace(smTable); return; }
         const cur = markets.find((x) => x.pid === smMarket) || markets[0]; smMarket = cur.pid;
         U.replace(smSel, UI.seg(markets.map((x) => ({ v: x.pid, label: x.p.displayTicker })), smMarket, (v) => { smMarket = v; renderStopMap(); }, 'sm'));
         const ls = byMarket[cur.pid]; const m = cur.mark; const tick = cur.p.tickSize;
-        const dense = new Set(ls.map((l) => l.price)).size > 40;
+        // what would sell into a fall and buy into a rise, near the mark
+        const usdC = (x) => U.fmtUsd(x, { compact: true });
+        U.replace(smBands, BANDS.map((b) => { const pr = pressure(ls, m, b); return h('div.band', { title: `Within ${b}% of the mark: ${U.fmtUsd(pr.sells)} of stops and liquidations below it would sell as the price falls to them (long stop-losses and liquidations, sell stops), ${U.fmtUsd(pr.buys)} above it would buy as it rises (short stop-losses and liquidations, buy stops)` },
+          h('span.k', 'within ' + b + '%'), h('span.neg', '▼ ' + usdC(pr.sells) + ' sells'), h('span.pos', '▲ ' + usdC(pr.buys) + ' buys')); }));
+        // the ladder keeps the levels within WIN% of the mark (a liquidation far away is no near pressure) and counts the
+        // rest; over 40 prices in that window, levels are binned
+        const WIN = 20;
+        const dense = new Set(ls.filter((l) => m > 0 && Math.abs(l.price - m) <= m * WIN / 100).map((l) => l.price)).size > 40;
         const bin = dense && m > 0 ? m * 0.0025 : 0;
         const level = (pr) => (bin ? Math.round(pr / bin) * bin : pr);
         const rows = {};
-        for (const l of ls) { const k = level(l.price) + '|' + l.kind; const r = rows[k] || (rows[k] = { price: level(l.price), kind: l.kind, usd: 0, qty: 0, items: [] }); r.usd += l.usd; r.qty += l.qty; r.items.push(l); }
-        const list = Object.values(rows).sort((a, b) => b.price - a.price);
+        for (const l of ls) { const k = level(l.price) + '|' + l.kind + '|' + l.flow; const r = rows[k] || (rows[k] = { price: level(l.price), kind: l.kind, flow: l.flow, usd: 0, qty: 0, items: [] }); r.usd += l.usd; r.qty += l.qty; r.items.push(l); }
+        const all = Object.values(rows).sort((a, b) => b.price - a.price);
+        const far = (r, up) => (m > 0 ? (up ? r.price > m * (1 + WIN / 100) : r.price < m * (1 - WIN / 100)) : false);
+        const farUp = all.filter((r) => far(r, true)), farDown = all.filter((r) => far(r, false));
+        const list = all.filter((r) => !far(r, true) && !far(r, false));
+        const farNote = (l, up) => (l.length ? h('div.xs.dim.center', { style: { padding: '6px' } }, `${l.length} more level${l.length === 1 ? '' : 's'} over ${WIN}% ${up ? 'above' : 'below'} the mark (${usdC(U.sum(l, (r) => r.usd))})`) : null);
         const maxUsd = Math.max(1, ...list.map((r) => r.usd));
+        const KINDS = { TP: ['TP', 'green'], SL: ['SL', 'red'], ENTRY: ['entry', 'blue'], LIQ: ['liq', 'amber'] };
         const rowEl = (r) => {
-          const cls = r.kind === 'TP' ? 'tp' : r.kind === 'SL' ? 'sl' : 'en';
           const dist = m > 0 ? ((r.price - m) / m) * 100 : null;
           const accts = new Set(r.items.map((i) => i.sid)).size;
           const detail = h('div.smap-detail', { style: { display: 'none' } }, r.items.map((i) => h('div.row.small',
             h('a.addr', { href: U.accountUrl(i.account, i.sid) }, U.shortAddr(i.account)),
-            h('span.dim', (i.kind === 'ENTRY' ? 'opens ' + i.posSide : 'closes ' + i.posSide) + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '')),
+            h('span.dim', i.kind === 'LIQ' ? 'liquidates ' + i.posSide : (i.kind === 'ENTRY' ? 'opens ' + i.posSide : 'closes ' + i.posSide) + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '')),
             h('span.grow'), h('span.num', U.fmtQty(i.qty, cur.p.lotSize) + ' · ' + U.fmtUsd(i.usd, { compact: true })))));
-          const el = h('div.lvl', { class: cls, onclick: () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; } },
+          const el = h('div.lvl', { class: r.flow, title: r.flow === 'sell' ? 'Sells when the price gets here' : 'Buys when the price gets here', onclick: () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; } },
             h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
             h('span', (bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
             h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),
-            h('span', UI.chip(r.kind === 'ENTRY' ? 'entry' : r.kind, r.kind === 'TP' ? 'green' : r.kind === 'SL' ? 'red' : 'blue')),
-            h('span.num', U.fmtUsd(r.usd, { compact: true })),
+            h('span', UI.chip(KINDS[r.kind][0], KINDS[r.kind][1])),
+            h('span', { class: r.flow === 'sell' ? 'neg' : 'pos' }, r.flow === 'sell' ? '▼ sell' : '▲ buy'),
+            h('span.num', usdC(r.usd)),
             h('span.dim', accts + (accts === 1 ? ' acct' : ' accts')));
           return [el, detail];
         };
         U.replace(smLadder,
-          h('div.hdr', h('span', 'Price'), h('span', 'vs mark'), h('span', 'Type'), h('span', 'Notional'), h('span', 'Accounts')),
+          h('div.hdr', h('span', 'Price'), h('span', 'vs mark'), h('span', 'Type'), h('span', 'Then'), h('span', 'Notional'), h('span', 'Accounts')),
+          farNote(farUp, true),
           list.filter((r) => r.price > m).map(rowEl),
           h('div.mid', h('span.bold', 'mark ' + U.fmtPrice(m, tick)), h('span.dim.xs', '  ' + cur.p.displayTicker)),
           list.filter((r) => r.price <= m).map(rowEl),
+          farNote(farDown, false),
           dense ? h('div.xs.dim.center', { style: { padding: '6px' } }, 'levels binned to 0.25% of mark') : null);
         const nearCell = (l, r) => (l ? h('span', U.fmtPrice(l.price, r.p.tickSize), h('span.xs.dim', ' ' + U.fmtPct(((l.price - r.mark) / r.mark) * 100, { sign: true, dp: 1 }))) : h('span.dim', '—'));
         U.replace(smTable, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker) },
-            { key: 'n', label: 'TP / SL / entry', num: true, render: (r) => h('span', h('span.pos', String(r.tp.length)), h('span.dim', ' / '), h('span.neg', String(r.sl.length)), h('span.dim', ' / '), String(r.en.length)) },
-            { key: 'tpu', label: 'TP notional', num: true, render: (r) => U.fmtUsd(U.sum(r.tp, (l) => l.usd), { compact: true }) },
-            { key: 'slu', label: 'SL notional', num: true, render: (r) => U.fmtUsd(U.sum(r.sl, (l) => l.usd), { compact: true }) },
+            { key: 'n', label: 'TP / SL / entry / liq', num: true, title: 'Take-profits, stop-losses, entry stops and liquidation prices', render: (r) => h('span', h('span.pos', String(r.tp.length)), h('span.dim', ' / '), h('span.neg', String(r.sl.length)), h('span.dim', ' / '), String(r.en.length), h('span.dim', ' / '), h('span', { style: { color: 'var(--amber)' } }, String(r.lq.length))) },
+            { key: 'sells', label: '▼ Sells ≤2%', num: true, title: 'Stops and liquidations within 2% below the mark that would sell into a fall', render: (r) => h('span.neg', usdC(r.near2.sells)) },
+            { key: 'buys', label: '▲ Buys ≤2%', num: true, title: 'Stops and liquidations within 2% above the mark that would buy into a rise', render: (r) => h('span.pos', usdC(r.near2.buys)) },
             { key: 'nsl', label: 'Nearest SL', num: true, title: 'Stop-loss closest to the mark price', render: (r) => nearCell(r.nearSl, r) },
-            { key: 'ntp', label: 'Nearest TP', num: true, title: 'Take-profit closest to the mark price', render: (r) => nearCell(r.nearTp, r) },
+            { key: 'nlq', label: 'Nearest liq.', num: true, title: 'Liquidation price closest to the mark price', render: (r) => nearCell(r.nearLq, r) },
             { key: 'a', label: 'Accounts', num: true, render: (r) => String(r.accounts) },
           ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''),
         }));

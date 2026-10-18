@@ -306,16 +306,16 @@ test('price drift: exactly one and five minutes after the fill, a fill far off t
   assert.equal(fresh.n, 0);
 });
 
-test('market categories: indices, currencies and commodities by name; any other mPerp is an RWA, any other cross market crypto', () => {
-  const cat = (base, mode = 'CROSS') => AN.marketCategory({ baseTokenName: base, marginMode: mode });
-  assert.deepEqual(AN.MARKET_CATS.map(([k]) => k), ['rwa', 'crypto', 'indices', 'fx', 'commodities'], 'the Dashboard\'s order');
+test('market categories as Hyperliquid files them: a cross market is crypto; an mPerp an index, commodity, currency or pre-IPO by name, else a stock', () => {
+  const cat = (base, mode = 'ISOLATED') => AN.marketCategory({ baseTokenName: base, marginMode: mode });
+  assert.deepEqual(AN.MARKET_CATS.map(([k]) => k), ['crypto', 'stocks', 'indices', 'commodities', 'fx', 'preipo'], 'Hyperliquid\'s order: Crypto, then its Tradfi tabs');
   // Meridian's markets in October 2026
-  for (const b of ['BTC', 'ETH', 'SOL', 'HYPE', 'NEAR', 'ZEC', 'VVV', 'ENA', 'LIT']) assert.equal(cat(b), 'crypto', b);
-  assert.equal(cat('SPY', 'ISOLATED'), 'indices'); assert.equal(cat('QQQ', 'ISOLATED'), 'indices');
-  assert.equal(cat('XAU', 'ISOLATED'), 'commodities'); assert.equal(cat('xag', 'ISOLATED'), 'commodities', 'any letter case');
-  assert.equal(cat('EUR', 'ISOLATED'), 'fx');
-  assert.equal(cat('TSLA', 'ISOLATED'), 'rwa', 'a stock: an mPerp not named above');
-  assert.equal(cat('NEWCOIN'), 'crypto'); assert.equal(AN.marketCategory({}), 'crypto');
+  for (const b of ['BTC', 'ETH', 'SOL', 'HYPE', 'NEAR', 'ZEC', 'VVV', 'ENA', 'LIT']) assert.equal(cat(b, 'CROSS'), 'crypto', b);
+  assert.equal(cat('SPY'), 'indices', 'the S&P 500 (Hyperliquid: US500, SP500)'); assert.equal(cat('QQQ'), 'indices', 'the Nasdaq-100 (USTECH, XYZ100)');
+  assert.equal(cat('XAU'), 'commodities', 'gold'); assert.equal(cat('xag'), 'commodities', 'silver, in any letter case');
+  assert.equal(cat('EUR'), 'fx'); assert.equal(cat('OPENAI'), 'preipo');
+  assert.equal(cat('TSLA'), 'stocks', 'an mPerp not named above'); assert.equal(cat('SMH'), 'stocks', 'a sector fund, as on Hyperliquid');
+  assert.equal(cat('GAS', 'CROSS'), 'crypto', 'a cross market is crypto whatever its name'); assert.equal(AN.marketCategory({}), 'crypto');
 });
 
 test('the market maker is known by its wallet, in any letter case, so the home page\'s top wallets leave it out', () => {

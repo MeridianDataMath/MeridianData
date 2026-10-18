@@ -7,8 +7,8 @@
       { name: 'home', path: '/', icon: 'home', label: 'Home' },
       { name: 'dashboard', path: '/dashboard', icon: 'grid', label: 'Dashboard' },
       { name: 'account', path: '/account', icon: 'account', label: 'Account' },
-      { name: 'favorites', path: '/favorites', icon: 'star', label: 'Favorites' },
-      { name: 'leaderboard', path: '/leaderboard', icon: 'trophy', label: 'Leaderboard' },
+      { name: 'favorites', path: '/favorites', icon: 'starFill', label: 'Favorites' },
+      { name: 'leaderboard', path: '/leaderboard', icon: 'trophyFill', label: 'Leaderboard' },
     ] },
     // tools that span perps and Predict sit between the two, ruled off above and below
     { title: null, rule: true, items: [

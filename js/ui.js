@@ -42,6 +42,11 @@
     }
   };
 
+  /** A rank in a ranked list: 1st, 2nd and 3rd as gold, silver and bronze medals (podium false: the number alone). */
+  UI.rank = (i, podium = true) => (podium && i >= 1 && i <= 3
+    ? h('span.rank.medal', { class: 'r' + i, title: ['1st', '2nd', '3rd'][i - 1] + ' place' }, String(i))
+    : h('span.rank', String(i)));
+
   /** numbered pager */
   UI.pager = function ({ page, pageSize, total, onPage }) {
     const pages = Math.max(1, Math.ceil(total / pageSize));

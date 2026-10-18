@@ -51,7 +51,7 @@
       return r && r.carried ? h('span.chip.amber', { title: `This account could not be rebuilt for the latest snapshot: its figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)})` }, 'older') : null;
     },
     async mount(root, route, ctx) {
-      MD.setTopbar(h('span.title', 'Leaderboard'));
+      MD.setTopbar(h('span.title.with-ic', h('span.ic-gold', U.icon('trophyFill')), 'Leaderboard'));
       await P.loadRemote();
       const state = { interval: route.params.interval || '30d', sort: { key: 'pnl', desc: true }, page: 1, q: '', favOnly: false, style: '', min: {}, max: {} };
       const tableWrap = h('div');
@@ -119,7 +119,7 @@
         const tbl = UI.table({
           sort: state.sort, onSort,
           cols: [
-            { key: 'rank', label: '#', render: (r) => { const i = rankOf.get(r.sid); return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
+            { key: 'rank', label: '#', render: (r) => UI.rank(rankOf.get(r.sid)) },
             { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, AN.known(r) ? h('span.chip.amber', { title: AN.known(r).title }, AN.known(r).label) : r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
             // PnL, volume and ROI as Meridian's Trade Stats (row basis 'app'); the site's net figures in a cell's tooltip

@@ -22,6 +22,14 @@
   --red-dim: rgba(239, 69, 74, 0.14);
   --amber: #f5b64a;
   --amber-dim: rgba(245, 182, 74, 0.14);
+  /* the podium, and the icons' colours (each section's own: the sidebar, the home page) */
+  --gold: #f7c948;
+  --silver: #c4ccd6;
+  --bronze: #d9925a;
+  --c-purple: #a98bfa;
+  --c-orange: #ff9f45;
+  --c-pink: #f472b6;
+  --c-cyan: #4cc9f0;
   --font: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --rail: 224px;
@@ -88,6 +96,19 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
 .rail a.nav:hover { background: var(--bg-4); color: var(--text-1); text-decoration: none; }
 .rail a.nav.active { background: var(--accent-dim); color: var(--accent); }
 .rail a.nav svg { width: 20px; height: 20px; flex: none; }
+/* each section's icon in its own colour; Favorites and the Leaderboard golden and filled (app.js SECTIONS) */
+.rail a.nav[data-path="/"] svg { color: var(--accent); }
+.rail a.nav[data-path="/dashboard"] svg { color: var(--accent-2); }
+.rail a.nav[data-path="/account"] svg { color: var(--c-cyan); }
+.rail a.nav[data-path="/favorites"] svg, .rail a.nav[data-path="/leaderboard"] svg { color: var(--gold); }
+.rail a.nav[data-path="/copytrade"] svg { color: var(--c-purple); }
+.rail a.nav[data-path="/tax"] svg { color: var(--green); }
+.rail a.nav[data-path="/predict"] svg { color: var(--c-orange); }
+.rail a.nav[data-path="/predict/bettors"] svg { color: var(--c-pink); }
+.rail a.nav[data-path="/predict/questions"] svg { color: var(--c-cyan); }
+.rail a.nav[data-path="/predict/makers"] svg { color: var(--c-purple); }
+.rail a.nav[data-path="/predict/vig"] svg { color: var(--amber); }
+.rail a.nav[data-path="/status"] svg { color: var(--green); }
 .rail a.nav .lbl { font-size: 13.5px; }
 .rail a.nav .ext-ico { margin-left: auto; opacity: .45; }
 .rail a.nav .ext-ico svg { width: 13px; height: 13px; }
@@ -517,6 +538,25 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .progress > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .rank { color: var(--text-3); font-family: var(--mono); font-size: 12px; width: 28px; display: inline-block; }
 .rank.top { color: var(--amber); font-weight: 700; }
+/* 1st, 2nd and 3rd as gold, silver and bronze medals (UI.rank) */
+.rank.medal { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: #241a06; font-family: var(--font); font-weight: 700; font-size: 11px; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .2), 0 0 0 1px rgba(0, 0, 0, .25); }
+.rank.r1 { background: radial-gradient(circle at 35% 30%, #fff4bd, var(--gold) 55%, #c9971c); }
+.rank.r2 { background: radial-gradient(circle at 35% 30%, #ffffff, var(--silver) 55%, #8d96a3); }
+.rank.r3 { background: radial-gradient(circle at 35% 30%, #ffdcbd, var(--bronze) 55%, #9c5a2c); }
+/* an icon in its colour: a button's, a card title's (.card-ic), a page title's (.with-ic) */
+.ic-gold > svg { color: var(--gold); }
+.ic-blue > svg { color: var(--accent-2); }
+.ic-teal > svg { color: var(--accent); }
+.ic-green > svg { color: var(--green); }
+.ic-cyan > svg { color: var(--c-cyan); }
+.ic-purple > svg { color: var(--c-purple); }
+.ic-orange > svg { color: var(--c-orange); }
+.ic-pink > svg { color: var(--c-pink); }
+.card-head .card-ic { display: inline-grid; place-items: center; flex: none; }
+.card-head .card-ic svg { width: 17px; height: 17px; }
+.card-head .card-ic + h2 { margin-left: -4px; }
+.title.with-ic { display: inline-flex; align-items: center; gap: 8px; }
+.title.with-ic svg { width: 18px; height: 18px; }
 .star-btn { background: transparent; border: 0; cursor: pointer; color: var(--text-3); padding: 2px; display: inline-grid; place-items: center; vertical-align: middle; }
 .star-btn:hover { color: var(--amber); }
 .star-btn.on { color: var(--amber); }
@@ -530,8 +570,8 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .smap-sel { padding: 10px 12px; border-bottom: 1px solid var(--border-2); }
 .smap-sel:empty { display: none; }
 .smap { font-family: var(--mono); font-size: 12px; max-height: 520px; overflow: auto; }
-.smap .hdr, .smap .lvl { display: grid; grid-template-columns: 1.3fr 0.9fr 0.8fr 1fr 0.9fr; gap: 8px; padding: 5px 12px; align-items: center; min-width: 480px; }
-.smap .mid, .smap-detail { min-width: 480px; }
+.smap .hdr, .smap .lvl { display: grid; grid-template-columns: 1.2fr 0.8fr 0.7fr 0.8fr 0.9fr 0.8fr; gap: 8px; padding: 5px 12px; align-items: center; min-width: 560px; }
+.smap .mid, .smap-detail { min-width: 560px; }
 .smap .hdr { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-family: var(--font); border-bottom: 1px solid var(--border-2); }
 .smap .hdr > span, .smap .lvl > span { text-align: right; white-space: nowrap; }
 .smap .hdr > span:first-child, .smap .lvl > span:first-of-type { text-align: left; }   /* the bar (i) comes first in a row */
@@ -539,9 +579,14 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .smap .lvl:hover { background: var(--bg-3); }
 .smap .lvl > span { position: relative; z-index: 1; }
 .smap .lvl i { position: absolute; top: 2px; bottom: 2px; left: 0; opacity: .14; border-radius: 0 3px 3px 0; }
-.smap .lvl.tp i { background: var(--green); }
-.smap .lvl.sl i { background: var(--red); }
-.smap .lvl.en i { background: var(--accent-2); }
+/* a level's bar in the colour of what it does when the price gets there: sell (red) or buy (green) */
+.smap .lvl.sell i { background: var(--red); }
+.smap .lvl.buy i { background: var(--green); }
+/* sells below and buys above the mark, within 1, 2 and 5% */
+.smap-bands { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-2); }
+.smap-bands:empty { display: none; }
+.smap-bands .band { display: flex; flex-direction: column; gap: 2px; background: var(--bg-3); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 0; }
+.smap-bands .band .k { font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
 .smap .lvl .chip { font-size: 10px; padding: 1px 5px; }
 .smap .mid { text-align: center; padding: 6px; border-top: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2); font-size: 13px; background: var(--bg-3); }
 .smap-detail { padding: 4px 12px 8px 24px; background: var(--bg-3); border-bottom: 1px solid var(--border-2); font-family: var(--font); display: flex; flex-direction: column; gap: 3px; }

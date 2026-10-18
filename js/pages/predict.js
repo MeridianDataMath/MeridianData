@@ -367,7 +367,7 @@
         const slice = rows.slice((st.page - 1) * PAGE, st.page * PAGE);
         const onSort = (k) => { if (st.sort.key === k) st.sort.desc = !st.sort.desc; else st.sort = { key: k, desc: k !== 'address' }; st.page = 1; render(); };
         U.replace(wrap, UI.table({ sort: st.sort, onSort, cols: [
-          { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
+          { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? UI.rank(i) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
           { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
           // open: Meridian's Open Positions where the snapshot counts them (one per pick configuration and side with tokens
           // still held), else (an older snapshot) the undecided predictions

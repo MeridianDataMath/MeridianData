@@ -515,18 +515,22 @@
   /** A market maker (its tooltip), else null */
   AN.marketMaker = (r) => { const k = AN.known(r); return k && k.kind === 'maker' ? k.title : null; };
 
-  // ---------- Market categories (the Dashboard's Markets, in this order) ----------
-  AN.MARKET_CATS = [['rwa', 'RWA'], ['crypto', 'Crypto'], ['indices', 'Indices'], ['fx', 'FX'], ['commodities', 'Commodities']];
+  // ---------- Market categories, as Hyperliquid's market selector groups them: Crypto, then its Tradfi tabs in their
+  //            order (Stocks, Indices, Commodities, FX, Pre-IPO); its info endpoint `perpCategories` files each market ----------
+  AN.MARKET_CATS = [['crypto', 'Crypto'], ['stocks', 'Stocks'], ['indices', 'Indices'], ['commodities', 'Commodities'], ['fx', 'FX'], ['preipo', 'Pre-IPO']];
+  // the base assets Hyperliquid files under each Tradfi tab, by its own names and the usual tickers for them (S&P 500:
+  // SPY, US500, SP500; Nasdaq-100: QQQ, USTECH, XYZ100; gold: XAU, GOLD …); a sector or theme fund (SMH, GDX) is a stock there
   const CAT_BY_BASE = {};
   for (const [cat, bases] of Object.entries({
-    indices: 'SPY QQQ DIA IWM VOO VTI SPX NDX DJI RUT VIX US500 US100 US30 US2000 NAS100 SP500 DAX FTSE N225 HSI',
-    fx: 'EUR GBP JPY CHF AUD CAD NZD CNH CNY HKD SGD KRW INR MXN BRL ZAR TRY SEK NOK DKK PLN',
-    commodities: 'XAU XAG XPT XPD WTI BRENT OIL NATGAS COPPER',
+    indices: 'SPY QQQ DIA IWM VOO VTI SPX NDX DJI RUT VIX US500 SP500 USA500 USTECH US100 NAS100 XYZ100 US30 US2000 SMALL2000 JP225 N225 KR200 DAX FTSE HSI',
+    commodities: 'XAU XAG XPT XPD GOLD SILVER PLATINUM PALLADIUM COPPER ALUMINIUM OIL USOIL WTI BRENT BRENTOIL CL GAS NATGAS HO CORN WHEAT SOY',
+    fx: 'EUR GBP JPY KRW CHF AUD CAD NZD CNH MXN DXY',
+    preipo: 'OPENAI OAI ANTHROPIC ANTH SPACEX OURA',
   })) for (const b of bases.split(' ')) CAT_BY_BASE[b] = cat;
-  /** A market's category (a key of AN.MARKET_CATS), by its base asset: index funds and indices, currencies and commodities
-   *  by name; any other isolated (mPerp) market is an RWA (a tokenized stock, trading its exchange's hours) and any other
-   *  cross market crypto. */
-  AN.marketCategory = (p) => CAT_BY_BASE[String((p && p.baseTokenName) || '').toUpperCase()] || (p && p.marginMode === 'ISOLATED' ? 'rwa' : 'crypto');
+  /** A market's category (a key of AN.MARKET_CATS), as Hyperliquid files the same asset. A cross market is crypto; an
+   *  isolated (mPerp) one, which follows its exchange's hours, is an index, a commodity, a currency or a pre-IPO company by
+   *  its base asset, else a stock. */
+  AN.marketCategory = (p) => (p && p.marginMode === 'ISOLATED' ? CAT_BY_BASE[String(p.baseTokenName || '').toUpperCase()] || 'stocks' : 'crypto');
 
   /** What a leaderboard snapshot covers (null without one): the accounts listed when it was built, its rows, the rows
    *  carried over from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs)

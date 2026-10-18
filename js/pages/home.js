@@ -39,8 +39,8 @@
         const have = new Set(favs.map((f) => String(f.address || '').toLowerCase()));
         const recent = MD.recent.list().filter((v) => !have.has(v.toLowerCase())).slice(0, 3);
         U.replace(shortcuts,
-          favs.map((f) => h('a.chipbtn', { href: U.accountUrl(f.address, f.subaccountId), title: 'Favorite · ' + f.address + (f.name && f.name !== 'primary' ? ' · ' + f.name : '') }, U.icon('starFill'), ' ' + U.shortAddr(f.address))),
-          recent.map((v) => h('button.chipbtn', { type: 'button', title: 'Recent search · ' + v, onclick: () => search(v) }, U.icon('search'), ' ' + U.shortAddr(v))),
+          favs.map((f) => h('a.chipbtn.ic-gold', { href: U.accountUrl(f.address, f.subaccountId), title: 'Favorite · ' + f.address + (f.name && f.name !== 'primary' ? ' · ' + f.name : '') }, U.icon('starFill'), ' ' + U.shortAddr(f.address))),
+          recent.map((v) => h('button.chipbtn.ic-blue', { type: 'button', title: 'Recent search · ' + v, onclick: () => search(v) }, U.icon('search'), ' ' + U.shortAddr(v))),
           recent.length ? h('button.chipbtn.icon', { type: 'button', title: 'Forget the recent searches', 'aria-label': 'Forget the recent searches', onclick: () => { MD.recent.clear(); renderShortcuts(); } }, U.icon('x')) : null);
       };
       renderShortcuts();
@@ -48,15 +48,15 @@
 
       // the sections, each with one live figure beside its name (filled as its source answers)
       const figs = {};
-      const go = (key, href, icon, label) => { figs[key] = h('span.n'); return h('a.chipbtn', { href }, U.icon(icon), ' ' + label, figs[key]); };
+      const go = (key, href, icon, label, color) => { figs[key] = h('span.n'); return h('a.chipbtn', { href, class: 'ic-' + color }, U.icon(icon), ' ' + label, figs[key]); };
       const setFig = (key, text) => { if (figs[key]) figs[key].textContent = text ? ' · ' + text : ''; };
       const hero = h('div.hero',
         h('h1', 'Explore ', h('span', 'Meridian'), ' account performance'),
         h('div.sub', 'Public perps and Predict analytics, copy trading and tax records for every account on Meridian · Robinhood Chain'),
         form, err, shortcuts,
         h('div.quick',
-          go('dash', '#/dashboard', 'grid', 'Markets dashboard'), go('lb', '#/leaderboard', 'trophy', 'Leaderboard'), go('fav', '#/favorites', 'star', 'Favorites'),
-          go('pred', '#/predict', 'target', 'Predict'), go('copy', '#/copytrade', 'users', 'Copy trading'), go('tax', '#/tax', 'receipt', 'Tax center')));
+          go('dash', '#/dashboard', 'grid', 'Markets dashboard', 'blue'), go('lb', '#/leaderboard', 'trophyFill', 'Leaderboard', 'gold'), go('fav', '#/favorites', 'starFill', 'Favorites', 'gold'),
+          go('pred', '#/predict', 'target', 'Predict', 'orange'), go('copy', '#/copytrade', 'users', 'Copy trading', 'purple'), go('tax', '#/tax', 'receipt', 'Tax center', 'green')));
       const favCount = () => { const n = U.favorites.list().length; setFig('fav', n ? n + ' saved' : ''); };
       favCount(); ctx.onCleanup(U.on('favorites', favCount));
       if (MD.tax && MD.tax.CCY) setFig('tax', MD.tax.CCY.length + ' currencies');
@@ -72,15 +72,15 @@
         UI.stat('Live questions', ps ? U.fmtNum(ps.questionsLive, 0) : '—', ps ? 'with money on them' : null));
       renderTiles();
 
-      const card = (title, note, href, linkText, body) => h('div.card.tight', h('div.card-head', h('h2', title), note, h('span.grow'), h('a.small', { href }, linkText)), body);
+      const card = (icon, color, title, note, href, linkText, body) => h('div.card.tight', h('div.card-head', h('span.card-ic', { class: 'ic-' + color }, U.icon(icon)), h('h2', title), note, h('span.grow'), h('a.small', { href }, linkText)), body);
       const topNote = h('span.dim.small'), topBody = h('div', UI.loading());
       const posNote = h('span.dim.small', 'live'), posBody = h('div', UI.loading());
       const winsNote = h('span.dim.small'), winsBody = h('div', UI.loading());
       const betsNote = h('span.dim.small'), betsBody = h('div', UI.loading());
       const foot = h('div.footer-note');
       root.appendChild(h('div.page', hero, h('div.home-body', h('div.stack', tiles,
-        h('div.grid.cols-2', card('Top wallets', topNote, '#/leaderboard', 'Leaderboard', topBody), card('Biggest open positions', posNote, '#/dashboard', 'Dashboard', posBody)),
-        h('div.grid.cols-2', card('Big Predict wins', winsNote, '#/predict', 'Predict', winsBody), card('Latest big bets', betsNote, '#/predict', 'Predict', betsBody)),
+        h('div.grid.cols-2', card('trophyFill', 'gold', 'Top wallets', topNote, '#/leaderboard', 'Leaderboard', topBody), card('activity', 'cyan', 'Biggest open positions', posNote, '#/dashboard', 'Dashboard', posBody)),
+        h('div.grid.cols-2', card('target', 'green', 'Big Predict wins', winsNote, '#/predict', 'Predict', winsBody), card('ticket', 'pink', 'Latest big bets', betsNote, '#/predict', 'Predict', betsBody)),
         foot))));
       setTimeout(() => input.focus(), 50);
 
@@ -113,7 +113,7 @@
         // the ranking says, as the Leaderboard does, when accounts are missing from it or carried over, and when it is stale
         U.replace(topNote, h('span', { title: 'All-time PnL as Meridian\'s app shows it (its Trade Stats): realized PnL, settled funding and trading fees, plus unrealized PnL; ROI on the deposits. Hover a wallet for the site\'s net figure' }, 'by all-time PnL', LB ? LB.coverageNote(lb) : null, UI.staleNote(lb.builtAt, 'the publishing job may be down')));
         U.replace(topBody, UI.table({ cols: [
-          { key: 'rk', label: '#', render: (r) => { const i = lb.top.indexOf(r); return h('span.rank', { class: i < 3 ? 'top' : '' }, String(i + 1)); } },
+          { key: 'rk', label: '#', render: (r) => UI.rank(lb.top.indexOf(r) + 1) },
           // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are
           { key: 'w', label: 'Wallet', render: (r) => h('a.addr', { href: U.accountUrl(r.account, r.sid), title: [r.carried ? `These figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : null, AN.sitePnlTitle(r, 'all'), r.style && r.style !== '—' ? 'Style: ' + r.style : null].filter(Boolean).join('\n') }, U.shortAddr(r.account)) },
           { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(r.stats.all.pnl) },
