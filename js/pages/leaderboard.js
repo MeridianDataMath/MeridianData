@@ -31,18 +31,9 @@
       P._remoteAt = Date.now();
       return P._remote;
     },
-    /** What a snapshot covers (null without one): the accounts listed when it was built, its rows, the rows carried over
-     *  from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs) and when
-     *  the oldest of those was built, and the accounts with no row at all. A snapshot from before rows were carried does
-     *  not count them: every account short of its list is missing. */
-    coverage(data) {
-      if (!data || !Array.isArray(data.rows)) return null;
-      const carried = data.rows.filter((r) => r && r.carried);
-      const accounts = data.accounts > 0 ? data.accounts : null;
-      const missing = data.missing != null ? data.missing : accounts ? Math.max(0, accounts - data.rows.length) : 0;
-      const oldest = carried.reduce((m, r) => Math.min(m, r.builtAt || data.builtAt), Infinity);
-      return { accounts, rows: data.rows.length, carried: carried.length, oldest: carried.length ? oldest : null, missing, partial: !!data.partial };
-    },
+    /** What a snapshot covers (AN.snapshotCoverage), or the coverage a summary carries without the rows (the home page's
+     *  data/home.json: cov) */
+    coverage(data) { return data && data.cov ? data.cov : AN.snapshotCoverage(data); },
     /** After a snapshot's age, on every page that ranks it (Leaderboard, Copy trading, Home): ' · N of M accounts
      *  missing', ' · N from an earlier build', or ' · partial build' for a browser build that did not count its accounts;
      *  null when the snapshot is whole. */
@@ -129,7 +120,7 @@
           sort: state.sort, onSort,
           cols: [
             { key: 'rank', label: '#', render: (r) => { const i = rankOf.get(r.sid); return h('span.rank', { class: i <= 3 ? 'top' : '' }, String(i)); } },
-            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
+            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), r.name && r.name !== 'primary' ? h('span.chip', r.name) : null, r.inactive ? h('span.xs.dim', 'inactive') : AN.marketMaker(r) ? h('span.chip.amber', { title: AN.marketMaker(r) }, 'market maker') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => U.fmtUsd(r.equity) },
             // PnL, volume and ROI as Meridian's Trade Stats (row basis 'app'); the site's net figures in a cell's tooltip
             { key: 'pnl', label: 'PnL', num: true, sortVal: 1, title: 'As Meridian\'s Trade Stats: the change in its running total of realized PnL, settled funding and trading fees, plus unrealized PnL, over its window (24h from the start of the hour a day ago, 7d and 30d from the end of the UTC day 7 or 30 days back); mPerp position fees are not in it. Hover a cell for the site\'s net figure', render: (r) => (s(r) ? h('span', { title: AN.sitePnlTitle(r, iv) }, U.pnlEl(s(r).pnl)) : '—') },

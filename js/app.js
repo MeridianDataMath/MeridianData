@@ -31,7 +31,16 @@
   MD.setTopbar = (node) => { const t = U.$('#topbar-title'); if (t) U.replace(t, node); };
 
   /** Resolve a search string to an account page. Returns {ok} or {error}. */
-  MD.search = async (raw) => {
+  /** The last few searches that found something, newest first, kept in this browser only: the home page offers them as
+   *  shortcuts under its search box. */
+  const RECENT_KEY = 'md.recentSearches', RECENT_MAX = 5;
+  MD.recent = {
+    list() { const l = U.storage.get(RECENT_KEY, []); return Array.isArray(l) ? l.filter((v) => typeof v === 'string' && v) : []; },
+    add(v) { v = String(v || '').trim(); if (U.isAddress(v)) v = v.toLowerCase(); if (!v) return; U.storage.set(RECENT_KEY, [v].concat(this.list().filter((x) => x.toLowerCase() !== v.toLowerCase())).slice(0, RECENT_MAX)); },
+    clear() { U.storage.set(RECENT_KEY, []); },
+  };
+  MD.search = async (raw) => { const r = await find(raw); if (r && r.ok) MD.recent.add(raw); return r; };
+  async function find(raw) {
     const v = String(raw || '').trim();
     if (!v) return { error: 'Enter a wallet address or subaccount ID' };
     if (U.isAddress(v)) {
@@ -56,7 +65,7 @@
       catch (e) { return { error: e.status === 404 ? 'Subaccount not found' : 'Lookup failed: ' + e.message }; }
     }
     return { error: 'Enter a 0x wallet address (40 hex chars) or a subaccount UUID' };
-  };
+  }
 
   /** "How is this number calculated?" — one modal, linked from the leaderboard, copy trading, the Performance tab and the tax center. */
   MD.DEFINITIONS = [

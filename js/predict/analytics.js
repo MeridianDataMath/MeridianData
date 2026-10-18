@@ -477,6 +477,7 @@
     if (Array.isArray(a.bettors)) a.bettors = a.bettors.filter((r) => !out(r.address));
     if (Array.isArray(a.makers)) a.makers = a.makers.filter((r) => !out(r.address));
     if (Array.isArray(a.tape)) a.tape = a.tape.filter((t) => !out(t.predictor) && !out(t.counterparty));
+    if (Array.isArray(a.bigBets)) a.bigBets = a.bigBets.filter((t) => !out(t.predictor) && !out(t.counterparty));
     if (Array.isArray(a.bigWins)) a.bigWins = a.bigWins.filter((w) => !out(w.p) && !out(w.c));
     return snap;
   };

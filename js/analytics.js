@@ -508,6 +508,19 @@
   };
   AN.marketMaker = (r) => (r && AN.MAKERS[String(r.account || '').toLowerCase()]) || null;
 
+  /** What a leaderboard snapshot covers (null without one): the accounts listed when it was built, its rows, the rows
+   *  carried over from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs)
+   *  and when the oldest of those was built, and the accounts with no row at all. A snapshot from before rows were
+   *  carried does not count them: every account short of its list is missing. */
+  AN.snapshotCoverage = (data) => {
+    if (!data || !Array.isArray(data.rows)) return null;
+    const carried = data.rows.filter((r) => r && r.carried);
+    const accounts = data.accounts > 0 ? data.accounts : null;
+    const missing = data.missing != null ? data.missing : accounts ? Math.max(0, accounts - data.rows.length) : 0;
+    const oldest = carried.reduce((m, r) => Math.min(m, r.builtAt || data.builtAt), Infinity);
+    return { accounts, rows: data.rows.length, carried: carried.length, oldest: carried.length ? oldest : null, missing, partial: !!data.partial };
+  };
+
   // ---------- Copy trading: what a follower would actually keep ----------
   /**
    * A taker order of `notional` USD walked through one side of the book: average price paid vs the mid, in bps.

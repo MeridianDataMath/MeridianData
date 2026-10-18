@@ -124,6 +124,13 @@ jobs:
         run: node scripts/build-fx.mjs --out data/fx
         continue-on-error: true
 
+      # The home page's summary (data/home.json, a few KB: js/home-summary.js) from the snapshots above, so the home page
+      # does not download both of them. Without it the page builds the same summary from the snapshots, so a failure here
+      # never blocks the deploy.
+      - name: Home page summary (data/home.json)
+        run: node scripts/build-home.mjs
+        continue-on-error: true
+
       - name: Assemble the site (dist/)
         run: |
           mkdir -p dist
