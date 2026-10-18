@@ -34,8 +34,9 @@
           periodRange: curve.length >= 2 ? K.range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : null,
           stats: [['Win rate', wr], ['Max drawdown', dd], ['Volume', U.fmtUsd(ap ? ap.volume : is.volume, { compact: true })], ['Positions', U.fmtNum(ps.count, 0)]],
           statsHidden: [['Win rate', wr], ['Max drawdown', dd], ['Positions', U.fmtNum(ps.count, 0)], ['Style', style || '—']],
-          // the exchange's own account (AN.EXCHANGE) and the market makers (AN.MAKERS) are not traders, as on the share card
-          footRight: (AN.exchangeAccount({ sid }) ? 'Exchange account · ' : AN.marketMaker({ account: addr }) ? 'Market maker · ' : style ? style + ' trader · ' : '') + 'since ' + K.date(sa.createdAt),
+          // a named wallet (AN.KNOWN: Meridian's own accounts, the market maker) or the exchange's own account is not a
+          // trader, as on the share card
+          footRight: (AN.known({ account: addr }) ? AN.known({ account: addr }).label + ' · ' : AN.exchangeAccount({ sid }) ? 'Exchange account · ' : style ? style + ' trader · ' : '') + 'since ' + K.date(sa.createdAt),
         };
       },
     });

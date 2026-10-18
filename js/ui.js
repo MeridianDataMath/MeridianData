@@ -15,9 +15,17 @@
       return th;
     })));
     const tbody = h('tbody');
-    const rows = o.rows || [];
-    if (!rows.length) tbody.appendChild(h('tr.empty', h('td', { colspan: cols.length }, o.empty || 'No data')));
-    for (const r of rows) {
+    // o.groups ([{ head, rows, empty }]): each group's rows under a full-width header row (head), a group without rows
+    // saying so (empty); without groups, o.rows
+    const groups = o.groups || [{ rows: o.rows || [] }];
+    if (!o.groups && !groups[0].rows.length) tbody.appendChild(h('tr.empty', h('td', { colspan: cols.length }, o.empty || 'No data')));
+    for (const g of groups) {
+      if (g.head != null) tbody.appendChild(h('tr.group', h('td', { colspan: cols.length }, g.head)));
+      if (o.groups && !g.rows.length && g.empty) tbody.appendChild(h('tr.empty', h('td', { colspan: cols.length }, g.empty)));
+      for (const r of g.rows) tbody.appendChild(rowEl(r));
+    }
+    return h('div.tbl-wrap', h('table.tbl', thead, tbody));
+    function rowEl(r) {
       const tr = h('tr', { class: [(o.onRow ? 'clickable' : ''), o.rowClass ? o.rowClass(r) : ''].join(' ').trim() });
       for (const c of cols) {
         const td = h('td', { class: (c.num ? 'num ' : '') + (c.cls || '') });
@@ -30,9 +38,8 @@
         tr.tabIndex = 0;   // reachable with Tab, opened with Enter
         tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === tr) { e.preventDefault(); o.onRow(r); } });
       }
-      tbody.appendChild(tr);
+      return tr;
     }
-    return h('div.tbl-wrap', h('table.tbl', thead, tbody));
   };
 
   /** numbered pager */

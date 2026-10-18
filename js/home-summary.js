@@ -9,8 +9,9 @@
   HS.BOOKS = 8;         // the accounts whose open positions the Biggest open positions card reads live
   HS.WEEK_DAYS = 7;     // the Predict button's figure: what was wagered over the last 7 UTC days, today included
 
-  /** The traders among the leaderboard's rows: the fee collector (no trades), the exchange's own account and the market
-   *  makers are left out, as from every list of traders to copy, and so are the wallets the site leaves out (U.EXCLUDED:
+  /** The traders among the leaderboard's rows: Meridian's own accounts (the liquidator, the fee collector: AN.KNOWN, and
+   *  any row with no trades) and the market makers are left out, as from every list of traders to copy, and so are the
+   *  wallets the site leaves out (U.EXCLUDED:
    *  a snapshot from before they were has them, and the deploy reads the file without the Leaderboard's filter). */
   HS.traders = (rows) => rows.filter((r) => r && !r.inactive && r.stats && r.stats.all && !U.isExcluded(r.account) && !AN.noTrades(r) && !AN.exchangeAccount(r) && !AN.marketMaker(r));
   /** When a big win counts, as the Overview's Recent sorts them: a win from its settlement, a cash-out from its last sale. */

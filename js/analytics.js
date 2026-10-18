@@ -418,7 +418,9 @@
     const [balances, positionsOpen, vol] = await Promise.all([A.balances(sid, o), A.openPositions(sid, o), A.totalVolume(sid, o).catch(() => 0)]);
     const acct = AN.accountState({ balances, positions: positionsOpen, ref, prices });
     const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
-    if (AN.EXCHANGE[sid]) row.exchange = true;   // for the share cards, which have no MD.analytics
+    // for the share cards, which have no MD.analytics: one of Meridian's own accounts, and the label of a named wallet
+    if (AN.exchangeAccount({ sid, account: sa.account })) row.exchange = true;
+    const known = AN.known({ account: sa.account }); if (known) row.role = known.label;
     if (acct.balance === 0 && !positionsOpen.length && !vol) {
       row.inactive = true;
       for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, posFees: 0, funding: 0, sitePnl: 0, siteVolume: 0, siteRoi: null };
@@ -495,18 +497,36 @@
    *  its "PnL" is fees received — so lists of traders leave these out and the leaderboard labels them. */
   AN.noTrades = (r) => !(U.num(r.volumeAll) > 0) && !(r.positionsCount > 0) && !(r.openCount > 0);
 
-  /** Subaccounts the exchange credits itself: not traders, so lists of traders leave them out and the leaderboard labels
-   *  them (the fee collector is caught by AN.noTrades). Keyed by subaccount id; the text is the leaderboard's tooltip. */
+  /** Wallets the site names: Meridian's own accounts (kind 'exchange') and the market makers (kind 'maker'). None is a
+   *  trader to copy, so lists of traders leave them out; the Leaderboard and Copy trading mark each with its label (the
+   *  title is the tooltip) and its share card names it. Keyed by wallet address. */
+  AN.KNOWN = {
+    '0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7': { kind: 'exchange', label: 'Meridian liquidator account', title: 'Meridian\'s liquidator account: created with the markets at launch, days before any user account. It takes over liquidated traders\' positions (SOL, 25 Sep 2026), and the position fees charged on mPerps are credited to it. Its PnL is not trading.' },
+    '0xff68fda91b0e785b4aee674d3b428c4ab6d8eaa7': { kind: 'exchange', label: 'Meridian fee collector', title: 'Meridian\'s fee collector: the exchange\'s trading fees are paid into it. It never trades, so its PnL is fees received, not trading.' },
+    '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2': { kind: 'maker', label: 'Market maker', title: 'Quotes both sides of every market: the exchange\'s market maker, not a trader to copy.' },
+  };
+  AN.known = (r) => (r && AN.KNOWN[String(r.account || '').toLowerCase()]) || null;
+  /** The subaccounts the exchange credits itself, by id (the liquidator account's, for a row that carries no wallet). */
   AN.EXCHANGE = {
-    '01a047c4-2be2-774c-ae58-1e45d2f2a99d': 'Created with the markets at launch, days before any user account. It took over a liquidated trader\'s position (SOL, 25 Sep 2026), and the position fees charged on mPerps are credited to it. Its PnL is not trading.',
+    '01a047c4-2be2-774c-ae58-1e45d2f2a99d': AN.KNOWN['0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7'].title,
   };
-  AN.exchangeAccount = (r) => (r && AN.EXCHANGE[r.sid]) || null;
-  /** Wallets that make the markets: they quote both sides of every book, so the home page's top wallets (traders to copy)
-   *  leave them out. Keyed by wallet address. */
-  AN.MAKERS = {
-    '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2': 'Quotes both sides of every market: the exchange\'s market maker, not a trader to copy.',
-  };
-  AN.marketMaker = (r) => (r && AN.MAKERS[String(r.account || '').toLowerCase()]) || null;
+  /** One of Meridian's own accounts (its tooltip), else null */
+  AN.exchangeAccount = (r) => { const k = AN.known(r); return (k && k.kind === 'exchange' ? k.title : null) || (r && AN.EXCHANGE[r.sid]) || null; };
+  /** A market maker (its tooltip), else null */
+  AN.marketMaker = (r) => { const k = AN.known(r); return k && k.kind === 'maker' ? k.title : null; };
+
+  // ---------- Market categories (the Dashboard's Markets, in this order) ----------
+  AN.MARKET_CATS = [['rwa', 'RWA'], ['crypto', 'Crypto'], ['indices', 'Indices'], ['fx', 'FX'], ['commodities', 'Commodities']];
+  const CAT_BY_BASE = {};
+  for (const [cat, bases] of Object.entries({
+    indices: 'SPY QQQ DIA IWM VOO VTI SPX NDX DJI RUT VIX US500 US100 US30 US2000 NAS100 SP500 DAX FTSE N225 HSI',
+    fx: 'EUR GBP JPY CHF AUD CAD NZD CNH CNY HKD SGD KRW INR MXN BRL ZAR TRY SEK NOK DKK PLN',
+    commodities: 'XAU XAG XPT XPD WTI BRENT OIL NATGAS COPPER',
+  })) for (const b of bases.split(' ')) CAT_BY_BASE[b] = cat;
+  /** A market's category (a key of AN.MARKET_CATS), by its base asset: index funds and indices, currencies and commodities
+   *  by name; any other isolated (mPerp) market is an RWA (a tokenized stock, trading its exchange's hours) and any other
+   *  cross market crypto. */
+  AN.marketCategory = (p) => CAT_BY_BASE[String((p && p.baseTokenName) || '').toUpperCase()] || (p && p.marginMode === 'ISOLATED' ? 'rwa' : 'crypto');
 
   /** What a leaderboard snapshot covers (null without one): the accounts listed when it was built, its rows, the rows
    *  carried over from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs)

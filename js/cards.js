@@ -158,8 +158,9 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
         periodRange: curve ? range(curve[0][0] * 1000, curve[curve.length - 1][0] * 1000) : r.createdAt ? 'since ' + date(r.createdAt) : null,
         stats: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', U.fmtDd(s.ddPct)], ['Volume', U.fmtUsd(r.volumeAll || s.volume || 0, { compact: true })], ['Positions', U.fmtNum(r.positionsCount || 0, 0)]],
         statsHidden: [['Win rate', r.winRate == null ? '—' : pct(r.winRate, 0)], ['Max drawdown', U.fmtDd(s.ddPct)], ['Positions', U.fmtNum(r.positionsCount || 0, 0)], ['Style', r.style && r.style !== '—' ? r.style : '—']],
-        // the exchange's own account (row.exchange, set by AN.buildLeaderboardRow) is not a trader
-        footRight: r.exchange ? 'Exchange account' + (r.createdAt ? ' · since ' + date(r.createdAt) : '')
+        // a named wallet (row.role: Meridian's own accounts, the market maker) or the exchange's own account (row.exchange,
+        // both set by AN.buildLeaderboardRow) is not a trader
+        footRight: r.role || r.exchange ? (r.role || 'Exchange account') + (r.createdAt ? ' · since ' + date(r.createdAt) : '')
           : r.style && r.style !== '—' ? r.style + ' trader' + (r.createdAt ? ' · since ' + date(r.createdAt) : '') : r.createdAt ? 'On Meridian since ' + date(r.createdAt) : '',
       };
     };

@@ -306,23 +306,43 @@ test('price drift: exactly one and five minutes after the fill, a fill far off t
   assert.equal(fresh.n, 0);
 });
 
+test('market categories: indices, currencies and commodities by name; any other mPerp is an RWA, any other cross market crypto', () => {
+  const cat = (base, mode = 'CROSS') => AN.marketCategory({ baseTokenName: base, marginMode: mode });
+  assert.deepEqual(AN.MARKET_CATS.map(([k]) => k), ['rwa', 'crypto', 'indices', 'fx', 'commodities'], 'the Dashboard\'s order');
+  // Meridian's markets in October 2026
+  for (const b of ['BTC', 'ETH', 'SOL', 'HYPE', 'NEAR', 'ZEC', 'VVV', 'ENA', 'LIT']) assert.equal(cat(b), 'crypto', b);
+  assert.equal(cat('SPY', 'ISOLATED'), 'indices'); assert.equal(cat('QQQ', 'ISOLATED'), 'indices');
+  assert.equal(cat('XAU', 'ISOLATED'), 'commodities'); assert.equal(cat('xag', 'ISOLATED'), 'commodities', 'any letter case');
+  assert.equal(cat('EUR', 'ISOLATED'), 'fx');
+  assert.equal(cat('TSLA', 'ISOLATED'), 'rwa', 'a stock: an mPerp not named above');
+  assert.equal(cat('NEWCOIN'), 'crypto'); assert.equal(AN.marketCategory({}), 'crypto');
+});
+
 test('the market maker is known by its wallet, in any letter case, so the home page\'s top wallets leave it out', () => {
   assert.ok(AN.marketMaker({ account: '0x2F46C3FCE6BDA596C2771BCA618C4F69AE3E56B2', sid: 'any' }));
   assert.equal(AN.marketMaker({ account: '0xa6b9cf0000000000000000000000000000000000' }), null);
   assert.equal(AN.marketMaker({}), null); assert.equal(AN.marketMaker(null), null);
 });
 
-test('the exchange\'s own account is flagged on its row; the fee collector is left to "no trades"', async () => {
+test('Meridian\'s own accounts are named by wallet (the liquidator, the fee collector) and flagged on their rows', async () => {
   const EX = '01a047c4-2be2-774c-ae58-1e45d2f2a99d', FEES = '01a047c4-2bd1-70db-9c88-6b93739534a5';
+  const LIQ_W = '0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7', FEES_W = '0xff68fda91b0e785b4aee674d3b428c4ab6d8eaa7';
+  assert.equal(AN.known({ account: LIQ_W.toUpperCase().replace('0X', '0x') }).label, 'Meridian liquidator account');
+  assert.equal(AN.known({ account: FEES_W }).label, 'Meridian fee collector');
+  assert.equal(AN.known({ account: '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2' }).label, 'Market maker');
+  assert.ok(AN.exchangeAccount({ account: FEES_W })); assert.equal(AN.marketMaker({ account: FEES_W }), null);
+  // a row with no wallet: only the liquidator's subaccount id is known
   assert.ok(AN.exchangeAccount({ sid: EX })); assert.equal(AN.exchangeAccount({ sid: FEES }), null); assert.equal(AN.exchangeAccount(null), null);
-  // an empty account takes the inactive path, so no archive is needed; the flag is set either way
+  // an empty account takes the inactive path, so no archive is needed; the flags are set either way
   const A = MD.api, saved = { balances: A.balances, openPositions: A.openPositions, totalVolume: A.totalVolume };
   Object.assign(A, { balances: async () => [], openPositions: async () => [], totalVolume: async () => 0 });
   try {
     const ref = { byId: {}, active: [] };
-    const row = await AN.buildLeaderboardRow({ id: EX, account: '0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7', createdAt: T0 }, ref, {}, {});
-    assert.equal(row.exchange, true); assert.equal(row.inactive, true);
-    const other = await AN.buildLeaderboardRow({ id: FEES, account: '0xff68fda91b0e785b4aee674d3b428c4ab6d8eaa7', createdAt: T0 }, ref, {}, {});
-    assert.equal('exchange' in other, false, 'an ordinary row gains no field');
+    const row = await AN.buildLeaderboardRow({ id: EX, account: LIQ_W, createdAt: T0 }, ref, {}, {});
+    assert.equal(row.exchange, true); assert.equal(row.role, 'Meridian liquidator account'); assert.equal(row.inactive, true);
+    const fees = await AN.buildLeaderboardRow({ id: FEES, account: FEES_W, createdAt: T0 }, ref, {}, {});
+    assert.equal(fees.exchange, true); assert.equal(fees.role, 'Meridian fee collector');
+    const other = await AN.buildLeaderboardRow({ id: 'x', account: '0x' + '1'.repeat(40), createdAt: T0 }, ref, {}, {});
+    assert.equal('exchange' in other, false, 'an ordinary row gains no field'); assert.equal('role' in other, false);
   } finally { Object.assign(A, saved); }
 });

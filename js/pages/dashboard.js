@@ -38,6 +38,7 @@
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
+      const catSel = h('span');   // the Markets' category buttons (renderCatSel)
       // stop map elements: the card is closed on every visit, so the page does not scan every account on load; opening it
       // starts the scan (user 10-18: "not load instantly by default … hidden by default")
       const smSummary = h('span.dim.small');
@@ -53,7 +54,7 @@
         h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'take-profit, stop-loss and entry stops of every account, by price level · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(stopCard, [smHead, smBody]);
       U.replace(root, h('div.page', h('div.stack', tiles,
-        h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price')), mktBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price · click a column to sort')), mktBody),
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
@@ -101,7 +102,7 @@
           const oiN = U.num(p.openInterest); const volN = U.num(l.vol24h || p.volume24h);
           // the clock, not the mount time: a closure that starts while the page is open pauses funding on the next render
           const f = fundingOf(p, { projected, live: l, gaps, t: Date.now() });
-          return { p, m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
+          return { p, cat: AN.marketCategory(p), m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
         });
       }
       // funding cells: the app's format (4 dp, a minus but no plus), greyed "Paused" on an mPerp market inside a closure
@@ -109,22 +110,47 @@
       const pausedEl = (f) => h('span.dim', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): no funding is charged in the window, a position fee is charged instead · last charge ${pct4(f.lastPct)}` }, 'Paused');
       const rateEl = (x, title) => (x == null ? h('span.dim', { title: 'projected rate not available yet' }, '—') : h('span', { class: U.pnlClass(x), title: title || null }, pct4(x)));
       const projEl = (f) => (f.paused ? pausedEl(f) : rateEl(f.projPct, 'last hourly charge ' + pct4(f.lastPct)));
+      // Markets by category (AN.MARKET_CATS: RWA, Crypto, Indices, FX, Commodities), each under a header with its count and
+      // totals, a category without markets saying so; the buttons show one category (remembered in this browser), and a
+      // column header sorts the markets inside each category (24h volume, the largest first, until one is clicked)
+      const CAT_KEY = 'md.dash.mktCat';
+      let mktCat = U.storage.get(CAT_KEY, 'all'); if (!AN.MARKET_CATS.some(([k]) => k === mktCat)) mktCat = 'all';
+      let mktSort = { key: 'vol', desc: true }, catSeen = '';
+      const SORTS = { m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
+      const renderCatSel = (rows) => {
+        const n = {}; for (const r of rows) n[r.cat] = (n[r.cat] || 0) + 1;
+        const seen = JSON.stringify(n) + '|' + mktCat; if (seen === catSeen) return; catSeen = seen;
+        const label = (name, k) => h('span', name, h('span.n', ' ' + k));
+        U.replace(catSel, UI.seg([{ v: 'all', label: label('All', rows.length) }].concat(AN.MARKET_CATS.map(([k, name]) => ({ v: k, label: label(name, n[k] || 0), title: n[k] ? null : 'No ' + name + ' markets on Meridian yet' }))), mktCat,
+          (v) => { mktCat = v; U.storage.set(CAT_KEY, v); renderMarkets(); }, 'sm'));
+      };
       function renderMarkets() {
         const rows = marketRows();
+        renderCatSel(rows);
+        const groups = AN.MARKET_CATS.filter(([k]) => mktCat === 'all' || k === mktCat).map(([k, name]) => {
+          const list = U.sortBy(rows.filter((r) => r.cat === k), SORTS[mktSort.key] || SORTS.vol, mktSort.desc);
+          return {
+            head: h('div.mkt-group', h('span.name', name), h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')),
+              list.length ? h('span.dim', '24h volume ' + U.fmtUsd(U.sum(list, (r) => r.volUsd), { compact: true }) + ' · open interest ' + U.fmtUsd(U.sum(list, (r) => r.oiUsd), { compact: true })) : null),
+            rows: list, empty: 'No ' + name + ' markets on Meridian yet',
+          };
+        });
         U.replaceLive(mktBody, UI.table({
           cols: [
             // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
-            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
-            { key: 'px', label: 'Mark price', num: true, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
-            { key: 'chg', label: '24h', num: true, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
+            { key: 'm', label: 'Market', sortVal: 1, render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
+            { key: 'px', label: 'Mark price', num: true, sortVal: 1, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
+            { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
             // the app's Funding column: the projected rate, not the last charge (they can differ in sign); Paused in a closure
-            { key: 'fr', label: 'Funding 1h', num: true, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f) },
-            { key: 'oi', label: 'Open interest', num: true, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
-            { key: 'vol', label: '24h volume', num: true, title: '24 h traded quantity (base units) × current mark price', render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
+            { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f) },
+            { key: 'oi', label: 'Open interest', num: true, sortVal: 1, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
+            { key: 'vol', label: '24h volume', num: true, sortVal: 1, title: '24 h traded quantity (base units) × current mark price', render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
             { key: 'spark', label: '7d', render: (r) => { const c = sparks[r.p.ticker] || (sparks[r.p.ticker] = h('canvas.spark', { width: 110, height: 30 })); return c; } },
             { key: 'note', label: 'Status', render: (r) => closureNote(r.p) || h('span.xs.dim', r.p.marginMode === 'CROSS' ? '24/7' : 'open') },
-          ], rows,
+          ], groups, sort: mktSort,
+          // a new column sorts the largest first (the market name A to Z); the same column again reverses it
+          onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(); },
         }));
         U.replaceLive(fundBody, UI.table({
           cols: [
