@@ -179,6 +179,7 @@
     if (opts.compact) {
       const a = Math.abs(n);
       const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
+      if (a >= 1e12) return s + '$' + fmtN(a / 1e12, 2) + 'T';   // a market cap: "$1.64T", not "$1,639.29B"
       if (a >= 1e9) return s + '$' + fmtN(a / 1e9, 2) + 'B';
       if (a >= 1e6) return s + '$' + fmtN(a / 1e6, 2) + 'M';
       if (a >= 1e4) return s + '$' + fmtN(a / 1e3, 1) + 'K';
@@ -216,6 +217,7 @@
   };
   U.fmtCompact = (x, dp = 1) => {
     const n = U.num(x); const a = Math.abs(n); const s = n < 0 ? '-' : '';
+    if (a >= 1e12) return s + fmtN(a / 1e12, dp) + 'T';
     if (a >= 1e9) return s + fmtN(a / 1e9, dp) + 'B';
     if (a >= 1e6) return s + fmtN(a / 1e6, dp) + 'M';
     if (a >= 1e3) return s + fmtN(a / 1e3, dp) + 'K';

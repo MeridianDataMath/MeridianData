@@ -318,6 +318,28 @@ test('market categories as Hyperliquid files them: a cross market is crypto; an 
   assert.equal(cat('GAS', 'CROSS'), 'crypto', 'a cross market is crypto whatever its name'); assert.equal(AN.marketCategory({}), 'crypto');
 });
 
+test('size outside Meridian: a coin\'s CoinGecko cap at its price, metals from the mark, the rest by their usual size', () => {
+  const A = MD.api;
+  const p = (base, mode = 'CROSS') => ({ baseTokenName: base, marginMode: mode });
+  // CoinGecko's rows: the largest coin of each symbol counts; a symbol it does not return is null
+  const caps = A.parseMarketCaps([{ symbol: 'lit', id: 'lighter', market_cap: 7.4e8, current_price: 2.96 }, { symbol: 'lit', id: 'litentry', market_cap: 3e7, current_price: 0.6 }, { symbol: 'btc', id: 'bitcoin', market_cap: 1.6e12, current_price: 81000 }], ['BTC', 'LIT', 'VVV']);
+  assert.deepEqual(caps.LIT, { mcap: 7.4e8, price: 2.96, id: 'lighter' }); assert.equal(caps.VVV, null);
+  assert.deepEqual(AN.marketSize(p('BTC'), caps, 81500), { usd: 1.6e12, src: 'coingecko' });
+  // a coin of that symbol at another price is another coin: its last known size orders it instead
+  assert.equal(AN.marketSize(p('LIT'), caps, 0.6).src, 'hint');
+  assert.equal(AN.marketSize(p('VVV'), caps, 22).src, 'hint', 'not answered: the last known size');
+  // gold and silver: the metal above ground at the mark
+  const gold = AN.marketSize(p('XAU', 'ISOLATED'), null, 4000), silver = AN.marketSize(p('XAG', 'ISOLATED'), null, 50);
+  assert.equal(gold.src, 'metal'); near(assert, gold.usd, 216265 * 32150.75 * 4000, 1);
+  assert.ok(gold.usd > silver.usd);
+  // indices by their companies\' value: the S&P 500 before the Nasdaq-100; nothing known: null
+  assert.ok(AN.marketSize(p('SPY', 'ISOLATED')).usd > AN.marketSize(p('QQQ', 'ISOLATED')).usd);
+  assert.equal(AN.marketSize(p('NEWCOIN'), caps, 1), null);
+  // Meridian\'s crypto markets in October 2026, without CoinGecko: the largest first
+  const order = ['LIT', 'ENA', 'BTC', 'HYPE', 'SOL', 'ETH', 'ZEC', 'NEAR', 'VVV'].sort((a, b) => AN.marketSize(p(b)).usd - AN.marketSize(p(a)).usd);
+  assert.deepEqual(order, ['BTC', 'ETH', 'SOL', 'ZEC', 'HYPE', 'NEAR', 'ENA', 'VVV', 'LIT']);
+});
+
 test('the market maker is known by its wallet, in any letter case, so the home page\'s top wallets leave it out', () => {
   assert.ok(AN.marketMaker({ account: '0x2F46C3FCE6BDA596C2771BCA618C4F69AE3E56B2', sid: 'any' }));
   assert.equal(AN.marketMaker({ account: '0xa6b9cf0000000000000000000000000000000000' }), null);

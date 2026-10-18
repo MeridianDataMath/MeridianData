@@ -15,6 +15,8 @@ test('money: two decimals everywhere, dust without a sign, compact columns witho
   assert.equal(U.fmtUsd(12.3, { sign: true }), '+$12.30');
   assert.equal(U.fmtUsd(9159.76, { compact: true }), '$9,160');
   assert.equal(U.fmtUsd(10234, { compact: true }), '$10.2K');
+  assert.equal(U.fmtUsd(1.63929e12, { compact: true }), '$1.64T', 'a market cap in trillions');
+  assert.equal(U.fmtUsd(2.9171e11, { compact: true }), '$291.71B');
   assert.equal(U.fmtUsd(536.18, { compact: true }), '$536.18');
   assert.equal(U.fmtUsd(0, { compact: true }), '$0');
   assert.equal(U.fmtUsd(2.5e6, { compact: true }), '$2.50M');

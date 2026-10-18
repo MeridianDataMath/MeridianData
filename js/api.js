@@ -129,6 +129,29 @@
   A.trades = (pid, limit, o) => A.get(A.BASE + '/v1/order/trade' + qs({ productId: pid, limit: limit || 50 }), { ttl: (o && o.ttl) || 0, signal: o && o.signal }).then((r) => r.data || []);
   /** One order by id (public): the way to learn which subaccount stood behind a trade from the REST history. Filled orders never change. */
   A.order = (id, o) => A.get(A.BASE + '/v1/order/' + encodeURIComponent(id), { ttl: o && o.ttl != null ? o.ttl : 6 * 3600000, signal: o && o.signal });
+  /** Market caps of crypto assets outside Meridian, by symbol: { SYMBOL: { mcap, price, id } or null }. From CoinGecko's
+   *  free API, which answers each symbol with the coin of that symbol that has the largest market cap (include_tokens=top);
+   *  kept 12 hours in this browser, as sizes move slowly and the free API allows few calls. */
+  A.MCAPS_KEY = 'md.mcaps.v1';
+  A.marketCaps = async function (symbols, o) {
+    const want = Array.from(new Set(symbols.map((s) => String(s).toUpperCase()))).sort();
+    const kept = U.storage.get(A.MCAPS_KEY, null);
+    if (kept && kept.by && kept.at > Date.now() - 12 * 3600e3 && want.every((s) => s in kept.by)) return kept.by;
+    const rows = await A.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&include_tokens=top&per_page=250&symbols=' + encodeURIComponent(want.join(',').toLowerCase()), { signal: o && o.signal });
+    const by = A.parseMarketCaps(rows, want);
+    U.storage.set(A.MCAPS_KEY, { at: Date.now(), by });
+    return by;
+  };
+  /** CoinGecko's coins/markets rows → { SYMBOL: { mcap, price, id } }, the largest coin per symbol, null for a symbol it
+   *  did not return */
+  A.parseMarketCaps = (rows, want) => {
+    const by = {}; for (const s of want) by[s] = null;
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const s = String((r && r.symbol) || '').toUpperCase(), mcap = Number(r && r.market_cap) || 0;
+      if (s in by && mcap > 0 && !(by[s] && by[s].mcap >= mcap)) by[s] = { mcap, price: Number(r.current_price) || null, id: String(r.id || '') };
+    }
+    return by;
+  };
   A.liquidations = (limit, o) => A.get(A.BASE + '/v1/position/liquidation' + qs({ limit: limit || 50 }), { ttl: 15000, signal: o && o.signal }).then((r) => r.data || []);
   A.gaps = (ids, start, end, o) => A.page(A.BASE, '/v1/product/mark-price-gap', { productIds: ids, startTime: start, endTime: end }, { ttl: 60000, maxPages: 5, signal: o && o.signal });
   A.fundingHistory = (pid, start, end, o) => A.page(A.BASE, '/v1/funding', { productId: pid, startTime: start, endTime: end }, { ttl: 60000, maxPages: 10, signal: o && o.signal });

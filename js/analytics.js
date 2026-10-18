@@ -532,6 +532,38 @@
    *  its base asset, else a stock. */
   AN.marketCategory = (p) => (p && p.marginMode === 'ISOLATED' ? CAT_BY_BASE[String(p.baseTokenName || '').toUpperCase()] || 'stocks' : 'crypto');
 
+  // ---------- How big a market's asset is outside Meridian (the Dashboard lists each category by it, the largest first) ----------
+  // Crypto: its CoinGecko market cap (A.marketCaps), taken only when CoinGecko's price is within 25% of the mark (another
+  // coin of the same symbol is not this market). Gold, silver, platinum: the metal above ground × the mark (World Gold
+  // Council: about 216,000 t of gold; about 1.75 million t of silver mined; about 7,800 t of platinum). The rest, and a coin
+  // CoinGecko does not answer for, by its usual size, only to order them (never shown): an index by its companies' value, a
+  // currency by its share of FX turnover (BIS), a company by its market cap or last valuation, a coin by its last known cap.
+  const OZ_PER_T = 32150.75;
+  const METAL_T = { XAU: 216265, GOLD: 216265, XAG: 1751000, SILVER: 1751000, XPT: 7800, PLATINUM: 7800 };
+  const SIZE_HINT = {};
+  for (const [usd, bases] of [
+    // indices
+    [57e12, 'SPY US500 SP500 USA500 SPX VOO'], [30e12, 'QQQ USTECH US100 NAS100 XYZ100 NDX'], [16e12, 'DIA US30 DJI'], [6e12, 'JP225 N225'], [4e12, 'FTSE DAX HSI'], [3e12, 'IWM US2000 SMALL2000 RUT VTI'], [2e12, 'KR200'],
+    // commodities without a metal stock above: oil, gas, copper, grains (by yearly output)
+    [2.5e12, 'OIL USOIL WTI BRENT BRENTOIL CL'], [3e11, 'COPPER'], [2e11, 'NATGAS GAS HO'], [1e11, 'CORN WHEAT SOY ALUMINIUM'], [8e10, 'XPD PALLADIUM'],
+    // currencies, by share of FX turnover
+    [31e12, 'EUR'], [17e12, 'JPY'], [13e12, 'GBP'], [7e12, 'CNH CNY'], [6e12, 'AUD CAD'], [5e12, 'CHF'], [2e12, 'HKD SGD KRW MXN NZD'], [1e12, 'DXY'],
+    // companies (the largest by market cap) and pre-IPO valuations
+    [4.5e12, 'NVDA'], [3.8e12, 'MSFT AAPL'], [3.2e12, 'GOOGL GOOG'], [2.4e12, 'AMZN'], [1.9e12, 'META'], [1.6e12, 'AVGO TSM'], [1.4e12, 'TSLA'], [1e12, 'BRK'], [8e11, 'JPM WMT LLY ORCL'], [7e11, 'V'], [5e11, 'MA NFLX XOM OPENAI'], [4e11, 'COST PLTR AMD SPACEX'], [2e11, 'ANTHROPIC ANTH'], [1e11, 'HOOD'], [8e10, 'COIN MSTR'],
+    // coins, by their market cap in October 2026, for when CoinGecko is out of reach
+    [1.6e12, 'BTC'], [2.9e11, 'ETH'], [6e10, 'SOL'], [1.8e10, 'ZEC'], [1.7e10, 'HYPE'], [6e9, 'NEAR'], [2.5e9, 'ENA'], [1e9, 'VVV'], [7e8, 'LIT'],
+  ]) for (const b of bases.split(' ')) SIZE_HINT[b] = usd;
+  /** { usd, src } or null: 'coingecko' (a live market cap), 'metal' (an estimate from the mark) or 'hint' (an order only).
+   *  caps: A.marketCaps' answer; mark: the market's price. */
+  AN.marketSize = (p, caps, mark) => {
+    const b = String((p && p.baseTokenName) || '').toUpperCase();
+    if (AN.marketCategory(p) === 'crypto') {
+      const c = caps && caps[b];
+      if (c && c.mcap > 0 && c.price > 0 && mark > 0 && Math.abs(c.price / mark - 1) < 0.25) return { usd: c.mcap, src: 'coingecko' };
+    } else if (METAL_T[b] && mark > 0) return { usd: METAL_T[b] * OZ_PER_T * mark, src: 'metal' };
+    return SIZE_HINT[b] ? { usd: SIZE_HINT[b], src: 'hint' } : null;
+  };
+
   /** What a leaderboard snapshot covers (null without one): the accounts listed when it was built, its rows, the rows
    *  carried over from an earlier build because this one could not rebuild them (mergeRows in scripts/build-snapshot.mjs)
    *  and when the oldest of those was built, and the accounts with no row at all. A snapshot from before rows were

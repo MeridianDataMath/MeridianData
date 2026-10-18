@@ -103,7 +103,7 @@
           const oiN = U.num(p.openInterest); const volN = U.num(l.vol24h || p.volume24h);
           // the clock, not the mount time: a closure that starts while the page is open pauses funding on the next render
           const f = fundingOf(p, { projected, live: l, gaps, t: Date.now() });
-          return { p, cat: AN.marketCategory(p), m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
+          return { p, cat: AN.marketCategory(p), size: AN.marketSize(p, caps, m), m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
         });
       }
       // funding cells: the app's format (4 dp, a minus but no plus), greyed "Paused" on an mPerp market inside a closure
@@ -114,11 +114,13 @@
       // Markets by category, as Hyperliquid groups them (AN.MARKET_CATS: Crypto, Stocks, Indices, Commodities, FX, Pre-IPO),
       // each under a header with its count and totals (a category Meridian has no market in, one line saying so); the
       // buttons show one category (remembered in this browser), and a column header sorts the markets inside each category
-      // (24h volume, the largest first, as Hyperliquid's selector, until one is clicked)
+      // (until one is clicked: the asset's size outside Meridian, the largest first: AN.marketSize, crypto by CoinGecko's
+      // market cap, loaded below)
       const CAT_KEY = 'md.dash.mktCat';
       let mktCat = U.storage.get(CAT_KEY, 'all'); if (!AN.MARKET_CATS.some(([k]) => k === mktCat)) mktCat = 'all';
-      let mktSort = { key: 'vol', desc: true }, catSeen = '';
-      const SORTS = { m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
+      let mktSort = { key: 'cap', desc: true }, catSeen = '', caps = null;
+      const sizeOf = (r) => (r.size ? r.size.usd : null);
+      const SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
       // the Funding table: the same categories (those with markets), the highest annualized rate first until a column is
       // clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
       let fundSort = { key: 'apr', desc: true };
@@ -136,13 +138,14 @@
         const rows = marketRows();
         renderCatSel(rows);
         const groups = AN.MARKET_CATS.filter(([k]) => mktCat === 'all' || k === mktCat).map(([k, name]) => {
-          const list = U.sortBy(rows.filter((r) => r.cat === k), SORTS[mktSort.key] || SORTS.vol, mktSort.desc);
+          const list = U.sortBy(rows.filter((r) => r.cat === k), SORTS[mktSort.key] || SORTS.cap, mktSort.desc);
           return { head: catHead(name, list, (l) => '24h volume ' + U.fmtUsd(U.sum(l, (r) => r.volUsd), { compact: true }) + ' · open interest ' + U.fmtUsd(U.sum(l, (r) => r.oiUsd), { compact: true })), rows: list };
         });
         U.replaceLive(mktBody, UI.table({
           cols: [
             // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
+            { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\x27s market cap (CoinGecko), the value of all the gold, silver or platinum above ground at the mark price; other markets are ordered by their usual size (an index by its companies\x27 value) without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: r.size.src === 'metal' ? 'Estimated: the metal above ground (World Gold Council and others) × the mark price' : 'CoinGecko market cap' }, (r.size.src === 'metal' ? '≈' : '') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) },
             { key: 'px', label: 'Mark price', num: true, sortVal: 1, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
@@ -265,9 +268,11 @@
           const near = (list) => (list.length ? list.reduce((a, l) => (Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a)) : null);
           agg.nearSl = near(agg.sl); agg.nearLq = near(agg.lq); return agg;
         });
-        // in the Markets table's order: by category, as Hyperliquid groups them, then the largest 24h volume first
+        // by category, as Hyperliquid groups them, then the largest asset outside Meridian first (AN.marketSize; Meridian's
+        // 24h volume for one without a size)
         const catIx = (p) => AN.MARKET_CATS.findIndex(([k]) => k === AN.marketCategory(p));
-        markets.sort((a, b) => catIx(a.p) - catIx(b.p) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
+        const sz = (x) => { const z = AN.marketSize(x.p, caps, x.mark); return z ? z.usd : 0; };
+        markets.sort((a, b) => catIx(a.p) - catIx(b.p) || sz(b) - sz(a) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
         // a protected position counts in both its TP and its SL, and its liquidation too, so the dollar figure is order
         // notional, not exposure
         const nOrders = L.filter((l) => l.kind !== 'LIQ').length, nLiq = L.length - nOrders;
@@ -344,6 +349,12 @@
       };
       ctx.onCleanup(() => clearInterval(smT));
       if (stopCard.classList.contains('open')) smOpen(true);   // opened while the page was still loading
+
+      // the coins' market caps (CoinGecko, kept 12 hours in this browser) order the crypto markets; until they arrive, or
+      // without them, each coin's last known size does (AN.marketSize)
+      A.marketCaps(ref.active.filter((p) => AN.marketCategory(p) === 'crypto').map((p) => p.baseTokenName), ctx)
+        .then((c) => { caps = c; renderMarketsThrottled(); renderStopMap(); })
+        .catch((e) => { if (!isAbort(e)) console.warn('market caps', e && e.message); });
 
       // ---- live trades ----
       // WebSocket fills carry both subaccount ids; the REST history only carries order ids, so those rows are
