@@ -122,16 +122,17 @@
     const rail = U.$('#rail');
     const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, dataset: { name: n.name, path: n.path, prefix: n.prefix || '' } },
       U.icon(n.icon), h('span.lbl', n.label, n.badge ? h('span.chip.accent', { style: { marginLeft: '8px' } }, n.badge) : null), h('span.tip', n.label));
-    const ext = (href, icon, label) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener' }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
+    // color: the icon's colour (.ic-<color>), as the sections above have theirs
+    const ext = (href, icon, label, color) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener', class: color ? 'ic-' + color : null }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
     U.replace(rail,
       h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
       SECTIONS.map((s) => [s.rule ? h('div.rule') : h('div.sec', s.title), s.items.map(navLink), s.rule ? h('div.rule') : null]),
       h('span.spacer'),
       h('div.sec', 'Meridian'),
-      ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian'),
-      ext(X_URL, U.icon('x'), 'Meridian on X'),
-      ext(ALERTS_X_URL, U.icon('radar'), '@LookonMeridian'),
-      ext('https://docs.meridian.xyz', U.icon('book'), 'Docs'),
+      ext(A.APP_URL, U.svg(U.icons.meridian), 'Trade on Meridian', 'teal'),
+      ext(X_URL, U.icon('x'), 'Meridian on X', 'cyan'),
+      ext(ALERTS_X_URL, U.icon('radar'), '@LookonMeridian', 'orange'),
+      ext('https://docs.meridian.xyz', U.icon('book'), 'Docs', 'blue'),
       navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),   // last in the rail (user 10-16)
       h('button.toggle', { type: 'button', onclick: () => { const c = !U.$('.app').classList.contains('rail-collapsed'); U.storage.set(RAIL_KEY, c); applyRail(c); } }));
     applyRail(railCollapsed());
