@@ -1,4 +1,4 @@
-/* MeridianDataHub — Exchange dashboard: markets, stop map, live trades, liquidations, closures */
+/* MeridianDataHub — Exchange dashboard: markets, live trades, liquidations, closures, funding, stop map (closed until opened) */
 (function () {
   const MD = window.MD; const U = MD.util; const A = MD.api; const AN = MD.analytics; const UI = MD.ui; const C = MD.charts; const h = U.h;
   const isAbort = (e) => e && e.name === 'AbortError';
@@ -38,22 +38,27 @@
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
-      // stop map elements
-      const smSummary = h('span.dim.small', h('span.loading', h('span.spinner'), 'Scanning accounts…'));
+      // stop map elements: the card is closed on every visit, so the page does not scan every account on load; opening it
+      // starts the scan (user 10-18: "not load instantly by default … hidden by default")
+      const smSummary = h('span.dim.small');
       const smSel = h('div.smap-sel');
       const smLadder = h('div.smap', UI.loading('Collecting stop orders…'));
       const smTable = h('div');
-      const smRescan = h('button.btn.sm', { onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');
-      const stopCard = h('div.card.tight',
-        h('div.card-head', h('h2', 'Stop map'), smSummary, h('span.grow'), h('span.dim.small', 'take-profit, stop-loss and entry stops of every account, by price level · click a level for the accounts'), smRescan),
-        h('div.smap-wrap', h('div', smSel, smLadder), smTable));
+      const smRescan = h('button.btn.sm', { disabled: true, onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');   // on with the first scan
+      const smBody = h('div', { style: { display: 'none' } }, h('div.card-head', smSummary, h('span.grow'), smRescan), h('div.smap-wrap', h('div', smSel, smLadder), smTable));
+      const stopCard = h('div.card.tight.collapsible');
+      let smOpen = () => {};   // the scan needs the markets and accounts loaded below: until then opening only shows the card
+      const setStops = (open) => { stopCard.classList.toggle('open', open); smBody.style.display = open ? '' : 'none'; smHead.setAttribute('aria-expanded', String(open)); smOpen(open); };
+      const smHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => setStops(!stopCard.classList.contains('open')) },
+        h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'take-profit, stop-loss and entry stops of every account, by price level · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      U.append(stopCard, [smHead, smBody]);
       U.replace(root, h('div.page', h('div.stack', tiles,
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price')), mktBody),
-        stopCard,
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate')), fundBody))));
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate')), fundBody),
+        stopCard)));
 
       const ref = await A.ref(ctx);
       const ids = ref.active.map((p) => p.id);
@@ -261,8 +266,17 @@
           ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''),
         }));
       }
-      scanStops();
-      const smT = setInterval(scanStops, 120000); ctx.onCleanup(() => clearInterval(smT));
+      // scans only while the card is open: at once on opening (unless the last scan is under 2 minutes old), then every
+      // 2 minutes; closing it stops the rescans and keeps what was found
+      let smT = null;
+      smOpen = (open) => {
+        clearInterval(smT); smT = null;
+        if (!open) return;
+        if (!sm || Date.now() - sm.at >= 120000) scanStops();
+        smT = setInterval(scanStops, 120000);
+      };
+      ctx.onCleanup(() => clearInterval(smT));
+      if (stopCard.classList.contains('open')) smOpen(true);   // opened while the page was still loading
 
       // ---- live trades ----
       // WebSocket fills carry both subaccount ids; the REST history only carries order ids, so those rows are
