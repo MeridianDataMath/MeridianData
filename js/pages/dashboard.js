@@ -59,7 +59,7 @@
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the highest first; click a column to sort')), fundBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody),
         stopCard)));
 
       const ref = await A.ref(ctx);
@@ -121,10 +121,12 @@
       let mktSort = { key: 'cap', desc: true }, catSeen = '', caps = null;
       const sizeOf = (r) => (r.size ? r.size.usd : null);
       const SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
-      // the Funding table: the same categories (those with markets), the highest annualized rate first until a column is
-      // clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
-      let fundSort = { key: 'apr', desc: true };
-      const FUND_SORTS = { m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? null : r.f.aprPct) };
+      // the Funding table: the same categories (those with markets) in the same order, the largest asset first, until a
+      // column is clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
+      let fundSort = { key: 'cap', desc: true };
+      const FUND_SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? null : r.f.aprPct) };
+      // both tables' size column: the figure for a coin (CoinGecko) or a metal (an estimate); an order only for the rest
+      const capCol = { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\'s market cap (CoinGecko), the value of all the gold, silver or platinum above ground at the mark price; other markets are ordered by their usual size (an index by its companies\' value) without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: r.size.src === 'metal' ? 'Estimated: the metal above ground (World Gold Council and others) × the mark price' : 'CoinGecko market cap' }, (r.size.src === 'metal' ? '≈' : '') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) };
       const catHead = (name, list, totals) => h('div.mkt-group', h('span.name', name),
         list.length ? h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')) : h('span.dim', 'none on Meridian yet'), list.length && totals ? h('span.dim', totals(list)) : null);
       const renderCatSel = (rows) => {
@@ -145,7 +147,7 @@
           cols: [
             // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
-            { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\x27s market cap (CoinGecko), the value of all the gold, silver or platinum above ground at the mark price; other markets are ordered by their usual size (an index by its companies\x27 value) without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: r.size.src === 'metal' ? 'Estimated: the metal above ground (World Gold Council and others) × the mark price' : 'CoinGecko market cap' }, (r.size.src === 'metal' ? '≈' : '') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) },
+            capCol,
             { key: 'px', label: 'Mark price', num: true, sortVal: 1, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
@@ -159,13 +161,14 @@
           // a new column sorts the largest first (the market name A to Z); the same column again reverses it
           onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(); },
         }));
-        const fundGroups = AN.MARKET_CATS.map(([k, name]) => ({ name, list: U.sortBy(rows.filter((r) => r.cat === k), FUND_SORTS[fundSort.key] || FUND_SORTS.apr, fundSort.desc) }))
+        const fundGroups = AN.MARKET_CATS.map(([k, name]) => ({ name, list: U.sortBy(rows.filter((r) => r.cat === k), FUND_SORTS[fundSort.key] || FUND_SORTS.cap, fundSort.desc) }))
           .filter((g) => g.list.length).map((g) => ({ head: catHead(g.name, g.list), rows: g.list }));
         U.replaceLive(fundBody, UI.table({
           groups: fundGroups, sort: fundSort,
           onSort: (k) => { fundSort = { key: k, desc: fundSort.key === k ? !fundSort.desc : k !== 'm' }; renderMarkets(); },
           cols: [
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
+            capCol,
             { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f) },
             // history, so it stands in a closure too: the charge taken before the market closed
             { key: 'fr', label: 'Last 1h', num: true, sortVal: 1, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
