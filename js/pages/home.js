@@ -141,7 +141,7 @@
             { key: 'n', label: 'Size', num: true, title: 'Notional at the oracle price', render: (x) => U.fmtUsd(x.r.notional, { compact: true }) },
             { key: 'u', label: 'uPnL', num: true, title: 'Unrealized PnL, as Meridian\'s app shows it: (oracle price − entry price) × size', render: (x) => U.pnlEl(x.r.upnl, { compact: true }) },
             { key: 'liq', label: 'To liq.', num: true, title: 'How far the price can move against the position before its margin pool is liquidated (in a cross pool, the other positions move it too)', render: (x) => (x.r.distPct == null ? '—' : h('span', { class: x.r.distPct < 5 ? 'neg' : '' }, U.fmtPct(x.r.distPct, { dp: 1 }))) },
-          ], rows, empty: 'None of them has a position open right now', onRow: (x) => { location.hash = U.accountUrl(x.b.account, x.b.sid).slice(1); } }));
+          ], rows, empty: 'None of them has a position open right now', phone: { title: 'm', aside: 'u' }, onRow: (x) => { location.hash = U.accountUrl(x.b.account, x.b.sid).slice(1); } }));
         } catch (e) { if (!isAbort(e)) U.replace(posBody, UI.error(e)); }
       }
       positions();

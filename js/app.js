@@ -148,7 +148,7 @@
     });
     MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
-    const main = U.$('#main'); if (main) main.classList.toggle('home', route.name === 'home');
+    const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }   // route: the Predict pages keep their tables on a phone (css .tbl-wrap.ph)
     if (route.name === 'account' && route.params.address) {
       U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub });
       const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();

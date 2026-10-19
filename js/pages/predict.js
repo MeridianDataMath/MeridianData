@@ -1627,7 +1627,7 @@
     const lostPos = (r) => r.side !== 'COUNTERPARTY' && r.picks.some((k) => (k.settled ? k.nonDecisive || k.resolvedToYes !== !!k.yes : R.pickLost(k, k.id)));
     // the chance now: the legs' results and Polymarket's prices once loaded (pickProb), else the row's stored chance
     const fairNow = (r) => { const ps = r.picks.map(pickProb); if (!ps.length || ps.some((p) => p == null)) return r.fair; const f = ps.reduce((a, p) => a * p, 1); return r.side === 'COUNTERPARTY' ? 1 - f : f; };
-    const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replace(openWrap, UI.table({ cols: [
+    const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replace(openWrap, UI.table({ phone: { title: 'q', aside: 'p' }, cols: [
       // a position holding several bets on the same picks says so (the row opens the largest of them)
       { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q)), r.n > 1 ? h('div.xs.dim', { title: 'Bets on the same picks and side share one position token: Meridian shows them as one position, their stakes and payouts summed. A click opens the largest.' }, `${r.n} bets, one position`) : null) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip(marketMaker ? 'maker' : 'counterparty', 'blue') : UI.chip('bettor', '')) },
@@ -1649,7 +1649,7 @@
     if (allIds.length) (async () => { try { await R.load(allIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); if (mine.some((n) => !n.decided && pendingVerdict(n))) renderHist(); if (await loadMids(openLegIds, ctx.signal) && !ctx.signal.aborted) renderOpen(); if (legIds.length) { await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
     resTicker(ctx, () => { renderOpen(); if (openLegIds.length) loadMids(openLegIds, ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) renderOpen(); }).catch(() => {}); });
     let hpage = 1; const histWrap = h('div');
-    const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ cols: [
+    const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ phone: { title: 'q', aside: 'p' }, cols: [
       { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
       { key: 'q', label: 'Prediction', render: (n) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, n.picks.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', k.q)), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + (n.legs === 4 ? ' more leg' : ' more legs')) : null) },
       { key: 'c', label: 'Category', render: (n) => n.cat },
@@ -1680,7 +1680,7 @@
     const ownBets = (t) => { const e = saleOf.get(t); const p = e && positions.find((x) => x.sales.includes(e)); return p ? p.bets.filter((n) => n.t <= t.t + 60000) : []; };
     const betsNote = (t) => { const b = ownBets(t); if (!b.length) return null; const s = U.sum(b, (n) => (t.side === 'C' ? n.cp : n.stake));
       return h('div.dim.xs', { title: 'This wallet\'s bets on these picks and side: they share one position token, which is what it sold' }, `from ${b.length} bet${b.length === 1 ? '' : 's'} · ${usd(s)} ${t.side === 'C' ? 'collateral' : 'staked'}`); };
-    const renderSec = () => { const slice = L.trades.slice((spage - 1) * PAGE, spage * PAGE); U.replace(secWrap, UI.table({ cols: [
+    const renderSec = () => { const slice = L.trades.slice((spage - 1) * PAGE, spage * PAGE); U.replace(secWrap, UI.table({ phone: { title: 'q', aside: 'a' }, cols: [
       { key: 't', label: 'When', render: (t) => h('span.dim', U.fmtDateTimeS(t.t)) },
       { key: 'q', label: 'Prediction', render: (t) => h('div', { style: { whiteSpace: 'normal', maxWidth: '420px', lineHeight: '1.3' } }, t.q || '—', t.legs > 1 ? h('span.dim.xs', ' +' + (t.legs - 1) + (t.legs === 2 ? ' leg' : ' legs')) : null, t.seller === addr ? betsNote(t) : null) },
       { key: 'k', label: 'Trade', render: (t) => h('span', t.seller === addr ? UI.chip('sold', 'amber') : UI.chip('bought', 'blue'), h('span.dim.xs', t.seller === addr ? ' to ' : ' from '), bettorLink(t.seller === addr ? t.buyer : t.seller, 3)) },

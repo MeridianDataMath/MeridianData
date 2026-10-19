@@ -197,6 +197,7 @@
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, title: 'All-time drawdown on the site\'s net PnL (funding and mPerp position fees as charged), deposits and withdrawals left out', render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
               { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],
+            phone: { lead: 'rank', title: 'w', wide: ['score', 'go'] },   // a phone: the score badge and the buttons two thirds of their line
             rows, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },
           }));

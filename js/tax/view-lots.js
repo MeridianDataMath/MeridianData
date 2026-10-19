@@ -236,7 +236,7 @@
         { key: 'r', label: 'Matched by', render: (d) => h('span.small', d.rule, d.provisional ? h('span.chip.amber', { style: { marginLeft: '6px' }, title: 'its 30 days are not over: the match can still change' }, 'provisional') : null) },
         { key: 'a', label: TUI.tzLabel('Acquired', tz), render: acq },
         { key: 'h', label: 'Held', render: held },
-      ], rows: shown, empty: 'No USDe disposals in this period' });
+      ], rows: shown, empty: 'No USDe disposals in this period', phone: { title: 'k', aside: 'g' } });
 
       const endPools = (res.at.find((s) => s.t === end) || { pools: [] }).pools.filter((p) => Math.abs(p.units) > 1e-6);
       const poolTbl = UI.table({ cols: [

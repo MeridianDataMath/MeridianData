@@ -95,10 +95,10 @@
   };
 
   /** table with cursor-based server paging */
-  function cursorTable({ fetchPage, cols, empty, pageSize = 25, onRow }) {
+  function cursorTable({ fetchPage, cols, empty, pageSize = 25, onRow, phone }) {
     const wrap = h('div');
     let page = 1, cursors = [null], hasNext = false, rows = [], loading = false;
-    const render = () => U.replace(wrap, UI.table({ cols, rows, empty, onRow }), UI.cursorPager({ page, hasNext, count: rows.length, loading, onPrev: () => go(page - 1), onNext: () => go(page + 1) }));
+    const render = () => U.replace(wrap, UI.table({ cols, rows, empty, onRow, phone }), UI.cursorPager({ page, hasNext, count: rows.length, loading, onPrev: () => go(page - 1), onNext: () => go(page + 1) }));
     const go = async (p) => {
       if (p < 1) return; loading = true; render();
       try {
@@ -411,7 +411,7 @@
             { key: 'rate', label: fund ? 'Funding rate' : 'Rate', num: true, title: fund ? 'The hour\'s funding rate (positive: longs pay shorts)' : 'The position-fee rate of the charge (both sides pay)',
               render: (r) => U.fmtPct(U.num(fund ? r.fundingRate : r.rate) * 100, { dp: 4 }) },
             { key: 'pay', label: 'Payment', num: true, title: 'Received +, paid −', render: (r) => U.pnlEl(pay(r)) },
-          ], rows: slice, empty: fund ? 'No funding charged in the last 30 days' : zero ? 'Only charges of $0.00 in the last 7 days' : 'No position fees charged in the last 7 days',
+          ], phone: { title: 'm', aside: 'pay' }, rows: slice, empty: fund ? 'No funding charged in the last 30 days' : zero ? 'Only charges of $0.00 in the last 7 days' : 'No position fees charged in the last 7 days',
         }),
         list.length > 25 ? UI.pager({ page: pg, pageSize: 25, total: list.length, onPage: (p) => { chargePage[k] = p; renderCharges(k); } }) : null);
     }
@@ -440,13 +440,13 @@
             { key: 'pfee', label: 'Position fee', num: true, title: PFEE_TITLE, render: pfeeCell },
             { key: 'liq', label: 'Liq. price', num: true, title: 'Estimated liquidation price (pool maintenance margin)', render: (r) => liqCell(r) },
             { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
-          ], rows: a.positions, empty: 'No open positions',
+          ], rows: a.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
         }));
       } else if (tt === 'orders') {
-        U.replace(ttBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+        U.replace(ttBody, UI.table({ cols: orderCols(ref), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
       } else if (tt === 'fills') {
         U.replace(ttBody, cursorTable({
-          fetchPage: (cursor, n) => A.fillsPage(sid, cursor, n, cx), empty: 'No fills yet',
+          fetchPage: (cursor, n) => A.fillsPage(sid, cursor, n, cx), empty: 'No fills yet', phone: { title: 'm', aside: 'cost', hide: ['maker'] },
           cols: [
             { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
             { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
@@ -462,7 +462,7 @@
         }));
       } else if (tt === 'history') {
         U.replace(ttBody, cursorTable({
-          fetchPage: (cursor, n) => A.positionsPage(sid, cursor, n, cx), empty: 'No positions yet',
+          fetchPage: (cursor, n) => A.positionsPage(sid, cursor, n, cx), empty: 'No positions yet', phone: { title: 'm', aside: 'rpnl', hide: ['pfee', 'created'] },
           cols: [
             { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
             { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side, true) },
@@ -484,7 +484,7 @@
         renderCharges(tt);
       } else if (tt === 'transfers') {
         U.replace(ttBody, cursorTable({
-          fetchPage: (cursor, n) => A.transfersPage(sid, cursor, n, cx), empty: 'No transfers yet',
+          fetchPage: (cursor, n) => A.transfersPage(sid, cursor, n, cx), empty: 'No transfers yet', phone: { title: 'type', aside: 'amt' },
           cols: [
             { key: 'type', label: 'Type', render: (r) => UI.chip(r.type, r.type === 'DEPOSIT' ? 'green' : r.type === 'WITHDRAW' ? 'red' : 'blue') },
             { key: 'token', label: 'Token', render: (r) => r.type === 'CONVERT' ? h('span', String(r.tokenName || ''), h('span.dim', ' → '), r.toTokenName) : r.tokenName },   // as text: an object in h()'s second place would be read as attributes
@@ -690,10 +690,10 @@
           { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
           { key: 'pfee', label: 'Position fee', num: true, title: PFEE_TITLE, render: pfeeCell },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
-        ], rows: acct.positions, empty: 'No open positions',
+        ], rows: acct.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
       }));
     };
-    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref), rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled, lotOf(ref, f.productId)) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
 
@@ -978,7 +978,7 @@
         { key: 'pnl', label: 'Net PnL (closed)', num: true, title: 'The site\'s net result of the closed positions: realized PnL less trading and position fees, plus funding (Meridian\'s Closed P&L leaves position fees out)', render: (r) => U.pnlEl(r.pnl) },
         { key: 'vol', label: 'Volume', num: true, render: (r) => U.fmtUsd(r.vol, { compact: true }) },
         { key: 'ls', label: 'Long %', num: true, render: (r) => U.fmtPct((r.longs / r.count) * 100, { dp: 0 }) },
-      ], rows: ps.byMarket, empty: 'No positions yet',
+      ], rows: ps.byMarket, empty: 'No positions yet', phone: { title: 'm', aside: 'pnl' },
     });
     // what a day's bar holds (Meridian's calendar), and the site's figure in its tooltip on the basis the charges allowed
     const posCharged = ser.posNetted || !(Math.abs(is.posFees || 0) > 0.005 || acct.unsettledPositionFee > 0.005);   // (none at all reads the same)
@@ -1088,7 +1088,7 @@
         { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'ACTIVE' ? 'green' : r.status === 'REVOKED' ? 'red' : '') },
         { key: 'linked', label: 'Linked', render: (r) => h('span.dim', U.fmtDate(r.linkedAt || r.createdAt)) },
         { key: 'exp', label: 'Expires', render: (r) => h('span.dim', r.expiresAt ? U.fmtDate(r.expiresAt) : '—') },
-      ], rows: signers, empty: 'No linked signers',
+      ], rows: signers, empty: 'No linked signers', phone: { title: 'name', aside: 'status' },
     })));
     U.replace(el, h('div.stack', cards));
   }

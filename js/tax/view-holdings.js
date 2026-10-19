@@ -126,7 +126,7 @@
           { key: 'o', label: TUI.tzLabel('Opened', tz), render: (o) => h('span.dim', { title: isoTime(o.r.opened) }, TZ.fmt(o.r.opened, tz, 'iso').slice(0, 16)) },
           { key: 'f', label: 'Funding not settled', num: true, title: 'funding charged and not settled at the instant (+ received); now, the exchange\'s figure', render: (o) => amt(o.r.funding, o.x, { sign: true, na: '—' }) },
           { key: 'u', label: 'Unrealized now', num: true, title: 'the exchange\'s figure now, price only (a past instant has it per pool, above)', render: (o) => amt(o.r.upnl, o.x, { sign: true, na: '—' }) },
-        ], rows: list, empty: 'No position open at either instant' })));
+        ], rows: list, empty: 'No position open at either instant', phone: { title: 'm', aside: 'u' } })));
       }
 
       // what is missing or how a value was read, said plainly

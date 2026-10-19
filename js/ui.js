@@ -15,6 +15,18 @@
       return th;
     })));
     const tbody = h('tbody');
+    // Phone rows: in a narrow box (css .tbl-wrap.ph, under 560 px) a table of five or more columns lists its rows as
+    // two-line items, as the Predict feeds do: its lead (a rank) and title column with an aside on the first line, the
+    // other columns as label and value under them. o.phone: false keeps the table as it is; { lead, title, aside, hide, wide }
+    // names those columns by key (hide: left out on a phone; wide: a value two thirds of the line wide, for a cell that does
+    // not fit a third); without names, a leading '#' column is the lead and the next one the title. The Predict pages keep their tables (css).
+    let ph = null;
+    if (o.phone !== false && (o.phone || cols.length >= 5)) {
+      const rankFirst = cols.length > 1 && (cols[0].label === '#' || cols[0].key === 'rank');
+      ph = Object.assign({ lead: rankFirst ? cols[0].key : null, title: (rankFirst ? cols[1] : cols[0]).key, aside: null, hide: [], wide: [] }, typeof o.phone === 'object' ? o.phone : {});
+    }
+    const phRole = (c) => (!ph ? '' : c.key === ph.lead ? ' ph-lead' : c.key === ph.title ? ' ph-title' : c.key === ph.aside ? ' ph-aside' : ph.hide.includes(c.key) ? ' ph-hide' : ph.wide.includes(c.key) ? ' ph-wide' : '');
+    const phLabel = (c) => c.phLabel || (typeof c.label === 'string' ? c.label : (c.label && c.label.textContent) || '');
     // o.groups ([{ head, rows, empty }]): each group's rows under a full-width header row (head), a group without rows
     // saying so (empty); without groups, o.rows
     const groups = o.groups || [{ rows: o.rows || [] }];
@@ -24,11 +36,13 @@
       if (o.groups && !g.rows.length && g.empty) tbody.appendChild(h('tr.empty', h('td', { colspan: cols.length }, g.empty)));
       for (const r of g.rows) tbody.appendChild(rowEl(r));
     }
-    return h('div.tbl-wrap', h('table.tbl', thead, tbody));
+    return h('div.tbl-wrap', { class: ph ? 'ph' : null }, h('table.tbl', thead, tbody));
     function rowEl(r) {
       const tr = h('tr', { class: [(o.onRow ? 'clickable' : ''), o.rowClass ? o.rowClass(r) : ''].join(' ').trim() });
       for (const c of cols) {
-        const td = h('td', { class: (c.num ? 'num ' : '') + (c.cls || '') });
+        const role = phRole(c);
+        const td = h('td', { class: ((c.num ? 'num ' : '') + (c.cls || '') + role).trim() || null });
+        if (ph && (!role || role === ' ph-aside' || role === ' ph-wide')) td.dataset.l = phLabel(c);   // its label above the value on a phone
         const v = c.render ? c.render(r) : r[c.key];
         U.append(td, [v == null ? '—' : v]);
         tr.appendChild(td);
@@ -41,6 +55,9 @@
       return tr;
     }
   };
+
+  /** An amount in full, compact in a phone row (UI.table phone, css .n2): "$23,720,633.03" reads "$23.72M" there. */
+  UI.money2 = (x, o) => h('span.n2', h('span.n-full', U.fmtUsd(x, o)), h('span.n-compact', U.fmtUsd(x, Object.assign({}, o, { compact: true }))));
 
   /** A rank in a ranked list: 1st, 2nd and 3rd as gold, silver and bronze medals (podium false: the number alone). */
   UI.rank = (i, podium = true) => (podium && i >= 1 && i <= 3

@@ -38,7 +38,7 @@
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
-      const catSel = h('span');   // the Markets' category buttons (renderCatSel)
+      const catSel = h('span.seg-box');   // the Markets' category buttons (renderCatSel); a phone scrolls them sideways
       // stop map elements: the card is closed on every visit, so the page does not scan every account on load; opening it
       // starts the scan (user 10-18: "not load instantly by default … hidden by default")
       const smSummary = h('span.dim.small');
@@ -158,6 +158,8 @@
             { key: 'spark', label: '7d', render: (r) => { const c = sparks[r.p.ticker] || (sparks[r.p.ticker] = h('canvas.spark', { width: 110, height: 30 })); return c; } },
             { key: 'note', label: 'Status', render: (r) => closureNote(r.p) || h('span.xs.dim', r.p.marginMode === 'CROSS' ? '24/7' : 'open') },
           ], groups, sort: mktSort,
+          // a phone: the market and its price on the first line, the figures under them, no bid/ask or sparkline
+          phone: { title: 'm', aside: 'px', hide: ['ba', 'spark'] },
           // a new column sorts the largest first (the market name A to Z); the same column again reverses it
           onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(); },
         }));
@@ -165,6 +167,7 @@
           .filter((g) => g.list.length).map((g) => ({ head: catHead(g.name, g.list), rows: g.list }));
         U.replaceLive(fundBody, UI.table({
           groups: fundGroups, sort: fundSort,
+          phone: { title: 'm', aside: 'apr', hide: ['base', 'cum', 'upd'] },   // a phone: the rates only
           onSort: (k) => { fundSort = { key: k, desc: fundSort.key === k ? !fundSort.desc : k !== 'm' }; renderMarkets(); },
           cols: [
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
@@ -338,7 +341,7 @@
             { key: 'nsl', label: 'Nearest SL', num: true, title: 'Stop-loss closest to the mark price', render: (r) => nearCell(r.nearSl, r) },
             { key: 'nlq', label: 'Nearest liq.', num: true, title: 'Liquidation price closest to the mark price', render: (r) => nearCell(r.nearLq, r) },
             { key: 'a', label: 'Accounts', num: true, render: (r) => String(r.accounts) },
-          ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''),
+          ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''), phone: { title: 'm', aside: 'a' },
         }));
       }
       // scans only while the card is open: at once on opening (unless the last scan is under 2 minutes old), then every
@@ -436,7 +439,7 @@
               { key: 'cost', label: 'Notional', num: true, title: 'USD value of the position closed by the liquidation (size × liquidation fill price), as the exchange reports it; not the trader\'s loss', render: (r) => U.fmtUsd(r.cost) },
               { key: 'px', label: 'Liq. price', num: true, render: (r) => U.fmtPrice(r.liquidationPrice, ref.byId[r.productId] && ref.byId[r.productId].tickSize) },
               { key: 'cause', label: 'Cause', title: 'What took the margin pool below its maintenance margin: a price move, a funding payment or an mPerp position fee', render: causeEl },
-            ], rows, empty: 'No liquidations recorded',
+            ], rows, empty: 'No liquidations recorded', phone: { title: 'm', aside: 'cost' },
           }));
         } catch (e) { if (e.name !== 'AbortError') U.replace(liqBody, UI.error(e)); }
       }
@@ -454,7 +457,7 @@
             { key: 's', label: 'Closes', render: (g) => h('span', { class: g.startTime <= t ? 'neg' : '' }, g.startTime <= t ? 'closed now' : U.fmtWhen(g.startTime)) },
             { key: 'e', label: 'Reopens', render: (g) => U.fmtWhen(g.endTime) },
             { key: 'd', label: 'Duration', num: true, render: (g) => U.fmtDuration(g.endTime - g.startTime) },
-          ], rows: upcoming, empty: 'No closures scheduled',
+          ], rows: upcoming, empty: 'No closures scheduled', phone: { title: 'm', aside: 'd' },
         }));
       }
       renderGaps();

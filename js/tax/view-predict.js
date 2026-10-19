@@ -136,7 +136,7 @@
         // token positions held to the verdict are no prediction of the wallet's: counted apart, so a buyer's month with a
         // result does not read 0 / 0 alone
         { key: 'w', label: mode === 'claim' ? 'Claimed won / lost' : 'Booked won / lost', num: true, render: (m) => `${m.won} / ${m.lost}` + (m.void ? ` / ${m.void} void` : '') + (m.held ? ` · ${m.held} held to verdict` : '') },
-      ], rows: F.months, empty: 'No activity in this period' });
+      ], rows: F.months, empty: 'No activity in this period', phone: { aside: 'p' } });
       // the files come from the exports registry (js/tax/exports.js, section 'predict'), under the basis chosen here;
       // a site report starts with the report's methodology (its Completeness row says what it misses), a tax-tool file
       // with the tool's header; either says it is incomplete in its name (-INCOMPLETE) and in the toast

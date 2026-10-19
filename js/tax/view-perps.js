@@ -217,14 +217,14 @@
         { key: 'd', label: 'Deposits', num: true, render: (m) => fmtC(m.C.deposits) },
         { key: 'w', label: 'Withdrawals', num: true, title: 'incl. withdrawal and deposit fees', render: (m) => fmtC(m.C.withdrawals) },
         { key: 'v', label: 'Volume', num: true, render: (m) => fmtC(m.C.volume, { compact: true }) },
-      ], rows: monthly, empty: 'No activity in this period' }));
+      ], rows: monthly, empty: 'No activity in this period', phone: { aside: 'n' } }));
       U.replace(quarterWrap, UI.table({ cols: [
         { key: 'q', label: 'Quarter', render: (q) => h('div', q.label, h('div.dim.xs', TZ.fmt(q.t0, tz, 'short') + ' – ' + TZ.fmt(q.t1 - 1, tz, 'short'))) },
         { key: 'r', label: 'Realized PnL', num: true, render: (q) => pnlEl(q.C.realized, q.realized) },
         { key: 'f', label: 'Fees', num: true, title: 'trading fees plus position fees', render: (q) => fmtC(q.C.fees + (q.C.pfees || 0)) },
         { key: 'fu', label: 'Funding', num: true, render: (q) => pnlEl(q.C.funding, q.funding) },
         { key: 'n', label: 'Net', num: true, render: (q) => pnlEl(q.C.net, q.net) },
-      ], rows: quarters, empty: 'No activity in this period' }));
+      ], rows: quarters, empty: 'No activity in this period', phone: { aside: 'n' } }));
     };
     // in another currency the axis is in that currency too, in whole units like C.axisUsd; drawn once the cards are in
     // the page (start), and again when the trade detail recasts the months
@@ -253,7 +253,7 @@
         { key: 'in', label: 'Funding & position fees inside', num: true, title: 'the settlements since each position opened, shared by quantity closed', render: (r) => pnlEl(r.C.inside, r.inside) },
         { key: 'na', label: 'Net, inside', num: true, title: 'net with funding and position fees inside the result', render: (r) => pnlEl(r.C.netAll, r.netAll) },
         { key: 'v', label: 'Closed notional', num: true, render: (r) => fmtC(r.C.notional, { compact: true }) },
-      ], rows: Object.values(m).sort((a, b) => b.notional - a.notional), empty: 'No disposals in this period' }));
+      ], rows: Object.values(m).sort((a, b) => b.notional - a.notional), empty: 'No disposals in this period', phone: { title: 'm', aside: 'net' } }));
     };
 
     // ---- disposals: one row per reducing fill, or merged per position per local day ----
@@ -290,7 +290,7 @@
           { key: 'in', label: 'Funding & fees inside', num: true, title: 'funding minus position fees settled since the position opened, shared by quantity closed (the inside-the-result reading)' + (rates ? '; each settlement at its own date' : ''), render: (r) => (Math.abs(r.fundingIn - r.posFeeIn) < 0.005 ? h('span.dim', '—') : pnlEl(r.fundingInC - r.posFeeInC, r.fundingIn - r.posFeeIn)) },
           { key: 'na', label: 'Net, inside', num: true, render: (r) => pnlEl(r.netAllC, r.netAll) },
           { key: 'fl', label: '', render: flags },
-        ], rows: slice, empty: 'No disposals in this period' }),
+        ], rows: slice, empty: 'No disposals in this period', phone: { title: 'm', aside: 'n' } }),
         !printAll && all.length > PAGE ? UI.pager({ page: dPage, pageSize: PAGE, total: all.length, onPage: (p) => { dPage = p; renderDisp(); } }) : null);
     };
 
@@ -320,7 +320,7 @@
         { key: 'net', label: 'Net', num: true, render: (c) => pnlEl(c.netC, c.net) },
         { key: 'hold', label: 'Held', num: true, render: (c) => h('span', U.fmtDuration(c.hold), overYearChip(c.longTerm, { marginLeft: '6px' })) },
         { key: 'flag', label: '', render: (c) => (c.liq ? UI.chip('LIQ', 'red') : c.adl ? UI.chip('ADL', 'amber') : '') },
-      ], rows: slice, empty: 'No positions closed in this period' }), !printAll && closed.length > PAGE ? UI.pager({ page: lpage, pageSize: PAGE, total: closed.length, onPage: (p) => { lpage = p; renderLedger(); } }) : null);
+      ], rows: slice, empty: 'No positions closed in this period', phone: { title: 'm', aside: 'net' } }), !printAll && closed.length > PAGE ? UI.pager({ page: lpage, pageSize: PAGE, total: closed.length, onPage: (p) => { lpage = p; renderLedger(); } }) : null);
     };
 
     // ---- all transactions: every fill (liquidation and deleverage fills included), settlement, transfer and close ----
@@ -348,7 +348,7 @@
         { key: 'f', label: 'Fee', num: true, title: 'the fee part of the cash effect', render: (e) => (e.fee ? fmtC(money.fx(e.fee, e.t)) : h('span.dim', '—')) },
         { key: 'n', label: 'Notional', num: true, render: (e) => (e.notional ? fmtC(money.fx(e.notional, e.t)) : h('span.dim', '—')) },
         { key: 'd', label: '', render: (e) => h('span.dim.small', e.detail, e.tx ? [' · ', h('a', { href: U.explorerTx(e.tx), target: '_blank', rel: 'noopener' }, 'tx')] : null) },
-      ], rows: slice, empty: 'No events of this type in the period' }), !printAll && rows.length > PAGE ? UI.pager({ page: txPage, pageSize: PAGE, total: rows.length, onPage: (p) => { txPage = p; renderTx(); } }) : null);
+      ], rows: slice, empty: 'No events of this type in the period', phone: { title: 'w', aside: 'a' } }), !printAll && rows.length > PAGE ? UI.pager({ page: txPage, pageSize: PAGE, total: rows.length, onPage: (p) => { txPage = p; renderTx(); } }) : null);
     };
     const txHead = h('div.row.wrap', { style: { gap: '8px', padding: '10px 14px 0' } }, UI.seg(TX_TYPES, txType, (v) => { txType = v; txPage = 1; renderTx(); }, 'sm'), h('span.grow'), txCount);
     // left out of print until the detail is in: a printed report holds the rows or not the card
