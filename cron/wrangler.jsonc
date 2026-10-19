@@ -1,0 +1,12 @@
+// The site's timer (worker.js): starts the "Snapshot & deploy" workflow at minutes 14 and 44 of every hour.
+// Deployed by the GitHub workflow on every push (pages.yml, "Deploy the timer"); its secret DISPATCH_TOKEN is set in the
+// Cloudflare dashboard once and kept across deploys. No route, no workers.dev address, no preview URLs: nothing can reach
+// it from outside, it only runs on its schedule.
+{
+  "name": "meridiandatahub-cron",
+  "main": "worker.js",
+  "compatibility_date": "2025-06-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": { "crons": ["14,44 * * * *"] }
+}

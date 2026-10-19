@@ -1,10 +1,11 @@
 # Builds the perps snapshot, adds the Predict snapshot published from a home connection (to a repository of its own,
 # see below), and deploys the site to the Cloudflare Worker with static assets (project "meridiandatahub", see
 # wrangler.jsonc; works from a private repo). Needs the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
-# without them the run fails instead of deploying anywhere else. Runs on every push to main, every 30 minutes (at :17 and
-# :47, a few minutes after the snapshot machine's runs at :09 and :39), and on demand.
+# without them the run fails instead of deploying anywhere else. Runs on every push to main, every 30 minutes when the
+# Cloudflare timer (cron/) dispatches it at :14 and :44 (a few minutes after the snapshot machine's runs at :09 and :39),
+# on its own schedule as a backup (GitHub drops most scheduled runs under load), and on demand.
 #
-# The Cloudflare token reaches the deploy step only, never the tests, the builders, npm or git. Third-party actions are
+# The Cloudflare token reaches the two deploy steps only, never the tests, the builders, npm or git. Third-party actions are
 # pinned to commits (a moved tag cannot swap in other code) and wrangler to one version. To update an action:
 # `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>*'` (an annotated tag's commit is the ^{} line),
 # read the changes, then replace the SHA and the version comment.
@@ -164,6 +165,20 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4.141.0'   # the one package-lock.json installs above (the action's default, wrangler 3, cannot deploy an assets-only Worker)
           command: deploy
+
+      # The timer that starts this workflow every 30 minutes (cron/: a Worker of its own whose Cron Trigger fires at :14 and
+      # :44 and dispatches this workflow; GitHub's own schedule drops most of its runs under load). Deployed with the code,
+      # on a push only; its GitHub token is a secret set in the Cloudflare dashboard, kept across deploys. A failure here
+      # leaves the timer as it was and never blocks the site.
+      - name: Deploy the timer (cron/)
+        if: github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.141.0'
+          command: deploy --config cron/wrangler.jsonc
 
   # GitHub turns a public repository's schedule off after 60 days without a commit. With the Predict snapshot published to
   # its own repository, weeks can pass without one here, so once a day a scheduled run enables this workflow again, as
