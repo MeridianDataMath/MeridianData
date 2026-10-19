@@ -635,20 +635,28 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .smap-bands:empty { display: none; }
 .smap-bands .band { display: flex; flex-direction: column; gap: 2px; background: var(--bg-3); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 0; }
 .smap-bands .band .k { font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
-/* the positions liquidated within the band, apart from the stops: they go to Meridian's liquidator account, not the book */
-.smap-bands .band .liq { display: flex; flex-wrap: wrap; column-gap: 6px; color: var(--amber); }
-.smap-bands .band .liq > span:first-child { font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); align-self: center; }
-/* an order its position cannot reach (closed by a nearer exit, or liquidated first) */
+/* an order its position cannot reach (closed by a nearer exit, or liquidated first), a liquidation its stop comes before */
 .smap .lvl.dead { opacity: .45; }
+/* the liquidation map: no "Then" column (a liquidation goes to the liquidator, not the book) and amber bars; under its
+   bands, the liquidator's pool for the market and the jump that would drain it */
+.smap.lm .hdr, .smap.lm .lvl { grid-template-columns: 1.2fr 0.8fr 0.8fr 0.9fr 0.8fr; }
+.smap.lm .lvl i { background: var(--amber); }
+.smap-bands.lm-bands { border-bottom: 0; padding-bottom: 0; }
+.smap-bands.lm-pool { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.smap-bands.lm-pool .band .xs { font-family: var(--font); }
+@container smapl (max-width: 560px) {
+  .smap.lm .hdr, .smap.lm .lvl { grid-template-columns: 1.2fr 0.85fr 0.8fr 0.95fr; }
+  .smap.lm .hdr > span:nth-child(5) { display: none; }
+}
 .smap .lvl .chip { font-size: 10px; padding: 1px 5px; }
 .smap .mid { text-align: center; padding: 6px; border-top: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2); font-size: 13px; background: var(--bg-3); }
 .smap-detail { padding: 4px 12px 8px 24px; background: var(--bg-3); border-bottom: 1px solid var(--border-2); font-family: var(--font); display: flex; flex-direction: column; gap: 3px; }
 .smap .empty { font-family: var(--font); }
 table.tbl tbody tr.sel { background: var(--accent-dim); }
-/* the summary table beside the ladder: tighter cells for its eight columns */
+/* the summary table beside the ladder (stop map, liquidation map): tighter cells */
 .smap-wrap table.tbl th, .smap-wrap table.tbl td { padding-left: 8px; padding-right: 8px; }
-/* the ladder and the summary table side by side only when the card holds both: the table needs ~850px (more with a far
-   liquidation's long figures), so under 1800px of card (most screens, whatever the sidebar) the two stack */
+/* the ladder and the summary table side by side only when the card holds both: the liquidation map's table needs ~850px,
+   so under 1800px of card (most screens, whatever the sidebar) the two stack */
 .smap-body { container: smapw / inline-size; }
 @container smapw (max-width: 1800px) { .smap-wrap { grid-template-columns: minmax(0, 1fr); } .smap-wrap > div:first-child { border-right: 0; border-bottom: 1px solid var(--border-2); } }
 .mkt-row .sub { color: var(--text-3); font-size: 11px; }

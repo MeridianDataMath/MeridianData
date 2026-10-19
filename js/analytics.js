@@ -506,9 +506,12 @@
     '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2': { kind: 'maker', label: 'Market maker', title: 'Quotes both sides of every market: the exchange\'s market maker, not a trader to copy.' },
   };
   AN.known = (r) => (r && AN.KNOWN[String(r.account || '').toLowerCase()]) || null;
+  /** The liquidator account's subaccount: its margin pools are what it can lose on the positions it takes over
+   *  (AN.liquidatorDrain; the Dashboard's liquidation map reads them) */
+  AN.LIQUIDATOR_SID = '01a047c4-2be2-774c-ae58-1e45d2f2a99d';
   /** The subaccounts the exchange credits itself, by id (the liquidator account's, for a row that carries no wallet). */
   AN.EXCHANGE = {
-    '01a047c4-2be2-774c-ae58-1e45d2f2a99d': AN.KNOWN['0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7'].title,
+    [AN.LIQUIDATOR_SID]: AN.KNOWN['0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7'].title,
   };
   /** One of Meridian's own accounts (its tooltip), else null */
   AN.exchangeAccount = (r) => { const k = AN.known(r); return (k && k.kind === 'exchange' ? k.title : null) || (r && AN.EXCHANGE[r.sid]) || null; };
@@ -900,6 +903,36 @@
       else if (l.mech === 'stop' && l.kind !== 'TP') { if (below && l.flow === 'sell') r.sells += q * l.price; else if (above && l.flow === 'buy') r.buys += q * l.price; }
     }
     return r;
+  };
+
+  /** Where a position's margin is gone, the rest of its pool held where it is (its bankruptcy price): its pool's equity
+   *  is 0 there. Meridian's liquidator takes a liquidated position over at that price. For a position alone in its pool
+   *  (an mPerp) it is the liquidation price × (1 − k) for a long, × (1 + k) for a short (k: its maintenance rate).
+   *  r: an AN.accountState position row; null without a price. */
+  AN.bankruptcyPrice = (r) => (r && r.abs > 0 && r.mark > 0 && r.pool && Number.isFinite(r.pool.equity)
+    ? Math.max(0, r.long ? r.mark - r.pool.equity / r.abs : r.mark + r.pool.equity / r.abs) : null);
+
+  /** How big a jump of the price, in percent from the mark (0.1 steps up to max; null: not within it), would leave
+   *  Meridian's liquidator a bigger loss than its pool, each way. It takes every position the jump liquidates over at the
+   *  position's bankruptcy price: a jump past that price costs it the difference, one that stops short of it earns it
+   *  the margin left. When its pool cannot cover the loss, Meridian auto-deleverages: it force-closes positions on the
+   *  winning side, outside the order book. A jump is a gap (a reopening), so each position it crosses counts whole, its
+   *  stops passed too. liqs: { price (the liquidation price), bk (the bankruptcy price), qty, posSide }. */
+  AN.liquidatorDrain = (liqs, mark, pool, max = 30) => {
+    const at = (up) => {
+      if (!(mark > 0) || !(pool >= 0)) return null;
+      for (let i = 1; i <= max * 10; i++) {
+        const x = mark * (1 + (up ? i : -i) / 1000);
+        let loss = 0;
+        for (const l of liqs) {
+          if (l.bk == null) continue;
+          if (up ? l.posSide === 'short' && l.price <= x : l.posSide === 'long' && l.price >= x) loss += l.qty * (up ? x - l.bk : l.bk - x);
+        }
+        if (loss > pool) return i / 10;
+      }
+      return null;
+    };
+    return { down: at(false), up: at(true) };
   };
 
   /**

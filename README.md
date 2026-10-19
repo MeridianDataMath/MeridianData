@@ -264,13 +264,17 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   sparkline and mPerp closure windows; the volume and open-interest tiles are the column
   totals, and products and
   projected funding are re-read every minute; a **stop map** (every account's take-profit,
-  stop-loss and entry-stop orders and every open position's liquidation price, per market, as
-  a ladder around the mark price, sized by notional, with the accounts behind each level; bands
-  sum the stops within 1, 2 and 5 % of the mark and, apart from them, the positions liquidated
-  there, which Meridian hands to its liquidator account instead of the order book; each
-  position counts once, at the exit the price reaches first (`AN.stopFires`,
-  `AN.stopPressure`), and an order its position cannot reach is dimmed; the account list is
-  re-read on every scan);
+  stop-loss and entry-stop orders per market as a ladder around the mark price, sized by
+  notional, with the accounts behind each level; bands sum the stops within 1, 2 and 5 % of the
+  mark that would sell or buy into the order book, each position once, at the exit the price
+  reaches first (`AN.stopFires`, `AN.stopPressure`), and an order its position cannot reach
+  is dimmed with the reason); a **liquidation map** from the same scan (every open position's
+  liquidation price per market, apart from the stops: Meridian hands a liquidated position to
+  its liquidator account at the bankruptcy price instead of the order book; bands of the longs
+  and shorts liquidated within 1, 2 and 5 %; the liquidator's pool for each market, read from
+  its balance, and the one-jump move that would cost it more than that pool, after which
+  Meridian force-closes winning positions: `AN.bankruptcyPrice`, `AN.liquidatorDrain`); both
+  cards stay closed until opened, and the account list is re-read on every scan;
   live trade tape (taker/maker links to the accounts); liquidation feed; funding table (rate
   charged at the last hourly funding, projected next charge, cumulative funding per unit of
   the base asset).

@@ -39,28 +39,42 @@
       const fundBody = h('div');
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
       const catSel = h('span.seg-box');   // the Markets' category buttons (renderCatSel); a phone scrolls them sideways
-      // stop map elements: the card is closed on every visit, so the page does not scan every account on load; opening it
-      // starts the scan (user 10-18: "not load instantly by default … hidden by default")
+      // stop map and liquidation map elements: both cards are closed on every visit, so the page does not scan every account
+      // on load; opening either starts the scan they share (user 10-18: "not load instantly by default … hidden by default")
       const smSummary = h('span.dim.small');
       const smSel = h('div.smap-sel');
-      const smBands = h('div.smap-bands');   // sells below and buys above the mark, within 1, 2 and 5%
+      const smBands = h('div.smap-bands');   // stops that sell below and buy above the mark, within 1, 2 and 5%
       const smLadder = h('div.smap', UI.loading('Collecting stop orders and positions…'));
       const smTable = h('div');
       const smRescan = h('button.btn.sm', { disabled: true, onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');   // on with the first scan
       const smBody = h('div.smap-body', { style: { display: 'none' } }, h('div.card-head', smSummary, h('span.grow'), smRescan), h('div.smap-wrap', h('div', smSel, smBands, smLadder), smTable));
       const stopCard = h('div.card.tight.collapsible');
-      let smOpen = () => {};   // the scan needs the markets and accounts loaded below: until then opening only shows the card
-      const setStops = (open) => { stopCard.classList.toggle('open', open); smBody.style.display = open ? '' : 'none'; smHead.setAttribute('aria-expanded', String(open)); smOpen(open); };
-      const smHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => setStops(!stopCard.classList.contains('open')) },
-        h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'take-profit, stop-loss and entry stops and the liquidation price of every open position, by price level · ▼ sells / ▲ buys when the price gets there · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      // the liquidation map (user 10-19: liquidations "a whole own field"): the scan's liquidation prices, apart from the
+      // stops, with the liquidator's pool for each market and the jump that would drain it
+      const lmSummary = h('span.dim.small');
+      const lmSel = h('div.smap-sel');
+      const lmBands = h('div.smap-bands.lm-bands');   // longs liquidated below and shorts above the mark, within 1, 2 and 5%
+      const lmPool = h('div.smap-bands.lm-pool');      // the liquidator's pool for the market and the jump that drains it
+      const lmLadder = h('div.smap.lm', UI.loading('Collecting positions…'));
+      const lmTable = h('div');
+      const lmRescan = h('button.btn.sm', { disabled: true, onclick: () => scanStops() }, U.icon('refresh'), 'Rescan');
+      const lmBody = h('div.smap-body', { style: { display: 'none' } }, h('div.card-head', lmSummary, h('span.grow'), lmRescan), h('div.smap-wrap', h('div', lmSel, lmBands, lmPool, lmLadder), lmTable));
+      const liqCard = h('div.card.tight.collapsible');
+      let scanOpen = () => {};   // the scan needs the markets and accounts loaded below: until then opening only shows the card
+      const toggleCard = (card, body, head) => { const open = !card.classList.contains('open'); card.classList.toggle('open', open); body.style.display = open ? '' : 'none'; head.setAttribute('aria-expanded', String(open)); scanOpen(); };
+      const smHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => toggleCard(stopCard, smBody, smHead) },
+        h('span.chev', U.icon('chevR')), h('h2', 'Stop map'), h('span.dim.small', 'every account\'s take-profit, stop-loss and entry stops, by price level · ▼ sells / ▲ buys into the order book when the price gets there · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      const lmHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => toggleCard(liqCard, lmBody, lmHead) },
+        h('span.chev', U.icon('chevR')), h('h2', 'Liquidation map'), h('span.dim.small', 'where every open position gets liquidated, by price level · Meridian\'s liquidator takes them over, not the order book · the jump that would drain its pool, after which winning positions are force-closed · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(stopCard, [smHead, smBody]);
+      U.append(liqCard, [lmHead, lmBody]);
       U.replace(root, h('div.page', h('div.stack', tiles,
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price · click a column to sort')), mktBody),
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
         h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody),
-        stopCard)));
+        stopCard, liqCard)));
 
       const ref = await A.ref(ctx);
       const ids = ref.active.map((p) => p.id);
@@ -207,17 +221,18 @@
       };
       const restT = setInterval(refreshRest, 60000); ctx.onCleanup(() => clearInterval(restT));
 
-      // ---- stop map: TP / SL / entry stop levels and liquidation prices of every account, per market ----
+      // ---- the scan both maps share: TP / SL / entry stop levels and liquidation prices of every account, per market ----
       // What a level does to the market when the price reaches it (flow): closing a long (its TP, SL or liquidation) sells,
       // closing a short buys; an entry stop buys or sells as it opens. Stops that sell below the mark push a fall further,
-      // those that buy above it a rise: the bands sum them near the mark and, apart from them, the positions liquidated
-      // there (AN.stopPressure), each position once (AN.stopFires).
+      // those that buy above it a rise: the stop map's bands sum them near the mark, each position once (AN.stopFires,
+      // AN.stopPressure). A liquidation goes to Meridian's liquidator, not the book: the liquidation map shows those.
       const flowOf = (kind, posSide) => (kind === 'ENTRY' ? (posSide === 'long' ? 'buy' : 'sell') : posSide === 'long' ? 'sell' : 'buy');
       const BANDS = [1, 2, 5];   // percent from the mark
-      let sm = null, smMarket = null, smScanning = false;
+      let sm = null, smMarket = null, lmMarket = null, smScanning = false;
+      const scanUi = (busy, msg) => { smRescan.disabled = lmRescan.disabled = busy; if (msg) { U.replace(smSummary, msg()); U.replace(lmSummary, msg()); } };
       async function scanStops() {
-        if (smScanning) return; smScanning = true; smRescan.disabled = true;
-        U.replace(smSummary, h('span.loading', h('span.spinner'), 'Scanning accounts…'));
+        if (smScanning) return; smScanning = true;
+        scanUi(true, () => h('span.loading', h('span.spinner'), 'Scanning accounts…'));
         try {
           const LB = MD.router.pages.leaderboard; if (LB) await LB.loadRemote();
           const snap = LB && LB.cache(); const known = {}; if (snap && snap.rows) for (const r of snap.rows) known[r.sid] = r;
@@ -250,8 +265,9 @@
                 used.add(e.order.id); const qty = e.qty == null ? r.abs : e.qty;
                 add({ productId: r.p.productId, price: e.price, kind, posSide, qty, usd: qty * e.price, mech: e.kind, trigger: e.trigger, oco: e.oco, pos, posQty });
               }
-              // where the exchange would close the whole position (read with its balances; none without them)
-              if (balances.length && r.liqPrice > 0) add({ productId: r.p.productId, price: r.liqPrice, kind: 'LIQ', posSide, qty: r.abs, usd: r.abs * r.liqPrice, mech: 'liq', pos, posQty });
+              // where the exchange would close the whole position (read with its balances; none without them), and where its
+              // margin is gone: the liquidator takes it over at that price (AN.bankruptcyPrice)
+              if (balances.length && r.liqPrice > 0) add({ productId: r.p.productId, price: r.liqPrice, kind: 'LIQ', posSide, qty: r.abs, usd: r.abs * r.liqPrice, mech: 'liq', pos, posQty, bk: AN.bankruptcyPrice(r) });
             }
             for (const od of pending) {                          // stops that open or add to a position
               if (used.has(od.id) || od.reduceOnly || od.close) continue;
@@ -261,76 +277,97 @@
           });
           await U.pLimit(tasks, 4);
           if (ctx.signal.aborted) return;
-          sm = { at: Date.now(), scanned, skipped, total: accounts.length, levels };
-          if (smMarket && !levels.some((l) => l.productId === smMarket)) smMarket = null;   // the first market then (renderStopMap)
-          renderStopMap();
-        } catch (e) { if (!isAbort(e)) U.replace(smSummary, h('span.neg', 'scan failed: ' + e.message)); }
-        finally { smScanning = false; smRescan.disabled = false; }
+          // the liquidator's margin pools, by currency: what it can lose on the positions it takes over (null: unread)
+          const lb = await A.balances(AN.LIQUIDATOR_SID, { signal: ctx.signal }).catch((e) => { if (isAbort(e)) throw e; return null; });
+          const pools = lb ? Object.fromEntries(lb.map((b) => [String(b.tokenAddress).toLowerCase(), U.num(b.amount)])) : null;
+          sm = { at: Date.now(), scanned, skipped, total: accounts.length, levels, pools };
+          renderStopMap(); renderLiqMap();   // each falls back to its first market when the one shown has gone
+        } catch (e) { if (!isAbort(e)) scanUi(false, () => h('span.neg', 'scan failed: ' + e.message)); }
+        finally { smScanning = false; scanUi(false); }
       }
+      // the markets in the Markets table's order: by category, as Hyperliquid groups them, then the largest asset outside
+      // Meridian first (AN.marketSize; Meridian's 24h volume for one without a size)
+      const sortMarkets = (list) => {
+        const catIx = (p) => AN.MARKET_CATS.findIndex(([k]) => k === AN.marketCategory(p));
+        const sz = (x) => { const z = AN.marketSize(x.p, caps, x.mark); return z ? z.order || z.usd : 0; };
+        return list.sort((a, b) => catIx(a.p) - catIx(b.p) || sz(b) - sz(a) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
+      };
+      const usdC = (x) => U.fmtUsd(x, { compact: true });
+      const nearest = (list, m) => list.reduce((a, l) => (!a || Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a), null);
+      const NB = String.fromCharCode(160);   // a no-break space: an arrow stays with its figure
+      // a ladder's rows: the levels within WIN% of the mark, grouped by price (binned to 0.25% of the mark over 40 prices)
+      // and by what keyOf returns; the rest are counted above and below
+      const WIN = 20;
+      const ladderRows = (levels, m, keyOf) => {
+        const dense = new Set(levels.filter((l) => m > 0 && Math.abs(l.price - m) <= m * WIN / 100).map((l) => l.price)).size > 40;
+        const bin = dense && m > 0 ? m * 0.0025 : 0;
+        const level = (pr) => (bin ? Math.round(pr / bin) * bin : pr);
+        const rows = {};
+        for (const l of levels) {
+          const k = level(l.price) + '|' + keyOf(l);
+          const r = rows[k] || (rows[k] = { price: level(l.price), kind: l.kind, flow: l.flow, side: l.posSide, usd: 0, items: [] });
+          r.usd += l.usd; r.items.push(l);
+        }
+        const all = Object.values(rows).sort((a, b) => b.price - a.price);
+        const far = (r, up) => (m > 0 ? (up ? r.price > m * (1 + WIN / 100) : r.price < m * (1 - WIN / 100)) : false);
+        return { bin, list: all.filter((r) => !far(r, true) && !far(r, false)), farUp: all.filter((r) => far(r, true)), farDown: all.filter((r) => far(r, false)) };
+      };
+      const farNote = (l, up) => (l.length ? h('div.xs.dim.center', { style: { padding: '6px' } }, `${l.length} more level${l.length === 1 ? '' : 's'} over ${WIN}% ${up ? 'above' : 'below'} the mark (${usdC(U.sum(l, (r) => r.usd))})`) : null);
+      const ladderBody = (hdr, lad, m, cur, rowEl) => [hdr, farNote(lad.farUp, true), lad.list.filter((r) => r.price > m).map(rowEl),
+        h('div.mid', h('span.bold', 'mark ' + U.fmtPrice(m, cur.p.tickSize)), h('span.dim.xs', '  ' + cur.p.displayTicker)),
+        lad.list.filter((r) => r.price <= m).map(rowEl), farNote(lad.farDown, false),
+        lad.bin ? h('div.xs.dim.center', { style: { padding: '6px' } }, 'levels binned to 0.25% of mark') : null];
+      const nearCell = (l, r) => (l ? h('span', U.fmtPrice(l.price, r.p.tickSize), h('span.xs.dim', ' ' + U.fmtPct(((l.price - r.mark) / r.mark) * 100, { sign: true, dp: 1 }))) : h('span.dim', '—'));
+      const toggleDetail = (detail) => () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; };
+
+      // ---- stop map: the orders (TP / SL / entry stops); a stop fires as a market order into the order book ----
       function renderStopMap() {
         if (!sm) return;
         const L = sm.levels.filter((l) => !U.isExcluded(l.account));   // left-out wallets (U.EXCLUDED)
         const byMarket = U.groupBy(L, (l) => l.productId);
-        const markets = Object.keys(byMarket).filter((pid) => ref.byId[pid]).map((pid) => {
+        // each market's liquidation prices stay in its levels, unlisted here: a stop behind its position's liquidation
+        // never fires (AN.stopFires); the liquidation map lists them
+        const markets = sortMarkets(Object.keys(byMarket).filter((pid) => ref.byId[pid] && byMarket[pid].some((l) => l.kind !== 'LIQ')).map((pid) => {
           const ls = byMarket[pid]; const p = ref.byId[pid]; const m = mark(p);
           const fires = AN.stopFires(ls, m);   // what of each level can fire, each position once
-          const agg = { pid, p, mark: m, fires, n: ls.length, tp: ls.filter((l) => l.kind === 'TP'), sl: ls.filter((l) => l.kind === 'SL'), en: ls.filter((l) => l.kind === 'ENTRY'), lq: ls.filter((l) => l.kind === 'LIQ'), usd: U.sum(ls, (l) => l.usd), accounts: new Set(ls.map((l) => l.sid)).size, near2: AN.stopPressure(ls, m, 2, fires) };
-          // the nearest that can fire: a stop-loss behind its position's liquidation never does, nor a liquidation behind a
-          // stop that closes the whole position first
-          const near = (list) => list.filter((l) => fires.get(l) > 0).reduce((a, l) => (!a || Math.abs(l.price - m) < Math.abs(a.price - m) ? l : a), null);
-          agg.nearSl = near(agg.sl); agg.nearLq = near(agg.lq); return agg;
-        });
-        // by category, as Hyperliquid groups them, then the largest asset outside Meridian first (AN.marketSize; Meridian's
-        // 24h volume for one without a size)
-        const catIx = (p) => AN.MARKET_CATS.findIndex(([k]) => k === AN.marketCategory(p));
-        const sz = (x) => { const z = AN.marketSize(x.p, caps, x.mark); return z ? z.order || z.usd : 0; };
-        markets.sort((a, b) => catIx(a.p) - catIx(b.p) || sz(b) - sz(a) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
-        // the ladder lists every order at its full size (a protected position shows in its TP, its SL and its liquidation,
-        // and what cannot happen is dimmed); the bands and the table count each position once (AN.stopFires)
-        const nOrders = L.filter((l) => l.kind !== 'LIQ').length, nLiq = L.length - nOrders;
-        U.replace(smSummary, `${nOrders} orders · ${nLiq} liquidation prices · ${new Set(L.map((l) => l.sid)).size} accounts · ${sm.scanned} of ${sm.total} accounts checked${sm.skipped ? ` (${sm.skipped} skipped: empty and never traded in the last snapshot)` : ''} · at ${U.fmtTime(sm.at)}`);
-        if (!markets.length) { U.replace(smSel); U.replace(smBands); U.replace(smLadder, UI.empty('No stop orders or open positions on the exchange right now.')); U.replace(smTable); return; }
+          const orders = ls.filter((l) => l.kind !== 'LIQ'), sl = orders.filter((l) => l.kind === 'SL');
+          return { pid, p, mark: m, ls, fires, orders, tp: orders.filter((l) => l.kind === 'TP'), sl, en: orders.filter((l) => l.kind === 'ENTRY'),
+            accounts: new Set(orders.map((l) => l.sid)).size, near2: AN.stopPressure(ls, m, 2, fires),
+            nearSl: nearest(sl.filter((l) => fires.get(l) > 0), m) };   // one behind its position's liquidation never fires
+        }));
+        const O = L.filter((l) => l.kind !== 'LIQ');
+        U.replace(smSummary, `${O.length} orders · ${new Set(O.map((l) => l.sid)).size} accounts · ${sm.scanned} of ${sm.total} accounts checked${sm.skipped ? ` (${sm.skipped} skipped: empty and never traded in the last snapshot)` : ''} · at ${U.fmtTime(sm.at)}`);
+        if (!markets.length) { U.replace(smSel); U.replace(smBands); U.replace(smLadder, UI.empty('No stop orders on the exchange right now.')); U.replace(smTable); return; }
         const cur = markets.find((x) => x.pid === smMarket) || markets[0]; smMarket = cur.pid;
         U.replace(smSel, UI.seg(markets.map((x) => ({ v: x.pid, label: x.p.displayTicker })), smMarket, (v) => { smMarket = v; renderStopMap(); }, 'sm'));
-        const ls = byMarket[cur.pid]; const m = cur.mark; const tick = cur.p.tickSize;
-        // the stops that would sell into a fall and buy into a rise near the mark, and apart from them the positions
-        // liquidated there (those go to Meridian's liquidator account, not into the book)
-        const usdC = (x) => U.fmtUsd(x, { compact: true });
-        const fires = cur.fires;
-        U.replace(smBands, BANDS.map((b) => { const pr = AN.stopPressure(ls, m, b, fires); return h('div.band', { title: `Within ${b}% of the mark. Stops: ${U.fmtUsd(pr.sells)} below it would sell into the order book as the price falls to them (longs' stop-losses, sell entry stops) and ${U.fmtUsd(pr.buys)} above it would buy as it rises (shorts' stop-losses, buy entry stops); a stop fires as a market order. Liquidations: ${U.fmtUsd(pr.liqDown)} of longs below and ${U.fmtUsd(pr.liqUp)} of shorts above, which Meridian hands to its liquidator account instead of selling them into the book. Each position counts once, at the exit the price reaches first, as if it moves there step by step: a gap can jump past a stop to the liquidation. Take-profits trade against the move and are not counted.` },
-          h('span.k', 'within ' + b + '%'), h('span.neg', '▼ ' + usdC(pr.sells), h('span.w', ' sells')), h('span.pos', '▲ ' + usdC(pr.buys), h('span.w', ' buys')),
-          h('span.liq', h('span', 'liq'), h('span', '▼ ' + usdC(pr.liqDown)), h('span', '▲ ' + usdC(pr.liqUp)))); }));
-        // the ladder keeps the levels within WIN% of the mark (a liquidation far away is no near pressure) and counts the
-        // rest; over 40 prices in that window, levels are binned
-        const WIN = 20;
-        const dense = new Set(ls.filter((l) => m > 0 && Math.abs(l.price - m) <= m * WIN / 100).map((l) => l.price)).size > 40;
-        const bin = dense && m > 0 ? m * 0.0025 : 0;
-        const level = (pr) => (bin ? Math.round(pr / bin) * bin : pr);
-        const rows = {};
-        for (const l of ls) { const k = level(l.price) + '|' + l.kind + '|' + l.flow; const r = rows[k] || (rows[k] = { price: level(l.price), kind: l.kind, flow: l.flow, usd: 0, qty: 0, items: [] }); r.usd += l.usd; r.qty += l.qty; r.items.push(l); }
-        const all = Object.values(rows).sort((a, b) => b.price - a.price);
-        const far = (r, up) => (m > 0 ? (up ? r.price > m * (1 + WIN / 100) : r.price < m * (1 - WIN / 100)) : false);
-        const farUp = all.filter((r) => far(r, true)), farDown = all.filter((r) => far(r, false));
-        const list = all.filter((r) => !far(r, true) && !far(r, false));
-        const farNote = (l, up) => (l.length ? h('div.xs.dim.center', { style: { padding: '6px' } }, `${l.length} more level${l.length === 1 ? '' : 's'} over ${WIN}% ${up ? 'above' : 'below'} the mark (${usdC(U.sum(l, (r) => r.usd))})`) : null);
-        const maxUsd = Math.max(1, ...list.map((r) => r.usd));
-        const KINDS = { TP: ['TP', 'green'], SL: ['SL', 'red'], ENTRY: ['entry', 'blue'], LIQ: ['liq', 'amber'] };
+        const { ls, fires } = cur, m = cur.mark, tick = cur.p.tickSize;
+        // the stops that would sell into a fall and buy into a rise near the mark, each position once
+        U.replace(smBands, BANDS.map((b) => { const pr = AN.stopPressure(ls, m, b, fires); return h('div.band', { title: `Within ${b}% of the mark: ${U.fmtUsd(pr.sells)} of stops below it would sell into the order book as the price falls to them (longs' stop-losses, sell entry stops) and ${U.fmtUsd(pr.buys)} above it would buy as it rises (shorts' stop-losses, buy entry stops); a stop fires as a market order. Each position counts once, at the exit the price reaches first, as if it moves there step by step; a stop behind its position's liquidation never fires (the liquidation map lists those). Take-profits trade against the move and are not counted.` },
+          h('span.k', 'within ' + b + '%'), h('span.neg', '▼' + NB + usdC(pr.sells), h('span.w', ' sells')), h('span.pos', '▲' + NB + usdC(pr.buys), h('span.w', ' buys'))); }));
+        // the ladder lists every order at its full size; one its position cannot reach is dimmed, with the reason
+        const lad = ladderRows(cur.orders, m, (l) => l.kind + '|' + l.flow);
+        const maxUsd = Math.max(1, ...lad.list.map((r) => r.usd));
+        const KINDS = { TP: ['TP', 'green'], SL: ['SL', 'red'], ENTRY: ['entry', 'blue'] };
+        // the exit of the same position the price reaches before an order that cannot happen (AN.stopFires)
+        const blocker = (i) => nearest(ls.filter((l) => l.pos === i.pos && l !== i && fires.get(l) > 0 && (i.price > m ? l.price > m && l.price <= i.price : l.price <= m && l.price >= i.price)), i.price);
+        const note = (i) => {
+          const f = fires.get(i);
+          if (f > 0) return f < i.qty * 0.999 ? ' · only ' + U.fmtQty(f, cur.p.lotSize) + ' left by then' : '';
+          const b = blocker(i);
+          return ' · won\'t happen: ' + (!b ? 'the position is closed by then' : b.kind === 'LIQ' ? 'liquidated first at ' + U.fmtPrice(b.price, tick) : 'closed first by its ' + (b.kind === 'TP' ? 'take-profit' : 'stop-loss') + ' at ' + U.fmtPrice(b.price, tick));
+        };
         const rowEl = (r) => {
           const dist = m > 0 ? ((r.price - m) / m) * 100 : null;
           const accts = new Set(r.items.map((i) => i.sid)).size;
-          // an order its position cannot reach (closed by a nearer exit or liquidated first) is listed, dimmed
-          const note = (i) => { const f = fires.get(i); return !(f > 0) ? ' · won\'t happen: the position is closed by then' : f < i.qty * 0.999 ? ' · only ' + U.fmtQty(f, cur.p.lotSize) + ' left by then' : ''; };
           const dead = !r.items.some((i) => fires.get(i) > 0);
           const detail = h('div.smap-detail', { style: { display: 'none' } }, r.items.map((i) => h('div.row.small',
             h('a.addr', { href: U.accountUrl(i.account, i.sid) }, U.shortAddr(i.account)),
-            h('span.dim', (i.kind === 'LIQ' ? 'liquidates ' + i.posSide + ' · to the liquidator' : (i.kind === 'ENTRY' ? 'opens ' + i.posSide : 'closes ' + i.posSide) + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '')) + note(i)),
+            h('span.dim', (i.kind === 'ENTRY' ? 'opens ' : 'closes ') + i.posSide + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '') + note(i)),
             h('span.grow'), h('span.num', U.fmtQty(i.qty, cur.p.lotSize) + ' · ' + U.fmtUsd(i.usd, { compact: true })))));
-          const title = dead ? 'Won\'t happen: these positions are closed by then (a nearer stop, or their liquidation)'
-            : r.kind === 'LIQ' ? 'Liquidated here: Meridian hands the position to its liquidator account instead of selling it into the order book'
-            : r.flow === 'sell' ? 'Sells when the price gets here' : 'Buys when the price gets here';
-          const el = h('div.lvl', { class: r.flow + (dead ? ' dead' : ''), title, onclick: () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; } },
+          const title = dead ? 'Won\'t happen: these positions are closed by then (a nearer exit, or their liquidation)' : r.flow === 'sell' ? 'Sells when the price gets here' : 'Buys when the price gets here';
+          const el = h('div.lvl', { class: r.flow + (dead ? ' dead' : ''), title, onclick: toggleDetail(detail) },
             h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
-            h('span', (bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
+            h('span', (lad.bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
             h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),
             h('span', UI.chip(KINDS[r.kind][0], KINDS[r.kind][1])),
             h('span', { class: r.flow === 'sell' ? 'neg' : 'pos' }, r.flow === 'sell' ? '▼ sell' : '▲ buy'),
@@ -338,44 +375,111 @@
             h('span.dim', accts + (accts === 1 ? ' acct' : ' accts')));
           return [el, detail];
         };
-        U.replace(smLadder,
-          h('div.hdr', h('span', 'Price'), h('span', 'vs mark'), h('span', 'Type'), h('span', 'Then'), h('span', 'Notional'), h('span', 'Accounts')),
-          farNote(farUp, true),
-          list.filter((r) => r.price > m).map(rowEl),
-          h('div.mid', h('span.bold', 'mark ' + U.fmtPrice(m, tick)), h('span.dim.xs', '  ' + cur.p.displayTicker)),
-          list.filter((r) => r.price <= m).map(rowEl),
-          farNote(farDown, false),
-          dense ? h('div.xs.dim.center', { style: { padding: '6px' } }, 'levels binned to 0.25% of mark') : null);
-        const nearCell = (l, r) => (l ? h('span', U.fmtPrice(l.price, r.p.tickSize), h('span.xs.dim', ' ' + U.fmtPct(((l.price - r.mark) / r.mark) * 100, { sign: true, dp: 1 }))) : h('span.dim', '—'));
+        U.replace(smLadder, ladderBody(h('div.hdr', h('span', 'Price'), h('span', 'vs mark'), h('span', 'Type'), h('span', 'Then'), h('span', 'Notional'), h('span', 'Accounts')), lad, m, cur, rowEl));
         U.replace(smTable, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker) },
-            { key: 'n', label: 'TP / SL / entry / liq', num: true, title: 'Take-profits, stop-losses, entry stops and liquidation prices', render: (r) => h('span', h('span.pos', String(r.tp.length)), h('span.dim', ' / '), h('span.neg', String(r.sl.length)), h('span.dim', ' / '), String(r.en.length), h('span.dim', ' / '), h('span', { style: { color: 'var(--amber)' } }, String(r.lq.length))) },
+            { key: 'n', label: 'TP / SL / entry', num: true, title: 'Take-profits, stop-losses and entry stops', render: (r) => h('span', h('span.pos', String(r.tp.length)), h('span.dim', ' / '), h('span.neg', String(r.sl.length)), h('span.dim', ' / '), String(r.en.length)) },
             { key: 'sells', label: '▼ Sells ≤2%', num: true, title: 'Stops within 2% below the mark that would sell into the order book in a fall, each position once', render: (r) => h('span.neg', usdC(r.near2.sells)) },
             { key: 'buys', label: '▲ Buys ≤2%', num: true, title: 'Stops within 2% above the mark that would buy into the order book in a rise, each position once', render: (r) => h('span.pos', usdC(r.near2.buys)) },
-            { key: 'liq2', label: 'Liq. ≤2%', num: true, title: 'Positions liquidated within 2% of the mark, ▼ longs below it and ▲ shorts above it, each once: Meridian hands them to its liquidator account instead of selling them into the book', render: (r) => { const d = r.near2.liqDown, u = r.near2.liqUp; return d || u ? h('span.amb', [d ? '▼ ' + usdC(d) : '', u ? '▲ ' + usdC(u) : ''].filter(Boolean).join(' ')) : h('span.dim', '—'); } },
             { key: 'nsl', label: 'Nearest SL', num: true, title: 'The stop-loss closest to the mark that can fire (one behind its position\'s liquidation never does)', render: (r) => nearCell(r.nearSl, r) },
-            { key: 'nlq', label: 'Nearest liq.', num: true, title: 'The liquidation price closest to the mark that the price can reach first (a position whose stop-loss closes it before is left out, though a gap can jump past the stop)', render: (r) => nearCell(r.nearLq, r) },
             { key: 'a', label: 'Accounts', num: true, render: (r) => String(r.accounts) },
           ], rows: markets, onRow: (r) => { smMarket = r.pid; renderStopMap(); }, rowClass: (r) => (r.pid === smMarket ? 'sel' : ''), phone: { title: 'm', aside: 'a' },
         }));
       }
-      // scans only while the card is open: at once on opening (unless the last scan is under 2 minutes old), then every
-      // 2 minutes; closing it stops the rescans and keeps what was found
+
+      // ---- liquidation map: every open position's liquidation price, and Meridian's liquidator ----
+      // A liquidated position goes to the liquidator account at its bankruptcy price, not into the order book. The
+      // liquidator's pool in the market's currency pays for a jump past that price; when it cannot, Meridian force-closes
+      // positions on the winning side (auto-deleveraging). The jump that would drain each pool: AN.liquidatorDrain.
+      const jump = (x, up) => (x == null ? h('span.dim', (up ? '▲' : '▼') + NB + '>30%') : h(up ? 'span.pos' : 'span.neg', (up ? '▲' : '▼') + NB + x.toFixed(1) + '%'));
+      function renderLiqMap() {
+        if (!sm) return;
+        const L = sm.levels.filter((l) => !U.isExcluded(l.account));   // left-out wallets (U.EXCLUDED) are not listed
+        const byMarket = U.groupBy(L, (l) => l.productId);
+        // the drain counts every account's positions, the left-out wallets' too: the liquidator takes those over as well
+        const allLiq = U.groupBy(sm.levels.filter((l) => l.kind === 'LIQ'), (l) => l.productId);
+        const markets = sortMarkets(Object.keys(byMarket).filter((pid) => ref.byId[pid] && byMarket[pid].some((l) => l.kind === 'LIQ')).map((pid) => {
+          const ls = byMarket[pid]; const p = ref.byId[pid]; const m = mark(p);
+          const fires = AN.stopFires(ls, m);   // a position whose stop-loss closes it first is not liquidated as the price moves there
+          const lq = ls.filter((l) => l.kind === 'LIQ');
+          const reached = (side) => lq.filter((l) => l.posSide === side && fires.get(l) > 0);
+          const pool = sm.pools ? sm.pools[String(p.quoteTokenAddress).toLowerCase()] || 0 : null;
+          return { pid, p, mark: m, ls, fires, lq, longs: lq.filter((l) => l.posSide === 'long').length, shorts: lq.filter((l) => l.posSide === 'short').length,
+            near5: AN.stopPressure(ls, m, 5, fires), nearLong: nearest(reached('long'), m), nearShort: nearest(reached('short'), m),
+            pool, drain: pool == null ? null : AN.liquidatorDrain(allLiq[pid] || [], m, pool), shared: AN.marketCategory(p) === 'crypto' };
+        }));
+        const LQ = L.filter((l) => l.kind === 'LIQ');
+        U.replace(lmSummary, `${LQ.length} positions with a liquidation price · ${new Set(LQ.map((l) => l.sid)).size} accounts · ${sm.pools ? 'the liquidator\'s pools read' : 'the liquidator\'s pools could not be read'} · ${sm.scanned} of ${sm.total} accounts checked · at ${U.fmtTime(sm.at)}`);
+        if (!markets.length) { U.replace(lmSel); U.replace(lmBands); U.replace(lmPool); U.replace(lmLadder, UI.empty('No open position has a liquidation price right now.')); U.replace(lmTable); return; }
+        const cur = markets.find((x) => x.pid === lmMarket) || markets[0]; lmMarket = cur.pid;
+        U.replace(lmSel, UI.seg(markets.map((x) => ({ v: x.pid, label: x.p.displayTicker })), lmMarket, (v) => { lmMarket = v; renderLiqMap(); }, 'sm'));
+        const { ls, fires } = cur, m = cur.mark, tick = cur.p.tickSize, base = cur.p.baseTokenName;
+        // the positions liquidated as the price moves within 1, 2 and 5% of the mark, each once
+        U.replace(lmBands, BANDS.map((b) => { const pr = AN.stopPressure(ls, m, b, fires); return h('div.band', { title: `Within ${b}% of the mark: ${U.fmtUsd(pr.liqDown)} of longs below it and ${U.fmtUsd(pr.liqUp)} of shorts above it are liquidated as the price moves there, each position once (one whose stop-loss closes it first is left out, though a gap can jump past the stop). The liquidator takes them over; nothing is sold into the order book.` },
+          h('span.k', 'within ' + b + '%'), h('span.neg', '▼' + NB + usdC(pr.liqDown), h('span.w', ' longs')), h('span.pos', '▲' + NB + usdC(pr.liqUp), h('span.w', ' shorts'))); }));
+        // the liquidator's pool for the market, and the jump that would drain it
+        U.replace(lmPool,
+          h('div.band', { title: `What Meridian's liquidator account holds in the market's margin pool, read at the scan. It takes every liquidated position over at its bankruptcy price (where the trader's margin is gone) and pays for a jump past that price from this pool.${cur.shared ? ' Every crypto market shares it.' : ''}` },
+            h('span.k', 'liquidator pool'), h('span', cur.pool == null ? '—' : U.fmtUsd(cur.pool)), h('span.xs.dim', cur.shared ? 'shared by every crypto market' : 'for ' + cur.p.displayTicker + ' only')),
+          h('div.band', { title: `How far the price would have to jump from the mark in one go (a gap at a reopening) for the liquidator to lose more than its pool on the positions the jump liquidates, each counted whole (a gap passes their stops too). Then Meridian auto-deleverages: it force-closes winning positions on the other side outside the order book, ${base} shorts after a fall and ${base} longs after a rise.${cur.shared ? ' As if this market moved alone: a fall across the coins drains the shared pool sooner.' : ''}` },
+            h('span.k', 'drained by a jump of'), cur.drain ? h('span', jump(cur.drain.down, false), ' ', jump(cur.drain.up, true)) : h('span.dim', '—'), h('span.xs.dim', 'then winning positions are force-closed')));
+        // the ladder: every liquidation price by price and side; one its position's stop-loss comes before is dimmed
+        const lad = ladderRows(cur.lq, m, (l) => l.posSide);
+        const maxUsd = Math.max(1, ...lad.list.map((r) => r.usd));
+        const stopFirst = (i) => nearest(ls.filter((l) => l.pos === i.pos && l.kind !== 'LIQ' && fires.get(l) > 0 && (i.posSide === 'long' ? l.price <= m && l.price >= i.price : l.price > m && l.price <= i.price)), i.price);
+        const rowEl = (r) => {
+          const dist = m > 0 ? ((r.price - m) / m) * 100 : null;
+          const accts = new Set(r.items.map((i) => i.sid)).size;
+          const dead = !r.items.some((i) => fires.get(i) > 0);
+          const detail = h('div.smap-detail', { style: { display: 'none' } }, r.items.map((i) => {
+            const f = fires.get(i), s = f >= i.qty * 0.999 ? null : stopFirst(i);
+            return h('div.row.small',
+              h('a.addr', { href: U.accountUrl(i.account, i.sid) }, U.shortAddr(i.account)),
+              h('span.dim', i.posSide + (i.bk != null ? ' · margin gone at ' + U.fmtPrice(i.bk, tick) : '') + (s ? ' · its stop-loss at ' + U.fmtPrice(s.price, tick) + (f > 0 ? ' closes part of it first' : ' closes it first, unless a gap jumps past it') : '')),
+              h('span.grow'), h('span.num', U.fmtQty(i.qty, cur.p.lotSize) + ' · ' + U.fmtUsd(i.usd, { compact: true })));
+          }));
+          const title = dead ? 'Their stop-losses close these positions first, unless a gap jumps past them' : (r.side === 'long' ? 'Longs liquidated when the price falls here' : 'Shorts liquidated when the price rises here') + ': the liquidator takes them over, nothing is sold into the order book';
+          const el = h('div.lvl', { class: dead ? 'dead' : null, title, onclick: toggleDetail(detail) },
+            h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
+            h('span', (lad.bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
+            h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),
+            h('span', UI.chip(r.side, r.side === 'long' ? 'green' : 'red')),
+            h('span.num', usdC(r.usd)),
+            h('span.dim', accts + (accts === 1 ? ' acct' : ' accts')));
+          return [el, detail];
+        };
+        U.replace(lmLadder, ladderBody(h('div.hdr', h('span', 'Liq. price'), h('span', 'vs mark'), h('span', 'Side'), h('span', 'Notional'), h('span', 'Accounts')), lad, m, cur, rowEl));
+        // a liquidation over 100% away (a short with far more margin than it needs) is practically never: no figures
+        const liqCell = (l, r) => (l && Math.abs(l.price / r.mark - 1) >= 1 ? h('span.dim', { title: U.fmtPrice(l.price, r.p.tickSize) }, '>+100%') : nearCell(l, r));
+        U.replace(lmTable, UI.table({
+          cols: [
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker) },
+            { key: 'n', label: 'Longs / shorts', num: true, title: 'Open positions with a liquidation price', render: (r) => r.longs + ' / ' + r.shorts },
+            { key: 'nl', label: 'Nearest long', num: true, title: 'The long liquidated first as the price falls (one whose stop-loss closes it before is left out)', render: (r) => liqCell(r.nearLong, r) },
+            { key: 'ns', label: 'Nearest short', num: true, title: 'The short liquidated first as the price rises (one whose stop-loss closes it before is left out; over 100% away it practically never is)', render: (r) => liqCell(r.nearShort, r) },
+            { key: 'w5', label: 'Liq. ≤5%', num: true, title: 'Positions liquidated within 5% of the mark, ▼ longs below it and ▲ shorts above it, each once', render: (r) => { const d = r.near5.liqDown, u = r.near5.liqUp; return d || u ? h('span', d ? h('span.neg', '▼' + NB + usdC(d)) : null, d && u ? ' ' : null, u ? h('span.pos', '▲' + NB + usdC(u)) : null) : h('span.dim', '—'); } },
+            { key: 'pool', label: 'Liquidator pool', num: true, title: 'What Meridian\'s liquidator account holds in the market\'s margin pool (the crypto markets share one)', render: (r) => (r.pool == null ? h('span.dim', '—') : h('span', usdC(r.pool), r.shared ? h('span.xs.dim', ' shared') : null)) },
+            { key: 'drain', label: 'Pool drained by', num: true, title: 'The jump of the price, in one go (a gap at a reopening), that would make the liquidator lose more than its pool; after that Meridian force-closes winning positions (auto-deleveraging)', render: (r) => (r.drain ? h('span', jump(r.drain.down, false), ' ', jump(r.drain.up, true)) : h('span.dim', '—')) },
+          ], rows: markets, onRow: (r) => { lmMarket = r.pid; renderLiqMap(); }, rowClass: (r) => (r.pid === lmMarket ? 'sel' : ''), phone: { title: 'm', aside: 'drain' },
+        }));
+      }
+      // scans only while the stop map or the liquidation map is open: at once on opening one (unless the last scan is under
+      // 2 minutes old), then every 2 minutes; closing both stops the rescans and keeps what was found
       let smT = null;
-      smOpen = (open) => {
+      scanOpen = () => {
         clearInterval(smT); smT = null;
-        if (!open) return;
+        if (!stopCard.classList.contains('open') && !liqCard.classList.contains('open')) return;
         if (!sm || Date.now() - sm.at >= 120000) scanStops();
         smT = setInterval(scanStops, 120000);
       };
       ctx.onCleanup(() => clearInterval(smT));
-      if (stopCard.classList.contains('open')) smOpen(true);   // opened while the page was still loading
+      scanOpen();   // one opened while the page was still loading
 
       // the coins' market caps (CoinGecko, kept 12 hours in this browser) order the crypto markets; until they arrive, or
       // without them, each coin's last known size does (AN.marketSize)
       A.marketCaps(ref.active.filter((p) => AN.marketCategory(p) === 'crypto').map((p) => p.baseTokenName), ctx)
-        .then((c) => { caps = c; renderMarketsThrottled(); renderStopMap(); })
+        .then((c) => { caps = c; renderMarketsThrottled(); renderStopMap(); renderLiqMap(); })
         .catch((e) => { if (!isAbort(e)) console.warn('market caps', e && e.message); });
 
       // ---- live trades ----

@@ -187,6 +187,28 @@ test('stop map: each position counts once, at the exits the price reaches first;
   near(assert, tp2.buys, 3 * 102, 1e-9, 'the stop at +3% is outside'); near(assert, tp2.liqUp, 101, 1e-9);
 });
 
+test('liquidation map: the bankruptcy price, and the jump that would drain the liquidator\'s pool', () => {
+  // an isolated 50x SPY long (k = 1/(2·50) + the 0.005% taker fee): its margin is gone k below its liquidation price
+  const ST = '0xspy';
+  const ref = { byId: { spy: { id: 'spy', displayTicker: 'SPY-USD', quoteTokenAddress: ST, quoteTokenName: 'SPY', maxLeverage: 50, takerFee: '0.00005' } } };
+  const st = AN.accountState({ balances: [{ tokenAddress: ST, tokenName: 'SPY', amount: '700', available: '0', totalUsed: '700' }],
+    positions: [{ productId: 'spy', size: '20', cost: '15000', fundingUsd: '0', positionFeeUsd: '0' }], ref, prices: { spy: { oraclePrice: '760' } } });
+  const r = st.positions[0], k = 1 / 100 + 0.00005;
+  near(assert, AN.bankruptcyPrice(r), 760 - (700 + 20 * (760 - 750)) / 20, 1e-9, 'where the pool\'s equity is 0');
+  near(assert, AN.bankruptcyPrice(r), r.liqPrice * (1 - k), 1e-9, 'alone in its pool: the liquidation price × (1 − k)');
+  // a jump past the bankruptcy price costs the liquidator the difference: 10 × (94 − x) > 47.5 from x < 89.25, so the
+  // first 0.1 step past it is 10.8%
+  const L = (side, price, bk, qty) => ({ posSide: side, price, bk, qty });
+  assert.deepEqual(AN.liquidatorDrain([L('long', 95, 94, 10)], 100, 47.5), { down: 10.8, up: null });
+  // a position the jump liquidates before its margin is gone pays the liquidator what was left, which covers the others
+  assert.equal(AN.liquidatorDrain([L('long', 95, 94, 10), L('long', 90, 50, 10)], 100, 47.5).down, null, 'a gain of 10 × (x − 50) outweighs it');
+  // shorts on a rise; an empty pool drains on any loss; none past max
+  assert.deepEqual(AN.liquidatorDrain([L('short', 105, 106, 10)], 100, 47.5), { down: null, up: 10.8 });
+  assert.equal(AN.liquidatorDrain([L('short', 105, 106.05, 10)], 100, 0).up, 6.1, 'an empty pool: any loss at all');
+  assert.equal(AN.liquidatorDrain([L('long', 50, 49, 10)], 100, 47.5).down, null, 'over 30%: not within it');
+  assert.equal(AN.liquidatorDrain([L('long', 50, 49, 10)], 100, 47.5, 60).down, 55.8);
+});
+
 test('drawdown and PnL ignore deposits and withdrawals', () => {
   const row = (t, pnl, dep, wd, bal) => ({ t, pnl, deposit: dep, withdrawal: wd, balance: bal, upnl: 0, equity: bal, fee: 0, funding: 0, volume: 0 });
   // start 1,000; lose 100; deposit 500 (not a gain); lose 50; withdraw 400 (not a loss)
