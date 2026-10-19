@@ -391,6 +391,46 @@ async function attachClaims(norms, trades) {
   console.log(`  predict: claimable winnings ${total.toFixed(2)} USDe in ${holders} wallets (asked ${ask.length} of ${Object.keys(cand).length} that can hold a paying token, ${requests} requests)`);
   return { at, of };
 }
+// The API's claimable positions can lag the chain: on 2026-10-20 it still listed 40 tokens for 0xc1ce…2bf2 to claim on a
+// July win, though the wallet had sold them to the Vault in the very transactions that placed its bets and redeemed the
+// rest on 15 Sep (its balance of the token is 0; every other listed position matched the chain). So each listed position
+// is read on-chain, its side's position token's balanceOf at the chain head (40 calls a request): the lower balance
+// counts and a position the chain shows empty is dropped. A failed read keeps the API's answer (agg.claimOnChain unset).
+/** The reads for a claimable read's positions (of: wallet → [{pc, side, bal}]): each position with its side's token,
+ *  from the predictions' tokens (a position whose token no prediction carries is not read). */
+export function claimReads(of, norms) {
+  const tokOf = dict();
+  for (const n of norms) { const pc = String(n.pc || '').toLowerCase(); if (!pc) continue; if (n.tokP) tokOf[pc + '|P'] = n.tokP; if (n.tokC) tokOf[pc + '|C'] = n.tokC; }
+  const out = [];
+  for (const a of Object.keys(of)) for (const e of of[a]) { const tok = tokOf[String(e.pc || '').toLowerCase() + '|' + e.side]; if (tok && isAddr(a)) out.push({ a, e, tok }); }
+  return out;
+}
+/** The balanceOf call for a read: {method, params} for rpcBatch. */
+export const balanceCall = (r) => ({ method: 'eth_call', params: [{ to: r.tok, data: '0x70a08231' + r.a.slice(2).padStart(64, '0') }, 'latest'] });
+/** Apply the chain's answers (rpcBatch results, in the reads' order) to the positions in `of`: a lower balance counts (to a
+ *  millionth of a USDe, as claimEntries), an empty position is dropped, a call without an answer leaves the API's balance.
+ *  Returns {read, lowered, dropped, unread}. */
+export function capClaims(of, reads, results) {
+  let lowered = 0, unread = 0;
+  reads.forEach((r, i) => {
+    const x = results[i]; const hex = x && !x.error && typeof x.result === 'string' ? x.result : null;
+    if (!hex || !/^0x[0-9a-f]+$/i.test(hex)) { unread++; return; }
+    // 18 decimals, rounded to a millionth as claimEntries rounds the API's balance (truncating made equal balances differ
+    // by 0.000001); a winning token pays 1 USDe
+    const bal = Math.round(Number(BigInt(hex)) / 1e12) / 1e6;
+    if (bal < r.e.bal - 5e-7) { r.e.bal = bal; lowered++; }
+  });
+  let dropped = 0;
+  for (const a of Object.keys(of)) { const before = of[a].length; of[a] = of[a].filter((e) => e.bal > 1e-9); dropped += before - of[a].length; }
+  return { read: reads.length - unread, lowered, dropped, unread };
+}
+async function checkClaimsOnChain(norms, claims) {
+  const reads = claimReads(claims.of, norms), results = [];
+  for (let i = 0; i < reads.length; i += 40) { if (i) await sleep(300); results.push(...await rpcBatch(reads.slice(i, i + 40).map(balanceCall))); }
+  const r = capClaims(claims.of, reads, results);
+  console.log(`  predict: claimable positions read on-chain: ${r.read} of ${reads.length}, ${r.lowered} hold less than the API lists (${r.dropped} nothing)${r.unread ? `, ${r.unread} unread (the API's balance stands)` : ''}`);
+  return r.unread === 0;
+}
 
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
@@ -412,8 +452,12 @@ async function buildPredict() {
   if (raw.truncated && !limit) { console.error('predict: a time window hit its page cap, so the history is incomplete; not writing a snapshot (raise windows or maxPagesPerWindow)'); process.exit(1); }
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
   // has its file (the publish step checks that, and that the count stays close to the API's)
-  // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads
-  const all = (limit ? raw.slice(0, limit) : raw).map(P.norm).filter((n) => !P.excluded(n));
+  // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads; predict.json keeps only their count, stakes,
+  // dates and the makers they were against (leftOut), so the Overview can say what its totals leave out
+  const normed = (limit ? raw.slice(0, limit) : raw).map(P.norm);
+  const left = normed.filter(P.excluded), all = normed.filter((n) => !P.excluded(n));
+  const leftOut = left.length ? { n: left.length, stake: Math.round(U.sum(left, (n) => n.stake) * 100) / 100, cp: Math.round(U.sum(left, (n) => n.cp) * 100) / 100,
+    from: Math.min(...left.map((n) => n.t)), to: Math.max(...left.map((n) => n.t)), makers: Array.from(new Set(left.map((n) => n.counterparty).filter((a) => !P.EXCLUDED.has(a)))) } : null;
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
@@ -432,8 +476,10 @@ async function buildPredict() {
   let claims = null;
   try { claims = await attachClaims(norms, trades); }
   catch (e) { console.warn('predict: claimable positions failed, the files go out without them:', e.message); }
+  let claimOnChain = false;
+  if (claims) { try { claimOnChain = await checkClaimsOnChain(norms, claims); } catch (e) { console.warn('predict: on-chain read of the claimable positions failed, the API\'s balances stand:', e.message); } }
   const agg = P.aggregate(norms, { tapeSize: 25, trades, claims: claims ? claims.of : null });   // the Overview's tape shows 25
-  if (claims) agg.claimAt = claims.at;
+  if (claims) { agg.claimAt = claims.at; if (claimOnChain) agg.claimOnChain = true; }
   if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
@@ -520,7 +566,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, leftOut, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);

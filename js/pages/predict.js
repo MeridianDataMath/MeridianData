@@ -20,17 +20,19 @@
   // win rates to two decimals, as Meridian's app shows them (24.01 %)
   const winPct = (x) => (x == null || !Number.isFinite(x) ? '—' : U.fmtPct(x, { dp: 2 }));
   // Records and win rates are Meridian's app's (its Positions Won / Lost and Win Rate, P.appRecord): a prediction counts
-  // once it is claimed and stays pending until then. The site's own count, every decided prediction at its verdict,
-  // claimed or not, goes in the title. app false: a snapshot from before its rows kept the app's counts, whose figure is
-  // the site's count.
+  // once it is settled on-chain and stays pending until then. Settling is its own call, which anyone can send once the
+  // verdict is in (Meridian's docs, Resolution & Settlement: settle, then redeem to claim); a winner's claim sends it when
+  // nobody has, as for 62 of the 63 big wins (2026-10-20), while the makers' wins are mostly settled by a bot that redeems
+  // later. The site's own count, every decided prediction at its verdict, settled or not, goes in the title. app false: a
+  // snapshot from before its rows kept the app's counts, whose figure is the site's count.
   const recTitle = (app, vWon, vLost) => (app
-    ? `As Meridian's app counts them (Positions Won / Lost, Win Rate): a prediction counts once it is claimed and stays pending until then. Site's figure, every decided prediction at its verdict, claimed or not: ${U.fmtNum(vWon, 0)}W / ${U.fmtNum(vLost, 0)}L, ${winPct(vWon + vLost ? (vWon / (vWon + vLost)) * 100 : null)}`
-    : 'Every decided prediction at its verdict, claimed or not (this snapshot predates the app\'s counts, which take a prediction only once it is claimed)');
+    ? `As Meridian's app counts them (Positions Won / Lost, Win Rate): a prediction counts once it is settled on-chain (a winner's claim settles it, unless someone already has) and stays pending until then. Site's figure, every decided prediction at its verdict, settled or not: ${U.fmtNum(vWon, 0)}W / ${U.fmtNum(vLost, 0)}L, ${winPct(vWon + vLost ? (vWon / (vWon + vLost)) * 100 : null)}`
+    : 'Every decided prediction at its verdict, settled or not (this snapshot predates the app\'s counts, which take a prediction only once it is settled on-chain)');
   /** A row's win rate as the app counts it (P.rowRecord: a bettor's or a maker's row, from its own side), the site's count in its title. */
   const winCell = (r) => { const rec = P.rowRecord(r); return h(rec.winRate == null ? 'span.dim' : 'span', { title: recTitle(rec.app, r.won || 0, r.lost || 0) }, winPct(rec.winRate)); };
-  const WIN_COL_TITLE = 'Won ÷ (won + lost) as Meridian\'s app counts them (its Win Rate): only claimed predictions count, and one decided but not yet claimed is still pending there. A figure\'s tooltip has the site\'s own count, every decided prediction at its verdict';
+  const WIN_COL_TITLE = 'Won ÷ (won + lost) as Meridian\'s app counts them (its Win Rate): only predictions settled on-chain count (a winner\'s claim settles one, unless someone already has), and one decided but not settled yet is still pending there. A figure\'s tooltip has the site\'s own count, every decided prediction at its verdict';
   // a breakdown by category or legs has no counterpart in the app: it counts every decided prediction at its verdict
-  const BREAKDOWN_WIN_TITLE = 'Won ÷ (won + lost) over the decided predictions in this row, claimed or not, each at its verdict. Meridian\'s app has no such breakdown; its Win Rate, which counts only claimed predictions, is the one the win-rate tiles and the wallets\' rows show';
+  const BREAKDOWN_WIN_TITLE = 'Won ÷ (won + lost) over the decided predictions in this row, settled or not, each at its verdict. Meridian\'s app has no such breakdown; its Win Rate, which counts only predictions settled on-chain, is the one the win-rate tiles and the wallets\' rows show';
   // the launch (P.LAUNCH_SEC) as its UTC day: what the snapshot starts from
   const LAUNCH_DAY = new Date(P.LAUNCH_SEC * 1000).toISOString().slice(0, 10);
   const pnlEl = (x) => h('span', { class: 'num ' + U.pnlClass(x) }, usd(x, { sign: true }));
@@ -57,6 +59,10 @@
     odds: { key: 'ao', label: 'Avg bettor odds', num: true, title: 'Average locked odds of the bettors it took: stake ÷ (stake + collateral)', render: (r) => pct(r.avgOdds, 0) },
     topCat: { key: 'cat', label: 'Top category', title: 'The category with the most predictions taken (a tie goes to the larger stake). Mixed: a combo with legs in more than one category.', render: (r) => r.topCat || '—' },
   });
+  // counterparties Meridian's own docs name: its Contracts page lists 0x79cB…552D as the Predict Vault
+  const CONTRACTS_URL = 'https://docs.meridian.xyz/protocol-reference/contracts';
+  const MAKER_NAMES = { '0x79cb914f3f336426e89fab55a9488ab25770552d': 'Meridian Vault' };
+  const makerName = (a) => (MAKER_NAMES[a] ? h('a.dim.xs', { href: CONTRACTS_URL, target: '_blank', rel: 'noopener', title: 'Meridian\'s Predict Vault contract, as Meridian\'s docs list it (Contracts)', onclick: (e) => e.stopPropagation() }, MAKER_NAMES[a]) : null);
 
   // ---------- snapshot: the newest of data/predict.json (Pages) and the "snapshots" branch (pushed from a PC),
   //            else a recent-window build in the browser ----------
@@ -147,13 +153,18 @@
     await withSnapshot(body, ctx, async (snap) => {
       const a = snap.agg; const T = a.totals; const MK = P.splitMakers(a.makers); const M = makerCols(T, a);
       const withSec = !!a.secondary;   // no secondary-market trades in this aggregate (the browser build, or a failed trades fetch)
+      // how the count meets Meridian's own (its API's total when the snapshot was read), said only when the parts add up
+      // exactly (a bet placed while the snapshot was read would make them differ)
+      const LO = snap.leftOut;
+      const apiNote = snap.apiTotal && snap.preLaunch != null && snap.apiTotal - snap.preLaunch - (LO ? LO.n : 0) - (T.selfMatched || 0) === T.n
+        ? `Meridian's API counted ${U.fmtNum(snap.apiTotal, 0)} predictions when this snapshot was read. Not counted here: ${U.fmtNum(snap.preLaunch, 0)} launch-day test predictions it files before the launch (no questions attached)` + (LO ? `, ${U.fmtNum(LO.n, 0)} by a wallet this site leaves out (below the tables)` : '') + (T.selfMatched ? `, ${U.fmtNum(T.selfMatched, 0)} a wallet placed against itself` : '') + '.' : '';
       const tiles = h('div.stats',
-        UI.stat('Predictions', U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
+        UI.stat('Predictions', apiNote ? h('span', { title: apiNote }, U.fmtNum(T.n, 0)) : U.fmtNum(T.n, 0), T.decided != null ? `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.decided, 0)} decided` : `${U.fmtNum(T.open, 0)} open · ${U.fmtNum(T.settled, 0)} settled`),
         UI.stat('Wagered', usd(T.wagered, { compact: true }), 'bettor stakes'),
         UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), 'put up against those stakes'),
         UI.stat('Bettors', U.fmtNum(T.bettors, 0), `${MK.makers.length} market maker${MK.makers.length === 1 ? '' : 's'}`),
         // every bettor's record as Meridian's app counts it, added up (the rows' appWon / appLost)
-        UI.stat('Bettor win rate', h('span', { title: recTitle(T.appWon != null, T.won || 0, T.lost || 0) }, winPct(T.appWon != null ? T.appWinRate : T.winRate)), T.appWon != null ? 'of claimed predictions, as Meridian\'s app counts them' : 'of decided predictions'),
+        UI.stat('Bettor win rate', h('span', { title: recTitle(T.appWon != null, T.won || 0, T.lost || 0) }, winPct(T.appWon != null ? T.appWinRate : T.winRate)), T.appWon != null ? 'of settled predictions, as Meridian\'s app counts them' : 'of decided predictions'),
         UI.stat('Bettor net result', usd(T.bettorPnl, { sign: true }), withSec ? 'decided, claimed or not · incl. positions sold on the secondary market' : 'decided, claimed or not · secondary-market sales not counted', U.pnlClass(T.bettorPnl)),
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), a.vig.overall.avg == null ? 'odds vs Polymarket price at bet time' : `odds vs Polymarket price at bet time · ${U.fmtNum(a.vig.overall.n, 0)} of ${U.fmtNum((a.vig.coverage || {}).total || T.n, 0)} predictions; combos with legs on the same match or asset left out`));
@@ -182,7 +193,7 @@
         if (n.cashOut && !n.decided && !soldOut(n)) return n.cashOut.cost > 0 ? n.cashOut.cash / n.cashOut.cost : null;
         return g.in > 0 ? (g.in + g.lp) / g.in : null; };
       const BW_SORTS = [
-        { v: 'recent', label: 'Recent', title: 'Latest settlement first (claimed or not); a cash-out from its last sale when it sold everything or the picks are still open', val: winTime },
+        { v: 'recent', label: 'Recent', title: 'Latest verdict first (claimed or not); a cash-out from its last sale when it sold everything or the picks are still open', val: winTime },
         { v: 'pnl', label: 'PnL', title: withSec ? 'Largest profit first: payout − stake (a bettor who traded its tokens: its own result, sales included)' : 'Largest profit first: payout − stake', val: (n) => bigPnl(n) },
         { v: 'mult', label: 'Multiplier', title: 'Highest return on the stake first: payout ÷ stake (a bettor who traded its tokens: what came back ÷ what it staked)', val: (n) => bigMult(n) || 0 }];
       let bwSort = 'recent', bigWins = null, bigAt = 0;
@@ -213,7 +224,7 @@
         { key: 'p', label: 'Bettor PnL', num: true, title: tblPnlTitle, render: (r) => pnlEl(r.pnl) },
       ], rows: a.combos });
       const makersTbl = UI.table({ cols: [
-        { key: 'a', label: 'Market maker', render: (r) => bettorLink(r.address, 6) },
+        { key: 'a', label: 'Market maker', render: (r) => h('span', bettorLink(r.address, 6), MAKER_NAMES[r.address] ? [' ', makerName(r.address)] : null) },
         { key: 'n', label: 'Taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
         M.share, M.committed, M.open, M.pnl, M.winRate, M.vig,
         { key: 'f', label: 'Last taken', title: 'When this maker last took the other side of a prediction', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
@@ -231,14 +242,18 @@
       const snapEl = h('span.dim.small', snapNote(snap));
       const tAgo = setInterval(() => { snapEl.textContent = snapNote(snap); }, 30000); ctx.onCleanup(() => clearInterval(tAgo));
       U.replace(body,
-        h('div.row.wrap', snapEl, h('span.grow'), h('span.dim.small', 'Meridian Predict runs on Sapience; questions mirror Polymarket markets, USDe collateral, RFQ auctions against market makers.')),
+        // Sapience: its own app repository is "a Next.js client for the Sapience prediction market on the Robinhood (Meridian)
+        // deployment"; Kalshi: Meridian's API links 87 questions to kalshi.com, the first bet on one placed 13 Oct (checked 10-20)
+        h('div.row.wrap', snapEl, h('span.grow'), h('span.dim.small', 'Meridian Predict runs on ', h('a', { href: 'https://github.com/sapiencexyz/sapience', target: '_blank', rel: 'noopener', title: 'Sapience\'s own app repository, a client for "the Sapience prediction market on the Robinhood (Meridian) deployment"' }, 'Sapience'),
+          '; questions mirror Polymarket markets (since 13 Oct also some Kalshi ones), USDe collateral, RFQ auctions against market makers (', h('a', { href: 'https://docs.meridian.xyz/trading/predictions', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), ').')),
         tiles,
         h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Wagered per day (UTC)'), h('div.chart-box.sm', cWager)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Predictions per day (UTC)'), h('div.chart-box.sm', cCount))),
         h('div.pred-pair', h('div.grid.pred-grid', tapeCard, bwCard)),
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,
-        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus the Polymarket price for the same picks at the moment of the bet (a combo multiplies its legs); positive means the bettor paid above fair' + (a.vig.coverage && a.vig.coverage.sameEvent ? `; the vig averages leave out the ${U.fmtNum(a.vig.coverage.sameEvent, 0)} combos with legs on the same match or asset` : '') + '. Predictions, stakes and the per-day charts count at placement; PnL and the category and singles-vs-combos win rates count a prediction at its verdict, claimed or not' + (T.unclaimed ? ` (${U.fmtNum(T.unclaimed, 0)} are not claimed yet${T.fromBalances && a.claimAt ? ': their winners still held the winning tokens when the snapshot read them, ' + U.fmtDateTime(a.claimAt) : ''}; ${U.fmtNum(T.unclaimedLost || 0, 0)} of them maker wins)` : '') + ': claiming only moves the cash.' + (T.appWon != null ? ' The Bettor win rate and the makers\' win rates are Meridian\'s app\'s Win Rate, which counts a prediction only once it is claimed; their tooltips have the count at the verdict.' : '') + (withSec ? ` The bettor net result and maker PnL also count position tokens traded on the secondary market (a sale when it happens, tokens still held at the verdict): ${usd(a.secondary.toBettors, { sign: true })} for bettors. The category and singles-vs-combos tables count each prediction's own result without those trades, so their Bettor PnL adds up to ${usd(T.bettorPnl - a.secondary.toBettors, { sign: true })}.` : '')));
+        h('div.footer-note', 'Odds = stake ÷ (stake + maker collateral). Vig = those odds minus Polymarket\'s price for the same picks at the moment of the bet (its order-book midpoint; a combo multiplies its legs\' prices); positive means the bettor paid more than that price' + (a.vig.coverage && a.vig.coverage.sameEvent ? `; the vig averages leave out the ${U.fmtNum(a.vig.coverage.sameEvent, 0)} combos with legs on the same match or asset` : '') + '. Predictions, stakes and the per-day charts count at placement; PnL and the category and singles-vs-combos win rates count a prediction at its verdict, claimed or not' + (T.unclaimed ? ` (${U.fmtNum(T.unclaimed, 0)} are not claimed yet${T.fromBalances && a.claimAt ? (a.claimOnChain ? ': their winners still held the winning tokens on-chain when the snapshot read them, ' : ': Meridian\'s app listed their payouts as still to claim when the snapshot read them, ') + U.fmtDateTime(a.claimAt) : ''}; ${U.fmtNum(T.unclaimedLost || 0, 0)} of them maker wins)` : '') + ': claiming only moves the cash.' + (T.appWon != null ? ' The Bettor win rate and the makers\' win rates are Meridian\'s app\'s Win Rate, which counts a prediction only once it is settled on-chain (a winner\'s claim settles it, unless someone already has); their tooltips have the count at the verdict.' : '') + (withSec ? ` The bettor net result and maker PnL also count position tokens traded on the secondary market (a sale when it happens, tokens still held at the verdict): ${usd(a.secondary.toBettors, { sign: true })} for bettors. The category and singles-vs-combos tables count each prediction's own result without those trades, so their Bettor PnL adds up to ${usd(T.bettorPnl - a.secondary.toBettors, { sign: true })}.` : '')
+          + (LO && LO.n ? ` Left out of every figure: the ${U.fmtNum(LO.n, 0)} bets a wallet placed ${U.fmtDayUTC(LO.from) === U.fmtDayUTC(LO.to) ? 'on ' + U.fmtDayUTC(LO.from) : 'from ' + U.fmtDayUTC(LO.from) + ' to ' + U.fmtDayUTC(LO.to)} and had decided by resolver contracts it deployed itself (on-chain a bet names the contract that decides it, and Meridian\'s API does not show which); they took ${usd(LO.cp)} from ${LO.makers.length === 1 ? 'the market maker ' + U.shortAddr(LO.makers[0], 4) : 'their market makers'}.` : '')));
       const col = C.colors();
       // a.daily is keyed by UTC day: the tooltip names that day, not a local clock time
       C.timeSeries(cWager, { points: a.daily.map((d) => ({ x: d.t, y: d.wagered })), type: 'bar', color: col.accent, label: 'Wagered', titleFmt: U.fmtDayUTC });
@@ -259,8 +274,10 @@
       const bigRow = (n) => {
         const on = (k, opt) => (bwSort === k ? 'on' : opt ? 'opt' : ''); const at = winTime(n), paid = !!(n.settled && n.settledAt); const pl = bigPnl(n);
         const co = n.cashOut, g = n.group, dec = decidedTime(n), lost = n.decided && !n.won && !n.nd;
-        const when = (co ? 'Cashed out ' + U.fmtDateTime(co.t) + '\n' + (n.decided ? 'Settled ' + U.fmtDateTime(dec || n.t) : 'Not settled yet') : 'Settled ' + U.fmtDateTime(at))
-          + (n.won && !soldOut(n) ? (toClaim(n) ? '\nPayout not claimed yet' : paid ? '\nPayout claimed ' + U.fmtDateTime(n.settledAt) : '\nPayout claimed') : '') + '\nPlaced ' + U.fmtDateTime(n.t);
+        // (settledAt is the on-chain settle, which anyone can send: the payout's claim when the winner sent it, as for 62 of the
+        // 63 big wins on 2026-10-20, the other claimed 6 h later; so it is named as the settle, and the claim without a time)
+        const when = (co ? 'Cashed out ' + U.fmtDateTime(co.t) + '\n' + (n.decided ? 'Decided ' + U.fmtDateTime(dec || n.t) : 'Not decided yet') : 'Decided ' + U.fmtDateTime(at))
+          + (n.won && !soldOut(n) ? (toClaim(n) ? '\nPayout not claimed yet' : paid ? '\nSettled on-chain ' + U.fmtDateTime(n.settledAt) + ', payout claimed' : '\nPayout claimed') : '') + '\nPlaced ' + U.fmtDateTime(n.t);
         // tokens sold before the verdict: what they fetched and cost, from how many bets, and how the picks then went
         const coTitle = co ? `The bettor sold ${U.fmtNum(co.tok, 2)} position tokens before the verdict for ${usd(co.cash)} (they cost ${usd(co.cost)})`
           + (g && g.n > 1 ? `. From ${g.n} bets on these picks, ${usd(g.s)} staked (the row opens the largest)` : '') + (soldOut(n) ? '' : n.decided ? '; the rest it held to the verdict' : '; it still holds the rest')
@@ -279,7 +296,7 @@
       const renderBig = () => {
         const s = BW_SORTS.find((o) => o.v === bwSort) || BW_SORTS[0];
         const rows = bigWins ? U.sortBy(bigWins, s.val, true) : [];
-        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its settlement, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '')));
+        U.replace(bwNote, h('span', { title: (withSec ? 'Net PnL = payout − stake. A bettor who traded its position tokens counts its own result over its bets on the same picks, sales included; a cash-out (tokens sold before the verdict) is listed when that profit is over ' + usd(P.BIG_WIN) + ', whatever the verdict, from its last sale when it sold everything or the picks are still open.' : 'Net PnL = payout − stake (no secondary-market trades in this snapshot).') + ' A win counts from its verdict, claimed or not.' }, `net PnL over ${usd(P.BIG_WIN)}` + (bigWins && bigWins.length ? ` · ${U.fmtNum(bigWins.length, 0)} ${snap.remote ? 'since launch' : 'on bets placed in the last ' + snap.windowDays + ' days'}` : '')));
         U.replace(bwBody, rows.length ? rows.map(bigRow) : UI.empty(bigWins ? `No win has made more than ${usd(P.BIG_WIN)} yet` : 'Big wins appear with the next snapshot (published every 30 minutes)'));
       };
       setBigWins(snap); renderBig();
@@ -290,7 +307,7 @@
       if (!live) { tapeNote.textContent = 'as of the snapshot · checked every minute'; tapeNote.title = offlineNote; }
       const tapeRow = (n, flash) => predRow(n, 'tape', flash ? 'flash' : '',
         h('span.t', U.fmtFeedTime(n.t)), bettorLink(n.predictor), sideChip(n.picks[0] ? n.picks[0].yes : null), picksCell(n),
-        h('span.num', usd(n.stake)), h('span.num.dim.opt', '@ ' + oddsPct(n.odds)), h('span.num', mult(n.multiple)), h('span.dim.xs.opt2', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: (MK.oneOff.some((x) => x.address === n.counterparty) ? 'One-off counterparty ' : 'Market maker ') + n.counterparty, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n, false, n.held == null ? 1 : n.held, false));
+        h('span.num', usd(n.stake)), h('span.num.dim.opt', '@ ' + oddsPct(n.odds)), h('span.num', mult(n.multiple)), h('span.dim.xs.opt2', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: (MK.oneOff.some((x) => x.address === n.counterparty) ? 'One-off counterparty ' : 'Market maker ') + n.counterparty + (MAKER_NAMES[n.counterparty] ? ' (' + MAKER_NAMES[n.counterparty] + ')' : ''), onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n, false, n.held == null ? 1 : n.held, false));
       const renderTape = (fresh) => U.replaceLive(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
       let tT = null;
@@ -1215,7 +1232,7 @@
         ...MK.oneOff.flatMap((m, i) => [i ? ', ' : '', bettorLink(m.address, 4), ` (${U.fmtNum(m.n, 0)} prediction${m.n === 1 ? '' : 's'}, ${usd(m.wagered)} collateral, ${usd(m.pnl || 0, { sign: true })} PnL)`]),
         `. ${MK.oneOff.length === 1 ? 'It is' : 'They are'} left out of the table and the chart but counted in the tiles above (collateral, PnL, win rate and vig).`) : null;
       const tbl = UI.table({ cols: [
-        { key: 'a', label: 'Market maker', render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 6), U.copyBtn(r.address)) },
+        { key: 'a', label: 'Market maker', render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 6), makerName(r.address), U.copyBtn(r.address)) },
         { key: 'n', label: 'Predictions taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
         M.share, M.committed, M.open, M.pnl, M.winRate, M.vig, M.odds, M.topCat,
         { key: 'f', label: 'Active', render: (r) => h('span.dim', U.fmtDate(r.first) + ' → ' + U.fmtAgo(r.last)) },

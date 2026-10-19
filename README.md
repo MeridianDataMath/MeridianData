@@ -800,7 +800,8 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       when the win was settled (decided), never when its payout was claimed, which can be weeks
       later: 0x4a72… settled Sep 13 and was claimed Sep 29. A win settled but not claimed yet is
       listed all the same, with an *unclaimed* chip, and the card's header counts them. The
-      tooltip has the settlement, claim and placement times. The same rule holds across the site:
+      tooltip has the verdict (*Decided*), the on-chain settle with whether the payout is claimed,
+      and the placement time. The same rule holds across the site:
       a result is dated at its settlement.
     - *Settlement time.* When the win settled on Meridian: its last leg's `condition.settledAt`
       (`P.legVerdictAt`), stored as `da` on every decided record (see *Settled vs claimed*
@@ -817,6 +818,26 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
         from its token ledger).
     - *Snapshot.* The snapshot carries the list as `agg.bigWins` (slim records with every leg's
       question id).
+  * *Overview fact-checked 2026-10-20* (as the Vig & edge page). Every tile, day of the charts,
+    table row, maker row, big win (the four cash-outs included) and secondary-market total was
+    recomputed from Meridian's raw predictions and trades with separate code, and matched to the
+    cent; all 245 trades came before both Polymarket's close and Meridian's verdict. The header
+    states Meridian's mechanics from its docs (USDe collateral, RFQ auctions) and links Sapience's
+    own repository ("the Robinhood (Meridian) deployment"); Kalshi questions are listed since
+    2026-10-13 (87, each linked to kalshi.com in the API). Meridian's docs separate *settling*
+    (anyone can send it once the verdict is in) from *redeeming* (the claim): the app's Win Rate
+    counts a prediction once it is settled (its account stats equal the settled flags on ten
+    wallets, over the whole history: the stats query without a date window returns only about
+    90 days), and makers' wins are mostly settled by a bot that redeems later, so the texts say
+    *settled on-chain*, and a big win's tooltip names the settle time as such (it was the claim
+    for 62 of 63; one was claimed 6 h later). The unclaimed count matched the winners' token
+    balances on-chain except for one wallet that the API still listed 40 tokens for (sold to the
+    Vault in the transactions that placed its bets, the rest redeemed on 15 Sep), so the builder
+    now reads each claimable position on-chain and keeps the lower balance (`claimReads`,
+    `capClaims`, `agg.claimOnChain`). The makers table names 0x79cB…552D *Meridian Vault*, as
+    Meridian's Contracts page lists it. The footer says what the totals leave out: the 13 bets of
+    15 Oct decided by resolver contracts their bettor deployed (`leftOut` in predict.json), and
+    the Predictions tile's tooltip reconciles the count with the API's total.
   * *Any prediction opens a dialog.* This covers the tape, big wins, a question's predictions and
     a bettor page's history and open positions. The dialog shows:
     - the result, stake, payout, odds, PnL and vig;

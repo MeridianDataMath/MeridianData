@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, CLAIM_RECHECK_MS, CLAIM_REFRESH } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, CLAIM_RECHECK_MS, CLAIM_REFRESH } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -90,6 +90,32 @@ test('claimPlan: new wallets, wallets with something to claim and wallets with a
   assert.deepEqual(claimPlan(cand, seen, now), [W('1'), W('2'), W('3'), W('6'), W('5')]);
   assert.deepEqual(claimPlan(cand, seen, now, { refresh: 1 }), [W('1'), W('2'), W('3'), W('6')]);
   assert.ok(CLAIM_REFRESH > 0);
+});
+
+test('claimReads / capClaims: each claimable position is read on-chain; the lower balance counts and an empty one is dropped (the API listed 40 tokens 0xc1ce… no longer held)', () => {
+  const a = W('a'), b = W('b'), tokP = W('1'), tokC = W('2'), tok2 = W('3');
+  const norms = [{ pc: '0xPC1', tokP, tokC }, { pc: '0xpc2', tokP: tok2, tokC: W('4') }, { pc: null, tokP: W('5') }];
+  const of = { [a]: [{ pc: '0xpc1', side: 'P', bal: 40 }, { pc: '0xpc2', side: 'P', bal: 12.5 }, { pc: '0xunknown', side: 'P', bal: 3 }], [b]: [{ pc: '0xpc1', side: 'C', bal: 7 }], nope: [{ pc: '0xpc1', side: 'P', bal: 1 }] };
+  const reads = claimReads(of, norms);
+  // a position whose token no prediction carries, and a wallet that is not an address, are not read
+  assert.deepEqual(reads.map((r) => [r.a, r.tok]), [[a, tokP], [a, tok2], [b, tokC]]);
+  assert.deepEqual(balanceCall(reads[0]), { method: 'eth_call', params: [{ to: tokP, data: '0x70a08231' + a.slice(2).padStart(64, '0') }, 'latest'] });
+  const hex = (usde) => '0x' + (BigInt(Math.round(usde * 1e6)) * 1000000000000n).toString(16);
+  // the chain: a holds none of the first (sold and redeemed), less of the second; b's answer is missing
+  const r = capClaims(of, reads, [{ result: '0x0' }, { result: hex(10.25) }, { error: { message: 'no answer' } }]);
+  assert.deepEqual(r, { read: 2, lowered: 2, dropped: 1, unread: 1 });
+  assert.deepEqual(of[a], [{ pc: '0xpc2', side: 'P', bal: 10.25 }, { pc: '0xunknown', side: 'P', bal: 3 }]);
+  assert.deepEqual(of[b], [{ pc: '0xpc1', side: 'C', bal: 7 }]);   // unread: the API's balance stands
+  // more on-chain than the API lists (tokens sent from outside the market): the API's figure stays, as the app shows it
+  const of2 = { [a]: [{ pc: '0xpc1', side: 'P', bal: 5 }] };
+  assert.deepEqual(capClaims(of2, claimReads(of2, norms), [{ result: hex(9) }]), { read: 1, lowered: 0, dropped: 0, unread: 0 });
+  assert.equal(of2[a][0].bal, 5);
+  // the same balance on both sides, however its last wei round, is not lower (claimEntries rounds the API's to a millionth)
+  const of4 = { [a]: [{ pc: '0xpc1', side: 'P', bal: 255.944458 }] };
+  assert.equal(capClaims(of4, claimReads(of4, norms), [{ result: '0x' + (255944457987075770000n).toString(16) }]).lowered, 0);
+  // an empty answer ("0x": no contract there) is no balance
+  const of3 = { [a]: [{ pc: '0xpc1', side: 'P', bal: 5 }] };
+  assert.equal(capClaims(of3, claimReads(of3, norms), [{ result: '0x' }]).unread, 1);
 });
 
 test('Leaderboard coverage: carried rows and missing accounts of a new snapshot; an older snapshot counts accounts short of its list', () => {
