@@ -264,8 +264,13 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   sparkline and mPerp closure windows; the volume and open-interest tiles are the column
   totals, and products and
   projected funding are re-read every minute; a **stop map** (every account's take-profit,
-  stop-loss and entry-stop orders per market as a ladder around the mark price, sized by
-  notional, with the accounts behind each level; the account list is re-read on every scan);
+  stop-loss and entry-stop orders and every open position's liquidation price, per market, as
+  a ladder around the mark price, sized by notional, with the accounts behind each level; bands
+  sum the stops within 1, 2 and 5 % of the mark and, apart from them, the positions liquidated
+  there, which Meridian hands to its liquidator account instead of the order book; each
+  position counts once, at the exit the price reaches first (`AN.stopFires`,
+  `AN.stopPressure`), and an order its position cannot reach is dimmed; the account list is
+  re-read on every scan);
   live trade tape (taker/maker links to the accounts); liquidation feed; funding table (rate
   charged at the last hourly funding, projected next charge, cumulative funding per unit of
   the base asset).

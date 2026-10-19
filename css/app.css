@@ -617,6 +617,7 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
   .smap-wrap .smap .mid, .smap-wrap .smap-detail { min-width: 0; }   /* (more specific than the 560 px rule below it) */
   .smap-bands { gap: 6px; padding: 8px 10px; }
   .smap-bands .band { padding: 5px 7px; font-size: 11px; }
+  .smap-bands .band .w { display: none; }   /* "sells" / "buys": the arrow and its colour say it */
 }
 .smap .mid, .smap-detail { min-width: 560px; }
 .smap .hdr { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-family: var(--font); border-bottom: 1px solid var(--border-2); }
@@ -634,13 +635,22 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .smap-bands:empty { display: none; }
 .smap-bands .band { display: flex; flex-direction: column; gap: 2px; background: var(--bg-3); border-radius: 6px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 0; }
 .smap-bands .band .k { font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
+/* the positions liquidated within the band, apart from the stops: they go to Meridian's liquidator account, not the book */
+.smap-bands .band .liq { display: flex; flex-wrap: wrap; column-gap: 6px; color: var(--amber); }
+.smap-bands .band .liq > span:first-child { font-family: var(--font); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); align-self: center; }
+/* an order its position cannot reach (closed by a nearer exit, or liquidated first) */
+.smap .lvl.dead { opacity: .45; }
 .smap .lvl .chip { font-size: 10px; padding: 1px 5px; }
 .smap .mid { text-align: center; padding: 6px; border-top: 1px solid var(--border-2); border-bottom: 1px solid var(--border-2); font-size: 13px; background: var(--bg-3); }
 .smap-detail { padding: 4px 12px 8px 24px; background: var(--bg-3); border-bottom: 1px solid var(--border-2); font-family: var(--font); display: flex; flex-direction: column; gap: 3px; }
 .smap .empty { font-family: var(--font); }
 table.tbl tbody tr.sel { background: var(--accent-dim); }
-/* the summary table beside the ladder needs ~640px; under 1500px the two stack (a 1440px screen minus the sidebar is not enough for both) */
-@media (max-width: 1500px) { .smap-wrap { grid-template-columns: minmax(0, 1fr); } .smap-wrap > div:first-child { border-right: 0; border-bottom: 1px solid var(--border-2); } }
+/* the summary table beside the ladder: tighter cells for its eight columns */
+.smap-wrap table.tbl th, .smap-wrap table.tbl td { padding-left: 8px; padding-right: 8px; }
+/* the ladder and the summary table side by side only when the card holds both: the table needs ~850px (more with a far
+   liquidation's long figures), so under 1800px of card (most screens, whatever the sidebar) the two stack */
+.smap-body { container: smapw / inline-size; }
+@container smapw (max-width: 1800px) { .smap-wrap { grid-template-columns: minmax(0, 1fr); } .smap-wrap > div:first-child { border-right: 0; border-bottom: 1px solid var(--border-2); } }
 .mkt-row .sub { color: var(--text-3); font-size: 11px; }
 .closure { font-size: 11.5px; color: var(--amber); }
 

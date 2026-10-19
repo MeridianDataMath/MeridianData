@@ -860,6 +860,48 @@
     return rows;
   };
 
+  // ---------- The stop map (Dashboard): what fires as the price moves ----------
+  /** How much of each stop map level can fire (a Map level → quantity), each position counted once: walking from the mark
+   *  outwards on each side, its exits take its size in the order the price reaches them (a stop before a liquidation at
+   *  the same price) and its liquidation takes what is left, so an exit behind a whole-position one, or behind the
+   *  liquidation, gets 0. As if the price moves there step by step: a gap can jump past a stop to the liquidation.
+   *  levels: { kind 'TP'|'SL'|'ENTRY'|'LIQ', price, qty, pos (the position's key), posQty (its size) }; an entry stop
+   *  (no pos) opens a position of its own and fires whole. */
+  AN.stopFires = (levels, mark) => {
+    const fires = new Map(), byPos = new Map();
+    for (const l of levels) {
+      if (!l.pos) { fires.set(l, l.qty); continue; }
+      if (!byPos.has(l.pos)) byPos.set(l.pos, []);
+      byPos.get(l.pos).push(l);
+    }
+    for (const exits of byPos.values()) for (const up of [false, true]) {
+      let left = exits[0].posQty;
+      const side = exits.filter((l) => (up ? l.price > mark : l.price <= mark))
+        .sort((a, b) => (up ? a.price - b.price : b.price - a.price) || (a.kind === 'LIQ') - (b.kind === 'LIQ'));
+      for (const l of side) { const q = Math.max(0, l.kind === 'LIQ' ? left : Math.min(l.qty, left)); fires.set(l, q); left -= q; }
+    }
+    return fires;
+  };
+
+  /** Within pct of the mark, in dollars at the levels' prices, each position once (fires: AN.stopFires; without it every
+   *  level whole): sells, the stops below the mark that sell into the order book as the price falls to them (longs'
+   *  stop-losses, sell entry stops; a stop fires as a market order), buys, those above that buy as it rises (shorts'
+   *  stop-losses, buy entry stops), and liqDown / liqUp, the longs below and shorts above that are liquidated there,
+   *  which Meridian hands to its liquidator account instead of sending them into the book. Take-profits trade against
+   *  the move and are not counted. levels also carry flow ('sell' | 'buy') and mech ('stop' | 'limit' | 'liq'). */
+  AN.stopPressure = (levels, mark, pct, fires) => {
+    const lo = mark * (1 - pct / 100), hi = mark * (1 + pct / 100);
+    const r = { sells: 0, buys: 0, liqDown: 0, liqUp: 0 };
+    for (const l of levels) {
+      const q = fires && fires.has(l) ? fires.get(l) : l.qty;
+      if (!(q > 0)) continue;
+      const below = l.price <= mark && l.price >= lo, above = l.price > mark && l.price <= hi;
+      if (l.kind === 'LIQ') { if (below) r.liqDown += q * l.price; else if (above) r.liqUp += q * l.price; }
+      else if (l.mech === 'stop' && l.kind !== 'TP') { if (below && l.flow === 'sell') r.sells += q * l.price; else if (above && l.flow === 'buy') r.buys += q * l.price; }
+    }
+    return r;
+  };
+
   /**
    * TP / SL as Meridian's app shows them on an open position (its positions table): the stop price of the whole-position
    * take profit and stop loss among the untriggered stop orders (status PENDING) that close the position (close: true)

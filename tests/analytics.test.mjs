@@ -151,6 +151,42 @@ test('exit levels: a partly filled reduce-only exit counts only its unfilled par
   assert.equal(all.tp[0].qty, null, 'a close-all order still covers the whole position');
 });
 
+test('stop map: each position counts once, at the exits the price reaches first; liquidations apart from the stops', () => {
+  // a level as the Dashboard's scan makes it (flow: what it does when reached)
+  const lv = (pos, posQty, kind, price, qty, side) => ({ pos, posQty, kind, price, qty, posSide: side, mech: kind === 'LIQ' ? 'liq' : 'stop',
+    flow: kind === 'ENTRY' ? (side === 'long' ? 'buy' : 'sell') : side === 'long' ? 'sell' : 'buy' });
+  // QQQ, 10-19: a long's two stop-losses at 705 sit behind its liquidation at 712.76: it is liquidated first, they never fire
+  const qLiq = lv('q', 0.14, 'LIQ', 712.76, 0.14, 'long'), qSl = [lv('q', 0.14, 'SL', 705, 0.14, 'long'), lv('q', 0.14, 'SL', 705, 0.14, 'long')];
+  const qf = AN.stopFires([qSl[0], qLiq, qSl[1]], 718.76);
+  near(assert, qf.get(qLiq), 0.14, 1e-12); assert.equal(qf.get(qSl[0]), 0); assert.equal(qf.get(qSl[1]), 0);
+  const qp = AN.stopPressure([qSl[0], qLiq, qSl[1]], 718.76, 2, qf);
+  assert.equal(qp.sells, 0, 'no stop sells'); near(assert, qp.liqDown, 0.14 * 712.76, 1e-9, 'the long is liquidated, apart');
+  near(assert, AN.stopPressure([qSl[0], qLiq, qSl[1]], 718.76, 2).sells, 2 * 0.14 * 705, 1e-9, 'without fires: every level whole, as before');
+  // SPY, 10-19: a long's whole-position stop at 750.94 closes it before its liquidation at 748.56; its take-profit above
+  // is not counted (it sells into a rise, against the move)
+  const sTp = lv('s', 9.141, 'TP', 780.44, 9.141, 'long'), sSl = lv('s', 9.141, 'SL', 750.94, 9.141, 'long'), sLiq = lv('s', 9.141, 'LIQ', 748.56, 9.141, 'long');
+  const sf = AN.stopFires([sLiq, sTp, sSl], 767.33);
+  near(assert, sf.get(sSl), 9.141, 1e-12); assert.equal(sf.get(sLiq), 0); near(assert, sf.get(sTp), 9.141, 1e-12, 'the other side has its own walk');
+  const sp = AN.stopPressure([sLiq, sTp, sSl], 767.33, 5, sf);
+  near(assert, sp.sells, 9.141 * 750.94, 1e-9); assert.equal(sp.liqDown, 0); assert.equal(sp.buys, 0, 'a take-profit is not a buy or a sell here');
+  // partial stops take their part in the order the price reaches them; the liquidation takes what is left
+  const p1 = lv('p', 10, 'SL', 98, 4, 'long'), p2 = lv('p', 10, 'SL', 96, 4, 'long'), p3 = lv('p', 10, 'SL', 94, 4, 'long'), pLiq = lv('p', 10, 'LIQ', 95, 10, 'long');
+  const pf = AN.stopFires([p3, pLiq, p2, p1], 100);
+  assert.deepEqual([pf.get(p1), pf.get(p2), pf.get(pLiq), pf.get(p3)], [4, 4, 2, 0]);
+  const pp = AN.stopPressure([p1, p2, p3, pLiq], 100, 5, pf);
+  near(assert, pp.sells, 4 * 98 + 4 * 96, 1e-9); near(assert, pp.liqDown, 2 * 95, 1e-9);
+  // a stop at the liquidation price goes first; shorts above the mark buy; an entry stop has no position and fires whole
+  const tSl = lv('t', 2, 'SL', 103, 2, 'short'), tLiq = lv('t', 2, 'LIQ', 103, 2, 'short'), uLiq = lv('u', 1, 'LIQ', 101, 1, 'short');
+  const entry = { kind: 'ENTRY', price: 102, qty: 3, posSide: 'long', mech: 'stop', flow: 'buy' };
+  const tf = AN.stopFires([tLiq, tSl, uLiq, entry], 100);
+  near(assert, tf.get(tSl), 2, 1e-12); assert.equal(tf.get(tLiq), 0); near(assert, tf.get(entry), 3, 1e-12);
+  const tp = AN.stopPressure([tLiq, tSl, uLiq, entry], 100, 5, tf);
+  near(assert, tp.buys, 2 * 103 + 3 * 102, 1e-9); near(assert, tp.liqUp, 101, 1e-9); assert.equal(tp.sells + tp.liqDown, 0);
+  // the band's edge: 2% holds what is within 2% and nothing past it
+  const tp2 = AN.stopPressure([tLiq, tSl, uLiq, entry], 100, 2, tf);
+  near(assert, tp2.buys, 3 * 102, 1e-9, 'the stop at +3% is outside'); near(assert, tp2.liqUp, 101, 1e-9);
+});
+
 test('drawdown and PnL ignore deposits and withdrawals', () => {
   const row = (t, pnl, dep, wd, bal) => ({ t, pnl, deposit: dep, withdrawal: wd, balance: bal, upnl: 0, equity: bal, fee: 0, funding: 0, volume: 0 });
   // start 1,000; lose 100; deposit 500 (not a gain); lose 50; withdraw 400 (not a loss)
