@@ -391,7 +391,7 @@
           { key: 'avgOdds', label: 'Avg odds', num: true, sortVal: 1, title: 'Average locked odds, stake ÷ (stake + maker collateral), over all its predictions, open ones included', render: (r) => pct(r.avgOdds, 0) },
           { key: 'combos', label: 'Combos', num: true, sortVal: 1, title: 'Share of its predictions with two or more legs', render: (r) => U.fmtPct((r.combos / r.n) * 100, { dp: 0 }) },
           // vigN: how many predictions the average covers (older snapshots have none: no title)
-          { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, title: 'Locked odds minus the Polymarket price at the moment of the bet, averaged over this bettor\'s singles and its combos with every leg on a different match', render: (r) => h('span', { title: r.vigN != null ? `Average of ${r.vigN} of ${r.n} predictions: those with a Polymarket price at bet time for every leg; combos with legs on the same match or asset left out` : null }, vigCell(r.avgVig)) },
+          { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, title: 'Locked odds minus Polymarket\'s price (its order-book midpoint) at the moment of the bet, averaged over this bettor\'s singles and its combos with every leg on a different match', render: (r) => h('span', { title: r.vigN != null ? `Average of ${r.vigN} of ${r.n} predictions: those with a Polymarket price at bet time for every leg; combos with legs on the same match or asset left out` : null }, vigCell(r.avgVig)) },
           { key: 'biggestWin', label: 'Best win', num: true, sortVal: 1, title: 'Largest net result on one decided prediction, claimed or not: payout − stake, or for a position traded on the secondary market, the bettor\'s own result with the sale', render: (r) => (r.biggestWin > 0 ? usd(r.biggestWin) : h('span.dim', '—')) },
           { key: 'cat', label: 'Top category', title: 'The category with the most predictions (a tie goes to the larger stake). Mixed: a combo with legs in more than one category.', render: (r) => r.topCat || '—' },
           { key: 'last', label: 'Last bet', sortVal: 1, title: 'When this wallet last placed a prediction', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
@@ -401,7 +401,10 @@
         const filt = full ? [] : [st.minN > 1 ? `${st.minN}+ predictions` : '', st.cat ? 'top category ' + st.cat : '', st.q ? 'address search' : ''].filter(Boolean);
         U.replace(summary, `${U.fmtNum(total, 0)} of ${U.fmtNum(all.length, 0)} bettors` + (filt.length ? ' · ' + filt.join(' · ') : '') + ' · ' + snapNote(snap));
       }
-      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts every decided prediction, claimed or not: a win earns the maker\'s collateral, a loss costs the stake' + (snap.agg.secondary ? ', and a position sold on the secondary market counts at its sale' : '; secondary-market sales are not counted in this view') + '. Open positions still held are excluded.'));
+      U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts every decided prediction, claimed or not: a win earns the maker\'s collateral, a loss costs the stake' + (snap.agg.secondary ? ', and a position sold on the secondary market counts at its sale' : '; secondary-market sales are not counted in this view') + '. Open positions still held are excluded. For a wallet that only bets, this is the PnL in Meridian\'s own account stats.'));
+      // (checked 2026-10-20 on all 764 bettors: Meridian's account stats give the same PnL, predictions and won / lost for
+      // every one, but a wallet with a bet placed against itself, which the site leaves out, and one that bet after the
+      // snapshot; the open positions equal Meridian's Open Positions on all 117 with any)
       render();
     });
   }

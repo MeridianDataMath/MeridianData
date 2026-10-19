@@ -928,6 +928,13 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     average vig paid, best win and last bet; click through to a bettor page. The count line
     says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
     filtered board, and a full address is found whatever the filters.
+    - *Fact-checked 2026-10-20* (as the Overview): every column of all 764 rows was recomputed
+      from the raw predictions and trades with separate code, with no difference; Meridian's own
+      account stats (statsHistory from launch: the query without a date window returns only about
+      90 days) give the same Net PnL, predictions and won / lost for every bettor but one with a bet
+      against itself (left out here) and one that bet after the snapshot; *(k open)* equals
+      Meridian's Open Positions on all 117 wallets with any. The footer now says the PnL is
+      Meridian's own for a wallet that only bets.
     - *ROI* (`P.roiOf`): net PnL, the secondary market included, ÷ the stakes of decided
       predictions (claimed or not) plus the sold share of open ones (a sale books its result before
       the verdict, so its stake joins the base). A bettor page counts it the same way, and a maker's
