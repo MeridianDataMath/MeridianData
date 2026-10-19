@@ -318,7 +318,7 @@ test('market categories as Hyperliquid files them: a cross market is crypto; an 
   assert.equal(cat('GAS', 'CROSS'), 'crypto', 'a cross market is crypto whatever its name'); assert.equal(AN.marketCategory({}), 'crypto');
 });
 
-test('size outside Meridian: a coin\'s CoinGecko cap at its price, metals from the mark, the rest by their usual size', () => {
+test('size outside Meridian: a coin\'s CoinGecko cap at its price, metals and index funds from the mark, the rest by their usual size', () => {
   const A = MD.api;
   const p = (base, mode = 'CROSS') => ({ baseTokenName: base, marginMode: mode });
   // CoinGecko's rows: the largest coin of each symbol counts; a symbol it does not return is null
@@ -334,6 +334,10 @@ test('size outside Meridian: a coin\'s CoinGecko cap at its price, metals from t
   assert.ok(gold.usd > silver.usd);
   // indices by their companies\' value: the S&P 500 before the Nasdaq-100; nothing known: null
   assert.ok(AN.marketSize(p('SPY', 'ISOLATED')).usd > AN.marketSize(p('QQQ', 'ISOLATED')).usd);
+  // an index fund at its mark: the value of its shares, still ranked by its index like any index market
+  const spy = AN.marketSize(p('SPY', 'ISOLATED'), null, 768), qqq = AN.marketSize(p('QQQ', 'ISOLATED'), null, 719);
+  assert.equal(spy.src, 'fund'); near(assert, spy.usd, 1066480000 * 768, 1); near(assert, qqq.usd, 674900000 * 719, 1);
+  assert.ok(spy.order > qqq.order); assert.equal(spy.order, AN.marketSize(p('US500', 'ISOLATED')).usd, 'the same index as US500');
   assert.equal(AN.marketSize(p('NEWCOIN'), caps, 1), null);
   // Meridian\'s crypto markets in October 2026, without CoinGecko: the largest first
   const order = ['LIT', 'ENA', 'BTC', 'HYPE', 'SOL', 'ETH', 'ZEC', 'NEAR', 'VVV'].sort((a, b) => AN.marketSize(p(b)).usd - AN.marketSize(p(a)).usd);

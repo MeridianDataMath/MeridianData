@@ -535,10 +535,13 @@
   // ---------- How big a market's asset is outside Meridian (the Dashboard lists each category by it, the largest first) ----------
   // Crypto: its CoinGecko market cap (A.marketCaps), taken only when CoinGecko's price is within 25% of the mark (another
   // coin of the same symbol is not this market). Gold, silver, platinum: the metal above ground × the mark (World Gold
-  // Council: about 216,000 t of gold; about 1.75 million t of silver mined; about 7,800 t of platinum). The rest, and a coin
+  // Council: about 216,000 t of gold; about 1.75 million t of silver mined; about 7,800 t of platinum). An index fund (SPY,
+  // QQQ): its own market value, its shares outstanding × the mark (companiesmarketcap.com, October 2026), ranked by its
+  // index like any index market. The rest, and a coin
   // CoinGecko does not answer for, by its usual size, only to order them (never shown): an index by its companies' value, a
   // currency by its share of FX turnover (BIS), a company by its market cap or last valuation, a coin by its last known cap.
   const OZ_PER_T = 32150.75;
+  const FUND_SHARES = { SPY: 1066480000, QQQ: 674900000 };   // shares outstanding, October 2026 (they move a few % a month)
   const METAL_T = { XAU: 216265, GOLD: 216265, XAG: 1751000, SILVER: 1751000, XPT: 7800, PLATINUM: 7800 };
   const SIZE_HINT = {};
   for (const [usd, bases] of [
@@ -553,7 +556,8 @@
     // coins, by their market cap in October 2026, for when CoinGecko is out of reach
     [1.6e12, 'BTC'], [2.9e11, 'ETH'], [6e10, 'SOL'], [1.8e10, 'ZEC'], [1.7e10, 'HYPE'], [6e9, 'NEAR'], [2.5e9, 'ENA'], [1e9, 'VVV'], [7e8, 'LIT'],
   ]) for (const b of bases.split(' ')) SIZE_HINT[b] = usd;
-  /** { usd, src } or null: 'coingecko' (a live market cap), 'metal' (an estimate from the mark) or 'hint' (an order only).
+  /** { usd, src, order? } or null: 'coingecko' (a live market cap), 'metal' or 'fund' (an estimate from the mark) or 'hint'
+   *  (an order only). order, when set, ranks it in its category instead of usd: a fund by its index, as the other indices.
    *  caps: A.marketCaps' answer; mark: the market's price. */
   AN.marketSize = (p, caps, mark) => {
     const b = String((p && p.baseTokenName) || '').toUpperCase();
@@ -561,6 +565,7 @@
       const c = caps && caps[b];
       if (c && c.mcap > 0 && c.price > 0 && mark > 0 && Math.abs(c.price / mark - 1) < 0.25) return { usd: c.mcap, src: 'coingecko' };
     } else if (METAL_T[b] && mark > 0) return { usd: METAL_T[b] * OZ_PER_T * mark, src: 'metal' };
+    else if (FUND_SHARES[b] && mark > 0) return { usd: FUND_SHARES[b] * mark, src: 'fund', order: SIZE_HINT[b] };
     return SIZE_HINT[b] ? { usd: SIZE_HINT[b], src: 'hint' } : null;
   };
 

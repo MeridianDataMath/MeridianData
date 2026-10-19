@@ -119,14 +119,16 @@
       const CAT_KEY = 'md.dash.mktCat';
       let mktCat = U.storage.get(CAT_KEY, 'all'); if (!AN.MARKET_CATS.some(([k]) => k === mktCat)) mktCat = 'all';
       let mktSort = { key: 'cap', desc: true }, catSeen = '', caps = null;
-      const sizeOf = (r) => (r.size ? r.size.usd : null);
+      const sizeOf = (r) => (r.size ? r.size.order || r.size.usd : null);
       const SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, px: (r) => r.m, chg: (r) => r.chg, fr: (r) => (r.f.paused ? null : r.f.projPct), oi: (r) => r.oiUsd, vol: (r) => r.volUsd };
       // the Funding table: the same categories (those with markets) in the same order, the largest asset first, until a
       // column is clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
       let fundSort = { key: 'cap', desc: true };
       const FUND_SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? null : r.f.aprPct) };
-      // both tables' size column: the figure for a coin (CoinGecko) or a metal (an estimate); an order only for the rest
-      const capCol = { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\'s market cap (CoinGecko), the value of all the gold, silver or platinum above ground at the mark price; other markets are ordered by their usual size (an index by its companies\' value) without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: r.size.src === 'metal' ? 'Estimated: the metal above ground (World Gold Council and others) × the mark price' : 'CoinGecko market cap' }, (r.size.src === 'metal' ? '≈' : '') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) };
+      // both tables' size column: the figure for a coin (CoinGecko), a metal or an index fund (estimates, ≈); an order only
+      // for the rest
+      const SIZE_TIP = { coingecko: 'CoinGecko market cap', metal: 'Estimated: the metal above ground (World Gold Council and others) × the mark price', fund: 'Estimated: the fund\'s shares outstanding (October 2026) × the mark price, the value of all its shares' };
+      const capCol = { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\'s market cap (CoinGecko); at the mark price, the value of an index fund\'s shares (SPY, QQQ) or of all the gold, silver or platinum above ground; other markets are ordered by their usual size without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: SIZE_TIP[r.size.src] }, (r.size.src === 'coingecko' ? '' : '≈') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) };
       const catHead = (name, list, totals) => h('div.mkt-group', h('span.name', name),
         list.length ? h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')) : h('span.dim', 'none on Meridian yet'), list.length && totals ? h('span.dim', totals(list)) : null);
       const renderCatSel = (rows) => {
@@ -277,7 +279,7 @@
         // by category, as Hyperliquid groups them, then the largest asset outside Meridian first (AN.marketSize; Meridian's
         // 24h volume for one without a size)
         const catIx = (p) => AN.MARKET_CATS.findIndex(([k]) => k === AN.marketCategory(p));
-        const sz = (x) => { const z = AN.marketSize(x.p, caps, x.mark); return z ? z.usd : 0; };
+        const sz = (x) => { const z = AN.marketSize(x.p, caps, x.mark); return z ? z.order || z.usd : 0; };
         markets.sort((a, b) => catIx(a.p) - catIx(b.p) || sz(b) - sz(a) || U.num(b.p.volume24h) * b.mark - U.num(a.p.volume24h) * a.mark);
         // a protected position counts in both its TP and its SL, and its liquidation too, so the dollar figure is order
         // notional, not exposure
