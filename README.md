@@ -225,7 +225,11 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
 ## Pages
 
 * **Home** – search by wallet address (`0x…`) or subaccount UUID; ticker of the top accounts
-  from the latest leaderboard snapshot; exchange stats.
+  from the latest leaderboard snapshot; exchange stats. Under the search: your first eight
+  favorites in your own order (a mouse drags one along the line; a finger holds it, then drags;
+  Shift+←/→ from the keyboard) under the names you give them (right-click or hold one: a small
+  dialog, which can also unfavorite it), then up to three recent searches while there is room;
+  the sections follow (Markets dashboard, Favorites, Leaderboard, …).
 * **Account**
   * *Overview* – equity / balance / margin per pool (USD cross pool + one isolated pool per
     mPerp), estimated liquidation prices, chart of PnL · Volume · Balance · Equity · Funding ·
@@ -247,7 +251,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     mPerp position fees.
   * *Rewards* – points per season (rank, tier, referral points, epoch history), exchange-wide
     points, linked API signers.
-* **Favorites** – starred accounts with live equity (stored in this browser only).
+* **Favorites** – starred accounts with live equity, in the home page's order, with the names
+  given there (a row's pencil names it too; stored in this browser only: `U.favorites`, label,
+  reorder).
 * **Leaderboard** – every subaccount on the exchange, ranked; sortable columns and filters for
   interval (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
   style. PnL, volume and ROI follow the interval on Meridian's windows and are its figures (the
@@ -835,9 +841,7 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     Vault in the transactions that placed its bets, the rest redeemed on 15 Sep), so the builder
     now reads each claimable position on-chain and keeps the lower balance (`claimReads`,
     `capClaims`, `agg.claimOnChain`). The makers table names 0x79cB…552D *Meridian Vault*, as
-    Meridian's Contracts page lists it. The footer says what the totals leave out: the 13 bets of
-    15 Oct decided by resolver contracts their bettor deployed (`leftOut` in predict.json), and
-    the Predictions tile's tooltip reconciles the count with the API's total.
+    Meridian's Contracts page lists it.
   * *Any prediction opens a dialog.* This covers the tape, big wins, a question's predictions and
     a bettor page's history and open positions. The dialog shows:
     - the result, stake, payout, odds, PnL and vig;

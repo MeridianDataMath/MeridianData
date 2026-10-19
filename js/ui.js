@@ -245,6 +245,28 @@
     return b;
   };
 
+  /** Name a favorite wallet (U.favorites.setLabel): a small dialog with its address, the name, and a way to unfavorite it.
+   *  The home page opens it from a favorite's right-click or long press, the Favorites page from a row's pencil. */
+  UI.nameFavorite = function (sid) {
+    const f = U.favorites.list().find((x) => x.subaccountId === sid); if (!f) return null;
+    const input = h('input.input', { type: 'text', value: f.label || '', maxLength: U.FAV_LABEL_MAX, placeholder: 'A name for this wallet', autocomplete: 'off', 'aria-label': 'Name' });
+    input.spellcheck = false;   // h() skips a false attribute
+    let m = null;
+    const save = (v) => { const name = String(v || '').replace(/\s+/g, ' ').trim(); U.favorites.setLabel(sid, name); if (m) m.close(); U.toast(name ? 'Saved as ' + name : 'Name removed'); };
+    const form = h('form.fav-name', { onsubmit: (e) => { e.preventDefault(); save(input.value); } },
+      h('div.small.dim.addr-full', f.address + (f.name && f.name !== 'primary' ? ' · ' + f.name : '')),
+      input,
+      h('div.row.wrap', { style: { gap: '8px' } },
+        h('button.btn.sm.primary', { type: 'submit' }, 'Save'),
+        f.label ? h('button.btn.sm', { type: 'button', onclick: () => save('') }, 'Remove the name') : null,
+        h('span.grow'),
+        h('button.btn.sm.ghost', { type: 'button', title: 'Remove this wallet from your favorites', onclick: () => { U.favorites.remove(sid); if (m) m.close(); U.toast('Removed from favorites'); } }, U.icon('trash'), 'Unfavorite')),
+      h('div.xs.dim', 'Names stay in this browser, like your favorites.'));
+    m = UI.modal({ title: 'Name this wallet', body: form });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+    return m;
+  };
+
   UI.marketCell = (ticker, sub) => h('div.mkt-row', h('div.tick', U.kid(ticker)), sub ? h('div.sub', U.kid(sub)) : null);
   UI.chip = (text, cls) => h('span.chip', { class: cls || '' }, text);
   UI.pct = (v, opts) => (v == null || !Number.isFinite(v) ? h('span.dim', '—') : h('span', { class: 'num ' + U.pnlClass(v) }, U.fmtPct(v, Object.assign({ sign: true, dp: 1 }, opts))));

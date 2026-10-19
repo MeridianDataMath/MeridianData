@@ -138,6 +138,7 @@
     first: I('<path d="m17 18-6-6 6-6"/><path d="M7 6v12"/>'),
     last: I('<path d="m7 18 6-6-6-6"/><path d="M17 6v12"/>'),
     trash: I('<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>'),
+    pencil: I('<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/><path d="m15 5 4 4"/>'),
     activity: I('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>'),
     bell: I('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
     radar: I('<path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>'),
@@ -302,13 +303,27 @@
   };
 
   // ---------- Favorites ----------
+  // [{subaccountId, address, name (the subaccount's own name, 'primary' for the first), addedAt, label}], newest first
+  // unless reordered; label: the name the user gave the wallet (the home page's favorites), this browser only
   const FAV_KEY = 'md.favorites.v1';
+  U.FAV_LABEL_MAX = 32;
   U.favorites = {
-    list() { return U.storage.get(FAV_KEY, []); },
+    list() { const l = U.storage.get(FAV_KEY, []); return Array.isArray(l) ? l : []; },
     has(sid) { return this.list().some((f) => f.subaccountId === sid); },
-    add(f) { const l = this.list().filter((x) => x.subaccountId !== f.subaccountId); l.unshift(Object.assign({ addedAt: Date.now() }, f)); U.storage.set(FAV_KEY, l); U.emit('favorites'); },
+    add(f) { const old = this.list().find((x) => x.subaccountId === f.subaccountId); const l = this.list().filter((x) => x.subaccountId !== f.subaccountId); l.unshift(Object.assign({ addedAt: Date.now() }, old && old.label ? { label: old.label } : null, f)); U.storage.set(FAV_KEY, l); U.emit('favorites'); },
     remove(sid) { U.storage.set(FAV_KEY, this.list().filter((f) => f.subaccountId !== sid)); U.emit('favorites'); },
     toggle(f) { if (this.has(f.subaccountId)) this.remove(f.subaccountId); else this.add(f); return this.has(f.subaccountId); },
+    /** Name a favorite (trimmed, at most U.FAV_LABEL_MAX characters); an empty name takes it off. */
+    setLabel(sid, label) { const v = String(label == null ? '' : label).replace(/\s+/g, ' ').trim().slice(0, U.FAV_LABEL_MAX); U.storage.set(FAV_KEY, this.list().map((f) => { if (f.subaccountId !== sid) return f; const g = Object.assign({}, f); if (v) g.label = v; else delete g.label; return g; })); U.emit('favorites'); },
+    /** Put these favorites (subaccount ids, e.g. the ones a page shows, in their new order) into the places they hold in
+     *  the list; the others keep theirs. Unknown ids are ignored. */
+    reorder(sids) {
+      const l = this.list(), by = new Map(l.map((f) => [f.subaccountId, f]));
+      const want = Array.from(new Set(sids || [])).filter((s) => by.has(s)), set = new Set(want);
+      const slots = []; l.forEach((f, i) => { if (set.has(f.subaccountId)) slots.push(i); });
+      const out = l.slice(); slots.forEach((slot, k) => { out[slot] = by.get(want[k]); });
+      U.storage.set(FAV_KEY, out); U.emit('favorites');
+    },
   };
 
   // ---------- Events ----------

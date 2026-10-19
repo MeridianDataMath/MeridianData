@@ -155,3 +155,39 @@ test('toast: a polite live region screen readers read out, shown 1.6 s by defaul
     t.mock.timers.tick(5999); assert.ok(el.cls.has('show')); t.mock.timers.tick(1); assert.ok(!el.cls.has('show'));
   } finally { Object.assign(globalThis, saved); }
 });
+
+test('favorites: a name of its own (trimmed, capped, removable) that survives re-adding; reorder moves only the given ones within their places', () => {
+  const mem = new Map();
+  const saved = globalThis.localStorage;
+  globalThis.localStorage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
+  try {
+    let events = 0; const off = U.on('favorites', () => { events++; });
+    const fav = (c) => ({ subaccountId: c, address: '0x' + c.repeat(40), name: 'primary' });
+    for (const c of ['e', 'd', 'c', 'b', 'a']) U.favorites.add(fav(c));   // newest first: a b c d e
+    assert.deepEqual(U.favorites.list().map((f) => f.subaccountId), ['a', 'b', 'c', 'd', 'e']);
+    U.favorites.setLabel('c', '  Market   maker  ');
+    assert.equal(U.favorites.list().find((f) => f.subaccountId === 'c').label, 'Market maker');
+    U.favorites.setLabel('b', 'x'.repeat(50));
+    assert.equal(U.favorites.list().find((f) => f.subaccountId === 'b').label.length, U.FAV_LABEL_MAX);
+    U.favorites.setLabel('b', '   ');
+    assert.equal('label' in U.favorites.list().find((f) => f.subaccountId === 'b'), false, 'an empty name takes it off');
+    // the first three shown, reordered: the others keep their places
+    U.favorites.reorder(['c', 'a', 'b']);
+    assert.deepEqual(U.favorites.list().map((f) => f.subaccountId), ['c', 'a', 'b', 'd', 'e']);
+    // ids that are not favorites, and repeats, change nothing else
+    U.favorites.reorder(['e', 'zz', 'd', 'e']);
+    assert.deepEqual(U.favorites.list().map((f) => f.subaccountId), ['c', 'a', 'b', 'e', 'd']);
+    // a subset that is not contiguous keeps the places it held
+    U.favorites.reorder(['d', 'c']);
+    assert.deepEqual(U.favorites.list().map((f) => f.subaccountId), ['d', 'a', 'b', 'e', 'c']);
+    // unfavorited and added again keeps nothing, but re-adding an existing one keeps its name
+    U.favorites.add(fav('c'));
+    assert.equal(U.favorites.list()[0].label, 'Market maker');
+    U.favorites.toggle(fav('c')); U.favorites.toggle(fav('c'));
+    assert.equal(U.favorites.list()[0].label, undefined);
+    assert.ok(events >= 10);
+    off();
+    mem.set('md.favorites.v1', '{"not":"a list"}');
+    assert.deepEqual(U.favorites.list(), []);
+  } finally { globalThis.localStorage = saved; }
+});

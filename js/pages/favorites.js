@@ -41,7 +41,8 @@
         const rows = results.map((r, i) => (r.ok ? r.value : { f: favs[i], error: r.error }));
         const tbl = UI.table({
           cols: [
-            { key: 'acct', label: 'Account', render: (r) => h('div.row', U.addrLink(r.f.address, r.f.subaccountId), U.copyBtn(r.f.address)) },
+            // the name the user gave the wallet (the home page's favorites, or the pencil here), then its address
+            { key: 'acct', label: 'Account', render: (r) => h('div.row', r.f.label ? h('b.fav-label', { title: 'Your name for this wallet' }, r.f.label) : null, U.addrLink(r.f.address, r.f.subaccountId), U.copyBtn(r.f.address)) },
             { key: 'sub', label: 'Subaccount', render: (r) => h('span.dim', r.f.name || 'primary') },
             { key: 'equity', label: 'Equity', num: true, render: (r) => (r.error ? h('span.neg', 'error') : UI.usd(r.st.equity)) },
             // Meridian's Unrealized P&L (gross); the site's net figure, what equity counts, in the cell's tooltip
@@ -52,7 +53,9 @@
             // a row the snapshot carried over from an earlier build is marked "older", as on the Leaderboard
             { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot, as Meridian\'s Trade Stats 30D: from the end of the UTC day 30 days back. Hover a cell for the site\'s net figure', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? h('span', { title: AN.sitePnlTitle(r.lb, '30d') }, U.pnlEl(r.lb.stats['30d'].pnl), r.lb.carried && LB ? [' ', LB.carriedChip(r.lb)] : null) : h('span.dim', '—')) },
             { key: 'added', label: 'Added', render: (r) => h('span.dim', U.fmtAgo(r.f.addedAt)) },
-            { key: 'rm', label: '', render: (r) => h('button.btn.sm.icon.ghost', { title: 'Remove', onclick: () => U.favorites.remove(r.f.subaccountId) }, U.icon('trash')) },
+            { key: 'rm', label: '', render: (r) => h('div.row', { style: { gap: '2px', flexWrap: 'nowrap' } },
+              h('button.btn.sm.icon.ghost', { title: r.f.label ? 'Rename' : 'Give it a name', 'aria-label': r.f.label ? 'Rename' : 'Give it a name', onclick: (e) => { e.stopPropagation(); UI.nameFavorite(r.f.subaccountId); } }, U.icon('pencil')),
+              h('button.btn.sm.icon.ghost', { title: 'Remove', 'aria-label': 'Remove', onclick: (e) => { e.stopPropagation(); U.favorites.remove(r.f.subaccountId); } }, U.icon('trash'))) },
           ],
           rows,
           onRow: (r) => { location.hash = U.accountUrl(r.f.address, r.f.subaccountId).slice(1); },

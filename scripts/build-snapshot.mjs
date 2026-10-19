@@ -452,12 +452,8 @@ async function buildPredict() {
   if (raw.truncated && !limit) { console.error('predict: a time window hit its page cap, so the history is incomplete; not writing a snapshot (raise windows or maxPagesPerWindow)'); process.exit(1); }
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
   // has its file (the publish step checks that, and that the count stays close to the API's)
-  // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads; predict.json keeps only their count, stakes,
-  // dates and the makers they were against (leftOut), so the Overview can say what its totals leave out
-  const normed = (limit ? raw.slice(0, limit) : raw).map(P.norm);
-  const left = normed.filter(P.excluded), all = normed.filter((n) => !P.excluded(n));
-  const leftOut = left.length ? { n: left.length, stake: Math.round(U.sum(left, (n) => n.stake) * 100) / 100, cp: Math.round(U.sum(left, (n) => n.cp) * 100) / 100,
-    from: Math.min(...left.map((n) => n.t)), to: Math.max(...left.map((n) => n.t)), makers: Array.from(new Set(left.map((n) => n.counterparty).filter((a) => !P.EXCLUDED.has(a)))) } : null;
+  // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads
+  const all = (limit ? raw.slice(0, limit) : raw).map(P.norm).filter((n) => !P.excluded(n));
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
@@ -566,7 +562,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, leftOut, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);

@@ -460,6 +460,16 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 /* the shortcuts (favorites, recent searches) sit right under the search; nothing shows on a first visit */
 .hero .quick.shortcuts { margin-top: 6px; }
 .hero .quick.shortcuts:empty { display: none; }
+/* a favorite moves along the line (a mouse drags it, a finger holds it first) and can carry a name: no text selection or
+   link preview while held, a long name ends in an ellipsis */
+.hero .quick .chipbtn.fav { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; max-width: min(220px, 100%); transition: transform .12s, border-color .12s; }
+.hero .quick .chipbtn.fav .lbl, .hero .quick .chipbtn.fav-ghost .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hero .quick .chipbtn.fav.fav-drag { opacity: .35; }
+.hero .quick .chipbtn.fav.fav-lift { transform: scale(1.06); border-color: var(--gold); }
+.hero .quick .chipbtn.fav-ghost { position: fixed; z-index: 200; pointer-events: none; margin: 0; border-color: var(--gold); background: var(--bg-2); box-shadow: 0 10px 28px rgba(0,0,0,.45); cursor: grabbing; }
+.fav-name { display: flex; flex-direction: column; gap: 10px; }
+.fav-label { color: var(--text-1); font-weight: 600; margin-right: 2px; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-name .addr-full { font-family: var(--mono, ui-monospace, monospace); word-break: break-all; }
 .hero .quick .chipbtn svg, .btn svg, .chip svg, .topbar svg { width: 14px; height: 14px; flex: none; }
 /* home: the tiles fill every row they take (5 tiles: no gap left in a short last row); the cards pair up only where
    each still has room for its rows, and a narrow card drops a Predict row's address and multiplier (.opt) */
@@ -882,6 +892,7 @@ textarea.input:focus { border-color: var(--accent); }
   .main.home .hero { padding: 36px 16px 20px; }
   .home-body { padding: 4px 12px 12px; }
   .hero h1 { font-size: 26px; }
+  .hero .quick .chipbtn.fav { max-width: 160px; }   /* two or three favorites a row on a phone; a long name ends in an ellipsis */
   .hero form input { font-size: 16px; }
   .chart-box { height: 240px; }
   /* feeds (trade tapes, fills, prediction tape): tighter cells so a row fits a phone instead of scrolling sideways */
