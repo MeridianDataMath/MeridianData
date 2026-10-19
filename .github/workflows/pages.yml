@@ -3,7 +3,7 @@
 # wrangler.jsonc; works from a private repo). Needs the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
 # without them the run fails instead of deploying anywhere else. Runs on every push to main, every 30 minutes when the
 # Cloudflare timer (cron/) dispatches it at :14 and :44 (a few minutes after the snapshot machine's runs at :09 and :39),
-# on its own schedule as a backup (GitHub drops most scheduled runs under load), and on demand.
+# on its own schedule every two hours as a backup (GitHub drops most scheduled runs under load), and on demand.
 #
 # The Cloudflare token reaches the two deploy steps only, never the tests, the builders, npm or git. Third-party actions are
 # pinned to commits (a moved tag cannot swap in other code) and wrangler to one version. To update an action:
@@ -15,7 +15,9 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '17,47 * * * *'
+    # the backup to the Cloudflare timer (cron/, :14 and :44): every two hours at :29, between the timer's runs, the odd
+    # hours so 03:29 UTC carries the keepalive below
+    - cron: '29 1-23/2 * * *'
   workflow_dispatch:
 
 permissions:
