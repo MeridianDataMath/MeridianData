@@ -673,15 +673,17 @@
       };
     }
     const realizedOf = (list) => {
-      const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null };
+      const k = list.length; if (!k) return { n: 0, implied: null, hit: null, ci: null, gap: null, stake: 0, pnl: 0, roi: null, comboStake: 0 };
       const implied = list.reduce((a, n) => a + n.odds, 0) / k, hit = list.filter((n) => n.won).length / k;
       const stake = list.reduce((a, n) => a + n.stake, 0), pnl = list.reduce((a, n) => a + n.pnl, 0);
+      // how much of it was staked on combos (on Meridian the long odds come almost only from combos: the Vig & edge page says so)
+      const comboStake = list.reduce((a, n) => a + (n.combo ? n.stake : 0), 0);
       // without the simulation (a single wallet's figures): the Wilson interval, which stays honest at a 0 % or 100 % hit
       // rate (a one-bet bucket reaches that trivially); it is centred off the raw hit rate, so its bounds are given as well
       const z = 1.96;
-      if (sharedSd) return { n: k, implied, hit, ci: z * sharedSd(list), ciKind: 'shared', gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+      if (sharedSd) return { n: k, implied, hit, ci: z * sharedSd(list), ciKind: 'shared', gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null, comboStake };
       const ci = (z * Math.sqrt((hit * (1 - hit)) / k + (z * z) / (4 * k * k))) / (1 + (z * z) / k), c = (hit + (z * z) / (2 * k)) / (1 + (z * z) / k);
-      return { n: k, implied, hit, ci, ciKind: 'wilson', lo: Math.max(0, c - ci), hi: Math.min(1, c + ci), gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null };
+      return { n: k, implied, hit, ci, ciKind: 'wilson', lo: Math.max(0, c - ci), hi: Math.min(1, c + ci), gap: implied - hit, stake, pnl, roi: stake > 0 ? pnl / stake : null, comboStake };
     };
     const realized = {
       overall: realizedOf(settledBets),

@@ -1167,7 +1167,22 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       the quoted vig's mean and median, the pooled realized return, the odds ranges with a clearly
       negative return (with their wins against the wins their odds implied) and each bet type's
       pooled return. It names no positive odds range, because a pooled positive return can rest
-      on a single wallet.
+      on a single wallet. Where the snapshot has it (`comboStake`, since 2026-10-20), a range's
+      share of stakes on combos too: on Meridian the long odds are nearly all combos.
+    - *Fact-checked 2026-10-20* (user: every figure must be what Meridian's data says, every
+      general claim shown to hold on other markets). The figures were recomputed from all raw API
+      predictions with separate code and match; the price at bet time matched a fresh CLOB lookup
+      on 160 of 161 legs; Meridian's YES is Polymarket's first outcome (111 of 111 open markets).
+      The text states Meridian's mechanics from its docs (linked: RFQ auction, odds, no trading
+      fee, a 50/50 leg counts as a loss while Polymarket pays 50¢), names the Kalshi markets
+      listed since 2026-10-13 (no Polymarket price, so outside the quoted vig), the midpoint the
+      price history holds, and the rare fallback to a sample after the bet. The negative-vig note
+      gives what was measured (92 of 97 with a sports leg were in-play, against about a third of
+      all bets). A last card, *The same patterns on other markets*, sources the general themes:
+      makers vs takers and long shots on Kalshi (Bürgi, Deng & Whelan 2026), racing long shots
+      (Snowberg & Wolfers 2010), Nevada's hold and parlay hold (UNLV), Polymarket's calibration
+      and its weaker long-shot effect (Cardozo & Rivero-Wildemauwe 2026) and stale in-play prices
+      (UK Gambling Commission).
   * *Bettor page* – PnL curve, daily volume, open positions with locked odds vs the chance now,
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center has a Predict card for the same wallet (both roles, three

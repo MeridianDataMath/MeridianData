@@ -401,6 +401,18 @@ test('the realized interval allows for bets on the same question winning or losi
   assert.equal(w.ciKind, 'wilson'); assert.ok(w.lo < w.hit && w.hit < w.hi);
 });
 
+test('realized figures say how much of their stakes is on combos (the long odds on Meridian are nearly all combos)', () => {
+  const bet = (id, stake, cp, legs, won) => P.norm({ predictionId: id, predictor: ME, counterparty: MAKER, predictorCollateral: wei(stake), counterpartyCollateral: wei(cp), settled: true, result: won ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS',
+    createdAt: new Date(T0).toISOString(), settledAt: new Date(T0 + DAY).toISOString(),
+    pickConfig: { pickConfigId: 'pc-' + id, resolved: true, result: won ? 'PREDICTOR_WINS' : 'COUNTERPARTY_WINS', picks: Array.from({ length: legs }, (_, i) => ({ conditionId: 'c' + id + i, predictedOutcome: 'YES', condition: { question: 'q' + id + i, endTime: Math.floor((T0 + DAY / 2) / 1000) } })) } });
+  // at 5 % odds: a 3-leg combo staking 9 and a single staking 1; at 50 %: one single
+  const r = P.aggregate([bet('a', 9, 171, 3, false), bet('b', 1, 19, 1, false), bet('c', 5, 5, 1, true)]).vig.realized;
+  near(assert, r.overall.comboStake, 9, 1e-9); near(assert, r.overall.stake, 15, 1e-9);
+  const low = r.byOddsBucket.find((b) => b.from === 0.05);
+  near(assert, low.comboStake, 9, 1e-9); near(assert, low.stake, 10, 1e-9);
+  assert.equal(r.byOddsBucket.find((b) => b.from === 0.5).comboStake, 0);
+});
+
 test('a percentage rounded to zero carries no sign', () => {
   assert.equal(MD.util.fmtPct(-0.04, { sign: true, dp: 1 }), '0.0%');
   assert.equal(MD.util.fmtPct(-0.06, { sign: true, dp: 1 }), '-0.1%');
