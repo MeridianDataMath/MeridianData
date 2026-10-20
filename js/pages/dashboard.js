@@ -34,13 +34,30 @@
     for (const r of list) { const x = U.num(r.positionFeeRate); rate += x; perUnit += U.num(r.chargePerUnitUsd); if (x > maxRate) maxRate = x; }
     return { n: list.length, rate, perUnit, maxRate, cadence: list.length ? U.num(list[0].cadenceMinutes) || null : null };
   };
+  /** A decimal rate as a percent with the trailing zeros dropped: 0.00005 → "0.005%", 0.0025 → "0.25%", 0.02 → "2%". */
+  const pctT = (x) => (+(U.num(x) * 100).toFixed(4)) + '%';
+  // ---- trading fees: the REST history carries each fill's fees; the WebSocket sends none, so a live fill's are worked
+  // out from the market's fee rates (marked ≈). Takers have paid 0.005% and makers nothing so far (Oct 2026) ----
+  /** A tape row's fees in USD: {taker, maker, exact}. */
+  const tradeFee = (t) => (t.takerFeeUsd != null
+    ? { taker: U.num(t.takerFeeUsd), maker: U.num(t.makerFeeUsd), exact: true }
+    : { taker: U.num(t.size) * U.num(t.price) * U.num(t.takerRate), maker: U.num(t.size) * U.num(t.price) * U.num(t.makerRate), exact: false });
+  /** The last 24 hours' trading fees from the Markets rows: each market's 24h volume at the mark × its taker and its maker
+   *  fee. Meridian's 24h volume counts each trade once (the REST trades of a day add up to it, checked Oct 21). */
+  const fees24h = (rows) => { let taker = 0, maker = 0; for (const r of rows || []) { taker += r.volUsd * U.num(r.p.takerFee); maker += r.volUsd * U.num(r.p.makerFee); } return { taker, maker }; };
+  /** A market's open interest against its cap. Meridian caps each side (maxOpenInterestUsd: the open interest of one side)
+   *  while its openInterest counts both, so one side is half of it: {side, cap, share}, in USD at the mark; null without
+   *  a cap. */
+  const oiUse = (p, mark) => { const cap = U.num(p.maxOpenInterestUsd); if (!(cap > 0)) return null; const side = (U.num(p.openInterest) / 2) * U.num(mark); return { side, cap, share: side / cap }; };
   // live-feed rows from the REST history and from a WebSocket fill: the product's tick and lot ride along, so price and
-  // size print at the app's decimals (a size at a fixed 4 dp showed a 1.19645 BTC fill as 1.1965, off the lot grid)
-  const restTrade = (p, r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null });
-  const wsTrades = (p, m) => { const d = m.data || {}; return (d.d || []).map((it) => ({ id: it.id, t: d.t || m.t, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: it.sd, size: it.sz, price: it.px, taker: it.sids && it.sids[0], maker: it.sids && it.sids[1], _new: true })); };
+  // size print at the app's decimals (a size at a fixed 4 dp showed a 1.19645 BTC fill as 1.1965, off the lot grid), and
+  // its fee rates, for a fill the feed sends without its fees
+  const restTrade = (p, r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null,
+    takerFeeUsd: r.takerFeeUsd ?? null, makerFeeUsd: r.makerFeeUsd ?? null, takerRate: p.takerFee, makerRate: p.makerFee });
+  const wsTrades = (p, m) => { const d = m.data || {}; return (d.d || []).map((it) => ({ id: it.id, t: d.t || m.t, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: it.sd, size: it.sz, price: it.px, taker: it.sids && it.sids[0], maker: it.sids && it.sids[1], takerRate: p.takerFee, makerRate: p.makerFee, _new: true })); };
 
   MD.router.pages.dashboard = {
-    ratePct, fundingGap, fundingOf, restTrade, wsTrades, lastLongGap, chargesSum,
+    ratePct, fundingGap, fundingOf, restTrade, wsTrades, lastLongGap, chargesSum, pctT, tradeFee, fees24h, oiUse,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Dashboard'));
       const tiles = h('div.stats');
@@ -81,13 +98,24 @@
         h('span.chev', U.icon('chevR')), h('h2', 'Liquidation map'), h('span.dim.small', 'where every open position gets liquidated, by price level · Meridian\'s liquidator takes them over, not the order book · the jump that would drain its pool, after which winning positions are force-closed · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(stopCard, [smHead, smBody]);
       U.append(liqCard, [lmHead, lmBody]);
+      // market specs: each market's limits and settings as Meridian's product data has them; closed until opened, and the
+      // choice is kept in this browser (it loads nothing of its own)
+      const SPECS_KEY = 'md.dash.specsOpen';
+      const specsBody = h('div', { style: { display: 'none' } }, UI.loading('Loading markets…'));
+      const specsCard = h('div.card.tight.collapsible');
+      let renderSpecs = () => {};   // set once the markets are loaded
+      const setSpecs = (open) => { specsCard.classList.toggle('open', open); specsBody.style.display = open ? '' : 'none'; specsHead.setAttribute('aria-expanded', String(open)); U.storage.set(SPECS_KEY, open); if (open) renderSpecs(); };
+      const specsHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => setSpecs(!specsCard.classList.contains('open')) },
+        h('span.chev', U.icon('chevR')), h('h2', 'Market specs'), h('span.dim.small', 'leverage, margins, open-interest caps, order limits, fees and price feeds of every market, as Meridian\'s product data has them'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      U.append(specsCard, [specsHead, specsBody]);
+      if (U.storage.get(SPECS_KEY, false) === true) setSpecs(true);
       U.replace(root, h('div.page', h('div.stack', tiles,
         h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price · click a column to sort')), mktBody),
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
         h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody, pfBody),
-        stopCard, liqCard)));
+        specsCard, stopCard, liqCard)));
 
       const ref = await A.ref(ctx);
       const ids = ref.active.map((p) => p.id);
@@ -122,20 +150,32 @@
         const rows = iso.map((p) => ({ p, gap: (gapsBy[p.id] || []).filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime)[0] || null, last: pfLast[p.id] || null }));
         const nowCell = (r) => { const g = r.gap; if (!g) return h('span.dim', 'open');
           return g.startTime <= t ? h('span.closure', 'closed · reopens ' + U.fmtWhen(g.endTime)) : h('span.dim', 'open · next closure ' + U.fmtWhen(g.startTime) + ' → ' + U.fmtWhen(g.endTime)); };
+        // Meridian's estimate of the closure's move (the mark-price gap's sigmas): one standard deviation of the price's
+        // return over the whole closure, the greater of the historic and the options-implied figure; the fee is set from it
+        const sig = (x) => U.fmtPct(U.num(x) * 100, { dp: 2 });
+        const sigmaNote = (g) => `one standard deviation of the price's move over the closure ±${sig(g.effectiveSigma)}, the greater of the figure from past closures (${sig(g.historicSigma)}) and the one implied by options volatility (${g.impliedSigma != null && g.impliedSigma !== '' ? sig(g.impliedSigma) : 'none for this closure'})`;
+        const riskCell = (r) => { const g = r.gap; if (!g || g.effectiveSigma == null) return h('span.dim', '—');
+          return h('span', { title: `${g.startTime <= t ? 'This closure' : 'The next closure'} (${U.fmtWhen(g.startTime)} → ${U.fmtWhen(g.endTime)}): Meridian puts ${sigmaNote(g)}, and works the position fee out with it` }, '±' + sig(g.effectiveSigma)); };
         const lastCell = (r) => { const s = r.last; if (!s) return h('span.dim', '—'); const base = r.p.baseTokenName || 'unit';
-          return h('span', { title: `${U.fmtWhen(s.g.startTime)} → ${U.fmtWhen(s.g.endTime)}: ${s.n} charges${s.cadence ? ', every ' + s.cadence + ' min' : ''}, adding up to ${pfRate(s.rate)} of a position's value, long or short alike (${U.fmtUsd(s.perUnit, { dp: 4 })} per ${base}; the largest single charge ${U.fmtPct(s.maxRate * 100, { dp: 6 })})` + (s.truncated ? ' · more charges than were read' : '') },
+          return h('span', { title: `${U.fmtWhen(s.g.startTime)} → ${U.fmtWhen(s.g.endTime)}: ${s.n} charges${s.cadence ? ', every ' + s.cadence + ' min' : ''}, adding up to ${pfRate(s.rate)} of a position's value, long or short alike (${U.fmtUsd(s.perUnit, { dp: 4 })} per ${base}; the largest single charge ${U.fmtPct(s.maxRate * 100, { dp: 6 })})` + (s.g.effectiveSigma != null ? `; Meridian put ${sigmaNote(s.g)}` : '') + (s.truncated ? ' · more charges than were read' : '') },
             pfRate(s.rate), h('span.xs.dim', ' ≈ ' + U.fmtUsd(s.rate * 10000, { dp: 2 }) + ' per $10K')); };
+        // the initial margin Meridian's product data sets while the market is open and while it is closed
+        const imCell = (p) => { const o = U.num(p.openMarketInitialMargin), c = U.num(p.closedMarketInitialMargin);
+          return h('span', { title: `The initial margin Meridian's product data sets for ${p.displayTicker}: ${pctT(o)} of a position's value while the market is open, ${pctT(c)} while it is closed (a mark-price gap); its maintenance margin is ${pctT(p.maintenanceMargin)}` },
+            pctT(o), c !== o ? h('span', h('span.dim', ' → '), h('span', { class: c > o ? 'neg' : '' }, pctT(c))) : h('span.xs.dim', ' both')); };
         const cads = Array.from(new Set(Object.values(pfLast).map((s) => s.cadence).concat(Object.values(pfProj).map((x) => U.num(x.cadenceMinutes))).filter((x) => x > 0)));
         U.replaceLive(pfBody, h('div', { style: { borderTop: '1px solid var(--border-2)' } },
-          h('div.card-head', h('h3', 'Position fees (mPerps)'), h('span.dim.small', 'charged instead of funding while the reference market is closed · the next charge as Meridian\'s app shows it · last weekend added up')),
+          h('div.card-head', h('h3', 'Position fees (mPerps)'), h('span.dim.small', 'charged instead of funding while the reference market is closed · the next charge as Meridian\'s app shows it · last weekend added up · Meridian\'s estimate of the move over a closure')),
           UI.table({ cols: [
             { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
             { key: 'now', label: 'Now', render: nowCell },
             { key: 'next', label: 'Next charge', num: true, title: 'The projected rate of the next position fee, as Meridian\'s app shows it (Next position fee): per charge, how often, and when; it can change before then. Only while the market is closed', render: (r) => { const x = nextFee(r.p); return x ? h('span', x) : h('span.dim', { title: 'Charged only while the market is closed' }, '—'); } },
+            { key: 'risk', label: 'Typical closure move', num: true, title: 'Meridian\'s estimate of how far the price moves over the current closure, or the next one: one standard deviation (σ) of its return over the whole closure, from past closures or options volatility, whichever is greater. Meridian works the position fee out with it', render: riskCell },
             { key: 'wk', label: 'Last weekend', num: true, title: 'The charges of the last weekend closure added up: about the share of a position\'s value it cost, long or short alike; hover a figure for the window and the dollars per unit', render: lastCell },
-            { key: 'cum', label: 'Since launch / unit', num: true, title: 'Position fee paid by a one-unit position held through every closure since launch, long or short alike: the sum of the per-unit charges, as Meridian\'s product data reports it', render: (r) => U.fmtUsd(r.p.cumulativePositionFeeUsd, { dp: 4 }) + ' / ' + (r.p.baseTokenName || 'unit') },
+            { key: 'im', label: 'Initial margin open → closed', num: true, title: 'The initial margin Meridian\'s product data sets while the market is open and while it is closed (a mark-price gap), as a share of a position\'s value', render: (r) => imCell(r.p) },
+            { key: 'cum', label: 'Since launch / unit', num: true, title: 'Position fee paid by a one-unit position held through every closure since launch, long or short alike: the sum of the per-unit charges, as Meridian\'s product data reports it', render: (r) => h('span', { title: r.p.positionFeeUpdatedAt ? 'Last charged ' + U.fmtWhen(r.p.positionFeeUpdatedAt) : null }, U.fmtUsd(r.p.cumulativePositionFeeUsd, { dp: 4 }) + ' / ' + (r.p.baseTokenName || 'unit')) },
           ], rows, phone: { title: 'm', aside: 'wk', hide: ['cum'] } }),
-          h('div.footer-note', 'Meridian charges a position fee on mPerp positions while their reference market is closed (the mark-price gaps listed under Market closures): ' + (cads.length === 1 ? 'every ' + cads[0] + ' minutes' : 'every few minutes') + ', on longs and shorts alike, by position size, paid to the exchange rather than between longs and shorts; funding is paused meanwhile. Each charge has its own rate (', h('a', { href: 'https://docs.meridian.xyz/trading/perpetual-futures/position-fees', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), ').')));
+          h('div.footer-note', 'Meridian charges a position fee on mPerp positions while their reference market is closed (the mark-price gaps listed under Market closures): ' + (cads.length === 1 ? 'every ' + cads[0] + ' minutes' : 'every few minutes') + ', on longs and shorts alike, by position size, paid to the exchange rather than between longs and shorts; funding is paused meanwhile. Each charge has its own rate, worked out with Meridian\'s estimate of the move over the closure (', h('a', { href: 'https://docs.meridian.xyz/trading/perpetual-futures/position-fees', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), ').')));
       }
       const loadPf = async () => {
         if (!iso.length) return;
@@ -154,10 +194,14 @@
 
       function renderTiles() {
         // summed from the Markets table's own rows, so the tiles always equal the column totals
+        const rows = marketRows();
         let vol = 0, oi = 0;
-        for (const r of marketRows()) { vol += r.volUsd; oi += r.oiUsd; }
+        for (const r of rows) { vol += r.volUsd; oi += r.oiUsd; }
+        // the fees those trades paid: each market's 24h volume × its taker fee (and maker fee, nothing so far)
+        const fz = fees24h(rows), rates = (k) => Array.from(new Set(ref.active.map((p) => pctT(p[k])))).join(' / ');
         U.replaceLive(tiles, UI.stat('Active markets', String(ref.active.length), ref.products.length - ref.active.length ? (ref.products.length - ref.active.length) + ' pending/delisted' : null),
           UI.stat(h('span', { title: '24 h traded quantity (base units) × current mark price, summed over markets' }, '24h volume'), U.fmtUsd(vol, { compact: true })),
+          UI.stat(h('span', { title: `The trading fees of the last 24 hours, worked out: each market's 24h volume × its taker fee (${rates('takerFee')}) and its maker fee (${rates('makerFee')}), summed over markets; one taker pays on each trade` }, 'Trading fees 24h'), '≈' + U.fmtUsd(fz.taker + fz.maker, { compact: true }), 'takers ' + rates('takerFee') + ' · makers ' + rates('makerFee')),
           UI.stat('Open interest', U.fmtUsd(oi, { compact: true }), 'long + short · one side ' + U.fmtUsd(oi / 2, { compact: true })),
           UI.stat('Accounts', subs ? String(subs.length) : '—', subs && subs.length ? 'newest ' + U.fmtAgo(Math.max(...subs.map((s) => s.createdAt))) : null), UI.stat('Points distributed', points ? U.fmtCompact(points.totalPoints) : '—', points ? 'updated ' + U.fmtAgo(points.updatedAt) : null));
       }
@@ -169,12 +213,14 @@
           const l = live[p.ticker] || {}; const px = prices[p.id] || {};
           const m = mark(p); const p24 = U.num(l.markPx24h || px.price24hAgo);
           const bid = U.num(l.bidPx || px.bestBidPrice), ask = U.num(l.askPx || px.bestAskPrice);
+          // the quantity at the best bid and ask comes with the live feed only (REST sends the prices alone)
+          const bidAmt = l.bidPx ? U.num(l.bidAmt) : 0, askAmt = l.askPx ? U.num(l.askAmt) : 0;
           // one source per field, shared by tiles and table: REST open interest matched the open positions
           // while the WebSocket oi lagged for minutes; volume takes the live figure when there is one
           const oiN = U.num(p.openInterest); const volN = U.num(l.vol24h || p.volume24h);
           // the clock, not the mount time: a closure that starts while the page is open pauses funding on the next render
           const f = fundingOf(p, { projected, live: l, gaps, t: Date.now() });
-          return { p, cat: AN.marketCategory(p), size: AN.marketSize(p, caps, m), m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
+          return { p, cat: AN.marketCategory(p), size: AN.marketSize(p, caps, m), m, chg: p24 ? ((m - p24) / p24) * 100 : null, bid, ask, bidAmt, askAmt, spread: bid && ask ? ((ask - bid) / ((ask + bid) / 2)) * 100 : null, oiUsd: oiN * m, volUsd: volN * m, f };
         });
       }
       // funding cells: the app's format (4 dp, a minus but no plus), greyed "Paused" on an mPerp market inside a closure
@@ -206,6 +252,11 @@
       const capCol = { key: 'cap', label: 'Market cap', num: true, sortVal: 1, title: 'How big the asset is outside Meridian: a coin\'s market cap (CoinGecko); at the mark price, the value of an index fund\'s shares (SPY, QQQ) or of all the gold, silver or platinum above ground; other markets are ordered by their usual size without a figure', render: (r) => (r.size && r.size.src !== 'hint' ? h('span', { title: SIZE_TIP[r.size.src] }, (r.size.src === 'coingecko' ? '' : '≈') + U.fmtUsd(r.size.usd, { compact: true })) : h('span.dim', '—')) };
       const catHead = (name, list, totals) => h('div.mkt-group', h('span.name', name),
         list.length ? h('span.dim', list.length + (list.length === 1 ? ' market' : ' markets')) : h('span.dim', 'none on Meridian yet'), list.length && totals ? h('span.dim', totals(list)) : null);
+      // the Bid / Ask cell's tooltip: the quantity at the top of the book on each side (the live feed's bidAmt and askAmt)
+      const baTitle = (r) => {
+        const side = (name, px, qty) => (px ? `${name} ${U.fmtPrice(px, r.p.tickSize)}` + (qty ? ` for ${U.fmtQty(qty, r.p.lotSize)} ${r.p.baseTokenName || ''} (${U.fmtUsd(qty * px, { compact: true })})` : '') : `no ${name}`);
+        return side('best bid', r.bid, r.bidAmt) + ' · ' + side('best ask', r.ask, r.askAmt) + (r.spread != null ? ' · spread ' + U.fmtPct(r.spread, { dp: 3 }) : '') + (r.bidAmt || r.askAmt ? '' : ' · the quantities come with the live feed');
+      };
       const renderCatSel = (rows) => {
         const n = {}; for (const r of rows) n[r.cat] = (n[r.cat] || 0) + 1;
         const seen = JSON.stringify(n) + '|' + mktCat; if (seen === catSeen) return; catSeen = seen;
@@ -227,7 +278,7 @@
             capCol,
             { key: 'px', label: 'Mark price', num: true, sortVal: 1, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
-            { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
+            { key: 'ba', label: 'Bid / Ask', num: true, title: 'Best bid and best ask, and the spread between them · hover a market\'s for the quantity waiting at each', render: (r) => h('span', { title: baTitle(r) }, h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
             // the app's Funding column: the projected rate, not the last charge (they can differ in sign); Paused in a closure
             { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f, r.p) },
             { key: 'oi', label: 'Open interest', num: true, sortVal: 1, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
@@ -276,7 +327,7 @@
           const r = await A.get(A.BASE + '/v1/product?limit=200', { signal: ctx.signal });   // no ttl: A.ref's 5-minute cache would hand back the same objects
           for (const p of (r && r.data) || []) if (ref.byId[p.id]) Object.assign(ref.byId[p.id], p);   // ref.active and ref.byId hold the same objects
           Object.assign(projected, await A.projectedFunding(ids, ctx));
-          renderMarketsThrottled();
+          renderMarketsThrottled(); renderSpecs();
         } catch (_) {}
         try { const t = Date.now(); setGaps(await A.gaps(ids, t, t + 7 * U.DAY, ctx)); renderGaps(); renderMarketsThrottled(); } catch (_) {}
         loadPf();   // the next position fee changes every charge; the last weekend's figure only after a new weekend
@@ -538,6 +589,42 @@
       ctx.onCleanup(() => clearInterval(smT));
       scanOpen();   // one opened while the page was still loading
 
+      // ---- market specs (the card under Funding): every market's limits and settings from its product data, by category
+      // in the Markets table's order; redrawn with the products every minute while open ----
+      renderSpecs = () => {
+        if (!specsCard.classList.contains('open')) return;
+        const list = sortMarkets(ref.active.map((p) => ({ p, mark: mark(p) })));
+        const groups = AN.MARKET_CATS.map(([k, name]) => ({ name, rows: list.filter((r) => AN.marketCategory(r.p) === k) })).filter((g) => g.rows.length).map((g) => ({ head: catHead(g.name, g.rows), rows: g.rows }));
+        const imS = (p) => { const o = U.num(p.openMarketInitialMargin), c = U.num(p.closedMarketInitialMargin);
+          return c !== o ? h('span', pctT(o), h('span.xs.dim', ' open · '), h('span', { class: c > o ? 'neg' : '' }, pctT(c)), h('span.xs.dim', ' closed')) : h('span', pctT(o)); };
+        const share = (x) => (x > 0 && x < 0.0005 ? '<0.1%' : U.fmtPct(x * 100, { dp: 1 }));
+        const oiS = (r) => { const u = oiUse(r.p, r.mark); if (!u) return h('span.dim', '—');
+          return h('span', { title: `Meridian caps the open interest of each side of ${r.p.displayTicker} at ${U.fmtUsd(u.cap, { dp: 0 })}: its longs (and as much in shorts) are worth ${U.fmtUsd(u.side, { dp: 0 })} at the mark price now, ${share(u.share)} of the cap` },
+            usdC(u.side), h('span.dim', ' of '), usdC(u.cap), h('span.xs.dim', ' ' + share(u.share))); };
+        const plain = (x) => U.fmtQty(x);   // up to 6 decimals, the trailing zeros dropped: "0.1 – 1,002,492"
+        const impS = (p) => { const b = U.num(p.fundingBidImpactSizeUsd), a = U.num(p.fundingAskImpactSizeUsd); return b === a ? usdC(b) : usdC(b) + ' / ' + usdC(a); };
+        const listedS = (p) => h('div.mkt-row', h('div', p.blockNumber ? h('a', { href: U.explorerBlock(p.blockNumber), target: '_blank', rel: 'noopener', title: 'Registered on Robinhood Chain in block ' + p.blockNumber }, U.fmtDate(p.createdAt)) : U.fmtDate(p.createdAt)),
+          h('div.sub', 'on-chain #' + (p.onchainId != null ? p.onchainId : '—') + ' · engine ' + (p.engineType != null ? p.engineType : '—')));
+        U.replaceLive(specsBody, h('div', UI.table({
+          cols: [
+            { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, r.p.marginMode === 'CROSS' ? 'cross margin' : 'isolated margin') },
+            { key: 'lev', label: 'Max leverage', num: true, title: 'The highest leverage Meridian\'s app offers on the market', render: (r) => r.p.maxLeverage + '×' },
+            { key: 'im', label: 'Initial margin', num: true, title: 'The initial margin Meridian\'s product data sets, as a share of a position\'s value: while the market is open, and while it is closed (an mPerp\'s mark-price gap) where that differs', render: (r) => imS(r.p) },
+            { key: 'mm', label: 'Maint. margin', num: true, title: 'The equity a margin pool must keep for a position, as a share of its value: below it the pool is liquidated. Meridian\'s docs put the base figure at 1 ÷ (2 × the max leverage)', render: (r) => pctT(r.p.maintenanceMargin) },
+            { key: 'oi', label: 'Open interest / cap', num: true, title: 'Meridian caps the open interest of each side of a market: one side\'s positions at the mark price now, the cap, and how much of it they use', render: oiS },
+            { key: 'pos', label: 'Max position', num: true, title: 'The largest position one account can hold in the market, by value', render: (r) => usdC(r.p.maxPositionNotionalUsd) },
+            { key: 'qty', label: 'Order size', num: true, title: 'The smallest and the largest quantity one order can have', render: (r) => plain(r.p.minQuantity) + ' – ' + plain(r.p.maxQuantity) + ' ' + (r.p.baseTokenName || '') },
+            { key: 'tl', label: 'Tick / lot', num: true, title: 'The step of an order\'s price and of its quantity', render: (r) => h('span', r.p.tickSize, h('span.dim', ' / '), r.p.lotSize) },
+            { key: 'px', label: 'Price limits', num: true, title: 'The lowest and the highest price the product allows', render: (r) => plain(r.p.minPrice) + ' – ' + plain(r.p.maxPrice) },
+            { key: 'fee', label: 'Taker / maker fee', num: true, title: 'The fee on each trade, as a share of its value: the taker\'s and the maker\'s', render: (r) => pctT(r.p.takerFee) + ' / ' + pctT(r.p.makerFee) },
+            { key: 'imp', label: 'Funding impact size', num: true, title: 'The order size funding reads the order book at: the average price of selling (the impact bid) and of buying (the impact ask) this many dollars at once, against the mark price, sampled through the hour (Meridian\'s docs: Funding Rates)', render: (r) => impS(r.p) },
+            { key: 'feed', label: 'Pyth feed', num: true, title: 'The id of the Pyth price feed the market\'s oracle price comes from', render: (r) => (r.p.pythFeedId != null ? '#' + r.p.pythFeedId : '—') },
+            { key: 'listed', label: 'Listed', title: 'When the market was listed (a link to the Robinhood Chain block it was registered in), its id on-chain and the engine type it was registered with', render: (r) => listedS(r.p) },
+          ], groups, phone: { title: 'm', aside: 'lev', hide: ['tl', 'px'], wide: ['oi'] },
+        }), h('div.footer-note', 'From Meridian\'s product data, refreshed every minute; open interest at the mark price. Funding reads the order book at the impact size (', h('a', { href: 'https://docs.meridian.xyz/trading/perpetual-futures/funding-rates', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), ').')));
+      };
+      renderSpecs();
+
       // the coins' market caps (CoinGecko, kept 12 hours in this browser) order the crypto markets; until they arrive, or
       // without them, each coin's last known size does (AN.marketSize)
       A.marketCaps(ref.active.filter((p) => AN.marketCategory(p) === 'crypto').map((p) => p.baseTokenName), ctx)
@@ -554,11 +641,17 @@
         if (!sid && t[which + 'Order']) { try { sid = (await A.order(t[which + 'Order'], ctx)).subaccountId; t[which] = sid; } catch (_) {} }
         if (sid) MD.router.navigate('/account', { address: '', sub: sid }); else U.toast('Account not available for this trade');
       };
+      // a fill's fees, on its notional: the REST history's own figures, a live fill's worked out from the fee rates (≈)
+      const feeUsd = (x) => (x > 0 && x < 0.01 ? '$' + x.toPrecision(2) : U.fmtUsd(x, { dp: x > 0 && x < 1 ? 4 : 2 }));
+      const feeTitle = (t) => {
+        const f = tradeFee(t), n = U.num(t.size) * U.num(t.price), ap = f.exact ? '' : '≈';
+        return `Notional ${U.fmtUsd(n)} · taker fee ${ap}${feeUsd(f.taker)}${n ? ' (' + pctT(f.taker / n) + ')' : ''} · maker fee ${f.maker ? ap + feeUsd(f.maker) : 'none'}` + (f.exact ? '' : ' · worked out from the market\'s fee rates: the live feed sends a fill without its fees');
+      };
       const tradeRow = (t, flash) => {
         const link = (which, label) => { const sid = t[which]; return sid || t[which + 'Order'] ? h('a', { href: sid ? U.accountUrl('', sid) : '#', title: sid || 'resolving…', onclick: (e) => { e.preventDefault(); e.stopPropagation(); openAccount(t, which); } }, label) : h('span.dim', label); };
         const clickable = !!(t.taker || t.takerOrder);
         return h('div.it', { class: (flash ? 'flash ' : '') + (clickable ? 'click' : ''), title: clickable ? 'Open the account that took this trade' : undefined, onclick: clickable ? () => openAccount(t, 'taker') : undefined },
-          h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))),
+          h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', { title: feeTitle(t) }, U.fmtUsd(U.num(t.size) * U.num(t.price))),
           h('span.xs', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));
       };
       const renderTrades = () => U.replaceLive(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));

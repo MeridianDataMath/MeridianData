@@ -295,7 +295,23 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   "0.0000% / 15m at 23:15"), the last weekend's applied charges added up (`/v1/position-fee`,
   as a share of a position's value and per $10K; Oct 17-19: QQQ 0.0045%, silver 0.0025%, SPY
   0.0006%, gold 0), and the product's `cumulativePositionFeeUsd` per unit; a paused funding
-  cell names the next charge too.
+  cell names the next charge too. Also per mPerp: the *typical closure move*, the gap's
+  `effectiveSigma` (one standard deviation of the price's return over the whole closure, the
+  greater of `historicSigma` and the options-`impliedSigma`; the API says the fee is worked out
+  with it; the last weekend's in its tooltip), and the initial margin open → closed
+  (`openMarketInitialMargin`, `closedMarketInitialMargin`: gold 1 → 2 %, silver 2 → 4 %, SPY
+  1 → 2 %, QQQ 1 → 4 %, as of Oct 21). A **Trading fees 24h** tile: each market's 24h volume ×
+  its taker and maker fee (`fees24h`; the volume counts each trade once: a day's REST trades add
+  up to it, and their `takerFeeUsd` to volume × 0.005 %, checked Oct 21). The Bid / Ask cell's
+  tooltip has the quantity at the best bid and ask (the WebSocket Ticker's `bidAmt` / `askAmt`);
+  a tape fill's notional has its fees in its tooltip (the REST history's `takerFeeUsd` /
+  `makerFeeUsd`; a live fill's worked out from the rates, marked ≈). A collapsible **Market
+  specs** card (closed until opened, remembered in the browser) lists every market's product
+  data: max leverage, initial margin (open / closed), maintenance margin (1 ÷ 2× max leverage,
+  as the docs say), one side's open interest against `maxOpenInterestUsd` (a cap per side:
+  `oiUse` halves `openInterest`), max position, order size, tick / lot, price limits, fees,
+  funding impact size, Pyth feed id, and the listing date linked to its Robinhood Chain
+  registration block with the on-chain id and engine type.
 * **Tax center** (`#/tax?address=0x…`; the page is `js/pages/tax.js`, its parts `js/tax/*.js` under `MD.tax`) – tax
   records for one wallet: its Meridian perps subaccount and its Meridian Predict activity, for a fiscal year or any
   range of local dates, in the time zone and the reporting currency the reader picks. Everything is computed in the

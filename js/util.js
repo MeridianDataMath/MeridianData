@@ -363,4 +363,5 @@
   U.addrLink = (address, sid, n) => U.h('a.addr', { href: U.accountUrl(address, sid), title: address }, U.shortAddr(address, n));
   U.explorerTx = (hash) => `https://robinhoodchain.blockscout.com/tx/${hash}`;
   U.explorerAddr = (a) => `https://robinhoodchain.blockscout.com/address/${a}`;
+  U.explorerBlock = (n) => `https://robinhoodchain.blockscout.com/block/${n}`;
 })();

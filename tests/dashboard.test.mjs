@@ -73,6 +73,26 @@ test('live-feed rows carry the product lot, so sizes print at the lot decimals a
   assert.deepEqual(D.wsTrades(p, { data: {} }), []);
 });
 
+test('trading fees: a REST fill carries its own, a live fill\'s are worked out from the rates; 24h fees and the OI cap', () => {
+  const p = { displayTicker: 'BTC-USD', tickSize: '1', lotSize: '0.00001', takerFee: '0.00005', makerFee: '0' };
+  // BTC, Oct 21: 0.00014 at 82,908 paid $0.000580356 as taker, nothing as maker
+  const r = D.restTrade(p, { id: 'a', createdAt: 1, takerSide: 1, makerSide: 0, filled: '0.00014', price: '82908', takerFeeUsd: '0.000580356', makerFeeUsd: '0' });
+  assert.deepEqual(D.tradeFee(r), { taker: 0.000580356, maker: 0, exact: true });
+  const w = D.wsTrades(p, { data: { t: 7, d: [{ id: 'b', sd: 1, sz: '0.00278', px: '82921', sids: ['s1', 's2'] }] } })[0];
+  const f = D.tradeFee(w);
+  assert.equal(f.exact, false); assert.equal(f.maker, 0);
+  assert.ok(Math.abs(f.taker - 0.011526019) < 1e-9, 'the REST history charged this fill $0.011526019');
+  // a REST row without the fee fields falls back to the rates too
+  assert.equal(D.tradeFee(D.restTrade(p, { id: 'c', filled: '1', price: '100' })).exact, false);
+  assert.equal(D.pctT('0.00005'), '0.005%'); assert.equal(D.pctT('0.0025'), '0.25%'); assert.equal(D.pctT('0.02'), '2%'); assert.equal(D.pctT('0'), '0%');
+  const fz = D.fees24h([{ volUsd: 1e6, p }, { volUsd: 2e5, p: { takerFee: '0.0001', makerFee: '-0.00001' } }]);
+  assert.ok(Math.abs(fz.taker - 70) < 1e-9); assert.ok(Math.abs(fz.maker + 2) < 1e-9);
+  // the cap is one side's: openInterest counts longs and shorts, so one side is half of it
+  const u = D.oiUse({ maxOpenInterestUsd: '20000000', openInterest: '100' }, 80000);
+  assert.equal(u.side, 4e6); assert.equal(u.cap, 2e7); assert.equal(u.share, 0.2);
+  assert.equal(D.oiUse({ openInterest: '1' }, 1), null);
+});
+
 test('mPerp position fees: the last weekend closure (not a weekday evening hour) and its charges added up', () => {
   const H = 3600000, t = Date.UTC(2026, 9, 20, 21, 30);
   const gaps = [
