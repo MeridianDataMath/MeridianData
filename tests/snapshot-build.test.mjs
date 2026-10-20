@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -152,4 +152,59 @@ test('escrowReads / escrowSum: Meridian OI per question from the position tokens
   assert.deepEqual(s.drained, ['pc3']);
   assert.equal(s.unread, 0);
   assert.equal(escrowSum(reads, [{ result: hex(1) }, { error: { message: 'x' } }, { result: '0x' }]).unread, 2);
+});
+
+// Meridian's own lists the snapshot carries (the shapes read on 2026-10-21); `out` stands in for the left-out wallets
+const WL = (k) => '0x' + String(k).repeat(40).slice(0, 40);
+const wei = (usde) => (BigInt(Math.round(usde * 1e6)) * 1000000000000n).toString();
+const out = (a) => a === WL('d');
+
+test('compactCompetition: window, prizes, rules, market counts and the standings best first, a left-out wallet not listed', () => {
+  const c = { slug: 'nfl-week-4', title: 'NFL Week 4', label: 'NFL', startsAt: '2026-09-30T04:00:00.000Z', endsAt: '2026-10-06T13:00:00.000Z', payouts: ['200', '75', '50'], prizeUnit: 'USDe', minStake: '10', minLegs: 2, rankBy: 'MULTIPLIER', disqualifyEarlySales: true, eligibleMarketKinds: { gameEventIds: ['885112', '909431'], groupIds: [], conditionIds: [] } };
+  const st = [{ rank: 2, account: WL('B'), multiplier: 8.761949443, predictionId: '0x2', payout: wei(87.62), stake: wei(10) }, { rank: 1, account: WL('a'), multiplier: 15.588582223, predictionId: '0x1', payout: wei(210.45), stake: wei(13.5) }, { rank: 3, account: WL('d'), multiplier: 5, payout: wei(50), stake: wei(10) }];
+  const x = compactCompetition(c, st, 36, out);
+  assert.equal(x.start, Date.UTC(2026, 8, 30, 4)); assert.equal(x.end, Date.UTC(2026, 9, 6, 13));
+  assert.deepEqual(x.payouts, [200, 75, 50]); assert.equal(x.minStake, 10); assert.equal(x.minLegs, 2); assert.equal(x.rankBy, 'MULTIPLIER'); assert.equal(x.noEarlySales, true);
+  assert.deepEqual(x.markets, { games: 2, groups: 0, questions: 0, eligible: 36 });
+  assert.equal(x.entries, 2);
+  assert.deepEqual(x.standings, [{ r: 1, a: WL('a'), m: 15.5886, p: 210.45, s: 13.5, id: '0x1' }, { r: 2, a: WL('b'), m: 8.7619, p: 87.62, s: 10, id: '0x2' }]);
+  assert.equal(compactCompetition(c, Array.from({ length: 40 }, (_, i) => ({ rank: i + 1, account: WL(i % 9 + 1), payout: wei(1), stake: wei(1) })), null, out).standings.length, COMP_STANDINGS);
+});
+
+test('rankMap: Meridian\'s own rank and PnL by wallet; compactMatch: a match\'s name, start, league and volume windows', () => {
+  const m = rankMap([{ rank: 1, pnl: wei(18810.12), account: { address: WL('A') } }, { rank: 2, pnl: wei(100), account: { address: WL('d') } }, { rank: 3, pnl: '-' + wei(5), account: { address: WL('c') } }], out);
+  assert.deepEqual(Object.assign({}, m), { [WL('a')]: [1, 18810.12], [WL('c')]: [3, -5] });   // rank 3 stays Meridian's 3
+  const x = compactMatch({ externalEventId: '909431', name: 'Colts vs. Commanders', startTime: '2026-10-04T13:30:00.000Z', teams: [{ league: 'nfl' }, { league: 'nfl' }], d1: 4810386.74, d7: '5000000' });
+  assert.deepEqual(x, { n: 'Colts vs. Commanders', t: Date.UTC(2026, 9, 4, 13, 30), lg: 'nfl', v: { d1: 4810386.74, d7: 5000000 } });
+});
+
+test('hotRows: Meridian\'s Hot list in its order, a group\'s questions added up', () => {
+  const edges = [
+    { node: { __typename: 'Condition', conditionId: '0xc1', question: 'San Francisco wins', similarMarketVolumeFiltered1h: 120.5, similarMarketVolumeFiltered24h: 77379023.32, category: { name: 'Sports' }, conditionGroup: { externalEventId: 'KXNFLGAME-26OCT19WASSF' } } },
+    { node: { __typename: 'ConditionGroup', groupId: 960, name: 'World Cup Winner', externalEventId: '30615', category: { name: 'Sports' }, conditions: { nodes: [{ similarMarketVolumeFiltered24h: 10 }, { similarMarketVolumeFiltered24h: 5.5 }] } } },
+    { node: { __typename: 'ConditionGroupCluster' } },
+  ];
+  assert.deepEqual(hotRows(edges, 'd1'), [{ k: 'c', id: '0xc1', q: 'San Francisco wins', cat: 'Sports', ev: 'KXNFLGAME-26OCT19WASSF', v: 77379023.32 }, { k: 'g', id: '960', q: 'World Cup Winner', cat: 'Sports', ev: '30615', v: 15.5, n: 2 }]);
+  assert.equal(hotRows(edges, 'h1')[0].v, 120.5);
+});
+
+test('cashPlan: wallets never read first, then active since their last read, then a week unread, each the most recently active first', () => {
+  const now = Date.UTC(2026, 9, 21), H = 3600000;
+  const active = { [WL(1)]: now - 5 * H, [WL(2)]: now - H, [WL(3)]: now - 2 * H, [WL(4)]: now - 30 * 24 * H, [WL(5)]: now - 3 * H };
+  const cache = { [WL(3)]: { at: now - 10 * H }, [WL(4)]: { at: now - CASH_STALE_MS - H }, [WL(5)]: { at: now - H } };
+  assert.deepEqual(cashPlan(active, cache, now, 10), [WL(2), WL(1), WL(3), WL(4)]);   // WL(5): read since its last activity
+  assert.deepEqual(cashPlan(active, cache, now, 1), [WL(2)]);
+  // a wallet's transfers: in +, out − with the other address, newest first; its balance oldest first
+  const me = WL('e');
+  const xf = cashTransfers([{ from: WL('F'), to: me, timestamp: '2026-10-20T14:15:00.000Z', transactionHash: '0xa', value: wei(84.5) }, { from: me, to: WL('f'), timestamp: '2026-10-20T14:41:59.000Z', transactionHash: '0xb', value: wei(1256.34) }, { from: WL('f'), to: me, timestamp: '2026-10-19T00:00:00.000Z', value: '0' }], me);
+  assert.deepEqual(xf, [[Date.UTC(2026, 9, 20, 14, 41, 59), -1256.34, WL('f'), '0xb'], [Date.UTC(2026, 9, 20, 14, 15), 84.5, WL('f'), '0xa']]);
+  assert.deepEqual(cashBalances([{ timestamp: '2026-10-20T22:25:48.141Z', amount: wei(0.66) }, { timestamp: '2026-10-19T22:25:48.141Z', amount: wei(0.36) }]), [[Date.UTC(2026, 9, 19, 22, 25, 48, 141), 0.36], [Date.UTC(2026, 9, 20, 22, 25, 48, 141), 0.66]]);
+  // the history runs back at 0 as far as it is paged: kept from `from` on, from the day before the first balance not 0
+  const day = (d) => ({ timestamp: new Date(Date.UTC(2026, 9, d, 22)).toISOString(), amount: d >= 10 ? wei(d) : '0' });
+  assert.deepEqual(cashBalances([12, 11, 10, 9, 8, 3].map(day), Date.UTC(2026, 9, 5)).map((x) => x[1]), [0, 10, 11, 12]);
+  assert.deepEqual(cashBalances([2, 1].map(day)), []);
+  // two days before its first activity or transfer, never before the exchange's start
+  assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 12), 5]]), Date.UTC(2026, 9, 8));
+  assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 3), 5]]), Date.UTC(2026, 9, 1));
+  assert.equal(cashFrom(null, []), MD.predict.EXCHANGE_START_SEC * 1000);
 });

@@ -479,6 +479,9 @@
     if (Array.isArray(a.tape)) a.tape = a.tape.filter((t) => !out(t.predictor) && !out(t.counterparty));
     if (Array.isArray(a.bigBets)) a.bigBets = a.bigBets.filter((t) => !out(t.predictor) && !out(t.counterparty));
     if (Array.isArray(a.bigWins)) a.bigWins = a.bigWins.filter((w) => !out(w.p) && !out(w.c));
+    // Meridian's own lists (the builder leaves them out of these already)
+    if (Array.isArray(snap.competitions)) for (const c of snap.competitions) if (Array.isArray(c.standings)) c.standings = c.standings.filter((s) => !out(s.a));
+    if (snap.pnlRank) for (const k of ['all', 'd7']) if (snap.pnlRank[k]) for (const x of Object.keys(snap.pnlRank[k])) if (out(x)) delete snap.pnlRank[k][x];
     return snap;
   };
   /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are
@@ -922,16 +925,20 @@
    *  last 24 hours and 7 days; va all time, f24 / f7 the windows without low-odds trading, the figures Meridian's app shows
    *  (P.questionVolume). A row from before va / f24 / f7 has only v24 / v7. */
   P.compactQuestion = (c) => ({ id: c.conditionId, q: c.question, short: c.shortName, cat: c.category ? c.category.name : null, slug: c.category ? c.category.slug : null, tags: (c.tags || []).slice(0, 6), ep: c.estimatedPrice == null ? null : Number(c.estimatedPrice), oi: P.usd(c.openInterest), v24: Number(c.similarMarketVolume24h) || 0, v7: Number(c.similarMarketVolume7d) || 0,
-    va: c.similarMarketVolume == null ? undefined : Number(c.similarMarketVolume) || 0, f24: c.similarMarketVolumeFiltered24h == null ? undefined : Number(c.similarMarketVolumeFiltered24h) || 0, f7: c.similarMarketVolumeFiltered7d == null ? undefined : Number(c.similarMarketVolumeFiltered7d) || 0, end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
+    va: c.similarMarketVolume == null ? undefined : Number(c.similarMarketVolume) || 0, f24: c.similarMarketVolumeFiltered24h == null ? undefined : Number(c.similarMarketVolumeFiltered24h) || 0, f7: c.similarMarketVolumeFiltered7d == null ? undefined : Number(c.similarMarketVolumeFiltered7d) || 0,
+    f1: c.similarMarketVolumeFiltered1h == null ? undefined : Number(c.similarMarketVolumeFiltered1h) || 0, f4: c.similarMarketVolumeFiltered4h == null ? undefined : Number(c.similarMarketVolumeFiltered4h) || 0,
+    ev: c.conditionGroup && c.conditionGroup.externalEventId != null ? String(c.conditionGroup.externalEventId) : undefined,   // its match (the snapshot's matches)
+    end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
   /** A question's source-market volume as Meridian's app shows it, from a live API row or a snapshot row
    *  (P.compactQuestion): all = all time (its market page's "… Vol"), d24 / d7 = the windows its list cards show sorted
-   *  Hot / Top (the Filtered fields: its lists leave out low-odds trading by default, excludeLowOdds), raw24 / raw7 = the
+   *  Hot / Top (the Filtered fields: its lists leave out low-odds trading by default, excludeLowOdds), h1 / h4 the
+   *  shorter windows its Hot lists can sort by, raw24 / raw7 = the
    *  unfiltered windows the app never shows. null where the row does not carry the field (an older snapshot's rows have
    *  only raw24 / raw7; the snapshot's rows for questions it adds from open predictions have no volume at all). */
   P.questionVolume = (c) => {
     const num = (v) => (v == null || v === '' ? null : Number(v) || 0);
-    return c && c.conditionId ? { all: num(c.similarMarketVolume), d24: num(c.similarMarketVolumeFiltered24h), d7: num(c.similarMarketVolumeFiltered7d), raw24: num(c.similarMarketVolume24h), raw7: num(c.similarMarketVolume7d) }
-      : { all: num(c && c.va), d24: num(c && c.f24), d7: num(c && c.f7), raw24: num(c && c.v24), raw7: num(c && c.v7) };
+    return c && c.conditionId ? { all: num(c.similarMarketVolume), h1: num(c.similarMarketVolumeFiltered1h), h4: num(c.similarMarketVolumeFiltered4h), d24: num(c.similarMarketVolumeFiltered24h), d7: num(c.similarMarketVolumeFiltered7d), raw24: num(c.similarMarketVolume24h), raw7: num(c.similarMarketVolume7d) }
+      : { all: num(c && c.va), h1: num(c && c.f1), h4: num(c && c.f4), d24: num(c && c.f24), d7: num(c && c.f7), raw24: num(c && c.v24), raw7: num(c && c.v7) };
   };
   /** Volume as Meridian's app writes it ("$12.35k Vol"): to the cent below $10,000, else two decimals with k, M, B or T
    *  ($2.72M, $12.35k); "—" when unknown. */

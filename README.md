@@ -849,6 +849,13 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
 * **Predict section** (Meridian's prediction markets, powered by Sapience; separate sidebar group):
   * *Overview* – exchange-wide totals, wagered and count per UTC day, a live prediction tape,
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
+    A **Competitions** card (`snap.competitions`, from the API's `competitions` and each one's
+    `competition(slug) { eligibleConditionIds leaderboard }`): Meridian's contests, the running ones
+    first, each with its window, prizes by place (NFL Week 4: 200 / 75 / 50, then 25 down to the
+    10th, USDe), rules (a stake of 10 USDe or more, 2 legs or more, ranked by the best multiplier,
+    a prediction sold before the verdict not counting: `disqualifyEarlySales`), the matches,
+    groups and questions it names, and its standings (place, bettor, multiplier, stake, payout,
+    the prize, the slip; the first 25).
     Everything on it comes from one snapshot: a newer one published while the page is open is
     offered in the tape's header (*newer snapshot published · show it*) rather than mixed in,
     and the snapshot's age line keeps counting. Where the aggregate has no secondary-market
@@ -985,7 +992,15 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last bet; click through to a bettor page. The count line
     says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
-    filtered board, and a full address is found whatever the filters.
+    filtered board, and a full address is found whatever the filters. *Meridian rank* is the
+    wallet's place in Meridian's own PnL leaderboard (`snap.pnlRank`, the API's `leaderboard(metric:
+    PNL)` paged 25 at a time: 775 wallets on 2026-10-21), all time with the last 7 days beside it,
+    the PnL it ranks by in the tooltip. Meridian ranks by the results of the wallet's own
+    predictions at the verdict, claimed or not, without the secondary market: checked on
+    2026-10-21, that figure equals the site's sum of a bettor's own decided predictions for 763 of
+    764 bettors (the other, a launch-day tester, differs by its tests); Net PnL here also counts
+    the position tokens a bettor traded, so it differs for those (0x3f6a…: +$1,695 against
+    Meridian's +$79).
     - *Fact-checked 2026-10-20* (as the Overview): every column of all 764 rows was recomputed
       from the raw predictions and trades with separate code, with no difference; Meridian's own
       account stats (statsHistory from launch: the query without a date window returns only about
@@ -1009,7 +1024,16 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     (stake ever placed on Meridian first); probability, Meridian OI with the number of
     open bets and stake, *Vol 24h* / *Vol 7d* (the mirrored market's volume as Meridian's list
     cards show it, `similarMarketVolumeFiltered24h` / `7d`, formatted as the app does; the
-    unfiltered and all-time volumes in the tooltip), link to the mirrored source market. *Probability* is
+    unfiltered and all-time volumes in the tooltip, and the last hour and 4 hours its Hot lists can
+    sort by, `…Filtered1h` / `4h`), link to the mirrored source market. Under each question its
+    match (`snap.matches`: the API's clusters of the questions on one event, by the group's
+    `externalEventId`: *Colts vs. Commanders · Oct 4, 15:30*, the match's volume over 24 hours and
+    7 days in the tooltip: the API answers at most two `displayVolume` windows in one request)
+    before its tags, and Meridian's most used tags (`snap.tags`, the API's `tags` by
+    condition count) that the listed questions carry are filter buttons. A collapsible *Hot on
+    Meridian's app* card (`snap.hot`: the API's `questions` sorted `SIMILAR_MARKET_VOLUME_1H_FILTERED`
+    / `24H_FILTERED`, a group's questions added up) lists what the app puts first, with the stake
+    placed through Meridian where the site lists the question. *Probability* is
     Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors), loaded for the
     rows on screen; until it has loaded, the `estimatedPrice` Meridian's API reported at the
     snapshot, which stops following the market once a game starts. A settled question shows its
@@ -1149,7 +1173,15 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     unclaimed: 389 bettor wins and 713 maker wins (most of them, it turned out, paid by a claim on
     the same token; see above). The Overview mentions the count only in its
     footnote. A bettor page shows an *Unclaimed winnings* tile (money that bettor can collect). A
-    maker page doesn't (a maker's wins left to collect change none of its figures). Offline, a wallet page's
+    maker page doesn't (a maker's wins left to collect change none of its figures). A wallet page
+    also shows the wallet's cash as the snapshot last read it (`cash` in its file): *Cash in the
+    wallet*, its USDe balance day by day (the API's `collateralBalanceHistory`, `intervalSeconds`
+    86400), and *Deposits & withdrawals* as Meridian's app lists them (`collateralTransfers` on
+    chain 4663 with `excludeProtocol`: the bets, payouts and token trades are not in it). The
+    builder keeps these in `data/cache/predict-cash.json` and reads, within 240 requests a build
+    (`CASH_BUDGET`), the wallets never read (the most recently active first), then those active
+    since their last read, then those unread for a week (`cashPlan`); a wallet waits for a later
+    build until then. Offline, a wallet page's
     *Cumulative PnL* chart is drawn from the verdicts too (`curveFromPredictions`). The old
     claim-based chart ended at +$508 for maker 0xdd9b…, whose PnL is +$1,500. When the file holds
     only the newest predictions (and older ones on traded positions), the chart and the *Daily

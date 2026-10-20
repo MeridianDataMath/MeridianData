@@ -491,6 +491,164 @@ async function checkClaimsOnChain(norms, claims) {
   return r.unread === 0;
 }
 
+// ---------------------------------------------------------------- Meridian's own lists
+// The site's origin cannot ask the Predict API, so what Meridian's app lists beside the predictions travels with the
+// snapshot: its competitions and their standings, its PnL ranking, the matches the listed questions belong to, its Hot
+// lists and its most used tags. A left-out wallet (P.EXCLUDED) is in none of them.
+const round2 = (x) => Math.round(x * 100) / 100;
+const numOr = (v) => (v == null || v === '' ? null : Number(v) || 0);
+const outWallet = (a) => !isAddr(a) || P.EXCLUDED.has(a);
+export const COMP_STANDINGS = 25;
+/** A competition as the snapshot keeps it: its window (ms), prizes by place, rules, how many matches, groups and
+ *  questions it names (and how many questions qualify in all), and its standings best first, up to COMP_STANDINGS: each
+ *  entry's place, wallet, multiplier, payout and stake (USDe) and the prediction behind it. */
+export function compactCompetition(c, standings, eligibleN, out = outWallet) {
+  const k = (c && c.eligibleMarketKinds) || {};
+  const rows = (standings || []).map((x) => Object.assign({}, x, { account: String((x && x.account) || '').toLowerCase() })).filter((x) => !out(x.account)).sort((a, b) => a.rank - b.rank);
+  return {
+    slug: c.slug, title: c.title, label: c.label || null, start: c.startsAt ? Date.parse(c.startsAt) : null, end: c.endsAt ? Date.parse(c.endsAt) : null,
+    payouts: (c.payouts || []).map((v) => Number(v) || 0), unit: c.prizeUnit || 'USDe', minStake: Number(c.minStake) || 0, minLegs: c.minLegs || null, rankBy: c.rankBy || null, noEarlySales: !!c.disqualifyEarlySales,
+    markets: { games: (k.gameEventIds || []).length, groups: (k.groupIds || []).length, questions: (k.conditionIds || []).length, eligible: eligibleN == null ? null : eligibleN },
+    entries: rows.length,
+    standings: rows.slice(0, COMP_STANDINGS).map((x) => ({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id: x.predictionId || null })),
+  };
+}
+async function readCompetitions() {
+  const d = await P.gql('{ competitions { slug title label startsAt endsAt payouts prizeUnit minStake minLegs rankBy disqualifyEarlySales eligibleMarketKinds { gameEventIds groupIds conditionIds } } }');
+  const out = [];
+  for (const c of (d && d.competitions) || []) {
+    let st = [], elig = null;
+    try {
+      const s = await P.gql('query($s: String!) { competition(slug: $s) { eligibleConditionIds leaderboard { rank account multiplier predictionId payout stake } } }', { s: c.slug });
+      st = (s.competition && s.competition.leaderboard) || []; elig = s.competition && Array.isArray(s.competition.eligibleConditionIds) ? s.competition.eligibleConditionIds.length : null;
+    } catch (e) { console.warn('  predict: the standings of competition', shown(c.slug), 'failed:', e.message); }
+    out.push(compactCompetition(c, st, elig));
+  }
+  return out.sort((a, b) => (b.end || 0) - (a.end || 0));
+}
+/** Meridian's PnL ranks by wallet (its app's leaderboard): { address: [rank, PnL in USDe] }, its own ranks. */
+export function rankMap(nodes, out = outWallet) {
+  const m = dict();
+  for (const x of nodes || []) { const a = String((x && x.account && x.account.address) || '').toLowerCase(); if (!out(a) && x.rank != null) m[a] = [x.rank, round2(P.usd(x.pnl))]; }
+  return m;
+}
+/** All time and over the last 7 days: { n (wallets ranked), all, n7, d7, at }. */
+async function readPnlRanks() {
+  const read = async (since) => {
+    const nodes = []; let after = null, pages = 0, total = null;
+    do {
+      const d = await P.gql('query($first: Int!, $since: Int!, $after: String) { leaderboard(metric: PNL, first: $first, after: $after, filter: { timestamp: { gte: $since } }) { totalCount pageInfo { hasNextPage endCursor } nodes { rank pnl account { address } } } }', { first: P.PAGE, since, after });
+      const lb = d.leaderboard || {}; if (total == null) total = lb.totalCount;
+      nodes.push(...(lb.nodes || [])); pages++;
+      after = lb.pageInfo && lb.pageInfo.hasNextPage ? lb.pageInfo.endCursor : null;
+    } while (after && pages < 80);
+    return { n: total, map: rankMap(nodes) };
+  };
+  const all = await read(0), d7 = await read(Math.floor(Date.now() / 1000) - 7 * 86400);
+  return { n: all.n, all: all.map, n7: d7.n, d7: d7.map, at: Date.now() };
+}
+/** A match (Meridian's cluster of the questions on one event) as the snapshot keeps it: name, start (ms), league, and the
+ *  app's volume over 24 hours and 7 days (the mirrored markets', low-odds trading left out; the API answers at most two
+ *  volume windows in one request). */
+export const compactMatch = (p) => ({ n: p.name || null, t: p.startTime ? Date.parse(p.startTime) : null, lg: (p.teams || []).map((t) => t.league).find(Boolean) || null,
+  v: { d1: numOr(p.d1), d7: numOr(p.d7) } });
+export async function readMatches(evIds) {   // exported for a check against the live API
+  const ids = Array.from(new Set((evIds || []).filter((x) => x != null && x !== '').map(String)));
+  const out = dict(), win = (w) => `displayVolume(filter: {}, window: ${w}, excludeLowOdds: true)`;
+  for (let i = 0; i < ids.length; i += P.PAGE) {
+    const d = await P.gql(`query($ids: [String!]!, $n: Int!) { clustersConnection(first: $n, filter: { externalEventIds: $ids }) { nodes { preview { externalEventId name startTime teams { league } d1: ${win('TWENTY_FOUR_HOURS')} d7: ${win('SEVEN_DAYS')} } } } }`, { ids: ids.slice(i, i + P.PAGE), n: P.PAGE });
+    for (const n of (d.clustersConnection && d.clustersConnection.nodes) || []) { const p = n && n.preview; if (p && p.externalEventId != null && p.name) out[String(p.externalEventId)] = compactMatch(p); }   // (some come without a name: nothing to show)
+  }
+  return out;
+}
+/** A Hot list as the snapshot keeps it: Meridian's top questions, or groups of them, by the mirrored markets' volume over
+ *  the window (h1: the last hour, d1: 24 hours; low-odds trading left out), in its order, each with that volume (a group:
+ *  its questions' added up), its category and match. */
+export function hotRows(edges, win) {
+  const vol = (c) => Number(win === 'h1' ? c.similarMarketVolumeFiltered1h : c.similarMarketVolumeFiltered24h) || 0;
+  return (edges || []).map((e) => e && e.node).filter(Boolean).map((n) => {
+    if (n.__typename === 'ConditionGroup') { const cs = (n.conditions && n.conditions.nodes) || []; return { k: 'g', id: String(n.groupId), q: n.name, cat: n.category ? n.category.name : null, ev: n.externalEventId != null ? String(n.externalEventId) : null, v: round2(cs.reduce((s, c) => s + vol(c), 0)), n: cs.length }; }
+    if (n.__typename === 'Condition') return { k: 'c', id: n.conditionId, q: n.question, cat: n.category ? n.category.name : null, ev: n.conditionGroup && n.conditionGroup.externalEventId != null ? String(n.conditionGroup.externalEventId) : null, v: round2(vol(n)) };
+    return null;
+  }).filter(Boolean);
+}
+async function readHot() {
+  const q = (field) => P.gql(`{ questions(first: 10, filter: {}, orderBy: { field: ${field}, direction: DESC }) { edges { node { __typename ... on Condition { conditionId question similarMarketVolumeFiltered1h similarMarketVolumeFiltered24h category { name } conditionGroup { externalEventId } } ... on ConditionGroup { groupId name externalEventId category { name } conditions(first: 25) { nodes { similarMarketVolumeFiltered1h similarMarketVolumeFiltered24h } } } } } } }`);
+  const h1 = await q('SIMILAR_MARKET_VOLUME_1H_FILTERED'), d1 = await q('SIMILAR_MARKET_VOLUME_24H_FILTERED');
+  return { h1: hotRows(h1.questions && h1.questions.edges, 'h1'), d1: hotRows(d1.questions && d1.questions.edges, 'd1'), at: Date.now() };
+}
+async function readTags() {
+  const d = await P.gql('{ tags(first: 20, orderBy: { field: CONDITION_COUNT, direction: DESC }) { nodes { name } } }');
+  return ((d.tags && d.tags.nodes) || []).map((t) => t.name).filter(Boolean);
+}
+
+// ---------------------------------------------------------------- wallets' cash
+// Each wallet's deposits and withdrawals on Meridian's chain as its app lists them (collateralTransfers without the
+// protocol's own) and its cash balance day by day (collateralBalanceHistory), kept in a cache beside the price cache. A
+// build reads the wallets never read (the most recently active first), then those active since their last read, then
+// those not read for a week, within a request budget; the rest wait for a later build.
+const cashFile = path.join(path.dirname(cacheFile), 'predict-cash.json');
+export const CASH_BUDGET = 240, CASH_PAGES = 8, CASH_STALE_MS = 7 * 86400000;
+/** The wallets a build reads, in order: `active` maps each wallet to its last activity (ms), `cache` holds what was read. */
+export function cashPlan(active, cache, now, max) {
+  const never = [], since = [], stale = [];
+  for (const [a, t] of Object.entries(active)) {
+    const c = cache[a];
+    if (!c) never.push([a, t]); else if (t > c.at) since.push([a, t]); else if (now - c.at > CASH_STALE_MS) stale.push([a, t]);
+  }
+  const by = (x, y) => y[1] - x[1];
+  return never.sort(by).concat(since.sort(by), stale.sort(by)).slice(0, max).map((x) => x[0]);
+}
+/** A wallet's transfers as its file keeps them, newest first: [ms, USDe (+ in, − out), the other address, tx]. */
+export function cashTransfers(nodes, addr) {
+  return (nodes || []).map((x) => {
+    const from = String(x.from || '').toLowerCase(), to = String(x.to || '').toLowerCase(), v = round2(P.usd(x.value)), out = from === addr;
+    return [Date.parse(x.timestamp), out ? -v : v, out ? to : from, x.transactionHash || null];
+  }).filter((x) => x[0] && x[1]).sort((a, b) => b[0] - a[0]);
+}
+/** Its balance day by day, oldest first: [ms, USDe], from `from` on (the history runs back as far as it is paged, at 0
+ *  before the wallet had anything) and from the day before its first balance that is not 0. */
+export const cashBalances = (nodes, from = 0) => {
+  const list = (nodes || []).map((x) => [Date.parse(x.timestamp), round2(P.usd(x.amount))]).filter((x) => x[0] && x[0] >= from).sort((a, b) => a[0] - b[0]);
+  const i = list.findIndex((x) => x[1] !== 0);
+  return i < 0 ? [] : list.slice(Math.max(0, i - 1));
+};
+/** Where a wallet's balance history needs reading back to: two days before its first activity or transfer, not before
+ *  the exchange's start. */
+export const cashFrom = (first, xf) => { const t = Math.min(first || Infinity, ...(xf || []).map((x) => x[0])); return Number.isFinite(t) ? Math.max(P.EXCHANGE_START_SEC * 1000, t - 2 * 86400000) : P.EXCHANGE_START_SEC * 1000; };
+/** One wallet, at most `budget` requests; `first` its first prediction or trade (ms). cut: the budget ran out before its
+ *  history did (then it is read again later). */
+async function readCashOf(addr, budget, first) {
+  let used = 0;
+  const all = async (q, pick, stop) => {
+    const nodes = []; let after = null, pages = 0;
+    do {
+      used++; const c = pick(await P.gql(q, { a: addr, c: P.CHAIN, first: P.PAGE, after })) || {}; const got = c.nodes || [];
+      nodes.push(...got); pages++; after = c.pageInfo && c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null;
+      if (stop && got.length && stop(got[got.length - 1])) after = null;   // the page reached back far enough
+    } while (after && pages < CASH_PAGES && used < budget);
+    return { nodes, cut: !!after && pages < CASH_PAGES };
+  };
+  const xf = await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { collateralTransfers(first: $first, after: $after, filter: { account: $a, chainId: $c, excludeProtocol: true }, orderBy: { field: TIMESTAMP, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { from to timestamp transactionHash value } } }', (d) => d.collateralTransfers);
+  const transfers = cashTransfers(xf.nodes, addr), from = cashFrom(first, transfers);
+  const bh = xf.cut ? { nodes: [], cut: true } : await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { account(address: $a, chainId: $c) { collateralBalanceHistory(first: $first, after: $after, intervalSeconds: 86400) { pageInfo { hasNextPage endCursor } nodes { timestamp amount } } } }', (d) => d.account && d.account.collateralBalanceHistory, (x) => Date.parse(x.timestamp) < from);
+  return { used, cut: xf.cut || bh.cut, entry: { at: Date.now(), xf: transfers, bh: cashBalances(bh.nodes, from) } };
+}
+async function readCash(active, first) {
+  let cache = dict();
+  try { Object.assign(cache, JSON.parse(fs.readFileSync(cashFile, 'utf8')).w || {}); } catch (_) {}
+  let used = 0, read = 0;
+  for (const a of cashPlan(active, cache, Date.now(), CASH_BUDGET)) {
+    if (used >= CASH_BUDGET) break;
+    try { const r = await readCashOf(a, CASH_BUDGET - used, first[a]); used += r.used; if (!r.cut) { cache[a] = r.entry; read++; } }
+    catch (e) { used++; console.warn('  predict: the cash of', a, 'failed:', e.message); }
+  }
+  try { fs.mkdirSync(path.dirname(cashFile), { recursive: true }); fs.writeFileSync(cashFile, JSON.stringify({ v: 1, w: cache })); }
+  catch (e) { console.warn('  predict: the cash cache was not saved:', e.message); }
+  console.log(`  predict: cash of ${read} wallets read (${used} requests), ${Object.keys(cache).length} kept, ${cashPlan(active, cache, Date.now(), Infinity).length} left for later builds`);
+  return cache;
+}
+
 // ---------------------------------------------------------------- Predict
 async function buildPredict() {
   const t0 = Date.now();
@@ -591,7 +749,7 @@ async function buildPredict() {
   try {
     for (let i = 0; i < bare.length; i += 25) {
       const pg = await P.conditions({ conditionIds: bare.slice(i, i + 25).map((q) => q.id), first: 25 });
-      for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
+      for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f1: x.f1, f4: x.f4, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ev: x.ev, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
     }
   } catch (e) { console.warn('predict: source links and volumes of the questions taken from predictions failed:', e.message); }
   // Meridian OI as Meridian counts it, read on-chain (escrowOnChain); the API's figure is kept to compare. A failed read
@@ -614,6 +772,13 @@ async function buildPredict() {
   let relayFee = null;
   try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; }
   catch (e) { console.warn('predict: relay fee quote failed:', e.message); }
+  // Meridian's own lists beside the predictions (readCompetitions and the rest); each failure leaves its part out
+  let competitions = null, pnlRank = null, matches = null, hot = null, tags = null;
+  try { competitions = await readCompetitions(); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { console.warn('predict: competitions failed:', e.message); }
+  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n7} over 7 days)`); } catch (e) { console.warn('predict: PnL ranks failed:', e.message); }
+  try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { console.warn('predict: matches failed:', e.message); }
+  try { hot = await readHot(); } catch (e) { console.warn('predict: Hot lists failed:', e.message); }
+  try { tags = await readTags(); } catch (e) { console.warn('predict: tags failed:', e.message); }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   // x: 1 marks an open prediction whose bettor has sold all its tokens to market makers (its ledger holds none of them):
@@ -645,7 +810,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, matches, hot, tags, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);
@@ -660,6 +825,16 @@ async function buildPredict() {
   const tradesOf = dict();
   for (const t of trades) for (const a of new Set([t.seller, t.buyer])) { if (!keepWallet(a)) continue; (tradesOf[a] || (tradesOf[a] = [])).push(t); if (!byWallet[a]) byWallet[a] = []; }
   const dir = path.join(outDir, 'bettors'); fs.mkdirSync(dir, { recursive: true });
+  // each wallet's deposits, withdrawals and daily cash (readCash), by its last prediction or trade
+  let cash = dict();
+  try {
+    const active = dict(), first = dict();
+    for (const [a, list] of Object.entries(byWallet)) {
+      const ts = list.map((n) => n.t).concat((tradesOf[a] || []).map((t) => t.t || 0)).filter((t) => t > 0);
+      active[a] = ts.length ? Math.max(...ts) : 0; first[a] = ts.length ? Math.min(...ts) : null;
+    }
+    cash = await readCash(active, first);
+  } catch (e) { console.warn('predict: wallet cash failed, the files go out without it:', e.message); }
   let files = 0;
   for (const [addr, list] of Object.entries(byWallet)) {
     list.sort((a, b) => b.t - a.t);
@@ -686,7 +861,10 @@ async function buildPredict() {
     const claim = claims ? claims.of[addr] || [] : undefined;
     // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do, so
     // its prediction opened from the maker's page shows the bettor's side as it stood
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim }));
+    // its deposits and withdrawals (the newest 200) and daily cash as last read (cash.at), when read yet
+    const cs = cash[addr];
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
+      cash: cs ? { at: cs.at, xf: cs.xf.slice(0, 200), xfN: cs.xf.length, bh: cs.bh } : undefined }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id

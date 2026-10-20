@@ -149,6 +149,47 @@
   // =====================================================================
   // Overview
   // =====================================================================
+  /** Meridian's competitions as of the snapshot (snap.competitions): contests over a set of matches with a prize for each of
+   *  the first places, ranked by the best multiplier of a qualifying prediction. The running ones first, then the
+   *  upcoming, then the ended (the latest first); a button for each, its rules, prizes and standings under it. Null
+   *  without any (an older snapshot). */
+  function competitionsCard(snap) {
+    const list = Array.isArray(snap.competitions) ? snap.competitions.slice() : [];
+    if (!list.length) return null;
+    const t0 = Date.now();
+    const stateOf = (c) => (c.start && c.start > t0 ? 'upcoming' : c.end && c.end <= t0 ? 'ended' : 'running');
+    const ORDER = { running: 0, upcoming: 1, ended: 2 };
+    list.sort((a, b) => ORDER[stateOf(a)] - ORDER[stateOf(b)] || (stateOf(a) === 'ended' ? (b.end || 0) - (a.end || 0) : (a.end || 0) - (b.end || 0)));
+    let cur = list[0].slug;
+    const body = h('div');
+    const render = () => {
+      const c = list.find((x) => x.slug === cur) || list[0], st = stateOf(c), t = Date.now();
+      const prize = (r) => (r >= 1 && r <= c.payouts.length ? c.payouts[r - 1] : 0);
+      const total = c.payouts.reduce((s, x) => s + x, 0);
+      const rules = [`a stake of ${U.fmtNum(c.minStake, 0)} ${c.unit} or more`, c.minLegs ? `${c.minLegs} legs or more` : null, c.rankBy === 'MULTIPLIER' ? 'ranked by the multiplier of the best prediction (payout ÷ stake)' : c.rankBy === 'PNL' ? 'ranked by PnL' : null, c.noEarlySales ? 'a prediction whose tokens were sold before the verdict does not count' : null].filter(Boolean).join(' · ');
+      const mk = c.markets || {};
+      const markets = [mk.games ? U.fmtNum(mk.games, 0) + ' matches' : null, mk.groups ? U.fmtNum(mk.groups, 0) + ' question groups' : null, mk.questions ? U.fmtNum(mk.questions, 0) + ' questions' : null].filter(Boolean).join(', ');
+      U.replace(body, h('div', { style: { padding: '10px 14px 6px' } },
+        h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, h('b', c.title), UI.chip(st, st === 'running' ? 'green' : st === 'upcoming' ? 'blue' : ''),
+          h('span.dim.small', U.fmtWhen(c.start) + ' → ' + U.fmtWhen(c.end) + (st === 'running' ? ' · ends in ' + U.fmtCountdown(c.end - t) : st === 'upcoming' ? ' · starts in ' + U.fmtCountdown(c.start - t) : ''))),
+        h('div.small', { style: { marginTop: '4px' } }, `${U.fmtNum(total, 0)} ${c.unit} in prizes for the first ${c.payouts.length} places (${c.payouts.slice(0, 3).map((x) => U.fmtNum(x, 0)).join(' / ')}${c.payouts.length > 3 ? ' / …' : ''})`, h('span.dim', ' · ' + rules)),
+        markets ? h('div.xs.dim', { style: { marginTop: '2px' } }, 'Counts predictions on ' + markets + (mk.eligible != null ? ` (${U.fmtNum(mk.eligible, 0)} questions in all)` : '')) : null),
+        UI.table({ cols: [
+          { key: 'r', label: '#', render: (s) => UI.rank(s.r) },
+          { key: 'a', label: 'Bettor', render: (s) => bettorLink(s.a, 5) },
+          { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
+          { key: 's', label: 'Stake', num: true, render: (s) => usd(s.s) },
+          { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
+          { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => (prize(s.r) ? h('span.pos', U.fmtNum(prize(s.r), 0) + ' ' + c.unit) : h('span.dim', '—')) },
+          { key: 'x', label: '', render: (s) => (s.id ? h('a.small', { href: '#/predict/p/' + s.id, title: 'The prediction', onclick: (e) => e.stopPropagation() }, 'slip') : '') },
+        ], rows: c.standings || [], empty: st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
+        c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
+    };
+    const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
+    render();
+    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of matches · as of the snapshot'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div', { style: { padding: '8px 12px 0', overflowX: 'auto' } }, sel), body);
+  }
   async function mountOverview(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Overview'));
     await withSnapshot(body, ctx, async (snap) => {
@@ -245,6 +286,7 @@
         tiles,
         h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Wagered per day (UTC)'), h('div.chart-box.sm', cWager)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Predictions per day (UTC)'), h('div.chart-box.sm', cCount))),
         h('div.pred-pair', h('div.grid.pred-grid', tapeCard, bwCard)),
+        competitionsCard(snap),
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,
@@ -365,8 +407,18 @@
         h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
         h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c }, c))),
         h('span.grow'), summary));
+      // Meridian's own PnL ranking (snap.pnlRank, its app's leaderboard): [rank, PnL] all time and over the last 7 days
+      const MR = snap.pnlRank || null;
+      const mrOf = (a, k) => (MR && MR[k || 'all'] ? MR[k || 'all'][a] || null : null);
+      const mrCell = (r) => {
+        const x = mrOf(r.address), w = mrOf(r.address, 'd7');
+        if (!MR) return h('span.dim', '—');
+        const title = (x ? `#${x[0]} of ${U.fmtNum(MR.n, 0)} in Meridian's PnL leaderboard, all time (${usd(x[1], { sign: true })})` : `Not in Meridian's PnL leaderboard`) + ` · last 7 days: ` + (w ? `#${w[0]} of ${U.fmtNum(MR.n7, 0)} (${usd(w[1], { sign: true })})` : 'not ranked') + ' · as of the snapshot'
+          + (x && Math.abs(x[1] - r.pnl) >= 0.5 ? `. Meridian ranks by its predictions' own results; Net PnL here, ${usd(r.pnl, { sign: true })}, also counts the position tokens it traded on the secondary market` : '');
+        return x ? h('span', { title }, '#' + x[0], w ? h('span.xs.dim', ' 7d #' + w[0]) : null) : h('span.dim', { title }, '—');
+      };
       // (win rate: the app's, as the column shows it)
-      const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: P.rowRecord(b).winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin })[k];
+      const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: P.rowRecord(b).winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin, mrank: mrOf(b.address) ? -mrOf(b.address)[0] : -1e9 })[k];
       function render() {
         let rows = all.filter((b) => b.n >= st.minN);
         if (st.cat) rows = rows.filter((b) => b.topCat === st.cat);
@@ -386,6 +438,7 @@
           { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => { const o = r.openPos != null ? r.openPos : r.open; return h('span', U.fmtNum(r.n, 0), o ? h('span.dim.xs', { title: r.openPos != null ? `${o} open position${o === 1 ? '' : 's'} as Meridian counts them: one per pick configuration and side with tokens still held (bets on the same picks share one; a position sold out is none)` + (r.open !== r.openPos ? ` · ${r.open} undecided prediction${r.open === 1 ? '' : 's'}` : '') : 'Undecided predictions' }, ' (' + o + ' open)') : null); } },
           { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
           { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => pnlEl(r.pnl) },
+          { key: 'mrank', label: 'Meridian rank', num: true, sortVal: 1, title: 'Its place in Meridian\'s own PnL leaderboard (its app\'s), all time, and over the last 7 days beside it; as of the snapshot. Meridian ranks by the results of the wallet\'s own predictions at the verdict, claimed or not, without the secondary market: Net PnL differs from it only by the position tokens a bettor traded (checked 2026-10-21 on 763 of 764 bettors). Hover a rank for that PnL', render: mrCell },
           { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ the stakes of decided predictions (claimed or not), plus the sold share of open predictions\' stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
           // (by result, whoever claimed: a prediction whose tokens it sold before the verdict counts too, its sale in Net PnL)
           { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, title: WIN_COL_TITLE + '. Predictions whose tokens it sold before the verdict count by their result (the sale is in Net PnL)', render: winCell },
@@ -450,9 +503,21 @@
     const v = P.questionVolume(c), app = win === '24h' ? v.d24 : v.d7, raw = win === '24h' ? v.raw24 : v.raw7, x = app != null ? app : raw;
     if (!x) return h('span.dim', '—');
     return h('span', { title: app != null ? `The mirrored Polymarket market's volume over the last ${winText(win)}, low-odds trading left out: what Meridian's app adds up over a group's questions on a list card sorted ${win === '24h' ? 'Hot' : 'Top'} (a question alone in its group shows just this). Every trade: ${P.fmtVol(raw)}` + (v.all != null ? ` · all time ${P.fmtVol(v.all)} (the app's question page)` : '')
+      + (v.h1 != null || v.h4 != null ? ` · the shorter windows its Hot lists can sort by: last hour ${P.fmtVol(v.h1)}, 4 hours ${P.fmtVol(v.h4)}` : '')
       : `Every trade on the mirrored Polymarket market over the last ${winText(win)} (this snapshot predates the figure Meridian's app shows)` }, P.fmtVol(x));
   };
   const winText = (win) => (win === '24h' ? '24 hours' : '7 days');
+  /** The match a question belongs to (snap.matches, by its group's event id): its name and start, the match's volume
+   *  windows in the tooltip; null without one. */
+  const matchEl = (snap, c) => {
+    const mt = c && c.ev && snap && snap.matches ? snap.matches[c.ev] : null;
+    if (!mt || !mt.n) return null;
+    const v = mt.v || {};
+    return h('span', { title: `${mt.n}${mt.t ? ', starts ' + U.fmtDateTime(mt.t) : ''}${mt.lg ? ' · ' + String(mt.lg).toUpperCase() : ''} · the match's volume on the mirrored markets as Meridian's app shows it, low-odds trading left out: ${P.fmtVol(v.d1)} in 24 hours, ${P.fmtVol(v.d7)} in 7 days` },
+      mt.n + (mt.t ? ' · ' + U.fmtWhen(mt.t) : ''));
+  };
+  /** The line under a question in the lists: its match, then its first tags */
+  const qSub = (snap, c) => { const m = matchEl(snap, c), tags = (c.tags || []).slice(0, 4).join(' · '); return h('div.xs.dim', m, m && tags ? ' · ' : null, tags || null); };
   const volColTitle = (win) => `Volume on the mirrored Polymarket market over the last ${winText(win)}, low-odds trading left out: the figure Meridian's app adds up over a group's questions on its list cards sorted ${win === '24h' ? 'Hot (24H Volume)' : 'Top (7D Volume)'}. A figure's tooltip has every trade, and the all-time volume its question page shows`;
   const PROB_TITLE = 'The chance of YES now as Meridian\'s app shows it: the midpoint of Polymarket\'s order book, rounded to a whole percent; until that has loaded, Polymarket\'s last price, else Meridian\'s own estimate, which stops moving once a game starts. Settled questions show their result';
   /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
@@ -1121,6 +1186,36 @@
    *  1,200 in all. Rows carry n = predictions ever, b = open predictions, s = open stake. */
   const hasBets = (q) => q.oi > 0 || q.b > 0 || q.n > 0 || q.n == null;   // n == null: snapshot older than this field
   const betsNote = (c) => { const parts = []; if (c.b) parts.push(`${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}`); if (c.u) parts.push(`${c.u} decided, unclaimed`); return parts.length ? parts.join(' · ') : null; };
+  /** Meridian's Hot lists as of the snapshot (snap.hot): the questions, or groups of them, its app puts first by the
+   *  mirrored markets' volume over the last hour or 24 hours (low-odds trading left out), with what is staked on them
+   *  through Meridian where this site's list has them (a row of those opens the question). Closed until opened, the choice
+   *  kept in this browser; null without the lists (an older snapshot). */
+  function hotCard(snap, all, ctx) {
+    const hot = snap.hot; if (!hot || !(hot.h1 || hot.d1)) return null;
+    const KEY = 'md.predict.hotOpen'; let win = 'd1';
+    const byId = new Map(all.map((q) => [String(q.id).toLowerCase(), q]));
+    const ours = (r) => (r.k === 'c' ? byId.get(String(r.id).toLowerCase()) || null : null);
+    const body = h('div', { style: { display: 'none' } });
+    const draw = () => {
+      const rows = hot[win] || [];
+      U.replace(body, h('div', { style: { padding: '8px 12px 0' } }, UI.seg([{ v: 'h1', label: 'Last hour' }, { v: 'd1', label: '24 hours' }], win, (v) => { win = v; draw(); }, 'sm')),
+        UI.table({ cols: [
+          { key: 'i', label: '#', render: (r) => UI.rank(rows.indexOf(r) + 1, false) },
+          { key: 'q', label: 'Question', render: (r) => h('div', { style: { whiteSpace: 'normal', minWidth: '220px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(r.q), r.k === 'g' ? h('span.xs.dim', ` · a group of ${r.n} question${r.n === 1 ? '' : 's'}`) : null), qSub(snap, { ev: r.ev })) },
+          { key: 'c', label: 'Category', render: (r) => r.cat || '—' },
+          { key: 'v', label: win === 'h1' ? 'Volume 1h' : 'Volume 24h', num: true, title: 'The mirrored market\'s volume over the window, low-odds trading left out, as Meridian\'s app sorts by it; a group\'s questions added up', render: (r) => P.fmtVol(r.v) },
+          { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes placed on the question through Meridian, where this site lists it (questions with Meridian bets)', render: (r) => { const q = ours(r); return q && q.sw ? usd(q.sw, { compact: true }) : h('span.dim', '—'); } },
+        ], rows, empty: 'No list in this snapshot', onRow: (r) => { const q = ours(r); if (q) openQuestion(q, ctx); } }),
+        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ' + U.fmtAgo(hot.at || snap.builtAt) + '. Any question on the exchange can be on these lists; most have no Meridian bets yet.'));
+    };
+    const card = h('div.card.tight.collapsible');
+    const set = (open) => { card.classList.toggle('open', open); body.style.display = open ? '' : 'none'; head.setAttribute('aria-expanded', String(open)); if (open && !body.firstChild) draw(); };
+    const head = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => { const open = !card.classList.contains('open'); U.storage.set(KEY, open); set(open); } },
+      h('span.chev', U.icon('chevR')), h('h2', 'Hot on Meridian\'s app'), h('span.dim.small', 'the questions its app lists first, by the volume of the mirrored markets'), h('span.grow'), h('span.dim.small.toggle-hint'));
+    U.append(card, [head, body]);
+    set(U.storage.get(KEY, false) === true);
+    return card;
+  }
   async function mountQuestionsWithBets(body, route, ctx, st, liveP) {
     await withSnapshot(body, ctx, (snap) => {
       let live = false;
@@ -1141,10 +1236,15 @@
       const endedCountOf = () => { const t = Date.now(); return all.filter((q) => exposure(q) && q.end && q.end < t && alive(q)).length; };
       const endedCount = endedCountOf();
       if (!['open', 'ended', 'settled', 'all'].includes(st.status)) st.status = 'open';
+      // Meridian's most used tags (snap.tags) that these questions carry, as filter buttons
+      const tagSet = new Set(all.flatMap((q) => q.tags || []));
+      const tagList = (snap.tags || []).filter((x) => tagSet.has(x)).slice(0, 16);
+      if (st.tag && !tagSet.has(st.tag)) st.tag = '';
+      const tagRow = tagList.length ? h('div', { style: { marginTop: '8px', overflowX: 'auto' } }, UI.seg([{ v: '', label: 'All tags' }].concat(tagList.map((x) => ({ v: x, label: x, title: 'Questions Meridian tags ' + x + ' (among its most used tags)' }))), st.tag || '', (v) => { st.tag = v; page = 1; render(); }, 'sm')) : null;
       const controls = h('div.card', h('div.row.wrap', search,
         h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
         h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; headerSorted = false; render(); renderBacklog(); }, 'sm')),
-        h('span.grow'), summary));
+        h('span.grow'), summary), tagRow);
       // header sorting like the leaderboard; the Ended tab keeps its pipeline order unless a header is chosen
       const SORTS = { q: (q) => (q.q || '').toLowerCase(), c: (q) => (q.cat || '').toLowerCase(), p: (q) => { if (q.settled) return -1; const x = probNow(q); return x ? x.p : -1; }, sw: (q) => (q.sw || 0) * 1e9 + (q.s || 0), oi: (q) => (q.oi || 0) * 1e9 + (q.s || 0), b: (q) => (q.b || 0) * 1e9 + (q.s || 0), v7: (q) => { const v = P.questionVolume(q); return (v.d7 != null ? v.d7 : v.raw7) || 0; }, end: (q) => q.end || Infinity, l: (q) => q.l || 0 };
       let headerSorted = false;
@@ -1181,6 +1281,7 @@
         let rows = all.slice(); const t = Date.now();
         if (st.search) { const s = st.search.toLowerCase(); rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(s)); }   // a linked ?q= keeps its case
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
+        if (st.tag) rows = rows.filter((q) => (q.tags || []).includes(st.tag));
         if (st.status === 'open') rows = rows.filter(exposure);
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
         else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
@@ -1192,7 +1293,7 @@
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE); shown = slice;
         U.replace(wrap, UI.table({ sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
-          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), qSub(snap, c)) },
           { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, sortVal: 1, title: PROB_TITLE, render: probCell },
           { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes of every prediction that includes this question (a combo\'s whole stake counts on each of its questions) · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, `${c.n} prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`) : null) },
@@ -1207,7 +1308,7 @@
         // price checks too, not only the ones visible on the first render
         if (!keepTracking || slice.some((q) => !tracked.has(qId(q)))) { slice.forEach((q) => tracked.add(qId(q))); const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
-      U.replace(body, controls, backlog, h('div.card.tight', wrap), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
+      U.replace(body, controls, backlog, h('div.card.tight', wrap), hotCard(snap, all, ctx), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
       render();
       // (shown: the rows on screen, whose midpoints are asked again once a minute is up)
       resTicker(ctx, () => { loadEnded(); refreshEndedLabel(); render(true); loadMids(shown.map(qId), ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) render(true); }).catch(() => {}); });
@@ -1417,7 +1518,7 @@
       const posRows = undecided.map((p) => { const stake = P.usd(p.userCollateral), payout = P.usd(p.totalPayout); const picks = ((p.pickConfig && p.pickConfig.picks) || []).map((k) => ({ id: k.conditionId || null, q: k.condition ? k.condition.question : k.conditionId, yes: String(k.predictedOutcome).toUpperCase() === 'YES', ep: k.condition ? k.condition.estimatedPrice : null, endTime: k.condition && k.condition.endTime ? k.condition.endTime * 1000 : null, settled: !!(k.condition && k.condition.settled), resolvedToYes: k.condition ? k.condition.resolvedToYes : null, nonDecisive: !!(k.condition && k.condition.nonDecisive) })); const f = winProb(picks); const fair = f == null ? null : p.side === 'COUNTERPARTY' ? 1 - f : f; return { id: (p.prediction && p.prediction.predictionId) || null, side: p.side, stake, payout, odds: payout > 0 ? stake / payout : null, picks, fair, t: P.ms(p.createdAt), ends: picks.reduce((m, k) => (k.endTime && (!m || k.endTime > m) ? k.endTime : m), null) }; });
       // openPosTotal: Meridian's Open Positions, the API's own count (positions with a balance, undecided)
       return { live: true, norms, truncated: !!raw.truncated, hist, totalVolume: Math.max(0, acct.totalVolume - U.sum(self, (n) => n.stake + n.cp)), selfPending: self.filter((n) => !n.settled).length, balance: acct.balance, posRows, openCount: undecided.length, openPosTotal: openPos.totalCount != null ? openPos.totalCount : null, posCapped: (openPos.totalCount || 0) > (openPos.nodes || []).length, builtAt: Date.now(), trades: (tf && tf.trades) || [], curve: null, daily: null, older: null, windowFrom: null,
-        claim: claimRaw ? P.claimRows(claimRaw) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: null };
+        claim: claimRaw ? P.claimRows(claimRaw) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: null, cash: (tf && tf.cash) || null };
     }
     const f = await P.snapshotFile('bettors/' + addr + '.json', { signal: ctx.signal });
     if (!f) return null;
@@ -1439,7 +1540,8 @@
       // the snapshot's read of the wallet's winning tokens still held (an older file has none: then the old way)
       claim: Array.isArray(f.claim) ? P.claimRows(f.claim) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: P.preLaunchOf(addr),
       curve: Array.isArray(f.curve) && f.curve.length >= 2 ? f.curve : null, daily: Array.isArray(f.daily) ? f.daily : null,
-      older: f.truncated ? new Set(f.predictions.slice(nHead).map((p) => p.id)) : null, windowFrom: f.truncated && nHead ? f.predictions[nHead - 1].t : null };
+      older: f.truncated ? new Set(f.predictions.slice(nHead).map((p) => p.id)) : null, windowFrom: f.truncated && nHead ? f.predictions[nHead - 1].t : null,
+      cash: f.cash || null };   // its deposits, withdrawals and daily cash as the snapshot last read them (a file from before has none)
   }
   P.loadBettor = loadBettor;
   /** A wallet's role, token ledger and headline figures, exactly as its bettor page shows them, from loadBettor's model;
@@ -1758,6 +1860,40 @@
     const ownerEl = h('span.small');
     if (!opts.embedded) P.wallets.ownerOf(addr).then((o) => { if (o && !ctx.signal.aborted) U.replace(ownerEl, h('span.dim', 'Predict wallet of '), h('a.addr', { href: U.accountUrl(o, null, 'predict'), title: 'Owner ' + o + ' · its account page (its perps account, if it has one)' }, U.shortAddr(o, 4)), U.copyBtn(o)); }).catch(() => {});
     const nPred = (k) => `${U.fmtNum(k, 0)} prediction${k === 1 ? '' : 's'}`;
+    // the wallet's cash on Meridian's chain as the snapshot last read it (m.cash): its USDe balance day by day, and its
+    // deposits and withdrawals as Meridian's app lists them (transfers that are not the protocol's own: the bets, payouts
+    // and token trades are in the tables above)
+    const cashCard = m.cash ? (() => {
+      const c = m.cash, xf = c.xf || [], bh = c.bh || [], all = c.xfN != null ? c.xfN : xf.length;
+      const cv = h('canvas');
+      const ins = U.sum(xf.filter((x) => x[1] > 0), (x) => x[1]), outs = -U.sum(xf.filter((x) => x[1] < 0), (x) => x[1]);
+      // the other side named where it is known: USDe arriving from the zero address was minted by the bridge (LayerZero),
+      // and leaving to it burned; Meridian's perps exchange contract and the wallet's owner once looked up
+      const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+      const names = {}, peers = [];
+      const who = (a, inflow) => (a === ZERO_ADDR ? h('span', { title: inflow ? 'USDe minted by its LayerZero bridge: brought in from another chain' : 'USDe burned by its LayerZero bridge: sent to another chain' }, 'the bridge')
+        : names[a] ? h('span', { title: a + (names[a] === 'Meridian perps' ? ' · Meridian\'s perps exchange contract' : '') }, names[a]) : h('a.addr', { href: U.accountUrl(a), title: a + ' · its account page', onclick: (e) => e.stopPropagation() }, U.shortAddr(a, 4)));
+      const peer = (a, inflow) => { const el = h('span', who(a, inflow)); peers.push([el, a, inflow]); return el; };
+      Promise.all([P.wallets.ownerOf(addr).catch(() => null), MD.api.rpcConfig().catch(() => null)]).then(([o, rc]) => {
+        if (o) names[String(o).toLowerCase()] = 'its owner';
+        if (rc && rc.domain && rc.domain.verifyingContract) names[String(rc.domain.verifyingContract).toLowerCase()] = 'Meridian perps';
+        for (const [el, a, inflow] of peers) if (names[a]) U.replace(el, who(a, inflow));
+      });
+      const tbl = UI.table({ cols: [
+        { key: 't', label: 'Time', render: (x) => h('span.dim', U.fmtDateTimeS(x[0])) },
+        { key: 'v', label: 'USDe', num: true, render: (x) => pnlEl(x[1]) },
+        { key: 'p', label: 'From / to', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x[2], x[1] > 0)) },
+        { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction' }, U.icon('external')) : '') },
+      ], rows: xf.slice(0, 25), empty: 'No deposits or withdrawals', phone: false });
+      const note = `${U.fmtNum(all, 0)} in all${all > xf.length ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (xf.length > 25 ? ' · the newest 25 listed' : '');
+      return {
+        el: h('div.grid.cols-2',
+          h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: 'The USDe the wallet held day by day (Meridian\'s balance history of the account), as the snapshot last read it' }, 'Cash in the wallet'), h('span.grow'), h('span.dim.xs', 'USDe · read ' + U.fmtAgo(c.at))),
+            bh.length >= 2 ? h('div.chart-box.sm', cv) : h('div.empty.small', bh.length ? 'One day so far: ' + usd(bh[0][1]) : 'No balance read yet')),
+          h('div.card.tight', h('div.card-head', h('h3', { title: 'USDe moved in and out of the wallet, as Meridian\'s app lists its deposits and withdrawals: transfers that are not the protocol\'s own (its bets, payouts and token trades are in the tables above)' }, 'Deposits & withdrawals'), h('span.dim.small', note)), tbl)),
+        draw: () => { if (bh.length >= 2) C.timeSeries(cv, { points: bh.map((x) => ({ x: x[0], y: x[1] })), color: C.colors().accent, label: 'USDe' }); },
+      };
+    })() : null;
     U.replace(el, h('div.stack',
       h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip(marketMaker ? 'market maker' : 'one-off counterparty', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? `${nPred(agg.n)} · the tables show the ${loaded}; the figures below cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${nPred(mine.length)} · figures from Meridian's own account history` : `${nPred(mine.length)} · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`, exclText ? [' · ', exclEl()] : null), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
@@ -1766,7 +1902,9 @@
       UI.card('Open positions', openWrap, h('span.dim.small', openNote)),
       UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
       L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
+      cashCard ? cashCard.el : null,
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
+    if (cashCard) cashCard.draw();
     const col = C.colors();
     const endPnl = pnlPts.length ? pnlPts[pnlPts.length - 1].y : 0;
     // the daily history (live: statsHistory; offline without a verdict curve: rebuilt per day) is in UTC days, a verdict

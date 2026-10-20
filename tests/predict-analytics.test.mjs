@@ -557,14 +557,15 @@ test('no sale and no win: a hedge\'s profit on a lost bet is no big win; bought 
 
 test('question volume as Meridian\'s app shows it: all time on its page, the Filtered windows on its list cards (Flávio Bolsonaro: $16.98M, $2.72M)', () => {
   // the live API's row (USD floats, not wei) and the snapshot's compact row carry the same figures
-  const api = { conditionId: '0xq', question: 'Will Flávio Bolsonaro win the 2026 Brazilian presidential election?', openInterest: '0', similarMarketVolume: 16981737.2, similarMarketVolume24h: 1280881.67, similarMarketVolume7d: 4792126, similarMarketVolumeFiltered24h: 2310277.44, similarMarketVolumeFiltered7d: 2718695 };
+  const api = { conditionId: '0xq', question: 'Will Flávio Bolsonaro win the 2026 Brazilian presidential election?', openInterest: '0', similarMarketVolume: 16981737.2, similarMarketVolume24h: 1280881.67, similarMarketVolume7d: 4792126, similarMarketVolumeFiltered1h: 41250.5, similarMarketVolumeFiltered4h: 160020, similarMarketVolumeFiltered24h: 2310277.44, similarMarketVolumeFiltered7d: 2718695, conditionGroup: { groupId: 5, externalEventId: 30615 } };
   const row = P.compactQuestion(api);
-  const want = { all: 16981737.2, d24: 2310277.44, d7: 2718695, raw24: 1280881.67, raw7: 4792126 };
+  const want = { all: 16981737.2, h1: 41250.5, h4: 160020, d24: 2310277.44, d7: 2718695, raw24: 1280881.67, raw7: 4792126 };
   assert.deepEqual(P.questionVolume(api), want); assert.deepEqual(P.questionVolume(row), want);
+  assert.equal(row.ev, '30615', 'the group\'s event id, a string: the match it belongs to');
   assert.equal(P.fmtVol(want.d7), '$2.72M'); assert.equal(P.fmtVol(want.all), '$16.98M'); assert.equal(P.fmtVol(want.raw7), '$4.79M');
   // an older snapshot's row (only the unfiltered windows) and one added from open predictions (none)
-  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 5, v7: 7 }), { all: null, d24: null, d7: null, raw24: 5, raw7: 7 });
-  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 0, v7: 0 }), { all: null, d24: null, d7: null, raw24: 0, raw7: 0 });
+  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 5, v7: 7 }), { all: null, h1: null, h4: null, d24: null, d7: null, raw24: 5, raw7: 7 });
+  assert.deepEqual(P.questionVolume({ id: '0xq', v24: 0, v7: 0 }), { all: null, h1: null, h4: null, d24: null, d7: null, raw24: 0, raw7: 0 });
   // the app's format: to the cent below $10,000, else two decimals and k / M / B / T
   assert.deepEqual([12345.6, 9999.99, 950, 0, 1.2e9, 3.4e12].map(P.fmtVol), ['$12.35k', '$9,999.99', '$950.00', '$0.00', '$1.20B', '$3.40T']);
   assert.equal(P.fmtVol(null), '—');

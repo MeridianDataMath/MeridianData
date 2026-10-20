@@ -84,8 +84,8 @@
   P.F = {
     condition: 'conditionId question shortName endTime settled resolvedToYes nonDecisive estimatedPrice isPublic category { name slug } tags',
     // the source market's volume: all time (Meridian's market page), the windows unfiltered, and the Filtered windows its
-    // list cards show (P.questionVolume)
-    conditionFull: 'conditionId question shortName endTime createdAt settled resolvedToYes nonDecisive estimatedPrice isPublic openInterest similarMarketVolume similarMarketVolume24h similarMarketVolume7d similarMarketVolumeFiltered24h similarMarketVolumeFiltered7d tags category { name slug } conditionGroup { groupId externalEventId } similarMarket { image markets }',
+    // list cards show (P.questionVolume: 1 and 4 hours for its Hot lists too); the group's event id names its match
+    conditionFull: 'conditionId question shortName endTime createdAt settled resolvedToYes nonDecisive estimatedPrice isPublic openInterest similarMarketVolume similarMarketVolume24h similarMarketVolume7d similarMarketVolumeFiltered1h similarMarketVolumeFiltered4h similarMarketVolumeFiltered24h similarMarketVolumeFiltered7d tags category { name slug } conditionGroup { groupId externalEventId } similarMarket { image markets }',
     // settleTxHash: the claim's transaction (null until claimed)
     prediction: 'predictionId chainId predictor counterparty predictorCollateral counterpartyCollateral predictorToken counterpartyToken settled result createdAt settledAt createTxHash settleTxHash pickConfig { pickConfigId endsAt resolved result picks { conditionId predictedOutcome condition { conditionId question shortName endTime settled settledAt resolvedToYes nonDecisive estimatedPrice isPublic category { name slug } tags } } }',
     position: 'id chainId createdAt holder side balance token userCollateral totalPayout prediction { predictionId } pickConfig { pickConfigId endsAt resolved result totalPredictorCollateral totalCounterpartyCollateral picks { conditionId predictedOutcome condition { question shortName endTime settled resolvedToYes nonDecisive estimatedPrice category { name } } } }',
