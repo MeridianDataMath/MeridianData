@@ -241,6 +241,7 @@
   R.get = (id) => { const m = markets.get(lc(id)); const o = oracles.get(lc(id)); const hv = hist.get(lc(id)); return { m: m ? m.m : undefined, o: o ? o.o : undefined, hv: hv ? hv.h : undefined, loaded: !!m }; };
   /** Which side of a Meridian question the source market resolved to: true = YES (Polymarket's first outcome, the one
    *  Meridian's YES mirrors), false = NO, 'void' = 50/50, null = not resolved or unknown. */
+  R.relayFee = null;   // POL, the Polygon reader's quote in the snapshot (predict.json relayFee), set by the page
   R.STUCK_DAYS = 7;   // resolved on the source market this long ago and still unsettled on Meridian = settlement backlog
   R.resolvedYes = (m) => { if (!m || !m.prices || !m.prices.length) return null; const i = m.prices.findIndex((p) => p >= 0.99); if (i === 0) return true; if (i === 1) return false; if (m.prices.every((p) => Math.abs(p - 0.5) < 0.01)) return 'void'; return null; };
   // Meridian's escrow has no refund outcome: a leg that resolves 50/50 (non-decisive) settles the prediction as
@@ -290,6 +291,40 @@
     return out;
   };
 
+  /** What a sports market's own rules (Polymarket's description, m.rules) say about a postponed game: {open: true} it stays
+   *  open until the make-up game has been played (686 of the 863 sports markets bet on, 2026-10-20); {by, days} a make-up
+   *  game must start by then (68 soccer markets: 14 days), else it resolves 50-50; null when the rules say neither (99). */
+  R.postponeRule = (m) => {
+    const t = String((m && m.rules) || '').replace(/\s+/g, ' ');
+    const d = t.match(/must be rescheduled to a start time on or before ([^(]+?)\s*\((\d+) calendar days/i);
+    if (d) return { by: d[1].trim(), days: Number(d[2]) };
+    return /postpone[^.]*remain open until/i.test(t) ? { open: true } : null;
+  };
+  /** What they say about a game started but not finished: {score: 'uefa.com'} it resolves on the official final score
+   *  published there (most soccer markets), {split: true} 50-50, {draw: true} a draw; null when they say none of these. */
+  R.unfinishedRule = (m) => {
+    const t = String((m && m.rules) || '').replace(/\s+/g, ' ');
+    const sc = t.match(/started but not completed[^.]*official final score(?: published on ([a-z0-9.-]+\.[a-z]+))?/i);
+    if (sc) return { score: sc[1] || null };
+    if (/(abandon|not completed)[^.]*50.50/i.test(t)) return { split: true };
+    if (/(abandon|not completed)[^.]*resolve to draw/i.test(t)) return { draw: true };
+    return null;
+  };
+  const LOSS = 'which Meridian settles as a loss for the bettor';
+  /** The postponement line for a market, from its rules (R.postponeRule). */
+  const postponedText = (m) => { const r = R.postponeRule(m);
+    return r && r.by ? 'its rules give a make-up game until ' + r.by + ' (' + r.days + ' days), else it resolves 50-50, ' + LOSS
+      : r && r.open ? 'the market stays open until the make-up game has been played; if it is cancelled instead, it resolves 50-50, ' + LOSS
+        : 'the market\'s rules (ⓘ) say how long it waits for a make-up game'; };
+  /** The line for a game the feed marks cancelled: 50-50 where the rules say so (a cancelled game without a make-up game,
+   *  or one not played by the reschedule deadline: 539 of the 863 sports markets bet on, 2026-10-20). */
+  const cancelledText = (m) => (R.postponeRule(m) ? 'without a make-up game it resolves 50-50, ' + LOSS : 'its rules (ⓘ) say how a cancelled game resolves (most sports markets: 50-50, ' + LOSS + ')');
+  /** The unfinished-game line (R.unfinishedRule). */
+  const unfinishedText = (m) => { const r = R.unfinishedRule(m);
+    return r && r.score !== undefined ? 'a game started but not finished resolves on the official final score' + (r.score ? ' (' + r.score + ')' : '')
+      : r && r.split ? 'an abandoned or unfinished game resolves 50-50, ' + LOSS : r && r.draw ? 'an abandoned or unfinished game resolves as a draw'
+        : 'its rules (ⓘ) say how an unfinished game resolves'; };
+
   // ---------------------------------------------------------------- state machine
   /**
    * q: Meridian view { end (ms), settled, yes, nd }.  Returns
@@ -301,7 +336,7 @@
     const cd = (t) => (t > now ? 'in ' + U.fmtCountdown(t - now) : U.fmtAgo(t));
     const live = (s) => (s === 1 ? '1 s' : s < 3600 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(s % 3600 ? 1 : 0) + ' h');
     if (q.settled) return { code: 'settled', chip: q.nd ? ['50/50', 'amber'] : q.yes ? ['YES', 'green'] : ['NO', 'red'], main: 'Settled on Meridian', sub: m && m.resolvedAt ? 'Polymarket resolved ' + U.fmtDateTime(m.resolvedAt) : null, m, o };
-    if (!m) return { code: 'unknown', chip: ['open', 'accent'], main: q.end ? (q.end > now ? 'Ends ' + cd(q.end) : 'Ended ' + cd(q.end)) : 'No end time', sub: m === null ? 'no Polymarket record for this question' : null, m, o };
+    if (!m) return { code: 'unknown', chip: ['open', 'accent'], main: q.end ? (q.end > now ? 'Ends ' + cd(q.end) : 'Ended ' + cd(q.end)) : 'No end time', sub: m === null ? (/kalshi\.com/i.test(String(q.src || '')) ? 'a Kalshi market (Meridian lists some since 13 Oct): this page follows Polymarket\'s resolutions only' : 'no Polymarket record for this question') : null, m, o };
     // Meridian's listed end time often comes well before the market itself ends; that is what people mistake for
     // "resolution". It is a listed end, not a betting cutoff: Meridian has taken bets after it
     const meridianEnd = q.end && m.endAt && m.endAt - q.end > 3600000 ? 'Meridian end time ' + (q.end > now ? U.fmtDateTime(q.end) : U.fmtDate(q.end)) : null;
@@ -339,14 +374,14 @@
             : noneOwed ? nb(owed.lost, 'bet') + ' on it lost on Polymarket: nothing is owed, only Meridian\'s settlement is pending' : 'on Polymarket · not settled on Meridian yet') + cashed + lostToo + why + unlistedNote, at, outcome: out, m, o };
     }
     if (o && o.paused) return { code: 'paused', chip: ['paused', 'amber'], main: 'Resolution paused by Polymarket', sub: 'under review · no timeline', m, o };
-    if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · typically 2–6 days', m, o };
+    if (o && !isZero(o.disputer)) return { code: 'vote', chip: ['UMA vote', 'red'], main: 'Proposal disputed' + (o.reset ? ' twice' : '') + ' → UMA vote', sub: 'UMA token holders vote on the outcome · Polymarket\'s docs: a 24–48 h debate, then about 48 h of voting', m, o };
     if (o && !isZero(o.proposer)) {
       const out = priceName(o.proposedPrice, o, m); const at = o.expiration; const since = at ? at - liveness * 1000 : null;
       if (at && at < now) return { code: 'settling', chip: ['proposed: ' + out, 'accent'], main: out + ' proposed · window closed ' + cd(at), sub: 'no dispute · Polymarket finalizes next, then Meridian settles', at, outcome: out, m, o };
       return { code: 'proposed', chip: ['proposed: ' + out, 'accent'], main: out + ' proposed' + (since ? ' ' + cd(since) : ''), sub: 'challenge window ends ' + (at ? U.fmtHM(at) + ' (' + cd(at) + ')' : 'in ' + live(liveness)) + (o.reset ? ' · 2nd proposal' : ''), at, outcome: out, m, o };
     }
     if (o && o.reset) return { code: 'disputed', chip: ['disputed', 'red'], main: 'First proposal disputed', sub: 'waiting for a new proposal · then another ' + live(liveness) + ' challenge window', m, o };
-    if (/disput|challeng/.test(m.uma)) return { code: 'disputed', chip: ['disputed', 'red'], main: 'Proposal disputed', sub: 'UMA dispute process · typically 2–6 days', m, o };
+    if (/disput|challeng/.test(m.uma)) return { code: 'disputed', chip: ['disputed', 'red'], main: 'Proposal disputed', sub: 'a second proposal comes next; disputed again, it goes to a vote of UMA token holders (4–6 days in all, per Polymarket\'s docs)', m, o };
     // Gamma says proposed but the oracle request is not known here (not read yet, the slip page, an RPC failure): Gamma's
     // updatedAt is a batch-refresh stamp, not the proposal time, so no time is stated
     if (/propos/.test(m.uma)) return { code: 'proposed', chip: ['proposed', 'accent'], main: 'Outcome proposed on UMA', sub: 'challenge window ' + live(liveness) + ' from the proposal', at: null, m, o };
@@ -369,23 +404,22 @@
       const was = moved ? ' from ' + U.fmtDateShort(orig) : '';
       // the league's own date (the listing's day, noon UTC) reads the same in every time zone; the start time does not
       const day = U.fmtDateShort(orig && Math.abs(game - orig) <= DAY ? orig : game);
-      const ifOff = 'if it is cancelled instead, it resolves 50-50, which Meridian settles as a loss for the bettor';
       const base = { at: game, orig: moved ? orig : null, feed, hv, m, o };
-      if (feed === 'cancelled') return Object.assign(base, { code: 'postponed', chip: ['cancelled', 'red'], main: 'Game cancelled' + (moved ? ' (postponed' + was + ')' : ''), sub: 'Polymarket\'s game feed marks it cancelled · without a make-up game it resolves 50-50, which Meridian settles as a loss for the bettor' });
+      if (feed === 'cancelled') return Object.assign(base, { code: 'postponed', chip: ['cancelled', 'red'], main: 'Game cancelled' + (moved ? ' (postponed' + was + ')' : ''), sub: 'Polymarket\'s game feed marks it cancelled · ' + cancelledText(m) });
       if (game > now) {
-        if (moved || feed === 'postponed') return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Postponed' + was + ' · now ' + U.fmtWhen(game) + ' (' + cd(game) + ')', sub: 'the market stays open until the rescheduled game has been played · ' + ifOff });
+        if (moved || feed === 'postponed') return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Postponed' + was + ' · now ' + U.fmtWhen(game) + ' (' + cd(game) + ')', sub: postponedText(m) });
         return { code: 'trading', chip: ['open', 'accent'], main: 'Game starts ' + U.fmtDateTime(game) + ' (' + cd(game) + ')', sub: 'resolves after the final result' + (meridianEnd ? ' · ' + meridianEnd : ''), at: game, m, o };
       }
       const what = moved ? 'Make-up game' : 'Game';
       // a price this lopsided can come minutes before the end, so "started", not "over"
       if (known) return Object.assign(base, { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: what + ' started ' + cd(game) + ' · Polymarket prices ' + known.name + ' at ' + pct(known.p), sub: 'the outcome is proposed once the final result is in · ' + proposal });
-      if (feed === 'postponed') return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Postponed · not played on ' + day, sub: 'Polymarket\'s game feed marks it postponed · no new date listed yet · the market stays open until the make-up game has been played; ' + ifOff });
+      if (feed === 'postponed') return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Postponed · not played on ' + day, sub: 'Polymarket\'s game feed marks it postponed · no new date listed yet · ' + postponedText(m) });
       if (now - game >= R.NO_RESULT_HOURS * 3600000) {
         const after = U.fmtCountdown(now - game);
-        if (hv && !hv.moved) return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Probably postponed · no sign it was played on ' + day, sub: 'no result ' + after + ' after the scheduled start, and in the first ' + hvWin(hv, game) + ' after it the median odds stayed within ' + Math.round(R.MOVE * 100) + ' points of the pre-game level (' + pct(hv.pre) + ' before, ' + pct(hv.post) + ' after) · no new date on Polymarket yet · the market stays open until the make-up game has been played; ' + ifOff });
+        if (hv && !hv.moved) return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Probably postponed · no sign it was played on ' + day, sub: 'no result ' + after + ' after the scheduled start, and in the first ' + hvWin(hv, game) + ' after it the median odds stayed within ' + Math.round(R.MOVE * 100) + ' points of the pre-game level (' + pct(hv.pre) + ' before, ' + pct(hv.post) + ' after) · no new date on Polymarket yet · ' + postponedText(m) });
         return Object.assign(base, { code: 'noresult', chip: ['no result · ' + (now - game >= DAY ? Math.floor((now - game) / DAY) + 'd' : Math.floor((now - game) / 3600000) + 'h'), 'amber'], main: what + ' scheduled ' + U.fmtWhen(game) + ' · no result yet',
-          sub: hv ? 'the odds moved after the start, but no winner is priced in (' + R.oddsText(m) + ') · an abandoned or unfinished game resolves 50-50, which Meridian settles as a loss for the bettor; a postponed one stays open until it is played'
-            : 'no result ' + after + ' after the scheduled start · a postponed game stays open until it is played; ' + ifOff });
+          sub: hv ? 'the odds moved after the start, but no winner is priced in (' + R.oddsText(m) + ') · ' + unfinishedText(m) + '; if it was postponed, ' + postponedText(m)
+            : 'no result ' + after + ' after the scheduled start · if it was postponed, ' + postponedText(m) });
       }
       return Object.assign(base, { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: what + ' started ' + cd(game) + (moved ? ' (postponed' + was + ')' : ''), sub: 'the outcome is proposed once the final result is in · ' + proposal });
     }
@@ -414,7 +448,7 @@
     const s = R.state(q, id);
     return h('div.res-line', MD.ui.chip(s.chip[0], s.chip[1]), ' ', h('span.small', { class: s.code === 'unknown' ? 'dim' : '' }, s.main));
   };
-  R.explainer = () => 'How a question resolves: Polymarket markets settle through UMA\'s optimistic oracle. After the event, one of Polymarket\'s approved proposers proposes the outcome and posts a bond, set per market ($250 or $500 on nearly every question here; a question\'s row shows it once its market has ended); a challenge window follows (2 h by default, 10–60 min on many sports, price and weather markets). An undisputed proposal resolves the market. A dispute forces a second proposal; a second dispute goes to a UMA token-holder vote (2–6 days). Meridian settles the question once the result has been relayed from Polygon, usually within minutes of Polymarket resolving; its settlement bot skips unlisted questions, which stay unsettled until someone else sends the relay transaction (anyone can, for about 3 POL). A postponed game keeps its question open until the make-up game has been played; one cancelled without a make-up game resolves 50/50. On Meridian a leg that resolves 50/50 counts as a loss for the bettor.';
+  R.explainer = () => 'How a question resolves: Polymarket markets settle through UMA\'s optimistic oracle. After the event, one of the proposers UMA has approved for Polymarket proposes the outcome and posts a bond, set per market ($250 or $500 on nearly every question here; a question\'s row shows it once its market has ended); a challenge window follows (2 h by default, 10–60 min on most sports, price and weather markets). An undisputed proposal resolves the market. A dispute forces a second proposal; a second dispute goes to a vote of UMA token holders (a 24–48 h debate, then about 48 h of voting: 4–6 days in all, per Polymarket\'s docs). Meridian settles the question once the result has been relayed from Polygon, usually within minutes of Polymarket resolving (a median of 8 min); its settlement bot skips unlisted questions, which stay unsettled until someone else sends the relay transaction (anyone can' + (R.relayFee ? ', for a fee of about ' + R.relayFee + ' POL' : ', for a small fee in POL') + '). Each sports market\'s rules say what a postponed game does: most keep the question open until the make-up game has been played (one cancelled without a make-up game resolves 50/50), some allow 14 days. On Meridian a leg that resolves 50/50 counts as a loss for the bettor.';
 
   R.openDetails = function (q, id, opts = {}) {
     const s = R.state(q, id); const m = s.m, o = s.o; const UI = MD.ui;
@@ -431,7 +465,8 @@
           : s.orig ? 'moved from ' + U.fmtDate(s.orig) + ' (the date in the market\'s listing and Meridian\'s end time) to ' + U.fmtDateTime(m.gameAt)
           : hv ? 'odds of ' + (m.outcomes[0] || 'the first outcome') + ': ' + pct(hv.pre) + ' before the scheduled start, ' + pct(hv.post) + ' in the first ' + hvWin(hv, m.gameAt) + ' after it (median of ' + hv.n + ' hourly prices). A game that is played moves them, usually to 99 % within hours of the end' + (hv.moved ? '; these moved, so it was probably started' : '; these did not, so it was most likely not played')
           : 'no price history to check whether it was played');
-        row('If it is postponed', 'the market stays open until the make-up game has been played, whatever the date Polymarket lists. Cancelled with no make-up game: resolves 50-50, which Meridian settles as a loss for the bettor' + (m.source ? '. Make-up dates are announced by the league (link below)' : ''));
+        row('If it is postponed', postponedText(m) + (m.source ? '. Make-up dates are announced by the league (link below)' : ''));
+        row('If it is not finished', unfinishedText(m));
       }
       if (!m.closed && m.prices.length) row('Polymarket odds', R.oddsText(m));
       row('Meridian end time', q.end ? U.fmtDateTime(q.end) + (m.endAt && m.endAt - q.end > 3600000 ? ' · ' + U.fmtDuration(m.endAt - q.end) + ' before the market ends' : '') : '—');

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, CLAIM_RECHECK_MS, CLAIM_REFRESH } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -130,4 +130,26 @@ test('Leaderboard coverage: carried rows and missing accounts of a new snapshot;
   const whole = { builtAt: NOW, accounts: 2, partial: false, rows: [row('a'), row('b')] };
   assert.equal(LB.coverage(whole).missing, 0); assert.equal(LB.coverageNote(whole), null); assert.equal(LB.carriedChip(row('a')), null);
   assert.equal(LB.coverage(null), null); assert.equal(LB.coverageNote({}), null);
+});
+
+test('escrowReads / escrowSum: Meridian OI per question from the position tokens still out (undecided: the bettor side; decided: the winner\'s), drained decided ones never read again', () => {
+  const n = (pc, ids, o) => Object.assign({ pc, picks: ids.map((id) => ({ id })), tokP: pc + '-P', tokC: pc + '-C', decided: false, won: false, nd: false }, o);
+  const norms = [
+    n('pc1', ['qa']),                                     // a single, open
+    n('pc1', ['qa']),                                     // the same picks again: one pick configuration
+    n('pc2', ['qa', 'qb']),                               // a combo, open: counts in full on both questions
+    n('pc3', ['qb'], { decided: true, won: false }),      // the maker won: its token is what is still to redeem
+    n('pc4', ['qb'], { decided: true, won: true }),       // the bettor won, already drained (cached)
+    n('pc5', ['qz']),                                     // a question not asked about
+    n(null, ['qa']),                                      // no pick configuration
+  ];
+  const reads = escrowReads(norms, new Set(['qa', 'qb']), { pc4: 1 });
+  assert.deepEqual(reads.map((r) => [r.pc, r.tok, r.decided, r.ids.join()]), [['pc1', 'pc1-P', false, 'qa'], ['pc2', 'pc2-P', false, 'qa,qb'], ['pc3', 'pc3-C', true, 'qb']]);
+  const hex = (usde) => '0x' + (BigInt(Math.round(usde * 1e6)) * 1000000000000n).toString(16);
+  // pc1 holds 100 (both bets' pools, less any merged), pc2 25, pc3 drained
+  const s = escrowSum(reads, [{ result: hex(100) }, { result: hex(25) }, { result: '0x0' }]);
+  assert.deepEqual(s.per, { qa: 125, qb: 25 });
+  assert.deepEqual(s.drained, ['pc3']);
+  assert.equal(s.unread, 0);
+  assert.equal(escrowSum(reads, [{ result: hex(1) }, { error: { message: 'x' } }, { result: '0x' }]).unread, 2);
 });

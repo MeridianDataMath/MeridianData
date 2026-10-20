@@ -424,6 +424,65 @@ export function capClaims(of, reads, results) {
   for (const a of Object.keys(of)) { const before = of[a].length; of[a] = of[a].filter((e) => e.bal > 1e-9); dropped += before - of[a].length; }
   return { read: reads.length - unread, lowered, dropped, unread };
 }
+// ---------------------------------------------------------------- Meridian OI (the Questions page)
+// Meridian's open interest on a question (its app's Open Interest sort, its API's openInterest) is the collateral still in
+// escrow behind the predictions on it, a combo in full on each of its questions. On-chain, per pick configuration:
+// undecided → its bettor-side token's totalSupply (each P + C pair is 1 USDe in escrow; a market maker that buys a bettor's
+// side back and merges the pair takes it out), decided → the winning token's totalSupply (what its holders can still
+// redeem). Checked 2026-10-20: equal to the API's figure on 298 of 301 questions, the other three bet on between the
+// reads. The figure from the predictions' own pools overstated it where a maker had merged a bought-back bet (0x3f6a…'s
+// two Fed singles, sold to 0xea41… on Oct 16: $3.5K each), and the API gives unlisted questions 0, the chain their real
+// figure. A decided pick configuration read empty stays empty (its tokens are redeemed and no new ones are minted), so the
+// price cache keeps those ('oiDone') and a run reads only the rest. A failed read throws (the caller falls back).
+/** The supply reads for the pick configurations on these questions (want: a Set of condition ids), less the drained
+ *  decided ones in done: [{pc, ids, tok, decided}], the token being the bettor side's (undecided) or the winner's. */
+export function escrowReads(norms, want, done = {}) {
+  const pcs = new Map();
+  for (const n of norms) {
+    if (!n.pc) continue; const ids = n.picks.map((k) => k.id); if (!ids.some((id) => want.has(id))) continue;
+    const x = pcs.get(n.pc) || { pc: n.pc, ids: new Set(), tokP: n.tokP, tokC: n.tokC, decided: false, makerWon: false };
+    ids.forEach((id) => x.ids.add(id));
+    if (n.decided) { x.decided = true; x.makerWon = !n.won && !n.nd; }
+    pcs.set(n.pc, x);
+  }
+  return Array.from(pcs.values()).filter((x) => !(x.decided && done[x.pc])).map((x) => ({ pc: x.pc, ids: Array.from(x.ids), tok: x.decided && x.makerWon ? x.tokC : x.tokP, decided: x.decided })).filter((r) => r.tok);
+}
+/** The escrow per question from the supply answers (rpcBatch results, in the reads' order): {per: {id: USDe}, drained:
+ *  [pc] (decided, empty: never read again), unread}. */
+export function escrowSum(reads, results) {
+  const per = {}, drained = []; let unread = 0;
+  reads.forEach((r, i) => {
+    const x = results[i]; const hex = x && !x.error && typeof x.result === 'string' && /^0x[0-9a-f]+$/i.test(x.result) ? x.result : null;
+    if (!hex) { unread++; return; }
+    const v = Number(BigInt(hex)) / 1e18;
+    if (r.decided && v < 1e-9) drained.push(r.pc);
+    for (const id of r.ids) per[id] = (per[id] || 0) + v;
+  });
+  return { per, drained, unread };
+}
+async function escrowOnChain(norms, want) {
+  let cache = {}; try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const done = Object.assign(dict(), cache.oiDone && typeof cache.oiDone === 'object' ? cache.oiDone : null);
+  const reads = escrowReads(norms, want, done), results = [];
+  for (let i = 0; i < reads.length; i += 25) { if (i) await sleep(250); results.push(...await rpcBatch(reads.slice(i, i + 25).map((r) => ({ method: 'eth_call', params: [{ to: r.tok, data: '0x18160ddd' }, 'latest'] })))); }
+  const s = escrowSum(reads, results);
+  if (s.unread) throw new Error(`${s.unread} of ${reads.length} token supplies unread`);
+  for (const pc of s.drained) done[pc] = 1;
+  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.oiDone = done; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
+  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ oiDone: done })); }
+  return s.per;
+}
+// The fee Meridian's Polygon reader asks to send a question's result over to Robinhood Chain (quoteResolution; anyone can
+// send it with requestResolution): 2.9 POL on 2026-09-23, 0.111 on 2026-10-20, so the page quotes it from each snapshot
+const POLYGON_RPC = 'https://polygon-bor-rpc.publicnode.com', POLYGON_READER = '0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98';
+async function quoteRelayFee(conditionId) {
+  if (!isCond(conditionId)) return null;
+  const r = await fetch(POLYGON_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to: POLYGON_READER, data: '0x8439252e' + conditionId.slice(2).toLowerCase().padStart(64, '0') }, 'latest'] }), signal: AbortSignal.timeout(15000) });
+  const j = await r.json();
+  if (j.error || typeof j.result !== 'string' || j.result.length < 66) return null;
+  return Number(BigInt(j.result.slice(0, 66))) / 1e18;
+}
+
 async function checkClaimsOnChain(norms, claims) {
   const reads = claimReads(claims.of, norms), results = [];
   for (let i = 0; i < reads.length; i += 40) { if (i) await sleep(300); results.push(...await rpcBatch(reads.slice(i, i + 40).map(balanceCall))); }
@@ -497,7 +556,9 @@ async function buildPredict() {
   for (const n of qNorms) {
     for (const k of n.picks) {
       const a = act[k.id] || (act[k.id] = { n: 0, b: 0, s: 0, l: 0, by: 0, bn: 0, u: 0, sw: 0 });
-      a.n++; a.sw += n.stake; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (!n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
+      // u: decided, payout not claimed yet: its winner still holds the winning tokens where the balances were read
+      // (n.toClaim, P.aggregate), else the settled flag (settling and claiming are separate steps on Meridian)
+      a.n++; a.sw += n.stake; if (!n.decided) { a.b++; a.s += n.stake; if (k.yes) a.by++; else a.bn++; } else if (n.toClaim != null ? n.toClaim : !n.settled) a.u++; if (n.t > a.l) a.l = n.t;   // by / bn: open bets on YES / NO
     }
   }
   const r2 = (x) => Math.round(x * 100) / 100;
@@ -524,13 +585,35 @@ async function buildPredict() {
   }
   if (withOi.length < 1200) recentFrom = cutoff30;   // the 30-day window, not the cap, set the limit
   for (const q of withOi) { const a = act[q.id]; q.n = a ? a.n : 0; q.b = a ? a.b : 0; q.s = a ? r2(a.s) : 0; q.l = a ? a.l : null; q.by = a ? a.by : 0; q.bn = a ? a.bn : 0; q.u = a ? a.u : 0; q.sw = a ? r2(a.sw) : 0; }   // sw: bettor stake ever placed on the question
-  // Meridian OI from the predictions: stake + maker collateral of every prediction on the question not yet claimed (a
-  // combo counts in full on each of its questions). It matches the API's openInterest on nearly every row the API lists
-  // (125 of 133 on 2026-10-02); the API reports 0 for unlisted questions and is not asked about settled ones, so every
-  // row gets this figure
-  const escrow = dict();
-  for (const n of qNorms) { if (n.settled) continue; for (const id of new Set(n.picks.map((k) => k.id))) escrow[id] = (escrow[id] || 0) + n.pool; }
-  for (const q of withOi) q.oi = r2(escrow[q.id] || 0);
+  // the rows taken from predictions carry no source link and no volume: Meridian's API has both (by condition id)
+  const byQid = new Map(withOi.map((q) => [String(q.id).toLowerCase(), q]));
+  const bare = withOi.filter((q) => q.src == null);
+  try {
+    for (let i = 0; i < bare.length; i += 25) {
+      const pg = await P.conditions({ conditionIds: bare.slice(i, i + 25).map((q) => q.id), first: 25 });
+      for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
+    }
+  } catch (e) { console.warn('predict: source links and volumes of the questions taken from predictions failed:', e.message); }
+  // Meridian OI as Meridian counts it, read on-chain (escrowOnChain); the API's figure is kept to compare. A failed read
+  // falls back to the pools of the predictions not yet settled, which overstate it where a maker merged a bought-back bet
+  const apiOi = new Map(questions.map((q) => [String(q.id).toLowerCase(), q.oi]));
+  let oiFrom = 'pools';
+  try {
+    const per = await escrowOnChain(qNorms, new Set(withOi.map((q) => q.id)));
+    for (const q of withOi) q.oi = r2(per[q.id] || 0);
+    oiFrom = 'chain';
+    const listed = withOi.filter((q) => apiOi.get(String(q.id).toLowerCase()) > 0), same = listed.filter((q) => Math.abs(apiOi.get(String(q.id).toLowerCase()) - q.oi) < 0.02).length;
+    console.log(`  predict: Meridian OI read on-chain for ${withOi.length} questions; equal to the API's openInterest on ${same} of the ${listed.length} it lists (bets placed between the reads differ)`);
+  } catch (e) {
+    console.warn('predict: open interest on-chain failed, the pools of the predictions not yet settled stand in:', e.message);
+    const escrow = dict();
+    for (const n of qNorms) { if (n.settled) continue; for (const id of new Set(n.picks.map((k) => k.id))) escrow[id] = (escrow[id] || 0) + n.pool; }
+    for (const q of withOi) q.oi = r2(escrow[q.id] || 0);
+  }
+  // the fee for sending a question's result from Polygon (anyone can): the Questions page quotes it
+  let relayFee = null;
+  try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; }
+  catch (e) { console.warn('predict: relay fee quote failed:', e.message); }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   // x: 1 marks an open prediction whose bettor has sold all its tokens to market makers (its ledger holds none of them):
@@ -562,7 +645,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);

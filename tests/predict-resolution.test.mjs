@@ -97,7 +97,8 @@ test('a game long past its scheduled start with nothing proposed is flagged, not
   const late = R.state(q, id, Date.parse('2026-09-23T00:00:00Z'));
   assert.equal(late.code, 'noresult', 'without price history it is not called postponed');
   assert.equal(late.chip[0], 'no result · 74d');
-  assert.match(late.sub, /postponed game stays open/);
+  // without rules text, the market's rules decide (and say so); with Polymarket's usual clause, it waits for the make-up game
+  assert.match(late.sub, /if it was postponed, the market's rules \(ⓘ\) say how long it waits for a make-up game/);
 });
 
 // hourly prices of the first outcome: `pre` until the start, then `post` values in turn
@@ -112,6 +113,7 @@ test('NPB Rakuten–SoftBank, Sep 21: rained out, still listed on its date, odds
   const id = '0xnpb';
   market(id, { question: 'Tohoku Rakuten Golden Eagles vs. Fukuoka SoftBank Hawks', outcomes: '["Tohoku Rakuten Golden Eagles", "Fukuoka SoftBank Hawks"]', outcomePrices: '["0.27", "0.73"]', bestBid: '0.02', bestAsk: '0.52',
     sportsMarketType: 'moneyline', gameStartTime: '2026-09-21 04:00:00+00', endDate: '2026-09-28T04:00:00Z', slug: 'npb-toh-fuk-2026-09-21', clobTokenIds: '["tokNpb", "tokNpb2"]',
+    description: 'If the game is postponed, this market will remain open until the game has been completed. If the game is canceled entirely, with no make-up game, this market will resolve 50-50.',
     events: [{ slug: 'npb-toh-fuk-2026-09-21', period: 'NS', resolutionSource: 'https://npb.jp/' }] });
   // what the CLOB actually served: 40.5 % before the start, 24–52 % on a thin book over the next two and a half days
   PRICES.tokNpb = series('2026-09-21T04:00:00Z', 0.405, [0.41, 0.39, 0.4, 0.41, 0.395, 0.315, 0.41, 0.415, 0.41, 0.385, 0.38, 0.38, 0.24, 0.395, 0.425, 0.515, 0.51, 0.475, 0.505, 0.465, 0.315, 0.295, 0.28, 0.405, 0.38, 0.37, 0.395, 0.405, 0.46, 0.285, 0.27, 0.27]);
@@ -124,7 +126,7 @@ test('NPB Rakuten–SoftBank, Sep 21: rained out, still listed on its date, odds
   assert.equal(s.main, 'Probably postponed · no sign it was played on Sep 21');
   // the window R.history asked for: from the start to "now", 2 days 16 hours later
   assert.match(s.sub, /in the first 2d 16h after it the median odds stayed within 10 points of the pre-game level \(41% before, 40% after\)/);
-  assert.match(s.sub, /50-50, which Meridian settles as a loss for the bettor/);
+  assert.match(s.sub, /the market stays open until the make-up game has been played; if it is cancelled instead, it resolves 50-50, which Meridian settles as a loss for the bettor/);
   assert.equal(s.m.source, 'https://npb.jp/');
   assert.equal(R.oddsText(s.m), 'Tohoku Rakuten Golden Eagles 27% · Fukuoka SoftBank Hawks 73%');
 });
@@ -285,4 +287,26 @@ test('a finished game is marked from Polymarket\'s game feed, while its market s
   assert.equal(R.get(greece).m.closed, false, 'still trading on Polymarket');
   assert.equal(R.get(live).m.ended, false, 'a game in progress');
   assert.equal(R.get(plain).m.ended, false, 'not a game: no such field');
+});
+
+test('a sports market\'s own rules decide what a postponed or unfinished game does (2026-10-20: most wait for the make-up game, some soccer markets 14 days; most soccer markets settle an abandoned game on the official score)', () => {
+  const open = { rules: 'If the game is postponed, this market will remain open until the game has been completed. If the game is canceled entirely, with no make-up game, this market will resolve 50–50. If the game is started but not completed, this market will resolve according to the official final score published on uefa.com.' };
+  const deadline = { rules: 'If the match is postponed, it must be rescheduled to a start time on or before November 2, 2026 at 11:59 PM ET (14 calendar days after the originally scheduled start of October 19, 2026 at 8:00 AM ET). If, by that deadline, the match has not been played, this market will resolve 50-50.' };
+  const split = { rules: 'If the match is abandoned or otherwise is completed without a winner, the market resolves 50-50.' };
+  assert.deepEqual(R.postponeRule(open), { open: true });
+  assert.deepEqual(R.postponeRule(deadline), { by: 'November 2, 2026 at 11:59 PM ET', days: 14 });
+  assert.equal(R.postponeRule({ rules: 'This market resolves to the winner.' }), null);
+  assert.equal(R.postponeRule(null), null);
+  assert.deepEqual(R.unfinishedRule(open), { score: 'uefa.com' });
+  assert.deepEqual(R.unfinishedRule(split), { split: true });
+  assert.equal(R.unfinishedRule(deadline), null);
+});
+
+test('the explainer quotes the relay fee the snapshot read, and says a small fee without one', () => {
+  R.relayFee = null;
+  assert.match(R.explainer(), /for a small fee in POL/);
+  R.relayFee = 0.111;
+  assert.match(R.explainer(), /for a fee of about 0\.111 POL/);
+  assert.match(R.explainer(), /4–6 days in all, per Polymarket's docs/);
+  R.relayFee = null;
 });

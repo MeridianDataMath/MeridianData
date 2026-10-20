@@ -52,7 +52,7 @@
   const makerCols = (T, a) => ({
     share: { key: 's', label: 'Share of predictions', num: true, title: 'Predictions taken ÷ all predictions, by count (not by stake or collateral)', render: (r) => U.fmtPct((r.n / T.n) * 100, { dp: 1 }) },
     committed: { key: 'c', label: 'Collateral committed', num: true, title: 'Sum of collateral put up against bettors', render: (r) => usd(r.wagered, { compact: true }) },
-    open: { key: 'o', label: 'Open collateral', num: true, title: 'Maker collateral in predictions not decided yet. It includes predictions whose bettor-side tokens the maker has since bought: holding both sides, it is paid stake + collateral whatever the result, so that part is not at risk.', render: (r) => usd(r.openWagered, { compact: true }) },
+    open: { key: 'o', label: 'Open collateral', num: true, title: 'Maker collateral in predictions not decided yet, as Meridian\'s own account stats count it (deployed collateral). It includes predictions whose bettor-side tokens the maker has since bought back: holding both sides, or having merged them for the collateral, it gets stake + collateral whatever the result, so that part is not at risk.', render: (r) => usd(r.openWagered, { compact: true }) },
     pnl: { key: 'p', label: 'Maker PnL', num: true, title: 'Decided predictions, claimed or not: + the bettor\'s stake on wins, − own collateral on losses' + (a.secondary ? ', plus secondary-market trades' : ''), render: (r) => pnlEl(r.pnl) },
     winRate: { key: 'wr', label: 'Maker win rate', num: true, title: WIN_COL_TITLE + ', from the maker\'s side', render: winCell },
     vig: { key: 'v', label: 'Avg vig quoted', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet (quoted, not what the maker realized), averaged over the singles and the combos with every leg on a different match that this maker took. Combos with legs on the same match or asset are left out: those legs are correlated, so the product of their prices is not a fair price (see Vig & edge).', render: (r) => vigCell(r.avgVig) },
@@ -120,6 +120,7 @@
         onProgress: (n) => { prog.textContent = `Collecting recent predictions… ${n}`; } });
     } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.reload())); return; }
     if (ctx.signal.aborted) { UI.progress.done(); return; }
+    if (P.res) P.res.relayFee = snap && snap.relayFee && snap.relayFee.pol > 0 ? snap.relayFee.pol : null;
     prog.textContent = 'Rendering…'; UI.progress.set(0.9);
     try { await render(snap); } catch (e) { if (!isAbort(e)) { console.error(e); U.replace(body, UI.error(e, () => MD.router.reload())); } }
     UI.progress.done();
@@ -416,8 +417,8 @@
   const STATUS_OPTS = [{ v: 'open', label: 'Open' }, { v: 'ended', label: 'Ended · unsettled', title: 'Past their end time on Meridian but not settled yet — where is each one in the resolution pipeline?' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }];
   /** Meridian's view of a question as the resolution tracker wants it (live API row or snapshot row). */
   const qView = (c) => (c.conditionId
-    ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic, question: c.question }
-    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, pub: c.pub, question: c.q, op: c.op });   // op: open predictions with their legs (snapshot rows); pub false = unlisted
+    ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic, question: c.question, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null }
+    : { end: c.end || null, settled: !!c.settled, yes: c.yes, nd: !!c.nd, pub: c.pub, question: c.q, op: c.op, src: c.src });   // op: open predictions with their legs (snapshot rows); pub false = unlisted
   const qId = (c) => c.conditionId || c.id;
   // Polymarket's order book: the chance Meridian's app shows for a question is the midpoint of its YES token on
   // Polymarket's CLOB while no older than two minutes (Gamma's outcome price, which the resolution tracker loads, is the
@@ -448,11 +449,11 @@
   const volCell = (c, win) => {
     const v = P.questionVolume(c), app = win === '24h' ? v.d24 : v.d7, raw = win === '24h' ? v.raw24 : v.raw7, x = app != null ? app : raw;
     if (!x) return h('span.dim', '—');
-    return h('span', { title: app != null ? `As Meridian's app shows it on a list card sorted ${win === '24h' ? 'Hot' : 'Top'}: the mirrored Polymarket market's volume over the last ${winText(win)}, low-odds trading left out. Site's figure, every trade: ${P.fmtVol(raw)}` + (v.all != null ? ` · all time ${P.fmtVol(v.all)} (the app's question page)` : '')
+    return h('span', { title: app != null ? `The mirrored Polymarket market's volume over the last ${winText(win)}, low-odds trading left out: what Meridian's app adds up over a group's questions on a list card sorted ${win === '24h' ? 'Hot' : 'Top'} (a question alone in its group shows just this). Every trade: ${P.fmtVol(raw)}` + (v.all != null ? ` · all time ${P.fmtVol(v.all)} (the app's question page)` : '')
       : `Every trade on the mirrored Polymarket market over the last ${winText(win)} (this snapshot predates the figure Meridian's app shows)` }, P.fmtVol(x));
   };
   const winText = (win) => (win === '24h' ? '24 hours' : '7 days');
-  const volColTitle = (win) => `Volume on the mirrored Polymarket market over the last ${winText(win)}, as Meridian's app shows it on its list cards sorted ${win === '24h' ? 'Hot' : 'Top'}: low-odds trading left out. A figure's tooltip has every trade, and the all-time volume`;
+  const volColTitle = (win) => `Volume on the mirrored Polymarket market over the last ${winText(win)}, low-odds trading left out: the figure Meridian's app adds up over a group's questions on its list cards sorted ${win === '24h' ? 'Hot (24H Volume)' : 'Top (7D Volume)'}. A figure's tooltip has every trade, and the all-time volume its question page shows`;
   const PROB_TITLE = 'The chance of YES now as Meridian\'s app shows it: the midpoint of Polymarket\'s order book, rounded to a whole percent; until that has loaded, Polymarket\'s last price, else Meridian\'s own estimate, which stops moving once a game starts. Settled questions show their result';
   /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
    *  at what odds, and where each leg stands, so a "won" leg can be read together with the rest of the combo. */
@@ -1078,7 +1079,7 @@
       h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'CREATED_AT', label: 'Newest' }], st.sort, (v) => { st.sort = v; load(); }, 'sm'),
       h('span.grow'), summary),
       h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Every question on the exchange, including the ones nobody has bet on.'), h('a.small', { href: '#/predict/questions', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: null, q: null, cat: null, status: null, sort: null }); } }, 'Back to questions with Meridian bets')));
-    U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is the exchange's open-interest figure (0 for unlisted questions). Vol 24h and 7d are the mirrored Polymarket market's volume as Meridian's app shows it on its list cards, low-odds trading left out; a question's dialog has its all-time volume, as on its page in the app.` : ''), resFootnote());
+    U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is the exchange's open-interest figure (0 for unlisted questions). Vol 24h and 7d are the mirrored Polymarket market's volume with low-odds trading left out, the figures Meridian's app adds up over a group's questions on its list cards; a question's dialog has its all-time volume, as on its page in the app.` : ''), resFootnote());
     let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
     function renderRows() {
       if (st.status === 'ended') rows = byStage(rows);
@@ -1163,7 +1164,7 @@
         // why: Meridian learns a result only when a relay transaction on Polygon sends it over LayerZero; the settlement
         // bot sends one for every listed question and skips unlisted ones (isPublic false)
         const unlisted = stuck.filter((q) => q.pub === false).length;
-        const why = !unlisted ? '' : ` ${unlisted === stuck.length ? (stuck.length > 1 ? 'All of these questions are' : 'The question is') : unlisted + ' of these questions are'} unlisted on Meridian. Meridian learns a result only when a relay transaction on Polygon sends it over, and its settlement bot does not send one for unlisted questions. A single relay per question (by Meridian or anyone, about 3 POL in fees) would make the payout claimable.`;
+        const why = !unlisted ? '' : ` ${unlisted === stuck.length ? (stuck.length > 1 ? 'All of these questions are' : 'The question is') : unlisted + ' of these questions are'} unlisted on Meridian. Meridian learns a result only when a relay transaction on Polygon sends it over, and its settlement bot does not send one for unlisted questions. A single relay per question (by Meridian or anyone, ${P.res.relayFee ? 'a fee of about ' + P.res.relayFee + ' POL' : 'a small fee in POL'}) would make the payout claimable.`;
         U.replace(backlog, h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, UI.chip('unresolved on Meridian', 'amber'),
           h('span.small', `${preds.size} prediction${preds.size > 1 ? 's' : ''} whose legs have all resolved in the bettor's favour on Polymarket, the last one more than ${R.STUCK_DAYS} days ago (oldest ${oldest} days), cannot be claimed because Meridian has not settled the question yet: ${usd(waiting)} of stakes across ${stuck.length} question${stuck.length > 1 ? 's' : ''}.${why} (Decided predictions that simply have not been claimed are a different matter and are not listed here.) The questions are listed first; click one to see the predictions and their legs.`))));
       };
@@ -1195,7 +1196,7 @@
           { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, sortVal: 1, title: PROB_TITLE, render: probCell },
           { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes of every prediction that includes this question (a combo\'s whole stake counts on each of its questions) · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, `${c.n} prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`) : null) },
-          { key: 'oi', label: 'Meridian OI', num: true, sortVal: 1, title: 'Collateral still in escrow on this question as of the snapshot: stake + maker collateral of every prediction on it not yet claimed (a combo counts in full on each of its questions) · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'normal', maxWidth: '200px', marginLeft: 'auto' } }, betsNote(c)) : null) },
+          { key: 'oi', label: 'Meridian OI', num: true, sortVal: 1, title: snap.oiFrom === 'chain' ? 'Meridian\'s open interest on this question, as its app counts it (Sort by Open Interest): the collateral still in escrow behind the predictions on it, i.e. the position tokens of open bets still in circulation and the winning tokens of decided ones not yet redeemed (a combo counts in full on each of its questions), read on-chain for the snapshot. Meridian\'s API gives unlisted questions 0; this is their real figure · open predictions and their bettor stakes' : 'Estimated from the predictions (this snapshot could not read it on-chain): stake + maker collateral of every prediction on the question not yet settled, a combo in full on each of its questions; it overstates where a market maker bought a bet back and merged it, which Meridian\'s own figure does not · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'normal', maxWidth: '200px', marginLeft: 'auto' } }, betsNote(c)) : null) },
           { key: 'v7', label: 'Vol 7d', num: true, sortVal: 1, title: volColTitle('7d'), render: (c) => volCell(c, '7d') },
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (webUrl(c.src) ? srcBtn(c.src) : '') },
@@ -1243,12 +1244,12 @@
           + (Math.abs(early) >= 1 ? `, plus ${usd(early, { sign: true })} booked on predictions not decided yet (a token sale counts when it is made, and a wallet that holds both sides of a pick books the sure payout when it has both; tokens still held count at the verdict)` : '') + '.');
       })();
       U.replace(body,
-        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds. The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds (', h('a', { href: 'https://docs.meridian.xyz/trading/predictions/placing-a-prediction', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), '). The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
         h('div.stats', UI.stat('Market makers', String(MK.makers.length), MK.oneOff.length ? `+ ${MK.oneOff.length} one-off counterpart${MK.oneOff.length === 1 ? 'y' : 'ies'}` : null),
           UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), snap.remote ? 'committed since launch' : `on predictions placed in the last ${snap.windowDays} days`),
           UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toMakers) >= 1 ? ' · incl. ' + usd(a.secondary.toMakers, { sign: true, compact: true }) + ' from secondary-market trades' : ''), U.pnlClass(makerPnl)),
           // the counterparties' records as Meridian's app counts them, added up: the bettors' turned round
-          UI.stat('Maker win rate', h('span', { title: recTitle(T.appWon != null, T.lost || 0, T.won || 0) }, ((r) => (r == null ? '—' : winPct(100 - r)))(T.appWon != null ? T.appWinRate : T.winRate)), T.appWon != null ? 'of claimed predictions, as Meridian\'s app counts them' : null),
+          UI.stat('Maker win rate', h('span', { title: recTitle(T.appWon != null, T.lost || 0, T.won || 0) }, ((r) => (r == null ? '—' : winPct(100 - r)))(T.appWon != null ? T.appWinRate : T.winRate)), T.appWon != null ? 'of settled predictions, as Meridian\'s app counts them' : null),
           UI.stat('Avg vig quoted', pp(a.vig.overall.avg), a.vig.coverage ? `locked odds vs Polymarket at bet time · ${U.fmtNum(a.vig.coverage.clean, 0)} of ${U.fmtNum(a.vig.coverage.total, 0)} predictions; combos with legs on the same match or asset left out` : 'locked odds vs Polymarket at bet time'),
           UI.stat('Stake-weighted vig', pp(a.vig.weighted), 'same predictions · big bets count more')),
         h('div.card.tight', tbl, oneOffNote),

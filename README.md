@@ -957,12 +957,23 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     snapshot, which stops following the market once a game starts. A settled question shows its
     result instead, and the column sorts by what it shows. *Staked on Meridian* and Meridian OI
     count a combo in full on every question it includes, so they overlap across rows and add up
-    to no total (the footer says so). Meridian OI is the
-    collateral still in escrow on the question, worked out from the predictions: stake + maker
-    collateral of every prediction on it not yet claimed (open, or decided and unclaimed), a combo
-    in full on each of its questions. That matches the API's `openInterest` on nearly every row
-    the API lists (125 of 133 on 2026-10-02), but the API reports 0 for unlisted questions and the
-    builder does not ask it about settled ones, so every row gets this figure. Self-matched
+    to no total (the footer says so). Meridian OI is Meridian's own open interest (its app's
+    *Open Interest* sort, its API's `openInterest`): the collateral still in escrow behind the
+    predictions on the question, a combo in full on each of its questions. The builder reads it
+    on-chain (`escrowOnChain`): per pick configuration, an undecided one's bettor-side token
+    supply (each P + C pair is 1 USDe in escrow), a decided one's winning token supply (what is
+    still to redeem). Fact-checked 2026-10-20: equal to the API's figure on 298 of 301 questions
+    (the rest bet on between the reads). Until then the site summed the pools of the predictions
+    not yet settled, which overstated questions where a market maker had bought a bet back and
+    merged both sides (0x3f6a…'s two Fed singles, sold to 0xea41… on Oct 16: $3.5K each); the
+    API gives unlisted questions 0, the chain their real figure. Drained decided pick
+    configurations are cached (`oiDone`), so a run reads about 340 supplies. *n decided, unclaimed*
+    follows the winners' token balances, as the Overview does (settling and claiming are separate
+    steps on Meridian). Rows the builder takes from predictions get their source link and
+    volumes from the API by condition id. *Vol 24h / 7d* per question are the figures Meridian's
+    app adds up over a group's questions on its list cards (checked: "Fed Decision in October?"
+    $1.55M = $731,752 + $817,386), its sort menu naming them *Hot (24H Volume)* and *Top (7D
+    Volume)*; a question's page there shows the all-time volume. Self-matched
     predictions are left out of the list's counts, its stakes and its question files, as
     everywhere else. On an origin with live API access a link
     switches to the full explorer over every question. A **Resolution** column says when and
@@ -1028,7 +1039,9 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       weeks for one.
     - *Meridian's bot does not relay unlisted questions.* Meridian learns an outcome only when
       someone calls `requestResolution(conditionId)` on the Polygon reader
-      `0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98`, which pays a LayerZero fee of about 3 POL. That
+      `0x3E402e220fB36f4d849F8B3B3b139f68ddb69c98`, which pays a LayerZero fee (`quoteResolution`:
+      2.9 POL on 2026-09-23, 0.111 POL on 2026-10-20; the builder quotes it each run as
+      `relayFee`, and the explainer and the backlog note use that). That
       reader reads Polymarket's ConditionalTokens payout and sends it to the resolver
       `0xe42847ee…0475` on Robinhood Chain (4663). Meridian's bot wallet
       `0xe32b714fc552aeab6ac9144d70f2a61b26bebef2` sends these for listed questions, typically within
@@ -1163,6 +1176,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
       how it meets the Overview's bettor net result: each prediction is zero-sum, so the two
       differ only by the secondary market (what wallets that never bet made there, and results
       booked before the verdict: sales, and both sides held).
+    - *Fact-checked 2026-10-20* (as the other Predict pages): every column of the four
+      counterparties' rows, the tiles and both vig averages were recomputed from the raw
+      predictions with separate code, with no difference. Meridian's own account stats give the
+      same PnL, predictions and won / lost for the Vault and 0xdd9b… (the Vault one prediction
+      more: placed after the snapshot). *Open collateral* equals Meridian's own deployed
+      collateral (statsHistory). The
+      maker win-rate tile says *settled*, the open-collateral tooltip names Meridian's figure, and
+      the intro links Meridian's page on the auction.
   * *Vig & edge* – the bettor's locked odds versus the mirrored Polymarket market's price **at
     the moment of the bet**, overall, per category, per odds bucket, singles vs combos, and per
     week. The Predict API only exposes a question's source probability as it is now, so the
