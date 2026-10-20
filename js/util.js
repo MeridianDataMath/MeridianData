@@ -364,4 +364,14 @@
   U.explorerTx = (hash) => `https://robinhoodchain.blockscout.com/tx/${hash}`;
   U.explorerAddr = (a) => `https://robinhoodchain.blockscout.com/address/${a}`;
   U.explorerBlock = (n) => `https://robinhoodchain.blockscout.com/block/${n}`;
+  /** The chains USDe moves between in Meridian's records, by EVM chain id, with their explorers, and the LayerZero v2
+   *  endpoint id of each (Robinhood Chain's 30416 and Ethereum's 30101 as Meridian's bridge records pair them) */
+  U.CHAINS = { 1: { name: 'Ethereum', tx: 'https://etherscan.io/tx/' }, 4663: { name: 'Robinhood Chain', tx: 'https://robinhoodchain.blockscout.com/tx/' }, 42161: { name: 'Arbitrum', tx: 'https://arbiscan.io/tx/' },
+    8453: { name: 'Base', tx: 'https://basescan.org/tx/' }, 10: { name: 'Optimism', tx: 'https://optimistic.etherscan.io/tx/' }, 137: { name: 'Polygon', tx: 'https://polygonscan.com/tx/' }, 56: { name: 'BNB Chain', tx: 'https://bscscan.com/tx/' } };
+  U.LZ_EIDS = { 30101: 1, 30416: 4663, 30110: 42161, 30184: 8453, 30111: 10, 30109: 137, 30102: 56 };
+  U.chainName = (id) => (U.CHAINS[id] ? U.CHAINS[id].name : 'chain ' + id);
+  U.lzChainName = (eid) => (U.LZ_EIDS[eid] ? U.chainName(U.LZ_EIDS[eid]) : 'LayerZero endpoint ' + eid);
+  U.explorerTxOn = (chainId, hash) => (hash && U.CHAINS[chainId] ? U.CHAINS[chainId].tx + hash : null);
+  /** A LayerZero destination (bytes32, an EVM address right-aligned in it) as the address; anything else as it is */
+  U.lzAddress = (b32) => { const s = String(b32 || '').toLowerCase().replace(/^0x/, ''); return s.length === 64 && /^0{24}/.test(s) ? '0x' + s.slice(24) : b32 || null; };
 })();

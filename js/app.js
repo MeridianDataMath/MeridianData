@@ -58,6 +58,10 @@
       }
       if (r.owner && r.owner !== v.toLowerCase()) { const os = await A.subaccountsOf(r.owner).catch(() => []); if (os.length) { MD.router.navigate('/account', { address: r.owner, sub: os[0].id, tab: 'predict' }); return { ok: true }; } }
       if (r.active !== false) { MD.router.navigate('/predict/bettor', { address: r.address }); return { ok: true }; }
+      // a linked signer (the Meridian app's trading session key, or an API key) signs for an account without being one;
+      // Meridian's record of it does not say whose it is
+      const sg = await A.signerByAddress(v).catch(() => null);
+      if (sg) return { error: `This address is a linked signer (${sg.category === 'API' ? 'an API key' : sg.category === 'TRADE_SESSION' ? 'a trading session key of the Meridian app' : 'a signing key'}${sg.name ? ' named "' + sg.name + '"' : ''}, ${String(sg.status || '').toLowerCase()}${sg.linkedAt ? ', linked ' + U.fmtDate(sg.linkedAt) : ''}): it signs for a Meridian account but is not one, and Meridian's API does not say whose` };
       return { error: 'No Meridian perps account or Predict activity found for this address' };
     }
     if (U.isUuid(v)) {

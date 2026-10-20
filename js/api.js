@@ -207,7 +207,22 @@
   A.transfersPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/token/transfer', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
   A.transfers = (sid, o) => A.page(A.BASE, '/v1/token/transfer', { subaccountId: sid }, { maxPages: 10, signal: o && o.signal });
   A.usdeTransfers = (address, o) => A.page(A.BASE, '/v1/usde/transfer', { address: String(address).toLowerCase() }, { maxPages: 3, ttl: 60000, signal: o && o.signal });
+  /** A wallet's USDe moves, one page, newest first: bridged in (DEPOSIT, from another chain), bridged out (WITHDRAW) and
+   *  same-chain transfers (TRANSFER), with the chains and addresses on each side. */
+  A.usdeTransfersPage = (address, cursor, limit, o) => A.pageOne(A.BASE, '/v1/usde/transfer', { address: String(address).toLowerCase() }, { cursor, limit, signal: o && o.signal });
+  /** Every order of a subaccount, one page, newest first: open, filled, canceled and rejected, each with its status and,
+   *  when it ended unfilled, Meridian's reason (rejectedReason), the address that placed it (sender) and its OCO / OTO
+   *  group (groupId). */
+  A.ordersPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/order', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
+  /** Withdrawals initiated and not finalized yet, with their LayerZero destination. */
+  A.activeWithdrawals = (sid, o) => A.page(A.BASE, '/v1/token/withdraw', { subaccountId: sid, isActive: true }, { maxPages: 2, ttl: 30000, signal: o && o.signal });
   A.signers = (sid, o) => A.page(A.BASE, '/v1/linked-signer', { subaccountId: sid }, { maxPages: 2, ttl: 60000, signal: o && o.signal });
+  /** How many signers the account may link in a period, and how many it has linked in the current one:
+   *  {maxLinkedSignersInPeriod, maxLinkedSignersPeriodDays, linkedSignersUsedInPeriod, linkedSignerRefreshHoursBeforeExpiry}. */
+  A.signerQuota = (sid, o) => A.get(A.BASE + '/v1/linked-signer/quota' + qs({ subaccountId: sid }), { ttl: 60000, signal: o && o.signal });
+  /** A linked signer by its address, or null when the address is none. The record does not say whose signer it is. */
+  A.signerByAddress = (address, o) => A.get(A.BASE + '/v1/linked-signer/address/' + String(address).toLowerCase(), { ttl: 60000, signal: o && o.signal })
+    .catch((e) => { if (e && e.status === 404) return null; throw e; });
   A.pointsSummary = (address, o) => A.get(A.BASE + '/v1/points/summary' + qs({ address: String(address).toLowerCase() }), { ttl: 60000, signal: o && o.signal }).then((r) => r.data || []);
   A.points = (address, season, epoch, o) => A.get(A.BASE + '/v1/points' + qs({ address: String(address).toLowerCase(), season, epoch }), { ttl: 60000, signal: o && o.signal }).then((r) => r.data || []);
   A.pointsTotal = (o) => A.get(A.BASE + '/v1/points/total', { ttl: 5 * 60000, signal: o && o.signal });

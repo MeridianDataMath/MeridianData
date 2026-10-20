@@ -164,7 +164,27 @@
     if (o.timeInForce && o.timeInForce !== 'GTD') f.push(o.timeInForce);
     return f.join(' · ');
   };
-  const orderCols = (ref) => [
+  // why an order ended unfilled (Meridian's rejectedReason, on canceled orders as well as rejected ones), in words where the
+  // name leaves no doubt, otherwise as Meridian names it
+  const REASONS = {
+    InsufficientBalance: 'not enough balance', ImmediateMatchPostOnly: 'post-only, and it would have matched at once',
+    OrderIncreasesPosition: 'reduce-only, and it would have added to the position', UnfilledImmediateOrCancel: 'immediate-or-cancel: the part not filled at once',
+    UnfilledFillOrKill: 'fill-or-kill: it could not fill in full at once', UnfilledMarketOrder: 'a market order: the part not filled',
+    MarketOrderReachedMaxSlippage: 'the market order reached its slippage limit', QuantityAboveMaximum: 'larger than the market\'s largest order',
+    Liquidation: 'the account was liquidated', SignerRevoked: 'the signer that placed it was revoked', AccountSuspended: 'the account is suspended',
+    ExchangeSuspended: 'the exchange was suspended', OcoFilled: 'the other order of its OCO pair filled', CausesImmediateLiquidation: 'it would have liquidated the account at once',
+    InstrumentOpenValueCapExceeded: 'the market\'s open-interest cap', RiskLimitExceeded: 'a risk limit', DuplicateSameSideOco: 'an OCO order on the side of one already there',
+    TriggerCanceled: 'its trigger was canceled',
+  };
+  const reasonTxt = (r) => (r ? REASONS[r] || r.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() : null);
+  // an order's OCO / OTO group (groupId): the other orders of it still active, in the flags' tooltip
+  const groupNote = (o, list, ref) => {
+    if (!o.groupId) return null;
+    const others = (list || []).filter((x) => x.groupId === o.groupId && x.id !== o.id);
+    const m = AN.orderMeta(o), kind = m.oco ? 'OCO' : m.oto ? 'OTO' : 'contingency';
+    return `In an ${kind} group` + (others.length ? ' with: ' + others.map((x) => { const xm = AN.orderMeta(x); return (xm.stop ? xm.kind + ' @' + U.fmtPrice(x.stopPrice, tickOf(ref, x.productId)) : x.type.toLowerCase() + (U.num(x.price) ? ' @' + U.fmtPrice(x.price, tickOf(ref, x.productId)) : '')); }).join(', ') : ' (no other order of it is active)');
+  };
+  const orderCols = (ref, list) => [
     { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(tickerOf(ref, r.productId)) },
     { key: 'side', label: 'Side', render: (r) => U.sideEl(r.side) },
     { key: 'type', label: 'Type', render: (r) => { const m = AN.orderMeta(r); return m.stop ? h('span', m.kind, h('span.dim.xs', ' ' + r.type.toLowerCase())) : r.type; } },
@@ -173,11 +193,41 @@
     { key: 'filled', label: 'Filled', num: true, render: (r) => U.fmtQty(r.filled, lotOf(ref, r.productId)) },
     { key: 'value', label: 'Value', num: true, title: 'Limit price × order quantity', render: (r) => { const v = U.num(r.price) * U.num(r.quantity); return v > 0 ? U.fmtUsd(v) : h('span.dim', '—'); } },
     { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'NEW' ? 'accent' : r.status === 'PENDING' ? 'amber' : r.status === 'FILLED_PARTIAL' ? 'blue' : '') },
-    { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', flags(r, tickOf(ref, r.productId))) },
+    { key: 'flags', label: 'Flags', render: (r) => h('span.dim.small', { title: groupNote(r, list, ref) }, flags(r, tickOf(ref, r.productId))) },
     { key: 'created', label: 'Created', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
   ];
+  // ---- the Live tab's transfers and liquidations: a REST transfer row and the WebSocket's TokenTransfer and
+  // SubaccountLiquidation events (Meridian's docs: WebSocket, Account Events) as one kind of feed item ----
+  const transferItem = (r) => ({ id: r.id, kind: 'transfer', t: U.num(r.createdAt), typ: r.type, st: r.status, amt: r.amount, fee: r.fee, token: r.tokenName, toToken: r.toTokenName || null, eid: U.num(r.lzDestinationEid) || 0, tx: r.finalizedTransactionHash || r.initiatedTransactionHash || null });
+  const wsTransferItem = (m) => { const d = (m && m.data) || {}; return { id: d.id, kind: 'transfer', t: U.num(d.t || (m && m.t)), typ: d.typ, st: d.st, amt: d.amt, fee: d.fee, token: d.tName, toToken: d.toTName || null, eid: U.num(d.lzEid) || 0, tx: d.finTx || d.iniTx || null }; };
+  // a liquidation closes every position of one margin pool: each with its ticker, the mark price then and its size
+  // (negative: a short)
+  const wsLiqItem = (m) => { const d = (m && m.data) || {}; const t = U.num(d.t || (m && m.t)); return { id: 'liq|' + t, kind: 'liq', t, positions: (d.d || []).map((x) => ({ ticker: x.s, px: x.px, sz: U.num(x.sz) })) }; };
+  /** An event onto the feed (newest first, 50 kept): a transfer already listed, whose status changed, is updated where it is. */
+  const pushEvent = (list, it) => {
+    const i = it.id ? list.findIndex((x) => x.id === it.id) : -1;
+    if (i >= 0) { const copy = list.slice(); copy[i] = Object.assign({}, list[i], it, { _new: true }); return copy; }
+    return [Object.assign({ _new: true }, it)].concat(list).slice(0, 50);
+  };
+  const STATUS_CHIP = { NEW: 'accent', PENDING: 'amber', FILLED_PARTIAL: 'blue', FILLED: 'green', REJECTED: 'red' };
+  /** Every order of the account, newest first (Order history): the open orders' columns without the value, the status
+   *  with Meridian's reason under it, who placed the order (the wallet itself or one of its linked signers: sigs, by
+   *  address) and its last change */
+  const historyCols = (ref, owner, sigs) => orderCols(ref).filter((c) => c.key !== 'value').map((c) => (c.key !== 'status' ? c : {
+    key: 'status', label: 'Status', title: 'The order\'s status and, for one that ended unfilled, Meridian\'s reason',
+    render: (r) => h('div', UI.chip(r.status, STATUS_CHIP[r.status] || ''), r.rejectedReason ? h('div.xs.dim', { title: 'Meridian\'s reason: ' + r.rejectedReason }, reasonTxt(r.rejectedReason)) : null),
+  })).concat([
+    { key: 'by', label: 'Placed by', title: 'The wallet itself, or one of its linked signers: the Meridian app\'s trading session key, or an API key', render: (r) => {
+      const s = String(r.sender || '').toLowerCase(); if (!s) return h('span.dim', '—');
+      if (s === owner) return h('span.dim', 'the wallet');
+      const sg = sigs[s];
+      return h('span', { title: 'Signer ' + s + (sg && sg.status ? ' · ' + sg.status.toLowerCase() : '') }, sg ? (sg.name ? sg.name + ' · ' : '') + (sg.category === 'API' ? 'API key' : sg.category === 'TRADE_SESSION' ? 'trading session' : 'linked signer') : 'signer ' + U.shortAddr(s, 4));
+    } },
+    { key: 'upd', label: 'Last change', render: (r) => h('span.dim', U.fmtDateTimeS(r.updatedAt)) },
+  ]);
 
   MD.router.pages.account = {
+    reasonTxt, transferItem, wsTransferItem, wsLiqItem, pushEvent,   // tests/account-page.test.mjs
     async mount(root, route, ctx) {
       const page = h('div.page');
       root.appendChild(page);
@@ -214,6 +264,9 @@
             U.replace(predictLine, w === a ? 'It does have Meridian Predict activity.' : h('span', 'It has Meridian Predict activity through its Predict wallet ', h('span.addr', { title: w }, U.shortAddr(w, 6)), '.'), btn(w));
             return;
           }
+          // a linked signer signs for an account without being one (Meridian's record of it does not say whose)
+          const sg = await A.signerByAddress(a, ctx).catch(() => null);
+          if (sg && !ctx.signal.aborted) U.replace(predictLine, `It is a linked signer: ${sg.category === 'API' ? 'an API key' : sg.category === 'TRADE_SESSION' ? 'a trading session key of the Meridian app' : 'a signing key'}${sg.name ? ' named "' + sg.name + '"' : ''} (${String(sg.status || '').toLowerCase()}${sg.linkedAt ? ', linked ' + U.fmtDate(sg.linkedAt) : ''}${sg.expiresAt ? ', expires ' + U.fmtDate(sg.expiresAt) : ''}) that signs for a Meridian account; Meridian's API does not say whose.`);
         })().catch(() => {});
         return;
       }
@@ -234,7 +287,8 @@
         h('button.btn.sm.ghost.explorer', { title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'),
         h('button.btn.sm.ghost.explorer', { title: 'Equity curve flex: this account\'s PnL card, to download, copy or post', onclick: () => openFlex(addr, sa, ref) }, U.icon('trophy'), 'Flex'),
         // the UTC day, like the flex card, the share card and the all-time curve's first day
-        h('span.dim.small.nowrap.since', { title: 'Subaccount created ' + new Date(U.num(sa.createdAt)).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' }, 'since ' + U.fmtDayUTC(sa.createdAt).replace(' (UTC day)', '')));
+        h('span.dim.small.nowrap.since', { title: 'Subaccount created ' + new Date(U.num(sa.createdAt)).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+          + (sa.createdBlockNumber ? ' · created in Robinhood Chain block ' + sa.createdBlockNumber : '') + (sa.registeredBlockNumber ? ', registered in block ' + sa.registeredBlockNumber : '') }, 'since ' + U.fmtDayUTC(sa.createdAt).replace(' (UTC day)', '')));
       // phones: the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
       const headSlot = h('div.acct-head-slot');
       const narrow = window.matchMedia('(max-width: 720px)');
@@ -361,7 +415,10 @@
     }
 
     // ---- tables ----
-    const TT = [['positions', 'Open positions'], ['orders', 'Orders & stops'], ['fills', 'Fills history'], ['history', 'Positions history'], ['funding', 'Funding payments'], ['posfees', 'Position fees'], ['transfers', 'Deposits, withdrawals & conversions']];
+    const TT = [['positions', 'Open positions'], ['orders', 'Orders & stops'], ['allorders', 'Order history'], ['fills', 'Fills history'], ['history', 'Positions history'], ['funding', 'Funding payments'], ['posfees', 'Position fees'], ['transfers', 'Deposits, withdrawals & conversions'], ['usde', 'Wallet USDe']];
+    // the account's linked signers by address, for the Order history's "Placed by" (read once, when that tab opens)
+    let sigsP = null;
+    const signerMap = () => (sigsP = sigsP || A.signers(sid, cx).then((list) => { const m = {}; for (const s of list) m[String(s.signer).toLowerCase()] = s; return m; }, () => ({})));
     // ---- funding and position-fee payments, as Meridian's Portfolio lists them: every hourly funding charge of the
     // last 30 days and every mPerp position-fee charge of the last 7 days (the archive), newest first; read when the tab
     // opens and kept a minute
@@ -443,7 +500,13 @@
           ], rows: a.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
         }));
       } else if (tt === 'orders') {
-        U.replace(ttBody, UI.table({ cols: orderCols(ref), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+        U.replace(ttBody, UI.table({ cols: orderCols(ref, base.orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+      } else if (tt === 'allorders') {
+        const sigs = {};   // filled before the first page renders
+        U.replace(ttBody, cursorTable({
+          fetchPage: async (cursor, n) => { Object.assign(sigs, await signerMap()); return A.ordersPage(sid, cursor, n, cx); }, empty: 'No orders yet', phone: { title: 'm', aside: 'status', hide: ['flags', 'by', 'upd'] },
+          cols: historyCols(ref, st.addr, sigs),
+        }));
       } else if (tt === 'fills') {
         U.replace(ttBody, cursorTable({
           fetchPage: (cursor, n) => A.fillsPage(sid, cursor, n, cx), empty: 'No fills yet', phone: { title: 'm', aside: 'cost', hide: ['maker'] },
@@ -483,18 +546,64 @@
       } else if (tt === 'funding' || tt === 'posfees') {
         renderCharges(tt);
       } else if (tt === 'transfers') {
-        U.replace(ttBody, cursorTable({
+        // withdrawals initiated and not finalized yet, above the list (none most of the time)
+        const inFlight = h('div');
+        A.activeWithdrawals(sid, cx).then((rows) => {
+          if (!rows.length || cx.signal.aborted || tt !== 'transfers') return;
+          const tok = (a) => (ref.tokenByAddr[String(a).toLowerCase()] || {}).name || U.shortAddr(a, 4);
+          U.replace(inFlight, h('div.small', { style: { padding: '8px 12px', color: 'var(--amber)' } }, `${rows.length} withdrawal${rows.length === 1 ? '' : 's'} in flight: ` + rows.map((w) => `${U.fmtNum(w.amount, 2)} ${tok(w.token)} (${String(w.status).toLowerCase()}, initiated ${U.fmtDateTimeS(w.createdAt)}${U.num(w.lzDestinationEid) > 0 ? ', to ' + U.lzChainName(w.lzDestinationEid) : ''})`).join(' · ')));
+        }, () => {});
+        // where a withdrawal went: the wallet on Robinhood Chain, or across LayerZero to another chain
+        const routeCell = (r) => {
+          if (r.type !== 'WITHDRAW') return h('span.dim', r.type === 'DEPOSIT' ? 'from the wallet' : 'within the account');
+          const to = U.lzAddress(r.lzDestinationAddress), other = to && to !== st.addr;
+          const who = other ? h('span.addr', { title: to }, U.shortAddr(to, 4)) : 'the wallet';
+          return U.num(r.lzDestinationEid) > 0 ? h('span', { title: 'Bridged out by LayerZero (endpoint ' + r.lzDestinationEid + ') to ' + (to || '—') }, '→ ' + U.lzChainName(r.lzDestinationEid) + ' · ', who) : h('span.dim', '→ ', who);
+        };
+        const blocks = (r) => [r.initiatedBlockNumber ? 'initiated in block ' + r.initiatedBlockNumber + (r.initiatedTransactionHash ? ' (tx ' + r.initiatedTransactionHash + ')' : '') : null, r.finalizedBlockNumber ? 'finalized in block ' + r.finalizedBlockNumber + (r.finalizedTransactionHash ? ' (tx ' + r.finalizedTransactionHash + ')' : '') : null].filter(Boolean).join(', ') || null;
+        U.replace(ttBody, inFlight, cursorTable({
           fetchPage: (cursor, n) => A.transfersPage(sid, cursor, n, cx), empty: 'No transfers yet', phone: { title: 'type', aside: 'amt' },
           cols: [
             { key: 'type', label: 'Type', render: (r) => UI.chip(r.type, r.type === 'DEPOSIT' ? 'green' : r.type === 'WITHDRAW' ? 'red' : 'blue') },
             { key: 'token', label: 'Token', render: (r) => r.type === 'CONVERT' ? h('span', String(r.tokenName || ''), h('span.dim', ' → '), r.toTokenName) : r.tokenName },   // as text: an object in h()'s second place would be read as attributes
             { key: 'amt', label: 'Amount', num: true, render: (r) => U.fmtNum(r.amount, 2) },
             { key: 'fee', label: 'Fee', num: true, render: (r) => U.fmtNum(r.fee, 2) },
+            { key: 'route', label: 'Where', title: 'A withdrawal\'s destination: the wallet on Robinhood Chain, or another chain across LayerZero', render: routeCell },
             { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'COMPLETED' ? 'green' : r.status === 'REJECTED' ? 'red' : 'amber') },
-            { key: 'tx', label: 'Tx', render: (r) => { const tx = r.finalizedTransactionHash || r.initiatedTransactionHash; return tx ? h('a.addr', { href: U.explorerTx(tx), target: '_blank', rel: 'noopener' }, U.shortAddr(tx, 6)) : '—'; } },
+            { key: 'tx', label: 'Tx', render: (r) => { const tx = r.finalizedTransactionHash || r.initiatedTransactionHash; return tx ? h('a.addr', { href: U.explorerTx(tx), target: '_blank', rel: 'noopener', title: blocks(r) }, U.shortAddr(tx, 6)) : '—'; } },
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
           ],
         }));
+      } else if (tt === 'usde') {
+        // the wallet's USDe as Meridian records it: bridged in and out across LayerZero, and transfers on Robinhood Chain
+        const USDE_TYPE = { DEPOSIT: ['Bridged in', 'green'], WITHDRAW: ['Bridged out', 'red'], TRANSFER: ['Transfer', 'blue'] };
+        // Meridian's exchange contract (the signing domain's verifying contract) holds the USDe behind the accounts: a
+        // transfer from it is the account's withdrawal reaching the wallet
+        let exch = null;
+        const who = (a) => { const x = String(a || '').toLowerCase(); return !x ? h('span.dim', '—') : x === st.addr ? h('span', 'this wallet') : x === exch ? h('span', { title: a + ' · Meridian\'s exchange contract' }, 'Meridian exchange') : h('span.addr', { title: a }, U.shortAddr(a, 4)); };
+        const route = (r) => (r.type === 'TRANSFER'
+          ? h('span', who(r.fromAddress), h('span.dim', ' → '), who(r.toAddress))
+          : h('span', { title: (r.senderAddress && r.senderAddress !== r.fromAddress ? 'Sent by ' + r.senderAddress + ' through ' + r.fromAddress : 'From ' + (r.fromAddress || '—')) + ' on ' + U.chainName(r.sourceChainId) + ' to ' + (r.destinationAddress || U.lzAddress(r.lzDestinationAddress) || '—') + (r.destinationChainId ? ' on ' + U.chainName(r.destinationChainId) : '') + (r.lzDestinationEid ? ' (LayerZero endpoint ' + r.lzDestinationEid + ')' : '') },
+            U.chainName(r.sourceChainId) + ' → ' + (r.destinationChainId ? U.chainName(r.destinationChainId) : U.lzChainName(r.lzDestinationEid)), h('span.dim', ' · '), who(r.senderAddress || r.fromAddress), h('span.dim', ' → '), who(r.destinationAddress || U.lzAddress(r.lzDestinationAddress))));
+        const txs = (r) => {
+          const a = U.explorerTxOn(r.sourceChainId, r.initiatedTransactionHash), dest = r.destinationChainId || r.sourceChainId;
+          const b = r.finalizedTransactionHash && r.finalizedTransactionHash !== r.initiatedTransactionHash ? U.explorerTxOn(dest, r.finalizedTransactionHash) : null;
+          const link = (href, label, title) => (href ? h('a', { href, target: '_blank', rel: 'noopener', title }, label) : null);
+          return h('span', link(a, b ? 'sent' : 'tx', 'On ' + U.chainName(r.sourceChainId) + ', block ' + (r.initiatedBlockNumber || '—')), b ? h('span.dim', ' · ') : null, link(b, 'arrived', 'On ' + U.chainName(dest) + ', block ' + (r.finalizedBlockNumber || '—')));
+        };
+        U.replace(ttBody, h('div.dim.small', { style: { padding: '8px 12px 2px' } }, 'The wallet\'s USDe as Meridian records it, newest first: bridged in from another chain, bridged out, and transfers on Robinhood Chain. It is the wallet\'s, not this subaccount\'s alone; a bridge stays pending until the other chain\'s side arrives.'),
+          cursorTable({
+            fetchPage: async (cursor, n) => { if (!exch) { const c = await A.rpcConfig(cx).catch(() => null); exch = c && c.domain ? String(c.domain.verifyingContract).toLowerCase() : null; } return A.usdeTransfersPage(st.addr, cursor, n, cx); },
+            empty: 'No USDe moves recorded for this wallet', phone: { title: 'type', aside: 'amt' },
+            cols: [
+              { key: 'type', label: 'Type', render: (r) => UI.chip((USDE_TYPE[r.type] || [r.type])[0], (USDE_TYPE[r.type] || [])[1] || '') },
+              { key: 'amt', label: 'Amount', num: true, render: (r) => U.fmtNum(r.amount, 2) + ' USDe' },
+              { key: 'route', label: 'From → to', render: route },
+              { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'COMPLETED' ? 'green' : 'amber') },
+              { key: 'tx', label: 'Tx', render: txs },
+              { key: 't', label: 'Time', render: (r) => h('span.dim', { title: r.finalizedAt && r.finalizedAt !== r.initiatedAt ? 'Arrived ' + U.fmtDateTimeS(r.finalizedAt) : null }, U.fmtDateTimeS(r.initiatedAt || r.createdAt)) },
+            ],
+          }));
       }
     }
 
@@ -642,7 +751,7 @@
     const { sa, ref } = st; const sid = sa.id;
     const status = h('span.status-dot');
     const statusTxt = h('span.dim.small', 'connecting');
-    const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
+    const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed.pause-hover'), evBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
     const mktTrades = h('div.feed.pause-hover', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
     const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
     const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
@@ -664,7 +773,8 @@
       h('div.stack',
         h('div.card.tight', h('div.card-head', h('h2', 'Open positions'), status, statusTxt), posBody),
         h('div.card.tight', h('div.card-head', h('h2', 'Orders & stops')), ordBody),
-        h('div.card.tight', h('div.card-head', h('h2', 'Fills'), h('span.dim.small', 'live')), fillBody)),
+        h('div.card.tight', h('div.card-head', h('h2', 'Fills'), h('span.dim.small', 'live')), fillBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Transfers & liquidations'), h('span.dim.small', 'deposits, withdrawals and conversions as their status changes, and a liquidation the moment it happens')), evBody)),
       h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Order book'), mkSel), h('div.book-bar', h('div.center', bookTitle), bookSeg, h('div.paused.hover', 'paused while hovering'), h('div.paused.focus', 'paused while a row has the focus')), h('div', { style: { flex: 'none' } }, book), bookNote,
         h('div.card-head', { style: { borderTop: '1px solid var(--border-2)', flex: 'none' } }, h('h2', 'Market trades'), mktTitle), mktFill)));
 
@@ -693,9 +803,17 @@
         ], rows: acct.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
       }));
     };
-    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref, orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled, lotOf(ref, f.productId)) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
+    let events = [];
+    const evRow = (e) => (e.kind === 'liq'
+      ? h('div.it', { class: e._new ? 'flash' : '' }, h('span.t', U.fmtFeedTime(e.t)), UI.chip('Liquidated', 'red'),
+        h('span.small', e.positions.map((p) => { const prod = ref.byTicker[p.ticker]; return (prod ? prod.displayTicker : p.ticker) + ' ' + (p.sz < 0 ? 'short ' : 'long ') + U.fmtQty(Math.abs(p.sz), prod && prod.lotSize) + ' at the mark ' + U.fmtPrice(p.px, prod && prod.tickSize); }).join(' · ')))
+      : h('div.it', { class: e._new ? 'flash' : '' }, h('span.t', U.fmtFeedTime(e.t)), UI.chip(e.typ, e.typ === 'DEPOSIT' ? 'green' : e.typ === 'WITHDRAW' ? 'red' : 'blue'),
+        h('span.num', U.fmtNum(e.amt, 2) + ' ' + (e.token || '') + (e.toToken ? ' → ' + e.toToken : '')), e.eid ? h('span.xs.dim', '→ ' + U.lzChainName(e.eid)) : null, U.num(e.fee) ? h('span.xs.dim', 'fee ' + U.fmtNum(e.fee, 2)) : null, h('span.grow'),
+        h('span.xs', { class: e.st === 'COMPLETED' ? 'pos' : e.st === 'REJECTED' ? 'neg' : '' }, String(e.st || '').toLowerCase()), e.tx ? h('a.xs', { href: U.explorerTx(e.tx), target: '_blank', rel: 'noopener', title: e.tx }, 'tx') : null));
+    const renderEvents = () => U.replaceLive(evBody, events.length ? events.slice(0, 20).map(evRow) : UI.empty('No transfers yet'));
 
     async function reload() {
       try {
@@ -712,6 +830,8 @@
     try { const f = await A.fillsPage(sid, null, 30, cx); fills = f.rows; } catch (_) {}
     if (cx.signal.aborted) return;
     renderFills();
+    // the last transfers to start the feed with; the WebSocket adds the rest as they happen
+    A.transfersPage(sid, null, 10, cx).then((r) => { if (!cx.signal.aborted) { events = r.rows.map(transferItem).concat(events.filter((e) => e.kind === 'liq')); renderEvents(); } }, () => renderEvents());
     await reload();
     if (cx.signal.aborted) return;   // the viewer left during the first loads: no subscription would ever be cleaned up
 
@@ -730,6 +850,9 @@
       }
       fills = fills.slice(0, 100); renderFills(); reloadThrottled();
     }));
+    // deposits, withdrawals and conversions as their status changes, and liquidations (each closes a pool's positions)
+    cx.onCleanup(A.ws.subscribe('TokenTransfer', sid, (m) => { events = pushEvent(events, wsTransferItem(m)); renderEvents(); }));
+    cx.onCleanup(A.ws.subscribe('SubaccountLiquidation', sid, (m) => { events = pushEvent(events, wsLiqItem(m)); renderEvents(); reloadThrottled(); }));
 
     // order book
     const bids = new Map(), asks = new Map();
@@ -1070,10 +1193,18 @@
         withTitle(UI.stat('Referral points', U.fmtNum(all, 0), seasons.length > 1 ? 'all ' + seasons.length + ' seasons' : cur ? 'season ' + cur.season : 'none yet'), 'Public: Meridian\'s points data gives every address the points credited to it for the people it referred')),
       h('div.small.dim', { style: { marginTop: '10px' } }, 'Its USDe referral rewards, the fee share and the Predict rewards, are not public: Meridian\'s app shows them only to the address\'s owner, after a signature from its wallet, on the ', h('a', { href: A.REFERRALS_URL, target: '_blank', rel: 'noopener' }, 'Referrals page'), '.'));
   }
+  /** The Rewards tab's "Last distribution" tile: the points the most recent distribution added to the season, trading and
+   *  referral, against Meridian's figures from before it (the Rank tile says where it moved the rank). */
+  const lastDrop = (s) => {
+    const d = U.num(s.totalPoints) - U.num(s.previousTotalPoints), dr = U.num(s.referralPoints) - U.num(s.previousReferralPoints);
+    const has = s.previousTotalPoints != null || s.previousReferralPoints != null;
+    return withTitle(UI.stat('Last distribution', has ? (d + dr > 0 ? '+' : '') + U.fmtNum(d + dr, 0) : '—', has ? U.fmtNum(d, 0) + ' trading · ' + U.fmtNum(dr, 0) + ' referral' : null),
+      'The points the most recent distribution added to this season: the season\'s totals now against Meridian\'s figures from before it' + (s.updatedAt ? ' (updated ' + U.fmtDateTime(s.updatedAt) + ')' : ''));
+  };
   async function mountRewards(el, st, cx) {
     const { addr, sa } = st;
     U.replace(el, UI.loading('Loading points…'));
-    const [summaries, total, signers] = await Promise.all([A.pointsSummary(addr, cx).catch(() => []), A.pointsTotal(cx).catch(() => null), A.signers(sa.id, cx).catch(() => [])]);
+    const [summaries, total, signers, quota] = await Promise.all([A.pointsSummary(addr, cx).catch(() => []), A.pointsTotal(cx).catch(() => null), A.signers(sa.id, cx).catch(() => []), A.signerQuota(sa.id, cx).catch(() => null)]);
     const cards = [];
     const seasons = U.sortBy(summaries, (s) => s.season, true);
     if (!seasons.length) {
@@ -1088,7 +1219,9 @@
         h('div.stats', UI.stat('Rank', s.rank ? '#' + s.rank : '—', s.previousRank > 0 && s.previousRank !== s.rank ? 'was #' + s.previousRank : null),
           withTitle(UI.stat('Total points', U.fmtNum(tp + rp, 0), U.fmtNum(tp, 0) + ' trading · ' + U.fmtNum(rp, 0) + ' referral'), 'Trading points plus referral points, as Meridian\'s points page shows the total'),
           withTitle(UI.stat('Referral points', U.fmtNum(rp, 0), rp > 0 && tp + rp > 0 ? U.fmtPct((rp / (tp + rp)) * 100, { dp: 1 }) + ' of its points' : 'none this season'), 'Points from the people this address referred: Meridian\'s referral program gives a referrer a share of the points they earn (' + REF_TERMS.pointsShare() + ')'),
-          withTitle(UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null), 'This address\'s trading points ÷ all trading points distributed in the season (referral points left out of both)')),
+          withTitle(UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null), 'This address\'s trading points ÷ all trading points distributed in the season (referral points left out of both)'),
+          // what the most recent distribution added: the season's points now against before it (Meridian keeps both)
+          lastDrop(s)),
         h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs, h('div.chart-note', 'Trading and referral points per epoch, as Meridian\'s points history shows them')));
       // epoch history (probe epochs until two consecutive empties)
       (async () => {
@@ -1107,16 +1240,23 @@
     }
     cards.push(referralCard(seasons));
     if (total) cards.push(h('div.card', h('div.row', h('h2', 'Exchange-wide points'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(total.updatedAt))), h('div.stats', { style: { marginTop: '10px' } }, UI.stat('Total distributed', U.fmtNum(total.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(total.referralPoints, 0)))));
-    cards.push(UI.card('Linked signers (API keys)', UI.table({
+    // the signers, with when each was linked and revoked (the Robinhood Chain blocks in the tooltips), and the account's
+    // quota: how many it may link in a period, and how long before expiry one can be refreshed
+    const blockLink = (n, label) => (n ? h('a', { href: U.explorerBlock(n), target: '_blank', rel: 'noopener', title: 'Robinhood Chain block ' + n }, label) : h('span', label));
+    const quotaNote = quota && quota.maxLinkedSignersInPeriod != null
+      ? h('div.dim.small', { style: { padding: '8px 12px' } }, `Linked in the last ${quota.maxLinkedSignersPeriodDays} days: ${quota.linkedSignersUsedInPeriod} of the ${quota.maxLinkedSignersInPeriod} the account may link in that time · a signer can be refreshed from ${quota.linkedSignerRefreshHoursBeforeExpiry} hours (${U.fmtNum(quota.linkedSignerRefreshHoursBeforeExpiry / 24, 0)} days) before it expires`)
+      : null;
+    cards.push(h('div.card.tight', h('div.card-head', h('h2', 'Linked signers (API keys)'), h('span.dim.small', 'keys that sign for the account: the Meridian app\'s trading session, or an API key')), UI.table({
       cols: [
         { key: 'name', label: 'Name', render: (r) => r.name || '—' },
         { key: 'signer', label: 'Signer', render: (r) => h('span.addr', { title: r.signer }, U.shortAddr(r.signer, 6)) },
-        { key: 'cat', label: 'Category', render: (r) => r.category || '—' },
+        { key: 'cat', label: 'Category', render: (r) => (r.category === 'TRADE_SESSION' ? 'trading session' : r.category === 'API' ? 'API key' : r.category || '—') },
         { key: 'status', label: 'Status', render: (r) => UI.chip(r.status, r.status === 'ACTIVE' ? 'green' : r.status === 'REVOKED' ? 'red' : '') },
-        { key: 'linked', label: 'Linked', render: (r) => h('span.dim', U.fmtDate(r.linkedAt || r.createdAt)) },
+        { key: 'linked', label: 'Linked', render: (r) => h('span.dim', blockLink(r.blockNumber, U.fmtDate(r.linkedAt || r.createdAt))) },
         { key: 'exp', label: 'Expires', render: (r) => h('span.dim', r.expiresAt ? U.fmtDate(r.expiresAt) : '—') },
+        { key: 'rev', label: 'Revoked', render: (r) => (r.revokedAt || r.revokedBlockNumber ? h('span.neg', blockLink(r.revokedBlockNumber, r.revokedAt ? U.fmtDateTime(r.revokedAt) : 'block ' + r.revokedBlockNumber)) : h('span.dim', '—')) },
       ], rows: signers, empty: 'No linked signers', phone: { title: 'name', aside: 'status' },
-    })));
+    }), quotaNote));
     U.replace(el, h('div.stack', cards));
   }
 })();

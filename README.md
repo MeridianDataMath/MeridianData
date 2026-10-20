@@ -252,8 +252,23 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     mPerp position fees. Line charts plot each archive bucket at its end and end on the live
     figures (the PnL line, the app's running total, at the PnL tile's end); the all-time bars
     are UTC days. Auto-refresh reloads the archive series whenever a balance moves
-    (a close, funding settlement, fee or transfer).
-  * *Live* – WebSocket-driven positions, orders, fills and an L2 order book for any market.
+    (a close, funding settlement, fee or transfer). An *Order history* table lists every order,
+    newest first (`/v1/order` unfiltered): its status, Meridian's reason for one that ended
+    unfilled (`rejectedReason`, found on canceled orders too: immediate-or-cancel remainders,
+    reduce-only orders that would add, not enough balance…; `reasonTxt` words the unambiguous
+    ones), who placed it (`sender`: the wallet, or a linked signer by name and kind) and its
+    last change; an open order's flags tooltip names the other active orders of its OCO / OTO
+    group (`groupId`). The transfers table has where a withdrawal went (the wallet, or another
+    chain across LayerZero: `lzDestinationEid`, `U.lzChainName`) and the blocks in the tx
+    tooltip, with withdrawals still in flight above it (`/v1/token/withdraw?isActive=true`). A
+    *Wallet USDe* table lists the wallet's USDe moves (`/v1/usde/transfer`): bridged in and out
+    with the chains, addresses and both transactions (Ethereum ↔ Robinhood Chain so far), and
+    transfers on Robinhood Chain, Meridian's exchange contract (from `/v1/rpc/config`) named.
+    The "since" date's tooltip has the subaccount's created and registered blocks.
+  * *Live* – WebSocket-driven positions, orders, fills and an L2 order book for any market, and a
+    *Transfers & liquidations* feed: the last transfers, then the WebSocket's `TokenTransfer`
+    (a deposit, withdrawal or conversion as its status changes) and `SubaccountLiquidation` (the
+    positions a liquidation closed, at the mark) events.
   * *Performance* – win rate, profit factor, expectancy, Sharpe, max drawdown, trading style,
     per-market breakdown, cumulative and daily PnL charts (both end on the all-time total, live
     unrealized PnL included); funding includes the open positions' unsettled funding, fees the
@@ -264,7 +279,13 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     their points and USDe by their Predict weighted volume, then 10%; the days left; the address's
     referral points over every season), exchange-wide points, linked API signers. The USDe referral
     rewards are not public: the app reads `/v1/referral/summary` with the owner's wallet signature,
-    so the card points the owner to Meridian's Referrals page.
+    so the card points the owner to Meridian's Referrals page. A *Last distribution* tile: what
+    the most recent distribution added (`totalPoints` − `previousTotalPoints`, referral likewise).
+    The signers table names each kind (the app's trading session, an API key), links the blocks
+    they were linked and revoked in (`revokedAt`), and gives the account's quota
+    (`/v1/linked-signer/quota`: 23 signers per 7 days, refreshable 336 hours before expiry, Oct 21).
+    A signer's address searched, or opened as an account, is said to be one
+    (`/v1/linked-signer/address/{address}`; the record does not say whose).
 * **Favorites** – starred accounts with live equity, in the home page's order, with the names
   given there (a row's pencil names it too; stored in this browser only: `U.favorites`, label,
   reorder).
