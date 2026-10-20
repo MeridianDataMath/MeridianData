@@ -1047,6 +1047,29 @@
   // =====================================================================
   // Rewards
   // =====================================================================
+  // Meridian's referral program (its announcement, passed on by the site's owner 2026-10-20): until 31 Dec 2026 a referrer
+  // gets 20% of the perps fees its referees pay (in USDe), 20% of the Meridian Points they earn, and USDe based on their
+  // weighted volume on Meridian Predict; from 1 Jan 2027 the rate is 10%. Referral points are public (points/summary,
+  // referralPoints); the USDe rewards are not: the app reads /v1/referral/summary with the owner's wallet signature.
+  const REF_PROMO_END = Date.UTC(2027, 0, 1);   // the end of 31 Dec 2026 (UTC)
+  const REF_TERMS = {
+    promo: (t = Date.now()) => t < REF_PROMO_END,
+    pointsShare: (t = Date.now()) => (t < REF_PROMO_END ? '20% until 31 Dec 2026, then 10%' : '10%'),
+    daysLeft: (t = Date.now()) => Math.max(0, Math.ceil((REF_PROMO_END - t) / 86400000)),
+  };
+  /** The referral program, and what this address's public figure, its referral points, comes to over every season. */
+  function referralCard(seasons) {
+    const t = Date.now(), promo = REF_TERMS.promo(t), days = REF_TERMS.daysLeft(t);
+    const all = U.sum(seasons, (s) => U.num(s.referralPoints)), cur = seasons[0];
+    return h('div.card',
+      h('div.row', { style: { marginBottom: '8px', gap: '8px', alignItems: 'baseline' } }, h('h2', 'Referral program'), UI.chip(promo ? '20% until 31 Dec' : '10%', promo ? 'amber' : ''), h('span.grow'), promo ? h('span.dim.small', days + (days === 1 ? ' day' : ' days') + ' left at 20%') : null),
+      h('p.muted', { style: { margin: '0 0 12px', maxWidth: '780px' } }, promo
+        ? 'Meridian pays a referrer part of what the people it referred bring in. Until 31 Dec 2026: 20% of the perps fees they pay, in USDe; 20% of the Meridian Points they earn; and USDe based on their weighted volume on Meridian Predict. From 1 Jan 2027 the rate goes back to 10%.'
+        : 'Meridian pays a referrer part of what the people it referred bring in: 10% of the perps fees they pay, in USDe, and of the Meridian Points they earn, and USDe based on their weighted volume on Meridian Predict (it was 20% until 31 Dec 2026).'),
+      h('div.stats',
+        withTitle(UI.stat('Referral points', U.fmtNum(all, 0), seasons.length > 1 ? 'all ' + seasons.length + ' seasons' : cur ? 'season ' + cur.season : 'none yet'), 'Public: Meridian\'s points data gives every address the points credited to it for the people it referred')),
+      h('div.small.dim', { style: { marginTop: '10px' } }, 'Its USDe referral rewards, the fee share and the Predict rewards, are not public: Meridian\'s app shows them only to the address\'s owner, after a signature from its wallet, on the ', h('a', { href: A.REFERRALS_URL, target: '_blank', rel: 'noopener' }, 'Referrals page'), '.'));
+  }
   async function mountRewards(el, st, cx) {
     const { addr, sa } = st;
     U.replace(el, UI.loading('Loading points…'));
@@ -1064,8 +1087,9 @@
       cards.push(h('div.card', h('div.row', { style: { marginBottom: '12px' } }, h('h2', 'Season ' + s.season), UI.chip('Tier ' + (s.tier != null ? s.tier : '—'), 'accent'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(s.updatedAt))),
         h('div.stats', UI.stat('Rank', s.rank ? '#' + s.rank : '—', s.previousRank > 0 && s.previousRank !== s.rank ? 'was #' + s.previousRank : null),
           withTitle(UI.stat('Total points', U.fmtNum(tp + rp, 0), U.fmtNum(tp, 0) + ' trading · ' + U.fmtNum(rp, 0) + ' referral'), 'Trading points plus referral points, as Meridian\'s points page shows the total'),
+          withTitle(UI.stat('Referral points', U.fmtNum(rp, 0), rp > 0 && tp + rp > 0 ? U.fmtPct((rp / (tp + rp)) * 100, { dp: 1 }) + ' of its points' : 'none this season'), 'Points from the people this address referred: Meridian\'s referral program gives a referrer a share of the points they earn (' + REF_TERMS.pointsShare() + ')'),
           withTitle(UI.stat('Share of season', share != null ? U.fmtPct(share, { dp: 4 }) : '—', total ? 'of ' + U.fmtCompact(total.totalPoints) + ' distributed' : null), 'This address\'s trading points ÷ all trading points distributed in the season (referral points left out of both)')),
-        h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs, h('div.chart-note', 'Trading plus referral points per epoch, as Meridian\'s points history shows them')));
+        h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs, h('div.chart-note', 'Trading and referral points per epoch, as Meridian\'s points history shows them')));
       // epoch history (probe epochs until two consecutive empties)
       (async () => {
         const pts = []; let misses = 0;
@@ -1076,9 +1100,12 @@
           misses = 0; for (const r of rows) pts.push({ epoch: e, name: r.name, points: U.num(r.points), ref: U.num(r.referralPoints), t: r.endedAt || r.startedAt });
         }
         if (!pts.length) { U.replace(epochs, UI.empty('No epoch breakdown available')); return; }
-        C.bars(cv, pts.map((p) => 'E' + p.epoch), pts.map((p) => p.points + p.ref), { fmt: (v) => U.fmtNum(v, 0) + ' pts', axisFmt: (v) => U.fmtCompact(v) });
+        // trading and referral points stacked, so the epochs a referral brought points in stand out
+        const col = C.colors();
+        C.stackedBars(cv, pts.map((p) => 'E' + p.epoch), [{ label: 'Trading', values: pts.map((p) => p.points), color: col.accent }, { label: 'Referral', values: pts.map((p) => p.ref), color: col.amber }], { fmt: (v) => U.fmtNum(v, 0) + ' pts', axisFmt: (v) => U.fmtCompact(v) });
       })();
     }
+    cards.push(referralCard(seasons));
     if (total) cards.push(h('div.card', h('div.row', h('h2', 'Exchange-wide points'), h('span.grow'), h('span.dim.small', 'updated ' + U.fmtAgo(total.updatedAt))), h('div.stats', { style: { marginTop: '10px' } }, UI.stat('Total distributed', U.fmtNum(total.totalPoints, 0)), UI.stat('Referral points', U.fmtNum(total.referralPoints, 0)))));
     cards.push(UI.card('Linked signers (API keys)', UI.table({
       cols: [

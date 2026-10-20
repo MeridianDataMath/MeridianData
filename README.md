@@ -249,8 +249,13 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
     per-market breakdown, cumulative and daily PnL charts (both end on the all-time total, live
     unrealized PnL included); funding includes the open positions' unsettled funding, fees the
     mPerp position fees.
-  * *Rewards* – points per season (rank, tier, referral points, epoch history), exchange-wide
-    points, linked API signers.
+  * *Rewards* – points per season (rank, tier, referral points and their share of its points,
+    trading and referral points per epoch stacked), a *Referral program* card (Meridian's terms as
+    announced: until 31 Dec 2026 a referrer gets 20% of its referees' perps fees in USDe, 20% of
+    their points and USDe by their Predict weighted volume, then 10%; the days left; the address's
+    referral points over every season), exchange-wide points, linked API signers. The USDe referral
+    rewards are not public: the app reads `/v1/referral/summary` with the owner's wallet signature,
+    so the card points the owner to Meridian's Referrals page.
 * **Favorites** – starred accounts with live equity, in the home page's order, with the names
   given there (a row's pencil names it too; stored in this browser only: `U.favorites`, label,
   reorder).
@@ -283,7 +288,14 @@ round trip, maintenance flag and clock offset; the Predict builder writes a few 
   cards stay closed until opened, and the account list is re-read on every scan;
   live trade tape (taker/maker links to the accounts); liquidation feed; funding table (rate
   charged at the last hourly funding, projected next charge, cumulative funding per unit of
-  the base asset).
+  the base asset), and under it the mPerps' *Position fees* (Meridian's docs: Position Fees):
+  charged instead of funding while a market's reference market is closed (its mark-price gaps),
+  every 15 minutes, longs and shorts alike, paid to the exchange. Per market: now (closed until /
+  next closure), the next projected charge as the app shows it (`/v1/position-fee/projected-rate`,
+  "0.0000% / 15m at 23:15"), the last weekend's applied charges added up (`/v1/position-fee`,
+  as a share of a position's value and per $10K; Oct 17-19: QQQ 0.0045%, silver 0.0025%, SPY
+  0.0006%, gold 0), and the product's `cumulativePositionFeeUsd` per unit; a paused funding
+  cell names the next charge too.
 * **Tax center** (`#/tax?address=0x…`; the page is `js/pages/tax.js`, its parts `js/tax/*.js` under `MD.tax`) – tax
   records for one wallet: its Meridian perps subaccount and its Meridian Predict activity, for a fiscal year or any
   range of local dates, in the time zone and the reporting currency the reader picks. Everything is computed in the

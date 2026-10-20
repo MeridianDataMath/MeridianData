@@ -14,6 +14,7 @@
   A.shareUrl = (kind, address) => A.SITE_URL + '/' + kind + '/' + String(address || '').toLowerCase();
   A.REF = 'BJ9Y51H9XB1L';   // the site owner's Meridian referral code: every link to the Meridian app carries it
   A.APP_URL = 'https://app.meridian.xyz/?ref=' + A.REF;
+  A.REFERRALS_URL = 'https://app.meridian.xyz/referrals?ref=' + A.REF;   // the app's Referrals page (an owner's own rewards)
 
   // ---------- fetch with cache / in-flight dedupe ----------
   const cache = new Map();
@@ -155,6 +156,17 @@
   A.liquidations = (limit, o) => A.get(A.BASE + '/v1/position/liquidation' + qs({ limit: limit || 50 }), { ttl: 15000, signal: o && o.signal }).then((r) => r.data || []);
   A.gaps = (ids, start, end, o) => A.page(A.BASE, '/v1/product/mark-price-gap', { productIds: ids, startTime: start, endTime: end }, { ttl: 60000, maxPages: 5, signal: o && o.signal });
   A.fundingHistory = (pid, start, end, o) => A.page(A.BASE, '/v1/funding', { productId: pid, startTime: start, endTime: end }, { ttl: 60000, maxPages: 10, signal: o && o.signal });
+  /** mPerp position fees (Meridian's docs: Position Fees, mPerp and Position-Fee API). The next projected charge of each
+   *  product inside a mark-price gap, by product id: {productId, scheduledAt, cadenceMinutes, positionFeeRate (a decimal
+   *  rate per charge, which can change before scheduledAt)}; a product outside a gap has none. */
+  A.projectedPositionFee = async (ids, o) => {
+    if (!ids || !ids.length) return {};
+    const r = await A.get(A.BASE + '/v1/position-fee/projected-rate' + qs({ productIds: ids }), { ttl: 30000, signal: o && o.signal });
+    const m = {}; for (const x of (r && r.data) || []) m[x.productId] = x; return m;
+  };
+  /** The position-fee charges applied to a product in a window: [{chargedAt, cadenceMinutes, positionFeeRate,
+   *  chargePerUnitUsd}], oldest first (a weekend at 15 minutes is about 190). */
+  A.positionFeeApplied = (pid, start, end, o) => A.page(A.BASE, '/v1/position-fee', { productId: pid, startTime: start, endTime: end, order: 'asc' }, { ttl: 10 * 60000, maxPages: 5, signal: o && o.signal });
   A.maintenance = (o) => A.get(A.BASE + '/v1/maintenance', { ttl: 60000, signal: o && o.signal });
   A.serverTime = (o) => A.get(A.BASE + '/v1/time', { signal: o && o.signal });
 

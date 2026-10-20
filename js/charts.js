@@ -145,6 +145,26 @@
     return chart;
   };
 
+  /** Bars stacked per label from several series [{label, values, color}], with a legend (e.g. trading and referral points
+   *  per epoch). opts: {fmt (tooltip values; U.fmtNum at 0 dp unless given), axisFmt (value-axis ticks)} */
+  C.stackedBars = function (canvas, labels, series, opts = {}) {
+    if (!window.Chart) return null;
+    C.destroy(canvas);
+    const col = C.colors();
+    const fmt = opts.fmt || ((v) => U.fmtNum(v, 0));
+    const chart = new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets: series.map((s) => ({ label: s.label, data: s.values, stack: 'all', backgroundColor: hexA(s.color, 0.6), borderColor: s.color, borderWidth: 1, borderRadius: 3, maxBarThickness: 26 })) },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { stacked: true, grid: { display: false }, border: { display: false } }, y: { stacked: true, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { callback: opts.axisFmt || C.axisUsd } } },
+        plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: col.text, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } }, tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, callbacks: { label: (it) => it.dataset.label + ': ' + fmt(it.raw) } } },
+      },
+    });
+    canvas.__chart = chart;
+    return chart;
+  };
+
   /** Two series side by side per label (e.g. implied vs realized probability per odds bucket), in percent. */
   C.pairedBars = function (canvas, labels, a, b, opts = {}) {
     if (!window.Chart) return null;

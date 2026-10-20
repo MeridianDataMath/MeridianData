@@ -70,3 +70,23 @@ test('live-feed rows carry the product lot, so sizes print at the lot decimals a
   assert.equal(U.fmtQty(w[0].size, w[0].lot), '0.00610');     // padded to the lot, as the app pads
   assert.deepEqual(D.wsTrades(p, { data: {} }), []);
 });
+
+test('mPerp position fees: the last weekend closure (not a weekday evening hour) and its charges added up', () => {
+  const H = 3600000, t = Date.UTC(2026, 9, 20, 21, 30);
+  const gaps = [
+    { productId: 'xau', startTime: Date.UTC(2026, 9, 16, 21), endTime: Date.UTC(2026, 9, 18, 22) },   // the weekend, 49 h
+    { productId: 'xau', startTime: Date.UTC(2026, 9, 19, 21), endTime: Date.UTC(2026, 9, 19, 22) },   // a weekday evening, 1 h
+    { productId: 'xau', startTime: Date.UTC(2026, 9, 20, 21), endTime: Date.UTC(2026, 9, 20, 22) },   // still open at t
+    { productId: 'xau', startTime: Date.UTC(2026, 9, 9, 21), endTime: Date.UTC(2026, 9, 11, 22) },    // the weekend before
+    { productId: 'spy', startTime: Date.UTC(2026, 9, 17, 0), endTime: Date.UTC(2026, 9, 19, 0) },
+  ];
+  assert.equal(D.lastLongGap(gaps, 'xau', t).endTime, Date.UTC(2026, 9, 18, 22));
+  assert.equal(D.lastLongGap(gaps, 'spy', t).startTime, Date.UTC(2026, 9, 17, 0));
+  assert.equal(D.lastLongGap(gaps, 'qqq', t), null);
+  assert.equal(D.lastLongGap(gaps, 'xau', t, 0.5 * H).endTime, Date.UTC(2026, 9, 19, 22), 'shorter windows count when asked');
+  // QQQ, Oct 17-19: 191 charges every 15 minutes; three of them here
+  const s = D.chargesSum([{ positionFeeRate: '0.000001', chargePerUnitUsd: '0.000707', cadenceMinutes: 15 }, { positionFeeRate: '0.0000014', chargePerUnitUsd: '0.00099', cadenceMinutes: 15 }, { positionFeeRate: '0', chargePerUnitUsd: '0', cadenceMinutes: 15 }]);
+  assert.equal(s.n, 3); assert.equal(s.cadence, 15);
+  assert.ok(Math.abs(s.rate - 0.0000024) < 1e-12); assert.ok(Math.abs(s.perUnit - 0.001697) < 1e-12); assert.ok(Math.abs(s.maxRate - 0.0000014) < 1e-12);
+  assert.deepEqual(D.chargesSum([]), { n: 0, rate: 0, perUnit: 0, maxRate: 0, cadence: null });
+});

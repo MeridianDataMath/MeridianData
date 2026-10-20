@@ -22,13 +22,25 @@
     const gap = fundingGap(p, gaps, t);
     return { lastPct: ratePct(p.fundingRate1h), projPct: raw == null ? null : ratePct(raw), aprPct: raw == null ? null : ratePct(raw, 24 * 365), paused: !!gap, until: gap ? gap.endTime : null };
   };
+  // ---- mPerp position fees (Meridian's docs: Position Fees): charged on longs and shorts alike while the reference market
+  // is closed (a mark-price gap), every few minutes (15 so far), by position size, paid to the exchange ----
+  /** The last finished gap of a product at least minMs long (the weekend; gold and silver also close an hour each
+   *  weekday evening, SPY and QQQ only at weekends, as of Oct 2026), or null. */
+  const lastLongGap = (gaps, pid, t, minMs = 12 * 3600000) => (gaps || []).filter((g) => g.productId === pid && g.endTime <= t && g.endTime - g.startTime >= minMs).sort((a, b) => b.endTime - a.endTime)[0] || null;
+  /** A window's applied charges added up: {n, rate (Σ of the per-charge rates: about the share of a position's value the
+   *  window cost), perUnit (Σ USD per unit), maxRate, cadence}. */
+  const chargesSum = (rows) => {
+    const list = rows || []; let rate = 0, perUnit = 0, maxRate = 0;
+    for (const r of list) { const x = U.num(r.positionFeeRate); rate += x; perUnit += U.num(r.chargePerUnitUsd); if (x > maxRate) maxRate = x; }
+    return { n: list.length, rate, perUnit, maxRate, cadence: list.length ? U.num(list[0].cadenceMinutes) || null : null };
+  };
   // live-feed rows from the REST history and from a WebSocket fill: the product's tick and lot ride along, so price and
   // size print at the app's decimals (a size at a fixed 4 dp showed a 1.19645 BTC fill as 1.1965, off the lot grid)
   const restTrade = (p, r) => ({ id: r.id, t: r.createdAt, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: r.takerSide, size: r.filled, price: r.price, takerOrder: r.takerOrderId || null, makerOrder: r.makerOrderId || null });
   const wsTrades = (p, m) => { const d = m.data || {}; return (d.d || []).map((it) => ({ id: it.id, t: d.t || m.t, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: it.sd, size: it.sz, price: it.px, taker: it.sids && it.sids[0], maker: it.sids && it.sids[1], _new: true })); };
 
   MD.router.pages.dashboard = {
-    ratePct, fundingGap, fundingOf, restTrade, wsTrades,
+    ratePct, fundingGap, fundingOf, restTrade, wsTrades, lastLongGap, chargesSum,
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Dashboard'));
       const tiles = h('div.stats');
@@ -37,6 +49,7 @@
       const liqBody = h('div', UI.loading('Loading…'));
       const gapBody = h('div', UI.loading('Loading…'));
       const fundBody = h('div');
+      const pfBody = h('div');   // the Funding card's mPerp position fees, under the funding table
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
       const catSel = h('span.seg-box');   // the Markets' category buttons (renderCatSel); a phone scrolls them sideways
       // stop map and liquidation map elements: both cards are closed on every visit, so the page does not scan every account
@@ -73,7 +86,7 @@
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody, pfBody),
         stopCard, liqCard)));
 
       const ref = await A.ref(ctx);
@@ -93,6 +106,50 @@
         const g = list[0];
         if (g.startTime <= t) return h('span.closure', 'closed · reopens in ' + U.fmtCountdown(g.endTime - t));
         return h('span.closure', { style: { color: 'var(--text-3)' } }, 'closes in ' + U.fmtCountdown(g.startTime - t));
+      };
+
+      // ---- mPerp position fees, under the funding table: the next projected charge while a market is closed (the app's
+      // "Next position fee"), the current or next closure, the last weekend's charges added up, and the per-unit total
+      // since launch (the product's cumulativePositionFeeUsd). The rate is set per charge: last weekend (Oct 17-19) QQQ's
+      // added up to 0.0045 %, gold's to 0 ----
+      const iso = ref.active.filter((p) => p.marginMode === 'ISOLATED'), isoIds = iso.map((p) => p.id);
+      let pfProj = {}; const pfLast = {};
+      const pfRate = (x) => U.fmtPct(U.num(x) * 100, { dp: 4 });   // a decimal rate per charge, printed as the app does (4 dp)
+      const nextFee = (p) => { const x = pfProj[p.id]; return x ? `${pfRate(x.positionFeeRate)} / ${x.cadenceMinutes}m at ${U.fmtHM(x.scheduledAt)}` : null; };
+      function renderPf() {
+        if (!iso.length) { U.clear(pfBody); return; }
+        const t = Date.now();
+        const rows = iso.map((p) => ({ p, gap: (gapsBy[p.id] || []).filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime)[0] || null, last: pfLast[p.id] || null }));
+        const nowCell = (r) => { const g = r.gap; if (!g) return h('span.dim', 'open');
+          return g.startTime <= t ? h('span.closure', 'closed · reopens ' + U.fmtWhen(g.endTime)) : h('span.dim', 'open · next closure ' + U.fmtWhen(g.startTime) + ' → ' + U.fmtWhen(g.endTime)); };
+        const lastCell = (r) => { const s = r.last; if (!s) return h('span.dim', '—'); const base = r.p.baseTokenName || 'unit';
+          return h('span', { title: `${U.fmtWhen(s.g.startTime)} → ${U.fmtWhen(s.g.endTime)}: ${s.n} charges${s.cadence ? ', every ' + s.cadence + ' min' : ''}, adding up to ${pfRate(s.rate)} of a position's value, long or short alike (${U.fmtUsd(s.perUnit, { dp: 4 })} per ${base}; the largest single charge ${U.fmtPct(s.maxRate * 100, { dp: 6 })})` + (s.truncated ? ' · more charges than were read' : '') },
+            pfRate(s.rate), h('span.xs.dim', ' ≈ ' + U.fmtUsd(s.rate * 10000, { dp: 2 }) + ' per $10K')); };
+        const cads = Array.from(new Set(Object.values(pfLast).map((s) => s.cadence).concat(Object.values(pfProj).map((x) => U.num(x.cadenceMinutes))).filter((x) => x > 0)));
+        U.replaceLive(pfBody, h('div', { style: { borderTop: '1px solid var(--border-2)' } },
+          h('div.card-head', h('h3', 'Position fees (mPerps)'), h('span.dim.small', 'charged instead of funding while the reference market is closed · the next charge as Meridian\'s app shows it · last weekend added up')),
+          UI.table({ cols: [
+            { key: 'm', label: 'Market', render: (r) => r.p.displayTicker },
+            { key: 'now', label: 'Now', render: nowCell },
+            { key: 'next', label: 'Next charge', num: true, title: 'The projected rate of the next position fee, as Meridian\'s app shows it (Next position fee): per charge, how often, and when; it can change before then. Only while the market is closed', render: (r) => { const x = nextFee(r.p); return x ? h('span', x) : h('span.dim', { title: 'Charged only while the market is closed' }, '—'); } },
+            { key: 'wk', label: 'Last weekend', num: true, title: 'The charges of the last weekend closure added up: about the share of a position\'s value it cost, long or short alike; hover a figure for the window and the dollars per unit', render: lastCell },
+            { key: 'cum', label: 'Since launch / unit', num: true, title: 'Position fee paid by a one-unit position held through every closure since launch, long or short alike: the sum of the per-unit charges, as Meridian\'s product data reports it', render: (r) => U.fmtUsd(r.p.cumulativePositionFeeUsd, { dp: 4 }) + ' / ' + (r.p.baseTokenName || 'unit') },
+          ], rows, phone: { title: 'm', aside: 'wk', hide: ['cum'] } }),
+          h('div.footer-note', 'Meridian charges a position fee on mPerp positions while their reference market is closed (the mark-price gaps listed under Market closures): ' + (cads.length === 1 ? 'every ' + cads[0] + ' minutes' : 'every few minutes') + ', on longs and shorts alike, by position size, paid to the exchange rather than between longs and shorts; funding is paused meanwhile. Each charge has its own rate (', h('a', { href: 'https://docs.meridian.xyz/trading/perpetual-futures/position-fees', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), ').')));
+      }
+      const loadPf = async () => {
+        if (!iso.length) return;
+        try { pfProj = await A.projectedPositionFee(isoIds, ctx); } catch (e) { if (isAbort(e)) return; }
+        try {
+          const t = Date.now(); const past = await A.gaps(isoIds, t - 9 * U.DAY, t, ctx);
+          // a weekend's charges are read once: the next weekend replaces them
+          await Promise.all(iso.map(async (p) => {
+            const g = lastLongGap(past, p.id, t); if (!g || (pfLast[p.id] && pfLast[p.id].g.endTime === g.endTime)) return;
+            const rows = await A.positionFeeApplied(p.id, g.startTime, g.endTime, ctx);
+            pfLast[p.id] = Object.assign({ g, truncated: !!rows.truncated }, chargesSum(rows));
+          }));
+        } catch (e) { if (isAbort(e)) return; }
+        renderPf();
       };
 
       function renderTiles() {
@@ -122,9 +179,9 @@
       }
       // funding cells: the app's format (4 dp, a minus but no plus), greyed "Paused" on an mPerp market inside a closure
       const pct4 = (x) => U.fmtPct(x, { dp: 4 });
-      const pausedEl = (f) => h('span.dim', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): no funding is charged in the window, a position fee is charged instead · last charge ${pct4(f.lastPct)}` }, 'Paused');
+      const pausedEl = (f, p) => h('span.dim', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): no funding is charged in the window, a position fee is charged instead${p && nextFee(p) ? ' (next: ' + nextFee(p) + ')' : ''} · last charge ${pct4(f.lastPct)}` }, 'Paused');
       const rateEl = (x, title) => (x == null ? h('span.dim', { title: 'projected rate not available yet' }, '—') : h('span', { class: U.pnlClass(x), title: title || null }, pct4(x)));
-      const projEl = (f) => (f.paused ? pausedEl(f) : rateEl(f.projPct, 'last hourly charge ' + pct4(f.lastPct)));
+      const projEl = (f, p) => (f.paused ? pausedEl(f, p) : rateEl(f.projPct, 'last hourly charge ' + pct4(f.lastPct)));
       // Markets by category, as Hyperliquid groups them (AN.MARKET_CATS: Crypto, Stocks, Indices, Commodities, FX, Pre-IPO),
       // each under a header with its count and totals (a category Meridian has no market in, one line saying so); the
       // buttons show one category (remembered in this browser), and a column header sorts the markets inside each category
@@ -168,7 +225,7 @@
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, render: (r) => h('span', h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
             // the app's Funding column: the projected rate, not the last charge (they can differ in sign); Paused in a closure
-            { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f) },
+            { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f, r.p) },
             { key: 'oi', label: 'Open interest', num: true, sortVal: 1, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
             { key: 'vol', label: '24h volume', num: true, sortVal: 1, title: '24 h traded quantity (base units) × current mark price', render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
             { key: 'spark', label: '7d', render: (r) => { const c = sparks[r.p.ticker] || (sparks[r.p.ticker] = h('canvas.spark', { width: 110, height: 30 })); return c; } },
@@ -188,10 +245,10 @@
           cols: [
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
             capCol,
-            { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f) },
+            { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f, r.p) },
             // history, so it stands in a closure too: the charge taken before the market closed
             { key: 'fr', label: 'Last 1h', num: true, sortVal: 1, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
-            { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure', render: (r) => (r.f.paused ? pausedEl(r.f) : rateEl(r.f.aprPct)) },
+            { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure', render: (r) => (r.f.paused ? pausedEl(r.f, r.p) : rateEl(r.f.aprPct)) },
             { key: 'base', label: 'Baseline / clamp / max APR', num: true, render: (r) => h('span.dim', U.fmtPct(U.num(r.p.fundingBaselineApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingClampApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingMaxApr) * 100, { dp: 0 })) },
             // a per-unit index (the sum of the hourly per-unit charges), not money paid on the market
             { key: 'cum', label: 'Cumulative funding / unit', num: true, title: 'Funding paid by a one-unit long held since funding began (negative = received); the sum of the hourly per-unit charges', render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) + ' / ' + (r.p.baseTokenName || 'unit') },
@@ -207,7 +264,7 @@
       }
       function drawSparks() { for (const t of Object.keys(sparkData)) { const cv = sparks[t]; if (cv && cv.isConnected && !cv.__chart) C.sparkline(cv, sparkData[t]); } }
       const renderMarketsThrottled = U.throttle(() => { renderMarkets(); renderTiles(); }, 1500);
-      renderTiles(); renderMarkets(); loadSparks();
+      renderTiles(); renderMarkets(); loadSparks(); loadPf();
       // products (last funding charge, cumulative funding, open interest, REST volume) and the projected rates
       // change on the exchange every hour or faster; refresh them every minute on a page left open
       const refreshRest = async () => {
@@ -218,6 +275,7 @@
           renderMarketsThrottled();
         } catch (_) {}
         try { const t = Date.now(); setGaps(await A.gaps(ids, t, t + 7 * U.DAY, ctx)); renderGaps(); renderMarketsThrottled(); } catch (_) {}
+        loadPf();   // the next position fee changes every charge; the last weekend's figure only after a new weekend
       };
       const restT = setInterval(refreshRest, 60000); ctx.onCleanup(() => clearInterval(restT));
 
