@@ -26,6 +26,14 @@
   }
   A.ApiError = ApiError;
 
+  /** The rate-limit budget of this browser's address on each Meridian host, from the headers of its last answer
+   *  (RateLimit-Limit / -Remaining / -Reset, Meridian's docs: System Limits): { host: { limit, remaining, reset (s), at } }. */
+  A.rateLimits = {};
+  const noteLimit = (url, res) => {
+    const lim = res.headers.get('ratelimit-limit'); if (lim == null) return;
+    let host = ''; try { host = new URL(url).host; } catch (_) { return; }
+    A.rateLimits[host] = { limit: U.num(lim), remaining: U.num(res.headers.get('ratelimit-remaining')), reset: U.num(res.headers.get('ratelimit-reset')), at: Date.now() };
+  };
   async function rawGet(url, signal) {
     let res;
     try {
@@ -34,11 +42,13 @@
       if (e && e.name === 'AbortError') throw e;
       throw new ApiError(0, 'Network error: ' + (e && e.message ? e.message : e), url);
     }
+    noteLimit(url, res);
     if (res.status === 429) {
-      const reset = parseInt(res.headers.get('ratelimit-reset') || '3', 10);
+      const reset = parseInt(res.headers.get('retry-after') || res.headers.get('ratelimit-reset') || '3', 10);
       await U.sleep(Math.min(10, Math.max(1, reset)) * 1000);
       if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
       res = await fetch(url, { signal, headers: { accept: 'application/json' } });
+      noteLimit(url, res);
     }
     const text = await res.text();
     let body = null;
@@ -169,6 +179,12 @@
   A.positionFeeApplied = (pid, start, end, o) => A.page(A.BASE, '/v1/position-fee', { productId: pid, startTime: start, endTime: end, order: 'asc' }, { ttl: 10 * 60000, maxPages: 5, signal: o && o.signal });
   A.maintenance = (o) => A.get(A.BASE + '/v1/maintenance', { ttl: 60000, signal: o && o.signal });
   A.serverTime = (o) => A.get(A.BASE + '/v1/time', { signal: o && o.signal });
+  /** What each route costs in rate-limit points: [{method, path, protocol, type FIXED (fixedPoints) or PAGINATED
+   *  (basePoints + pointsPerRow per row returned)}]. */
+  A.rateLimitConfig = (o) => A.get(A.BASE + '/v1/rate-limit/config', { ttl: 10 * 60000, signal: o && o.signal }).then((r) => (r && r.data) || []);
+  /** The EIP-712 domain the exchange's signed actions use ({ domain: {name, version, chainId, verifyingContract (the
+   *  exchange contract deposits go to)}, signatureTypes }). */
+  A.rpcConfig = (o) => A.get(A.BASE + '/v1/rpc/config', { ttl: 60 * 60000, signal: o && o.signal });
 
   // ---------- Accounts ----------
   A.allSubaccounts = (o) => A.page(A.BASE, '/v1/subaccount/all', {}, { ttl: (o && o.ttl) || 60000, maxPages: 100, signal: o && o.signal });

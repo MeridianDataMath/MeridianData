@@ -211,7 +211,16 @@ keeps its newest row from an earlier snapshot no older than 7 days, marked `carr
 trading and Home say how many rows are carried or missing, and a carried row reads "older". `#/status` (**Data status**, linked from the home page's footer and from every
 "stale" note) shows both snapshots' age, builder, counts and build time, plus the exchange's
 round trip, maintenance flag and clock offset; the Predict builder writes a few hundred bytes to
-`data/predict-status.json` for it so the page does not need the 1 MB snapshot.
+`data/predict-status.json` for it so the page does not need the 1 MB snapshot. Its **Exchange
+configuration** card reads the exchange's own set-up: the signing domain from `/v1/rpc/config`
+(the exchange contract deposits go to, Robinhood Chain 4663, the nine signed actions); the
+tokens from `/v1/token` by the docs' kinds (`tokenKind`: concrete merUSD with its deposit
+minimum and fees, withdrawal fee and LayerZero OFT adapter; the synthetic quote tokens, each an
+mPerp's isolated margin pool backed by USD, their accounting address spelling the name; the
+virtual base tokens, names only), each with the block it was added in; and the API rate limits:
+this browser's budget on each host from the `RateLimit-*` headers of the last answer
+(`A.rateLimits`, kept by `rawGet`; 20,000 points a window per address, Oct 21) and what each
+route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a share a row).
 
 ### Privacy notes
 

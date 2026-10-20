@@ -347,6 +347,7 @@ a.addr:hover { text-decoration: underline; }
 .kv .k { color: var(--text-3); white-space: nowrap; }
 .kv .v { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kv.wrap-v .v { white-space: normal; overflow-wrap: anywhere; }   /* sentences, not figures (Data status): wrap on a phone rather than end in "…" */
+.kv.left .v { text-align: left; }   /* a page-wide card: the value beside its label, not across the page */
 .kv .sep { grid-column: 1 / -1; border-top: 1px solid var(--border-2); margin: 4px 0; }
 
 /* Tables */
