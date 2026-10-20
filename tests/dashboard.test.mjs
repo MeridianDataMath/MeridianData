@@ -57,6 +57,8 @@ test('fundingOf: the projected rate from REST is the figure, the WebSocket fr1h 
   const x = D.fundingOf(XAU, { projected, live: {}, gaps, t: T0 + 6 * 60000 });
   assert.equal(x.paused, true); assert.equal(x.until, T0 + H);
   assert.equal(pct4(x.lastPct), '0.0077%');
+  // the Annualized column shows the last charge annualized while paused (the projected rate is 0 in a closure)
+  assert.equal(x.lastAprPct, D.ratePct(XAU.fundingRate1h, 8760));
   assert.equal(D.fundingOf(XAU, { projected, live: {}, gaps, t: T0 + H }).paused, false);
 });
 

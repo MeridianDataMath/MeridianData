@@ -20,7 +20,7 @@
     const pj = projected && projected[p.id], has = (v) => v != null && v !== '';
     const raw = pj && has(pj.fundingRateProjected1h) ? pj.fundingRateProjected1h : live && has(live.fr1h) ? live.fr1h : null;
     const gap = fundingGap(p, gaps, t);
-    return { lastPct: ratePct(p.fundingRate1h), projPct: raw == null ? null : ratePct(raw), aprPct: raw == null ? null : ratePct(raw, 24 * 365), paused: !!gap, until: gap ? gap.endTime : null };
+    return { lastPct: ratePct(p.fundingRate1h), lastAprPct: ratePct(p.fundingRate1h, 24 * 365), projPct: raw == null ? null : ratePct(raw), aprPct: raw == null ? null : ratePct(raw, 24 * 365), paused: !!gap, until: gap ? gap.endTime : null };
   };
   // ---- mPerp position fees (Meridian's docs: Position Fees): charged on longs and shorts alike while the reference market
   // is closed (a mark-price gap), every few minutes (15 so far), by position size, paid to the exchange ----
@@ -182,6 +182,10 @@
       const pausedEl = (f, p) => h('span.dim', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): no funding is charged in the window, a position fee is charged instead${p && nextFee(p) ? ' (next: ' + nextFee(p) + ')' : ''} · last charge ${pct4(f.lastPct)}` }, 'Paused');
       const rateEl = (x, title) => (x == null ? h('span.dim', { title: 'projected rate not available yet' }, '—') : h('span', { class: U.pnlClass(x), title: title || null }, pct4(x)));
       const projEl = (f, p) => (f.paused ? pausedEl(f, p) : rateEl(f.projPct, 'last hourly charge ' + pct4(f.lastPct)));
+      // in a closure Meridian projects no funding (its projected rate is 0, the app's 1y figure paused): the last hourly
+      // charge before the closure, annualized, says what the market was costing and will likely cost again once it reopens
+      const lastAprEl = (f, p) => h('span', { title: `Funding is paused while this mPerp market is closed (until ${U.fmtWhen(f.until)}): Meridian projects none in the window, so its app's 1y figure is paused. This is the last hourly charge before the closure (${pct4(f.lastPct)}) × 24 × 365${p && nextFee(p) ? '; meanwhile a position fee is charged (next: ' + nextFee(p) + ')' : ''}` },
+        h('span.dim', { class: U.pnlClass(f.lastAprPct) }, pct4(f.lastAprPct)), h('span.xs.dim', ' last'));
       // Markets by category, as Hyperliquid groups them (AN.MARKET_CATS: Crypto, Stocks, Indices, Commodities, FX, Pre-IPO),
       // each under a header with its count and totals (a category Meridian has no market in, one line saying so); the
       // buttons show one category (remembered in this browser), and a column header sorts the markets inside each category
@@ -195,7 +199,7 @@
       // the Funding table: the same categories (those with markets) in the same order, the largest asset first, until a
       // column is clicked; a paused market (an mPerp inside a closure) sorts last on the projected figures
       let fundSort = { key: 'cap', desc: true };
-      const FUND_SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? null : r.f.aprPct) };
+      const FUND_SORTS = { cap: sizeOf, m: (r) => r.p.displayTicker, proj: (r) => (r.f.paused ? null : r.f.projPct), fr: (r) => r.f.lastPct, apr: (r) => (r.f.paused ? r.f.lastAprPct : r.f.aprPct) };
       // both tables' size column: the figure for a coin (CoinGecko), a metal or an index fund (estimates, ≈); an order only
       // for the rest
       const SIZE_TIP = { coingecko: 'CoinGecko market cap', metal: 'Estimated: the metal above ground (World Gold Council and others) × the mark price', fund: 'Estimated: the fund\'s shares outstanding (October 2026) × the mark price, the value of all its shares' };
@@ -248,7 +252,7 @@
             { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f, r.p) },
             // history, so it stands in a closure too: the charge taken before the market closed
             { key: 'fr', label: 'Last 1h', num: true, sortVal: 1, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
-            { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure', render: (r) => (r.f.paused ? pausedEl(r.f, r.p) : rateEl(r.f.aprPct)) },
+            { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure. While an mPerp market is closed (funding paused, Meridian projects none), its last hourly charge × 24 × 365 instead, marked "last"', render: (r) => (r.f.paused ? lastAprEl(r.f, r.p) : rateEl(r.f.aprPct)) },
             { key: 'base', label: 'Baseline / clamp / max APR', num: true, render: (r) => h('span.dim', U.fmtPct(U.num(r.p.fundingBaselineApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingClampApr) * 100, { dp: 0 }) + ' / ' + U.fmtPct(U.num(r.p.fundingMaxApr) * 100, { dp: 0 })) },
             // a per-unit index (the sum of the hourly per-unit charges), not money paid on the market
             { key: 'cum', label: 'Cumulative funding / unit', num: true, title: 'Funding paid by a one-unit long held since funding began (negative = received); the sum of the hourly per-unit charges', render: (r) => U.fmtUsd(r.p.cumulativeFundingUsd) + ' / ' + (r.p.baseTokenName || 'unit') },
