@@ -590,3 +590,27 @@ test('a left-out wallet (U.EXCLUDED) is in no figure, on either side of a bet, n
   assert.deepEqual(snap.agg.bettors.map((b) => b.address), [ME]);
   assert.equal(snap.agg.tape.length, 1); assert.equal(snap.agg.bigWins.length, 1);
 });
+
+test('searching a wallet\'s predictions: every word anywhere in a leg, its category or tags, or a wallet; case and accents ignored', () => {
+  assert.deepEqual(P.searchWords('  Trump   Tariffs '), ['trump', 'tariffs']);
+  assert.deepEqual(P.searchWords(''), []);
+  assert.equal(P.fold('Kylian Mbappé'), 'kylian mbappe');
+  const combo = { cat: 'Mixed', predictor: ME, counterparty: MAKER, picks: [
+    { q: 'Will Trump announce new tariffs on China by October 31?', short: 'Trump tariffs', cat: 'Economy & Finance', tags: ['Trump', 'Tariffs'] },
+    { q: 'Will Kylian Mbappé win the Ballon d\'Or 2026?', short: 'Will Kylian Mbappé win the Ballon d\'Or 2026?', cat: 'Sports', tags: [] },
+  ] };
+  const single = { cat: 'Sports', predictor: ME, counterparty: MAKER, picks: [{ q: 'Lakers vs. Celtics: Lakers win?', cat: 'Sports', tags: [] }] };
+  const find = (q) => [combo, single].filter((n) => P.hasWords(P.searchText(n), P.searchWords(q)));
+  assert.deepEqual(find('trump'), [combo]);
+  assert.deepEqual(find('TRUMP mbappe'), [combo]);            // the words may sit in different legs
+  assert.deepEqual(find('trump lakers'), []);                 // every word, in one prediction
+  assert.deepEqual(find('sports'), [combo, single]);          // a leg's category
+  assert.deepEqual(find(MAKER.slice(0, 10)), [combo, single]); // a wallet's address
+  assert.deepEqual(find(''), [combo, single]);
+  // where to mark them: ranges of the original text, accents kept, overlaps merged
+  assert.deepEqual(P.hitRanges('Will Trump win? trump!', ['trump']), [[5, 10], [16, 21]]);
+  assert.deepEqual(P.hitRanges('Kylian Mbappé', ['mbappe']), [[7, 13]]);
+  assert.deepEqual(P.hitRanges('Fed Decision', ['dec', 'decision']), [[4, 12]]);
+  assert.deepEqual(P.hitRanges('Fed Decision', []), []);
+  assert.deepEqual(P.hitRanges(null, ['x']), []);
+});

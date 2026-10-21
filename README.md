@@ -1387,6 +1387,14 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     full prediction history, category and combo breakdown (also the **Predict** tab on every
     perps account page). The Tax center has a Predict card for the same wallet (both roles, three
     date bases, the gross split, its own report and tax-tool files: see *Tax center*).
+    - *Prediction history* has a search box: *trump* lists every prediction with a leg about
+      Trump. A prediction is found when every word of the search is in one of its legs'
+      questions, categories or tags, its category or a wallet's address, case and accents
+      ignored (`P.searchText`, *Mbappe* finds Mbappé); its matching legs come first and are marked,
+      and the card's note sums up what was found (*13 of 120 found · $317 staked · 1 won · 12
+      lost · PnL −$290*). Esc clears it; the words stay while the site is open, so the account's
+      Predict tab and the bettor page share them. A wallet file the snapshot capped searches the
+      predictions it holds.
     - *Chance now*: the legs multiplied (as independent), a leg Meridian has settled counting as
       won or lost (its estimatedPrice freezes before the settlement), an open one at Polymarket's
       price once loaded, else Meridian's estimate from the snapshot, marked. A Meridian-settled leg

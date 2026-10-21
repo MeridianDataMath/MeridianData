@@ -39,6 +39,16 @@
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const bettorLink = (a, n) => h('a.addr', { href: bettorUrl(a), title: a, onclick: (e) => e.stopPropagation() }, U.shortAddr(a, n || 4));
   const sideChip = (yes) => (yes == null ? h('span.dim', '—') : UI.chip(yes ? 'YES' : 'NO', yes ? 'green' : 'red'));
+  /** A text with a search's words marked (P.hitRanges: case and accents ignored) */
+  const marked = (s, words) => {
+    const r = P.hitRanges(s, words); if (!r.length) return s;
+    const out = []; let at = 0;
+    for (const [a, b] of r) { if (a > at) out.push(s.slice(at, a)); out.push(h('mark.hit', s.slice(a, b))); at = b; }
+    if (at < s.length) out.push(s.slice(at));
+    return out;
+  };
+  // a wallet's Prediction history search, kept while the site stays open (back to the tab, the same words)
+  const histQueries = new Map();
   /** A prediction's result from one side (the bettor's unless asMaker). "Unclaimed" is shown only where that side has
    *  something to collect (its win, or a void's refund): a loss is simply lost, whether or not the winner has claimed. */
   const resultChip = (n, asMaker, held = 1, claims = true) => { const r = P.resultFor(n, asMaker, held, claims); return h('span.chip', { class: r.tone, title: r.title || '' }, r.label); };
@@ -1822,10 +1832,33 @@
     if (allIds.length) (async () => { try { await R.load(allIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); if (mine.some((n) => !n.decided && pendingVerdict(n))) renderHist(); if (await loadMids(openLegIds, ctx.signal) && !ctx.signal.aborted) renderOpen(); if (legIds.length) { await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
     resTicker(ctx, () => { renderOpen(); if (openLegIds.length) loadMids(openLegIds, ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) renderOpen(); }).catch(() => {}); });
     let hpage = 1; const histWrap = h('div');
-    const renderHist = () => { const slice = mine.slice((hpage - 1) * PAGE, hpage * PAGE); U.replace(histWrap, UI.table({ phone: { title: 'q', aside: 'p' }, cols: [
+    // the history's search (user 10-21: "trump" lists every bet with a leg about Trump): the predictions with every word
+    // of it in a leg's question, category or tags, their own category or a wallet's address, case and accents ignored
+    // (P.searchText); the matching legs come first in a row and are marked, and the note sums up what was found
+    let hwords = P.searchWords(histQueries.get(addr) || '');
+    const hayOf = new WeakMap(), hay = (n) => { let s = hayOf.get(n); if (s == null) hayOf.set(n, (s = P.searchText(n))); return s; };
+    const legHit = (k) => (hwords.some((w) => P.fold([k.q, k.cat].concat(k.tags || []).join(' ')).includes(w)) ? 1 : 0);
+    // a row's PnL as its column shows it: the ledger's result for traded tokens, else the verdict's (null: none yet)
+    const histPnl = (n) => { const bp = L.byPrediction[n.id]; if (bp) return n.decided || Math.abs(bp.pnl) > 0.005 ? bp.pnl : null; return n.decided ? (isMaker ? -n.pnl : n.pnl) : null; };
+    const histNote = h('span.dim.small', 'newest first');
+    const searchNote = (list) => {
+      let stake = 0, pnl = 0, won = 0, lost = 0, open = 0;
+      for (const n of list) { stake += n.stake; pnl += histPnl(n) || 0; if (!n.decided) open++; else if (!n.nd) { if (isMaker ? !n.won : n.won) won++; else lost++; } }
+      return [`${U.fmtNum(list.length, 0)} of ${U.fmtNum(mine.length, 0)} found`, list.length ? ` · ${usd(stake)} ${isMaker ? 'bettor stakes' : 'staked'} · ${won} won · ${lost} lost${open ? ` · ${open} open` : ''} · PnL ` : null, list.length ? pnlEl(pnl) : null];
+    };
+    const histSearch = mine.length > 1 ? h('input.input.sm', { id: 'predict-history-search', type: 'search', value: histQueries.get(addr) || '', placeholder: 'Search, e.g. trump', autocomplete: 'off', 'aria-label': 'Search this wallet\'s predictions', style: { flex: '0 1 240px', minWidth: '150px' },
+      title: 'The predictions with every word in a leg\'s question, category or tags, or in a wallet\'s address; case and accents ignored' + (m.truncated ? `. It searches the ${loaded} loaded here` : '') + '. Esc clears it',
+      oninput: U.debounce((e) => { histQueries.set(addr, e.target.value); hwords = P.searchWords(e.target.value); hpage = 1; renderHist(); }, 200),
+      onkeydown: (e) => { if (e.key === 'Escape' && e.target.value) { e.target.value = ''; histQueries.delete(addr); hwords = []; hpage = 1; renderHist(); } } }) : null;
+    const renderHist = () => {
+      const list = hwords.length ? mine.filter((n) => P.hasWords(hay(n), hwords)) : mine;
+      hpage = Math.min(hpage, Math.max(1, Math.ceil(list.length / PAGE)));
+      const slice = list.slice((hpage - 1) * PAGE, hpage * PAGE);
+      U.replace(histNote, hwords.length ? searchNote(list) : 'newest first');
+      U.replace(histWrap, UI.table({ phone: { title: 'q', aside: 'p' }, cols: [
       { key: 't', label: 'Placed', render: (n) => h('span.dim', U.fmtDateTimeS(n.t)) },
-      { key: 'q', label: 'Prediction', render: (n) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, n.picks.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', k.q)), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + (n.legs === 4 ? ' more leg' : ' more legs')) : null) },
-      { key: 'c', label: 'Category', render: (n) => n.cat },
+      { key: 'q', label: 'Prediction', render: (n) => { const legs = hwords.length ? n.picks.slice().sort((a, b) => legHit(b) - legHit(a)) : n.picks; return h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, legs.slice(0, 3).map((k) => h('div', sideChip(k.yes), ' ', marked(k.q, hwords))), n.legs > 3 ? h('div.xs.dim', '+' + (n.legs - 3) + (n.legs === 4 ? ' more leg' : ' more legs')) : null); } },
+      { key: 'c', label: 'Category', render: (n) => marked(n.cat, hwords) },
       { key: 's', label: isMaker ? 'Bettor stake' : 'Stake', num: true, render: (n) => usd(n.stake) },
       { key: 'o', label: isMaker ? 'Bettor odds' : 'Odds', num: true, render: (n) => h('span', oddsPct(n.odds), h('span.dim.xs', ' ' + mult(n.multiple))) },
       { key: 'v', label: 'Vig', num: true, title: 'Locked odds minus the Polymarket price at the moment of the bet', render: (n) => vigCell(n.vig, n) },
@@ -1839,8 +1872,9 @@
         bp && bp.hedged && bp.held >= 0.999 ? h('span.dim.xs', { title: 'This wallet also bought the other side\'s position tokens: the matched amount pays out whatever the verdict, and its result is booked when it held both sides' }, ' hedged') : null); } },
       // a prediction whose tokens were traded shows its share of the ledger's result (the sale, and the verdict on what was
       // still held); an open one without such a result has none yet
-      { key: 'p', label: 'PnL', num: true, render: (n) => { const bp = L.byPrediction[n.id]; if (bp) return n.decided || Math.abs(bp.pnl) > 0.005 ? pnlEl(bp.pnl) : h('span.dim', '—'); return n.decided ? pnlEl(isMaker ? -n.pnl : n.pnl) : h('span.dim', '—'); } },
-    ], rows: slice, empty: 'No predictions', onRow: openRow }), mine.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: mine.length, onPage: (p) => { hpage = p; renderHist(); } }) : null); };
+      { key: 'p', label: 'PnL', num: true, render: (n) => { const v = histPnl(n); return v == null ? h('span.dim', '—') : pnlEl(v); } },
+    ], rows: slice, empty: hwords.length ? 'No prediction of this wallet matches the search' : 'No predictions', onRow: openRow }), list.length > PAGE ? UI.pager({ page: hpage, pageSize: PAGE, total: list.length, onPage: (p) => { hpage = p; renderHist(); } }) : null);
+    };
     renderHist();
     // secondary-market trades of this wallet: what it sold or bought, at what price, and what that did
     const secWrap = h('div'); let spage = 1;
@@ -1940,7 +1974,7 @@
       // offline, a truncated file's curve and daily volume are the snapshot's, from every prediction; say what is shown when they are not
       h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), noCurve ? h('div.empty.small', 'This wallet has more predictions than its file holds; its curve comes with the next snapshot') : h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: volTitle }, 'Stakes per day (UTC)'), h('span.grow'), h('span.dim.xs', { title: volTitle }, (volNote ? volNote + ' · ' : '') + 'excl. token trades')), h('div.chart-box.sm', cVol))),
       UI.card('Open positions', openWrap, h('span.dim.small', openNote)),
-      UI.card('Prediction history', histWrap, h('span.dim.small', 'newest first')),
+      UI.card('Prediction history', histWrap, [histNote, histSearch]),
       L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
       cashCard ? cashCard.el : null,
       h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));

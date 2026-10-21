@@ -312,6 +312,8 @@ a.defs svg { width: 13px; height: 13px; }
 /* an inline link out (a page on Meridian's app): a small arrow beside the text, or alone */
 a.ext { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 a.ext svg { width: 12px; height: 12px; flex: none; }
+/* a search's words in the text they were found in (the Predict wallet's Prediction history) */
+mark.hit { background: var(--accent-dim); color: var(--text-1); border-radius: 3px; padding: 0 1px; }
 .modal.wide { width: min(1180px, 100%); }
 /* Equity curve flex: the card preview keeps its 1200 × 630 shape while it loads */
 .flex-modal { max-width: 960px; margin: 0 auto; }

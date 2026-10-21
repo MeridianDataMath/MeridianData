@@ -951,4 +951,30 @@
     return sg + '$' + (a / d).toFixed(2) + u;
   };
   P.compactTrade = (x) => { const tokens = P.usd(x.tokenAmount), paid = P.usd(x.price); return { t: x.executedAt * 1000, seller: String(x.seller || '').toLowerCase(), buyer: String(x.buyer || '').toLowerCase(), tokens, paid, px: tokens > 0 ? paid / tokens : null, tx: x.txHash, token: String(x.token || '').toLowerCase() }; };
+
+  // ---------- searching a wallet's predictions (its Prediction history) ----------
+  /** A text folded for searching, lower case and without accents (Mbappé finds mbappe), with each folded character's
+   *  index in the original so a match can be marked where it is: { f, map }. */
+  P.foldMap = (s) => {
+    const t = String(s == null ? '' : s); let f = ''; const map = [];
+    for (let i = 0; i < t.length; i++) for (const c of t[i].normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()) { f += c; map.push(i); }
+    return { f, map };
+  };
+  P.fold = (s) => P.foldMap(s).f;
+  /** A query's words, folded: "Trump  Tariffs" → ['trump', 'tariffs'] */
+  P.searchWords = (q) => P.fold(q).split(/\s+/).filter(Boolean);
+  /** What a prediction is found by: its legs' questions, categories and tags, its category and both wallets, folded */
+  P.searchText = (n) => P.fold([].concat(...((n && n.picks) || []).map((k) => [k.q, k.short !== k.q ? k.short : null, k.cat].concat(k.tags || [])), n && n.cat, n && n.predictor, n && n.counterparty).filter(Boolean).join(' · '));
+  /** Whether a folded text holds every word */
+  P.hasWords = (folded, words) => words.every((w) => folded.includes(w));
+  /** Where the words are in a text: [start, end) ranges of the original, in order and merged, to mark them */
+  P.hitRanges = (s, words) => {
+    if (!s || !words || !words.length) return [];
+    const { f, map } = P.foldMap(s), r = [];
+    for (const w of words) for (let i = f.indexOf(w); i >= 0; i = f.indexOf(w, i + 1)) r.push([map[i], map[i + w.length - 1] + 1]);
+    r.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (const x of r) { const last = out[out.length - 1]; if (last && x[0] <= last[1]) last[1] = Math.max(last[1], x[1]); else out.push(x.slice()); }
+    return out;
+  };
 })();
