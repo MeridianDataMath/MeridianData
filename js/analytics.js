@@ -339,10 +339,29 @@
    *  1 at an equity of 0 or less, as the app computes it (it shows "100%+" from 1 on). */
   AN.marginRatio = (mm, equity) => (!(mm > 0) ? 0 : !(equity > 0) ? 1 : mm / equity);
 
+  /** A market's margins and the leverage Meridian's app offers on it, as its app works them out (getProductMargin, read in
+   *  its code 2026-10-21): the leverage is 1 ÷ the open-market initial margin, rounded down (BTC: 2 % → 50×, while the
+   *  product's maxLeverage says 100: the app falls back on that only without an initial margin; a field it cannot read
+   *  makes it 1×); an isolated market whose closed-market initial margin is higher uses that while it is closed (QQQ:
+   *  1 % → 100× open, 4 % → 25× closed). The maintenance margin is the product's own, else 1 ÷ (2 × maxLeverage).
+   *  { im, lev, imClosed, levClosed (null when the same), mm } */
+  AN.productMargin = (p) => {
+    const ratio = (v) => { if (v == null || v === '') return undefined; const n = Number(v); return n > 0 && n <= 1 ? n : 1; };   // 1: unreadable, the app's 1×
+    const levOf = (r) => Math.max(1, Math.floor(1 / r + 1e-9));
+    const maxLev = U.num(p && p.maxLeverage) || 1;
+    const open = ratio(p && p.openMarketInitialMargin);
+    const im = open !== undefined ? open : 1 / maxLev, lev = open !== undefined ? levOf(open) : maxLev;
+    const closed = ratio(p && p.closedMarketInitialMargin);
+    const shut = p && p.marginMode === 'ISOLATED' && closed !== undefined && closed > im ? closed : null;
+    const mmField = ratio(p && p.maintenanceMargin);
+    return { im, lev, imClosed: shut, levClosed: shut ? levOf(shut) : null, mm: mmField !== undefined ? mmField : 1 / (2 * maxLev) };
+  };
+
   /**
    * Live margin state from balances + open positions + prices. Mirrors the app's pool maths:
    * pool equity = balance + Σ(uPnL − unapplied funding − unapplied position fee);
-   * maintenance = Σ notional × (1/(2·maxLev) + takerFee); liq price solved per position.
+   * maintenance = Σ notional × (the product's maintenance margin, 1/(2·maxLeverage) on every market so far, + takerFee);
+   * liq price solved per position.
    */
   AN.accountState = function ({ balances = [], positions = [], ref, prices = {} }) {
     const pools = {};
@@ -364,13 +383,13 @@
       const upnl = mark > 0 && entry > 0 ? size * (mark - entry) : upnlApi;
       const net = upnl - U.num(p.fundingUsd) - U.num(p.positionFeeUsd);
       const notional = abs * (mark || entry);
-      const maxLev = U.num(prod.maxLeverage) || 1;
-      const k = 1 / (2 * maxLev) + U.num(prod.takerFee);
+      const pm = AN.productMargin(prod), lev = pm.lev;   // the leverage the app offers: its initial margin, for the return on it
+      const k = pm.mm + U.num(prod.takerFee);
       const mm = notional * k;
       // pnlPct: Meridian's P&L % beside its P&L (upnl, gross): the price move since the entry, a fall for a short, in percent;
       // no leverage, funding or fees in it
       const pnlPct = mark > 0 && entry > 0 ? ((mark - entry) / entry) * (size > 0 ? 100 : -100) : null;
-      const row = { p, prod, ticker: prod.displayTicker, size, abs, long: size > 0, mark, entry, upnl, net, pnlPct, notional, mm, k, maxLev, pool, funding: U.num(p.fundingUsd), positionFee: U.num(p.positionFeeUsd), realized: U.num(p.realizedPnl), roe: null, liqPrice: null, distPct: null, leverage: null };
+      const row = { p, prod, ticker: prod.displayTicker, size, abs, long: size > 0, mark, entry, upnl, net, pnlPct, notional, mm, k, lev, im: pm.im, pool, funding: U.num(p.fundingUsd), positionFee: U.num(p.positionFeeUsd), realized: U.num(p.realizedPnl), roe: null, liqPrice: null, distPct: null, leverage: null };
       pool.upnl += net; pool.grossUpnl += upnl; pool.mm += mm; pool.notional += notional; pool.positions.push(row); rows.push(row);
     }
     let equity = 0, balance = 0, upnl = 0, grossUpnl = 0, notional = 0, used = 0, available = 0, mmTotal = 0;
@@ -388,7 +407,7 @@
           r.liqPrice = liq;
           r.distPct = eqFor <= r.mm ? 0 : Math.abs((liq - r.mark) / r.mark) * 100;
         }
-        const margin = r.notional / r.maxLev;
+        const margin = r.notional * r.im;   // its initial margin at the leverage the app offers (the open-market figure)
         r.roe = margin > 0 ? (r.net / margin) * 100 : null;
         r.leverage = pool.equity > 0 ? r.notional / pool.equity : null;
       }

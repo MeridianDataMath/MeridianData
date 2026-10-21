@@ -242,6 +242,25 @@ test('account state as Meridian\'s app: available never below 0 per pool, levera
   assert.equal(AN.accountState({ balances: [], positions: [], ref, prices: {} }).leverage, null, 'no balance: no leverage');
 });
 
+test('the leverage Meridian\'s app offers: 1 ÷ the initial margin (BTC 50×, not the product\'s maxLeverage 100), an mPerp\'s closed figure while closed', () => {
+  // the products as the API sent them on 2026-10-21; the app showed BTC at 50×
+  const btc = { marginMode: 'CROSS', maxLeverage: 100, openMarketInitialMargin: '0.02', closedMarketInitialMargin: '0.02', maintenanceMargin: '0.005' };
+  assert.deepEqual(AN.productMargin(btc), { im: 0.02, lev: 50, imClosed: null, levClosed: null, mm: 0.005 });
+  const qqq = { marginMode: 'ISOLATED', maxLeverage: 200, openMarketInitialMargin: '0.01', closedMarketInitialMargin: '0.04', maintenanceMargin: '0.0025' };
+  assert.deepEqual(AN.productMargin(qqq), { im: 0.01, lev: 100, imClosed: 0.04, levClosed: 25, mm: 0.0025 });
+  assert.equal(AN.productMargin({ marginMode: 'CROSS', maxLeverage: 50, openMarketInitialMargin: '0.05' }).lev, 20, 'SOL');
+  assert.equal(AN.productMargin({ marginMode: 'ISOLATED', maxLeverage: 5, openMarketInitialMargin: '0.2', closedMarketInitialMargin: '0.2' }).levClosed, null, 'the same while closed: no second figure');
+  // without an initial margin the app falls back on maxLeverage; one it cannot read makes it 1×; a share is rounded down
+  assert.deepEqual(AN.productMargin({ maxLeverage: 10 }), { im: 0.1, lev: 10, imClosed: null, levClosed: null, mm: 0.05 });
+  assert.equal(AN.productMargin({ maxLeverage: 100, openMarketInitialMargin: '0' }).lev, 1);
+  assert.equal(AN.productMargin({ maxLeverage: 100, openMarketInitialMargin: '0.03' }).lev, 33);
+  // the return on initial margin follows it: $10 on $810 of BTC at 2% is +61.7%, not +123% at 1%
+  const ref = { byId: { btc: Object.assign({ id: 'btc', displayTicker: 'BTC-USD', quoteTokenAddress: '0xusd', quoteTokenName: 'USD', takerFee: '0.00005' }, btc) } };
+  const r = AN.accountState({ balances: [], positions: [{ productId: 'btc', size: '0.01', cost: '800', fundingUsd: '0', positionFeeUsd: '0' }], ref, prices: { btc: { oraclePrice: '81000' } } }).positions[0];
+  near(assert, r.roe, (10 / (810 * 0.02)) * 100, 1e-9); assert.equal(r.lev, 50);
+  near(assert, r.mm, 810 * (0.005 + 0.00005), 1e-9, 'maintenance from the product\'s own field');
+});
+
 test('order book as Meridian\'s: the mid in the centre, Total the size from the touch in the base asset at its lot size', () => {
   // BTC at 20:15:27 UTC: bid 85,658, ask 85,675
   const m = AN.bookMid(85675, 85658);

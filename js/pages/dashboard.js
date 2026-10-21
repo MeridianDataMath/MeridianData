@@ -274,7 +274,8 @@
         U.replaceLive(mktBody, UI.table({
           cols: [
             // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
-            { key: 'm', label: 'Market', sortVal: 1, render: (r) => UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + r.p.maxLeverage + '× · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%') },
+            // the leverage the app offers (AN.productMargin): 1 ÷ the initial margin, an mPerp's closed-market one while it is closed
+            { key: 'm', label: 'Market', sortVal: 1, render: (r) => { const pm = AN.productMargin(r.p); return UI.marketCell(r.p.displayTicker, (r.p.marginMode === 'CROSS' ? 'cross' : 'isolated') + ' · ' + (r.f.paused && pm.levClosed ? pm.levClosed + '× while closed' : pm.lev + '×') + ' · taker fee ' + (+(U.num(r.p.takerFee) * 100).toFixed(4)) + '%'); } },
             capCol,
             { key: 'px', label: 'Mark price', num: true, sortVal: 1, title: 'live mark price; the oracle price is shown until the first live update arrives', render: (r) => U.fmtPrice(r.m, r.p.tickSize) },
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
@@ -608,9 +609,9 @@
         U.replaceLive(specsBody, h('div', UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.p.displayTicker, r.p.marginMode === 'CROSS' ? 'cross margin' : 'isolated margin') },
-            { key: 'lev', label: 'Max leverage', num: true, title: 'The highest leverage Meridian\'s app offers on the market', render: (r) => r.p.maxLeverage + '×' },
+            { key: 'lev', label: 'Max leverage', num: true, title: 'The highest leverage Meridian\'s app offers on the market: 1 ÷ its initial margin (BTC: 2% → 50×), and on an mPerp while its market is closed 1 ÷ the closed-market initial margin. The product data\'s own maxLeverage field (100 for BTC) is what the app falls back on only where a market has no initial margin; hover a figure for it', render: (r) => { const pm = AN.productMargin(r.p); return h('span', { title: 'The product data\'s maxLeverage field: ' + r.p.maxLeverage + '×' }, pm.lev + '×', pm.levClosed ? h('span.xs.dim', ' · ' + pm.levClosed + '× closed') : null); } },
             { key: 'im', label: 'Initial margin', num: true, title: 'The initial margin Meridian\'s product data sets, as a share of a position\'s value: while the market is open, and while it is closed (an mPerp\'s mark-price gap) where that differs', render: (r) => imS(r.p) },
-            { key: 'mm', label: 'Maint. margin', num: true, title: 'The equity a margin pool must keep for a position, as a share of its value: below it the pool is liquidated. Meridian\'s docs put the base figure at 1 ÷ (2 × the max leverage)', render: (r) => pctT(r.p.maintenanceMargin) },
+            { key: 'mm', label: 'Maint. margin', num: true, title: 'The equity a margin pool must keep for a position, as a share of its value: below it the pool is liquidated. On every market so far it is 1 ÷ (2 × the product data\'s maxLeverage field), as Meridian\'s docs give it', render: (r) => pctT(r.p.maintenanceMargin) },
             { key: 'oi', label: 'Open interest / cap', num: true, title: 'Meridian caps the open interest of each side of a market: one side\'s positions at the mark price now, the cap, and how much of it they use', render: oiS },
             { key: 'pos', label: 'Max position', num: true, title: 'The largest position one account can hold in the market, by value', render: (r) => usdC(r.p.maxPositionNotionalUsd) },
             { key: 'qty', label: 'Order size', num: true, title: 'The smallest and the largest quantity one order can have', render: (r) => plain(r.p.minQuantity) + ' – ' + plain(r.p.maxQuantity) + ' ' + (r.p.baseTokenName || '') },

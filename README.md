@@ -337,11 +337,19 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   a tape fill's notional has its fees in its tooltip (the REST history's `takerFeeUsd` /
   `makerFeeUsd`; a live fill's worked out from the rates, marked ≈). A collapsible **Market
   specs** card (closed until opened, remembered in the browser) lists every market's product
-  data: max leverage, initial margin (open / closed), maintenance margin (1 ÷ 2× max leverage,
-  as the docs say), one side's open interest against `maxOpenInterestUsd` (a cap per side:
-  `oiUse` halves `openInterest`), max position, order size, tick / lot, price limits, fees,
-  funding impact size, Pyth feed id, and the listing date linked to its Robinhood Chain
-  registration block with the on-chain id and engine type.
+  data: max leverage, initial margin (open / closed), maintenance margin (1 ÷ 2× the product's
+  `maxLeverage` field on every market, as the docs say), one side's open interest against
+  `maxOpenInterestUsd` (a cap per side: `oiUse` halves `openInterest`), max position, order
+  size, tick / lot, price limits, fees, funding impact size, Pyth feed id, and the listing date
+  linked to its Robinhood Chain registration block with the on-chain id and engine type. The
+  max leverage, here and in the Markets table, is the one Meridian's app offers
+  (`AN.productMargin`, as its getProductMargin, read in its code 2026-10-21): 1 ÷ the
+  `openMarketInitialMargin`, rounded down (BTC 2 % → 50×, while the product's `maxLeverage` field
+  says 100: the app falls back on that only without an initial margin, and an initial margin it
+  cannot read makes it 1×), and for an isolated market whose `closedMarketInitialMargin` is
+  higher, that one while the market is closed (QQQ 100× open, 25× closed). The account page's
+  return on initial margin uses the same initial margin; the maintenance margin comes from the
+  product's `maintenanceMargin`, which equals the old 1 ÷ (2 × `maxLeverage`) on every market.
 * **Tax center** (`#/tax?address=0x…`; the page is `js/pages/tax.js`, its parts `js/tax/*.js` under `MD.tax`) – tax
   records for one wallet: its Meridian perps subaccount and its Meridian Predict activity, for a fiscal year or any
   range of local dates, in the time zone and the reporting currency the reader picks. Everything is computed in the

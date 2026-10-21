@@ -132,7 +132,7 @@
     return h('span', { title: `Settled into the balance at its fills: ${U.fmtUsd(settled, { sign: true, dp: 2 })}\nSince its last fill, not settled yet: ${U.fmtUsd(unsettled, { sign: true, dp: 2 })} (in equity)` }, U.pnlEl(settled + unsettled));
   };
   // Meridian's P&L and P&L % (gross, the price move); the site's net figure and its return on initial margin in the tooltip
-  const upnlCell = (r) => h('span', { title: `Site's net figure incl. unsettled funding and position fees: ${fmtS(r.net)}` + (r.roe != null ? `\nIts return on initial margin: ${U.fmtUsd(r.net)} ÷ (${U.fmtUsd(r.notional)} ÷ ${r.maxLev}×) = ${U.fmtPct(r.roe, { sign: true, dp: 1 })}` : '') },
+  const upnlCell = (r) => h('span', { title: `Site's net figure incl. unsettled funding and position fees: ${fmtS(r.net)}` + (r.roe != null ? `\nIts return on initial margin: ${U.fmtUsd(r.net)} ÷ (${U.fmtUsd(r.notional)} ÷ ${r.lev}×) = ${U.fmtPct(r.roe, { sign: true, dp: 1 })}` : '') },
     U.pnlEl(r.upnl), r.pnlPct != null ? h('span.dim.xs', ' (' + U.fmtPct(r.pnlPct, { sign: true, dp: 2 }) + ')') : null);
   const TPSL_TITLE = 'As Meridian\'s app: the trigger prices of the take profit and the stop loss set on the whole position (the nearest of each kind when there are several), and the take profits and stop losses set on part of it counted ("Partial"). Hover a cell for the site\'s nearest exit levels: every stop or reduce-only order, whole or partial, with its distance from the mark and its PnL.';
   /** an exit level of AN.attachStops in words: price, how much, how it was placed, distance from the mark, PnL there */
@@ -490,7 +490,7 @@
             { key: 'entry', label: 'Entry price', num: true, render: (r) => U.fmtPrice(r.entry, r.prod.tickSize) },
             { key: 'mark', label: 'Mark', num: true, render: (r) => (r.mark ? U.fmtPrice(r.mark, r.prod.tickSize) : '—') },
             { key: 'cost', label: 'Notional', num: true, render: (r) => U.fmtUsd(r.notional) },
-            { key: 'upnl', label: 'Unrealized PnL', num: true, title: UPNL_TITLE + ' The site\'s return on initial margin (net figure ÷ (notional at the mark ÷ the market\'s max leverage), the margin the exchange holds for the position) is in the tooltip too.', render: upnlCell },
+            { key: 'upnl', label: 'Unrealized PnL', num: true, title: UPNL_TITLE + ' The site\'s return on initial margin (net figure ÷ (notional at the mark ÷ the leverage Meridian\'s app offers on the market, 1 ÷ its initial margin: 50× on BTC)) is in the tooltip too.', render: upnlCell },
             { key: 'tpsl', label: 'TP / SL', num: true, title: TPSL_TITLE, render: tpslCell },
             { key: 'rpnl', label: 'Realized PnL', num: true, title: RPNL_TITLE, render: (r) => U.pnlEl(r.realized) },
             { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
