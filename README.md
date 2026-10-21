@@ -1177,7 +1177,14 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     also shows the wallet's cash as the snapshot last read it (`cash` in its file): *Cash in the
     wallet*, its USDe balance day by day (the API's `collateralBalanceHistory`, `intervalSeconds`
     86400), and *Deposits & withdrawals* as Meridian's app lists them (`collateralTransfers` on
-    chain 4663 with `excludeProtocol`: the bets, payouts and token trades are not in it). The
+    chain 4663 with `excludeProtocol`: the bets and payouts are not in it, but a position token
+    sold to or bought from a market maker is, as the maker's payment: matched to the wallet's
+    trades by transaction, marked and kept out of the in / out totals). The other side is named
+    where known: the zero address is the LayerZero bridge (minted in, burned out), `U.RELAY` is
+    Relay's router on Robinhood Chain (api.relay.link/chains: Meridian's app deposits through
+    Relay, its solvers deliver through the router), then Meridian's perps exchange contract and
+    the wallet's owner (checked 2026-10-21 on 0x7f9b…: Relay deposits, payments for tokens sold
+    to 0xea41…, a withdrawal to its owner). The
     builder keeps these in `data/cache/predict-cash.json` and reads, within 240 requests a build
     (`CASH_BUDGET`), the wallets never read (the most recently active first), then those active
     since their last read, then those unread for a week (`cashPlan`); a wallet waits for a later

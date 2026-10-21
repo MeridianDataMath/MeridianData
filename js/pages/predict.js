@@ -1861,36 +1861,44 @@
     if (!opts.embedded) P.wallets.ownerOf(addr).then((o) => { if (o && !ctx.signal.aborted) U.replace(ownerEl, h('span.dim', 'Predict wallet of '), h('a.addr', { href: U.accountUrl(o, null, 'predict'), title: 'Owner ' + o + ' · its account page (its perps account, if it has one)' }, U.shortAddr(o, 4)), U.copyBtn(o)); }).catch(() => {});
     const nPred = (k) => `${U.fmtNum(k, 0)} prediction${k === 1 ? '' : 's'}`;
     // the wallet's cash on Meridian's chain as the snapshot last read it (m.cash): its USDe balance day by day, and its
-    // deposits and withdrawals as Meridian's app lists them (transfers that are not the protocol's own: the bets, payouts
-    // and token trades are in the tables above)
+    // deposits and withdrawals as Meridian's app lists them (transfers that are not the protocol's own: its bets and payouts
+    // are left out, while a position token sold to or bought from a market maker shows up as the maker's payment)
     const cashCard = m.cash ? (() => {
       const c = m.cash, xf = c.xf || [], bh = c.bh || [], all = c.xfN != null ? c.xfN : xf.length;
       const cv = h('canvas');
-      const ins = U.sum(xf.filter((x) => x[1] > 0), (x) => x[1]), outs = -U.sum(xf.filter((x) => x[1] < 0), (x) => x[1]);
-      // the other side named where it is known: USDe arriving from the zero address was minted by the bridge (LayerZero),
-      // and leaving to it burned; Meridian's perps exchange contract and the wallet's owner once looked up
+      // a payment for position tokens (its transaction is one of the wallet's secondary-market trades) is kept apart from
+      // the deposits and withdrawals
+      const tradeTx = new Set((L.trades || []).map((t) => String(t.tx || '').toLowerCase()).filter(Boolean));
+      const traded = (x) => !!x[3] && tradeTx.has(String(x[3]).toLowerCase());
+      const ins = U.sum(xf.filter((x) => x[1] > 0 && !traded(x)), (x) => x[1]), outs = -U.sum(xf.filter((x) => x[1] < 0 && !traded(x)), (x) => x[1]), trades = U.sum(xf.filter(traded), (x) => x[1]);
+      // the other side named where it is known: USDe arriving from the zero address was minted by its LayerZero bridge, and
+      // leaving to it burned; Relay's router (U.RELAY), through which Meridian's app deposits; the other party of a token
+      // trade; Meridian's perps exchange contract and the wallet's owner once looked up
       const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
       const names = {}, peers = [];
-      const who = (a, inflow) => (a === ZERO_ADDR ? h('span', { title: inflow ? 'USDe minted by its LayerZero bridge: brought in from another chain' : 'USDe burned by its LayerZero bridge: sent to another chain' }, 'the bridge')
-        : names[a] ? h('span', { title: a + (names[a] === 'Meridian perps' ? ' · Meridian\'s perps exchange contract' : '') }, names[a]) : h('a.addr', { href: U.accountUrl(a), title: a + ' · its account page', onclick: (e) => e.stopPropagation() }, U.shortAddr(a, 4)));
-      const peer = (a, inflow) => { const el = h('span', who(a, inflow)); peers.push([el, a, inflow]); return el; };
+      const who = (a, inflow, trade) => (a === ZERO_ADDR ? h('span', { title: inflow ? 'USDe minted by its LayerZero bridge: brought in from another chain' : 'USDe burned by its LayerZero bridge: sent to another chain' }, 'the bridge')
+        : U.RELAY.has(a) ? h('span', { title: a + ' · Relay\'s router on Robinhood Chain: Meridian\'s app deposits through Relay, from another chain or token' }, 'Relay (bridge)')
+        : names[a] ? h('span', { title: a + (names[a] === 'Meridian perps' ? ' · Meridian\'s perps exchange contract' : '') }, names[a])
+        : trade ? h('span', { title: 'The payment for position tokens traded on the secondary market (the Secondary market table has the trade)' }, inflow ? 'the buyer of its tokens ' : 'the seller of tokens ', bettorLink(a, 3))
+        : h('a.addr', { href: U.accountUrl(a), title: a + ' · its account page', onclick: (e) => e.stopPropagation() }, U.shortAddr(a, 4)));
+      const peer = (x) => { const a = x[2], inflow = x[1] > 0, trade = traded(x); const el = h('span', who(a, inflow, trade)); peers.push([el, a, inflow, trade]); return el; };
       Promise.all([P.wallets.ownerOf(addr).catch(() => null), MD.api.rpcConfig().catch(() => null)]).then(([o, rc]) => {
         if (o) names[String(o).toLowerCase()] = 'its owner';
         if (rc && rc.domain && rc.domain.verifyingContract) names[String(rc.domain.verifyingContract).toLowerCase()] = 'Meridian perps';
-        for (const [el, a, inflow] of peers) if (names[a]) U.replace(el, who(a, inflow));
+        for (const [el, a, inflow, trade] of peers) if (names[a]) U.replace(el, who(a, inflow, trade));
       });
       const tbl = UI.table({ cols: [
         { key: 't', label: 'Time', render: (x) => h('span.dim', U.fmtDateTimeS(x[0])) },
         { key: 'v', label: 'USDe', num: true, render: (x) => pnlEl(x[1]) },
-        { key: 'p', label: 'From / to', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x[2], x[1] > 0)) },
+        { key: 'p', label: 'From / to', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x)) },
         { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction' }, U.icon('external')) : '') },
       ], rows: xf.slice(0, 25), empty: 'No deposits or withdrawals', phone: false });
-      const note = `${U.fmtNum(all, 0)} in all${all > xf.length ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (xf.length > 25 ? ' · the newest 25 listed' : '');
+      const note = `${U.fmtNum(all, 0)} in all${all > xf.length ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (trades ? ` · ${usd(trades, { sign: true })} for position tokens traded` : '') + (xf.length > 25 ? ' · the newest 25 listed' : '');
       return {
         el: h('div.grid.cols-2',
           h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: 'The USDe the wallet held day by day (Meridian\'s balance history of the account), as the snapshot last read it' }, 'Cash in the wallet'), h('span.grow'), h('span.dim.xs', 'USDe · read ' + U.fmtAgo(c.at))),
             bh.length >= 2 ? h('div.chart-box.sm', cv) : h('div.empty.small', bh.length ? 'One day so far: ' + usd(bh[0][1]) : 'No balance read yet')),
-          h('div.card.tight', h('div.card-head', h('h3', { title: 'USDe moved in and out of the wallet, as Meridian\'s app lists its deposits and withdrawals: transfers that are not the protocol\'s own (its bets, payouts and token trades are in the tables above)' }, 'Deposits & withdrawals'), h('span.dim.small', note)), tbl)),
+          h('div.card.tight', h('div.card-head', h('h3', { title: 'USDe moved in and out of the wallet, as Meridian\'s app lists its deposits and withdrawals: transfers that are not the protocol\'s own, so its bets and payouts are left out. A position token sold to or bought from a market maker shows up as the maker\'s payment, marked, and is not in the in / out totals' }, 'Deposits & withdrawals'), h('span.dim.small', note)), tbl)),
         draw: () => { if (bh.length >= 2) C.timeSeries(cv, { points: bh.map((x) => ({ x: x[0], y: x[1] })), color: C.colors().accent, label: 'USDe' }); },
       };
     })() : null;

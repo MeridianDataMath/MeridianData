@@ -372,6 +372,9 @@
   U.chainName = (id) => (U.CHAINS[id] ? U.CHAINS[id].name : 'chain ' + id);
   U.lzChainName = (eid) => (U.LZ_EIDS[eid] ? U.chainName(U.LZ_EIDS[eid]) : 'LayerZero endpoint ' + eid);
   U.explorerTxOn = (chainId, hash) => (hash && U.CHAINS[chainId] ? U.CHAINS[chainId].tx + hash : null);
+  /** Relay's contracts on Robinhood Chain (api.relay.link/chains, read 2026-10-21): Meridian's app deposits through Relay,
+   *  whose solvers deliver the funds through its router */
+  U.RELAY = new Set(['0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f', '0x0729e2a4716d9f7dd17858d5d504426d228697f7', '0xccc88a9d1b4ed6b0eaba998850414b24f1c315be', '0x5567954cd026cebfe486062cb75848e0f1c12e58', '0x4cd00e387622c35bddb9b4c962c136462338bc31']);
   /** A LayerZero destination (bytes32, an EVM address right-aligned in it) as the address; anything else as it is */
   U.lzAddress = (b32) => { const s = String(b32 || '').toLowerCase().replace(/^0x/, ''); return s.length === 64 && /^0{24}/.test(s) ? '0x' + s.slice(24) : b32 || null; };
 })();

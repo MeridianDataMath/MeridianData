@@ -580,7 +580,8 @@
         // Meridian's exchange contract (the signing domain's verifying contract) holds the USDe behind the accounts: a
         // transfer from it is the account's withdrawal reaching the wallet
         let exch = null;
-        const who = (a) => { const x = String(a || '').toLowerCase(); return !x ? h('span.dim', '—') : x === st.addr ? h('span', 'this wallet') : x === exch ? h('span', { title: a + ' · Meridian\'s exchange contract' }, 'Meridian exchange') : h('span.addr', { title: a }, U.shortAddr(a, 4)); };
+        const who = (a) => { const x = String(a || '').toLowerCase(); return !x ? h('span.dim', '—') : x === st.addr ? h('span', 'this wallet') : x === exch ? h('span', { title: a + ' · Meridian\'s exchange contract' }, 'Meridian exchange')
+          : U.RELAY.has(x) ? h('span', { title: a + ' · Relay\'s router on Robinhood Chain: Meridian\'s app deposits through Relay, from another chain or token' }, 'Relay (bridge)') : h('span.addr', { title: a }, U.shortAddr(a, 4)); };
         const route = (r) => (r.type === 'TRANSFER'
           ? h('span', who(r.fromAddress), h('span.dim', ' → '), who(r.toAddress))
           : h('span', { title: (r.senderAddress && r.senderAddress !== r.fromAddress ? 'Sent by ' + r.senderAddress + ' through ' + r.fromAddress : 'From ' + (r.fromAddress || '—')) + ' on ' + U.chainName(r.sourceChainId) + ' to ' + (r.destinationAddress || U.lzAddress(r.lzDestinationAddress) || '—') + (r.destinationChainId ? ' on ' + U.chainName(r.destinationChainId) : '') + (r.lzDestinationEid ? ' (LayerZero endpoint ' + r.lzDestinationEid + ')' : '') },
