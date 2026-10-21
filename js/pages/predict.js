@@ -151,9 +151,18 @@
   // =====================================================================
   /** Meridian's competitions as of the snapshot (snap.competitions): contests over a set of matches with a prize for each of
    *  the first places, ranked by the best multiplier of a qualifying prediction. The running ones first, then the
-   *  upcoming, then the ended (the latest first); a button for each, its rules, prizes and standings under it. Null
-   *  without any (an older snapshot). */
-  function competitionsCard(snap) {
+   *  upcoming, then the ended (the latest first); a button for each, its rules, prizes and standings under it. A standing
+   *  opens its prediction, as a row of the live tape or the big wins does (user 10-21). Null without any (an older
+   *  snapshot). */
+  function competitionsCard(snap, ctx) {
+    // the entry's prediction from the snapshot (its slip file), in the dialog the tape and the big wins open
+    const openStanding = async (s) => {
+      if (!s.id) { U.toast('No prediction listed for this entry'); return; }
+      let r = null;
+      try { r = await findPrediction(s.id, ctx.signal); } catch (e) { if (isAbort(e)) return; }
+      if (ctx.signal.aborted) return;
+      if (r && r.n) openPrediction(r.n, ctx); else U.toast('This prediction is not in the snapshot yet');
+    };
     const list = Array.isArray(snap.competitions) ? snap.competitions.slice() : [];
     if (!list.length) return null;
     const t0 = Date.now();
@@ -181,13 +190,12 @@
           { key: 's', label: 'Stake', num: true, render: (s) => usd(s.s) },
           { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
           { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => (prize(s.r) ? h('span.pos', U.fmtNum(prize(s.r), 0) + ' ' + c.unit) : h('span.dim', '—')) },
-          { key: 'x', label: '', render: (s) => (s.id ? h('a.small', { href: '#/predict/p/' + s.id, title: 'The prediction', onclick: (e) => e.stopPropagation() }, 'slip') : '') },
-        ], rows: c.standings || [], empty: st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
+        ], rows: c.standings || [], onRow: openStanding, empty: st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
         c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
     };
     const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
     render();
-    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of matches · as of the snapshot'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of matches · as of the snapshot · click an entry for its prediction'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       h('div', { style: { padding: '8px 12px 0', overflowX: 'auto' } }, sel), body);
   }
   async function mountOverview(body, route, ctx) {
@@ -286,7 +294,7 @@
         tiles,
         h('div.grid.cols-2', h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Wagered per day (UTC)'), h('div.chart-box.sm', cWager)), h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Predictions per day (UTC)'), h('div.chart-box.sm', cCount))),
         h('div.pred-pair', h('div.grid.pred-grid', tapeCard, bwCard)),
-        competitionsCard(snap),
+        competitionsCard(snap, ctx),
         h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl)),
         h('div.card.tight', h('div.card-head', h('h2', 'Market makers'), h('span.dim.small', 'who takes the other side of the auctions · click a row for the maker'), h('span.grow'), h('a.small', { href: '#/predict/makers' }, 'all makers')), makersTbl),
         secCard,

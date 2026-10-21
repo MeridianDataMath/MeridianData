@@ -855,7 +855,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     10th, USDe), rules (a stake of 10 USDe or more, 2 legs or more, ranked by the best multiplier,
     a prediction sold before the verdict not counting: `disqualifyEarlySales`), the matches,
     groups and questions it names, and its standings (place, bettor, multiplier, stake, payout,
-    the prize, the slip; the first 25).
+    the prize; the first 25). An entry opens its prediction in the dialog the tape and the big
+    wins open (from the snapshot's slip files, `findPrediction`).
     Everything on it comes from one snapshot: a newer one published while the page is open is
     offered in the tape's header (*newer snapshot published · show it*) rather than mixed in,
     and the snapshot's age line keeps counting. Where the aggregate has no secondary-market
