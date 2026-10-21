@@ -1079,9 +1079,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     the window's filtered volume; a group's questions added up, all of them (the API pages them
     25 at a time; the app asks again from the group's cursor), and the groups the app never lists
     (925, 926) left out. Checked against the app's list on 2026-10-21: the same 15 entries and
-    volumes. Each row has a link to its page on the app and the stake placed through Meridian on
-    the question, the group's or the match's questions where the site lists them (questions
-    keep their group id, `g`). *Probability* is
+    volumes. Each row has a link to its page on the app and the stake ever placed through
+    Meridian on the question, the group or the match (`mw`: the builder adds each prediction
+    once, however many of its legs are in the group, `stakeByGroup`; the questions keep their
+    group id, `g`). *Probability* is
     Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors), loaded for the
     rows on screen; until it has loaded, the `estimatedPrice` Meridian's API reported at the
     snapshot, which stops following the market once a game starts. A settled question shows its

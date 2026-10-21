@@ -1236,7 +1236,7 @@
             r.k === 'm' ? null : qSub(snap, { ev: r.ev })) },
           { key: 'c', label: 'Category', render: (r) => r.cat || '—' },
           { key: 'v', label: 'Volume ' + tab.win, num: true, title: `The mirrored markets' volume over the last ${tab.win}, low-odds trading left out, as Meridian's app shows it on this list: a group's questions added up (those it lists, between 1 and 99 %), a match's open questions together`, render: (r) => P.fmtVol(r.v) },
-          { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes placed through Meridian on the question, the group\'s or the match\'s questions, where this site lists them (questions with Meridian bets)', render: (r) => { const sw = oursOf(r).reduce((s, q) => s + (q.sw || 0), 0); return sw ? usd(sw, { compact: true }) : h('span.dim', '—'); } },
+          { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes ever placed through Meridian on the question, or on the group\'s or the match\'s questions: a prediction once, however many of its legs are in it', render: (r) => { const sw = hot.stakes ? r.mw || 0 : oursOf(r).reduce((s, q) => s + (q.sw || 0), 0); return sw ? usd(sw, { compact: true }) : h('span.dim', '—'); } },   // (a snapshot without mw: the listed questions' stakes added up)
         ], rows, empty: 'No list in this snapshot', onRow: (r) => { const qs = oursOf(r); if (qs.length === 1) openQuestion(qs[0], ctx); } }),
         h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ' + U.fmtAgo(hot.at || snap.builtAt) + ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with one question this site lists opens it; the arrow opens Meridian\'s page.'));
     };

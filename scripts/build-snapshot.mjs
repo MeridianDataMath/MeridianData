@@ -645,6 +645,26 @@ export function hotRows(nodes, hidden = HOT_HIDDEN_GROUPS) {
     return null;
   }).filter(Boolean);
 }
+/** Meridian stake by group and by match (the questions sharing an event id), each prediction once however many of its
+ *  legs are in it: { g: { groupId: USDe }, ev: { eventId: USDe } }; `qOf` maps a question id to its listed row (g, ev).
+ *  A question's own sw counts a combo on every question it includes, so adding those up would count it twice. */
+export function stakeByGroup(norms, qOf) {
+  const g = dict(), ev = dict();
+  for (const n of norms || []) {
+    const gs = new Set(), es = new Set();
+    for (const k of n.picks || []) { const q = qOf.get(k.id); if (!q) continue; if (q.g != null) gs.add(String(q.g)); if (q.ev != null) es.add(String(q.ev)); }
+    for (const x of gs) g[x] = (g[x] || 0) + n.stake;
+    for (const x of es) ev[x] = (ev[x] || 0) + n.stake;
+  }
+  return { g, ev };
+}
+/** The Hot lists' rows with mw, the stake placed through Meridian on the question (`swOf`), the group or the match
+ *  (stakeByGroup), where there is any; `stakes` marks a snapshot that has them */
+export function hotStakes(hot, swOf, by) {
+  for (const w of Object.keys(HOT_WINDOWS)) for (const r of (hot && hot[w]) || []) { const v = r.k === 'g' ? by.g[r.id] : r.k === 'm' ? by.ev[r.ev] : swOf(r.id); if (v > 0) r.mw = round2(v); }
+  if (hot) hot.stakes = true;
+  return hot;
+}
 /** One list (a key of HOT_WINDOWS): its first page, then the rest of each group's questions the way the app reads them
  *  (the same request again from the group's cursor) */
 async function readHotList(cats, win) {
@@ -874,7 +894,7 @@ async function buildPredict() {
   try { const legacy = legacyCompetitions(norms, trades); competitions = (competitions || []).concat(legacy); console.log(`  predict: monthly leaderboard: ${legacy.map((c) => c.entries).join(' / ')} entries in its 4 cycles`); } catch (e) { console.warn('predict: monthly leaderboard failed:', e.message); }
   try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n30} over 30 days)`); } catch (e) { console.warn('predict: PnL ranks failed:', e.message); }
   try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { console.warn('predict: matches failed:', e.message); }
-  try { hot = await readHot(); } catch (e) { console.warn('predict: Hot lists failed:', e.message); }
+  try { hot = await readHot(); hotStakes(hot, (id) => (act[id] ? act[id].sw : 0), stakeByGroup(qNorms, new Map(withOi.map((q) => [q.id, q])))); } catch (e) { console.warn('predict: Hot lists failed:', e.message); }
   try { tags = await readTags(); } catch (e) { console.warn('predict: tags failed:', e.message); }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them

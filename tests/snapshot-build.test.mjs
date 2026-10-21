@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -206,6 +206,20 @@ test('hotFilter: the app\'s list as it opens, sorted by one window of its menu',
   assert.deepEqual(hotFilter(['crypto', 'sports'], 'd1'), { categorySlugs: ['crypto', 'sports'], resolutionStatus: 'UNRESOLVED', excludeTags: ['15 Minute Up/Down'], estimatedPrice: { gte: 0.01, lte: 0.99 }, similarMarketVolumeWindow: 'TWENTY_FOUR_HOURS_FILTERED', clustered: true });
   assert.deepEqual(Object.keys(HOT_WINDOWS), ['h1', 'h4', 'd1', 'd7']);
   assert.equal(HOT_WINDOWS.h1.order, 'SIMILAR_MARKET_VOLUME_1H_FILTERED'); assert.equal(HOT_WINDOWS.d7.cluster, 'SEVEN_DAYS');
+});
+
+test('stakeByGroup / hotStakes: Meridian stake per group and match, a prediction once however many of its legs are in it', () => {
+  const qOf = new Map([['0xq1', { g: '20516', ev: 'E1' }], ['0xq2', { g: '20516', ev: 'E1' }], ['0xq3', { g: '7', ev: 'E2' }], ['0xq4', {}]]);
+  const norms = [
+    { stake: 10, picks: [{ id: '0xq1' }, { id: '0xq2' }] },   // two legs in one group and match: once
+    { stake: 5, picks: [{ id: '0xq1' }, { id: '0xq3' }] },    // one leg in each of two groups
+    { stake: 7, picks: [{ id: '0xq4' }, { id: '0xother' }] },  // no group known
+  ];
+  const by = stakeByGroup(norms, qOf);
+  assert.deepEqual(Object.assign({}, by.g), { 20516: 15, 7: 5 }); assert.deepEqual(Object.assign({}, by.ev), { E1: 15, E2: 5 });
+  const hot = { at: 1, d1: [{ k: 'g', id: '20516' }, { k: 'm', id: 'E2', ev: 'E2' }, { k: 'c', id: '0xq4' }, { k: 'g', id: '99' }], h1: [] };
+  hotStakes(hot, (id) => (id === '0xq4' ? 7.004 : 0), by);
+  assert.deepEqual(hot.d1.map((r) => r.mw), [15, 5, 7, undefined]); assert.equal(hot.stakes, true);
 });
 
 test('legacyCycle: the monthly leaderboard\'s four cycles from 1 July 16:00 UTC', () => {
