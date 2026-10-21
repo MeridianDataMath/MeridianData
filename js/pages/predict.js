@@ -149,11 +149,12 @@
   // =====================================================================
   // Overview
   // =====================================================================
-  /** Meridian's competitions as of the snapshot (snap.competitions): contests over a set of matches with a prize for each of
-   *  the first places, ranked by the best multiplier of a qualifying prediction. The running ones first, then the
-   *  upcoming, then the ended (the latest first); a button for each, its rules, prizes and standings under it. A standing
-   *  opens its prediction, as a row of the live tape or the big wins does (user 10-21). Null without any (an older
-   *  snapshot). */
+  /** Meridian's competitions as of the snapshot (snap.competitions): contests over a set of markets with a prize for each
+   *  of the first places, ranked by the best multiplier of a qualifying prediction, and its monthly leaderboard of July to
+   *  September (`legacy`: its cycle; USD prizes plus a token `bonus`). The running ones first, then the upcoming, then the
+   *  ended (the latest first); a button for each, its conditions as the app words them, prizes and standings under it. A
+   *  standing opens its prediction, as a row of the live tape or the big wins does (user 10-21). Null without any (an
+   *  older snapshot). */
   function competitionsCard(snap, ctx) {
     // the entry's prediction from the snapshot (its slip file), in the dialog the tape and the big wins open
     const openStanding = async (s) => {
@@ -173,29 +174,42 @@
     const body = h('div');
     const render = () => {
       const c = list.find((x) => x.slug === cur) || list[0], st = stateOf(c), t = Date.now();
-      const prize = (r) => (r >= 1 && r <= c.payouts.length ? c.payouts[r - 1] : 0);
-      const total = c.payouts.reduce((s, x) => s + x, 0);
-      const rules = [`a stake of ${U.fmtNum(c.minStake, 0)} ${c.unit} or more`, c.minLegs ? `${c.minLegs} legs or more` : null, c.rankBy === 'MULTIPLIER' ? 'ranked by the multiplier of the best prediction (payout ÷ stake)' : c.rankBy === 'PNL' ? 'ranked by PnL' : null, c.noEarlySales ? 'a prediction whose tokens were sold before the verdict does not count' : null].filter(Boolean).join(' · ');
+      // the prize for a place: its amount in the competition's unit, plus the token bonus of the monthly leaderboard
+      const bonus = c.bonus && Array.isArray(c.bonus.payouts) ? c.bonus : null;
+      const prizeOf = (r) => { const a = r >= 1 && r <= c.payouts.length ? c.payouts[r - 1] : 0, b = bonus && r >= 1 && r <= bonus.payouts.length ? bonus.payouts[r - 1] : 0; return a || b ? [a ? U.fmtNum(a, 0) + ' ' + c.unit : null, b ? U.fmtNum(b, b % 1 ? 1 : 0) + ' ' + bonus.unit : null].filter(Boolean).join(' + ') : null; };
+      const total = c.payouts.reduce((s, x) => s + x, 0), bonusTotal = bonus ? bonus.payouts.reduce((s, x) => s + x, 0) : 0;
+      const places = Math.max(c.payouts.length, bonus ? bonus.payouts.length : 0);
+      // the conditions as Meridian's app words them on the competition's page
+      const legsRule = c.minLegs > 1 ? `${c.minLegs}+ legs` : 'Any prediction';
+      const how = c.rankBy === 'PNL'
+        ? ['Entered in-window, counts when settled', c.noEarlySales ? 'Early sales can\'t add to your score' : 'Early sales count at the sale price', 'Ranked by total PnL']
+        : ['Entered & settled in-window', c.noEarlySales ? 'Held until settlement' : 'Early sales still count', 'Resolves as a win'];
+      const rulesTitle = (c.rankBy === 'PNL' ? 'Ranked by the PnL of the qualifying predictions' : 'Ranked by the multiplier (payout ÷ stake) of each bettor\'s best qualifying prediction: placed and settled within the window, won')
+        + (c.noEarlySales ? ', with none of its position tokens sold before its settlement' : '') + '. Each leg of a combo has to be an independent outcome: a combo whose legs imply one another counts as one prediction and Meridian takes it off the standings, as it may other attempts to game the contest';
       const mk = c.markets || {};
-      const markets = [mk.games ? U.fmtNum(mk.games, 0) + ' matches' : null, mk.groups ? U.fmtNum(mk.groups, 0) + ' question groups' : null, mk.questions ? U.fmtNum(mk.questions, 0) + ' questions' : null].filter(Boolean).join(', ');
+      const markets = c.markets ? [mk.games ? U.fmtNum(mk.games, 0) + ' matches' : null, mk.groups ? U.fmtNum(mk.groups, 0) + ' question groups' : null, mk.questions ? U.fmtNum(mk.questions, 0) + ' questions' : null].filter(Boolean).join(', ') : 'every question';
+      const appLink = c.legacy != null ? P.appPageUrl('/leaderboard', 'cycle=' + c.legacy) : P.appPageUrl('/competitions/' + encodeURIComponent(c.slug));
       U.replace(body, h('div', { style: { padding: '10px 14px 6px' } },
         h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, h('b', c.title), UI.chip(st, st === 'running' ? 'green' : st === 'upcoming' ? 'blue' : ''),
-          h('span.dim.small', U.fmtWhen(c.start) + ' → ' + U.fmtWhen(c.end) + (st === 'running' ? ' · ends in ' + U.fmtCountdown(c.end - t) : st === 'upcoming' ? ' · starts in ' + U.fmtCountdown(c.start - t) : ''))),
-        h('div.small', { style: { marginTop: '4px' } }, `${U.fmtNum(total, 0)} ${c.unit} in prizes for the first ${c.payouts.length} places (${c.payouts.slice(0, 3).map((x) => U.fmtNum(x, 0)).join(' / ')}${c.payouts.length > 3 ? ' / …' : ''})`, h('span.dim', ' · ' + rules)),
-        markets ? h('div.xs.dim', { style: { marginTop: '2px' } }, 'Counts predictions on ' + markets + (mk.eligible != null ? ` (${U.fmtNum(mk.eligible, 0)} questions in all)` : '')) : null),
+          h('span.dim.small', (c.weeks ? c.weeks + '-week competition · ' : '') + U.fmtWhen(c.start) + ' → ' + U.fmtWhen(c.end) + (st === 'running' ? ' · ends in ' + U.fmtCountdown(c.end - t) : st === 'upcoming' ? ' · starts in ' + U.fmtCountdown(c.start - t) : '')),
+          h('span.grow'), h('a.small.ext', { href: appLink, target: '_blank', rel: 'noopener', title: 'This competition on Meridian\'s app' }, U.icon('external'), 'Meridian\'s page')),
+        h('div.small', { style: { marginTop: '4px' } }, `${U.fmtNum(total, 0)} ${c.unit}${bonus ? ` + ${U.fmtNum(bonusTotal, bonusTotal % 1 ? 1 : 0)} ${bonus.unit}` : ''} in prizes for the first ${places} places (${[1, 2, 3].filter((r) => r <= places).map(prizeOf).join(' / ')}${places > 3 ? ' / …' : ''})`),
+        h('div.xs.dim', { style: { marginTop: '2px' }, title: rulesTitle }, 'Conditions · ' + [legsRule, `Stake ≥ ${U.fmtUsd(c.minStake, { dp: 0 })}`].concat(how).join(' · ')),
+        h('div.xs.dim', { style: { marginTop: '2px' } }, 'Counts predictions on ' + markets + (mk.eligible != null ? ` (${U.fmtNum(mk.eligible, 0)} questions in all)` : ''))),
         UI.table({ cols: [
           { key: 'r', label: '#', render: (s) => UI.rank(s.r) },
           { key: 'a', label: 'Bettor', render: (s) => bettorLink(s.a, 5) },
-          { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
+          { key: 'l', label: 'Legs', num: true, title: 'The legs of its best qualifying prediction', render: (s) => (s.l ? String(s.l) : h('span.dim', '—')) },
           { key: 's', label: 'Stake', num: true, render: (s) => usd(s.s) },
+          { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
           { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
-          { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => (prize(s.r) ? h('span.pos', U.fmtNum(prize(s.r), 0) + ' ' + c.unit) : h('span.dim', '—')) },
+          { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => { const p = prizeOf(s.r); return p ? h('span.pos', p) : h('span.dim', '—'); } },
         ], rows: c.standings || [], onRow: openStanding, empty: st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
         c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
     };
     const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
     render();
-    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of matches · as of the snapshot · click an entry for its prediction'), h('span.grow'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of markets · as of the snapshot · click an entry for its prediction'), h('span.grow'), h('a.btn.sm.ghost', { href: P.appPageUrl('/competitions'), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Competitions')),
       h('div', { style: { padding: '8px 12px 0', overflowX: 'auto' } }, sel), body);
   }
   async function mountOverview(body, route, ctx) {
@@ -415,15 +429,16 @@
         h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
         h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c }, c))),
         h('span.grow'), summary));
-      // Meridian's own PnL ranking (snap.pnlRank, its app's leaderboard): [rank, PnL] all time and over the last 7 days
-      const MR = snap.pnlRank || null;
+      // Meridian's own PnL ranking (snap.pnlRank, its API's leaderboard): [rank, PnL] all time and over the last 30 days,
+      // the window its app ranks its top traders by (an older snapshot: 7 days)
+      const MR = snap.pnlRank || null, MW = MR && MR.d30 ? { k: 'd30', n: MR.n30, label: '30d', text: 'last 30 days' } : { k: 'd7', n: MR && MR.n7, label: '7d', text: 'last 7 days' };
       const mrOf = (a, k) => (MR && MR[k || 'all'] ? MR[k || 'all'][a] || null : null);
       const mrCell = (r) => {
-        const x = mrOf(r.address), w = mrOf(r.address, 'd7');
+        const x = mrOf(r.address), w = mrOf(r.address, MW.k);
         if (!MR) return h('span.dim', '—');
-        const title = (x ? `#${x[0]} of ${U.fmtNum(MR.n, 0)} in Meridian's PnL leaderboard, all time (${usd(x[1], { sign: true })})` : `Not in Meridian's PnL leaderboard`) + ` · last 7 days: ` + (w ? `#${w[0]} of ${U.fmtNum(MR.n7, 0)} (${usd(w[1], { sign: true })})` : 'not ranked') + ' · as of the snapshot'
+        const title = (x ? `#${x[0]} of ${U.fmtNum(MR.n, 0)} in Meridian's PnL leaderboard, all time (${usd(x[1], { sign: true })})` : `Not in Meridian's PnL leaderboard`) + ` · ${MW.text}: ` + (w ? `#${w[0]} of ${U.fmtNum(MW.n, 0)} (${usd(w[1], { sign: true })})` : 'not ranked') + ' · as of the snapshot'
           + (x && Math.abs(x[1] - r.pnl) >= 0.5 ? `. Meridian ranks by its predictions' own results; Net PnL here, ${usd(r.pnl, { sign: true })}, also counts the position tokens it traded on the secondary market` : '');
-        return x ? h('span', { title }, '#' + x[0], w ? h('span.xs.dim', ' 7d #' + w[0]) : null) : h('span.dim', { title }, '—');
+        return x ? h('span', { title }, '#' + x[0], w ? h('span.xs.dim', ` ${MW.label} #` + w[0]) : null) : h('span.dim', { title }, '—');
       };
       // (win rate: the app's, as the column shows it)
       const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: P.rowRecord(b).winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin, mrank: mrOf(b.address) ? -mrOf(b.address)[0] : -1e9 })[k];
@@ -446,7 +461,7 @@
           { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => { const o = r.openPos != null ? r.openPos : r.open; return h('span', U.fmtNum(r.n, 0), o ? h('span.dim.xs', { title: r.openPos != null ? `${o} open position${o === 1 ? '' : 's'} as Meridian counts them: one per pick configuration and side with tokens still held (bets on the same picks share one; a position sold out is none)` + (r.open !== r.openPos ? ` · ${r.open} undecided prediction${r.open === 1 ? '' : 's'}` : '') : 'Undecided predictions' }, ' (' + o + ' open)') : null); } },
           { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
           { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => pnlEl(r.pnl) },
-          { key: 'mrank', label: 'Meridian rank', num: true, sortVal: 1, title: 'Its place in Meridian\'s own PnL leaderboard (its app\'s), all time, and over the last 7 days beside it; as of the snapshot. Meridian ranks by the results of the wallet\'s own predictions at the verdict, claimed or not, without the secondary market: Net PnL differs from it only by the position tokens a bettor traded (checked 2026-10-21 on 763 of 764 bettors). Hover a rank for that PnL', render: mrCell },
+          { key: 'mrank', label: 'Meridian rank', num: true, sortVal: 1, title: 'Its place in Meridian\'s own PnL leaderboard (its API\'s ranking), all time, and over the last 30 days beside it, the window its app ranks its top traders by (the first 12, in its social search, not open to the public yet); as of the snapshot. Meridian ranks by the results of the wallet\'s own predictions at the verdict, claimed or not, without the secondary market: Net PnL differs from it only by the position tokens a bettor traded (checked 2026-10-21 on 763 of 764 bettors). Hover a rank for that PnL', render: mrCell },
           { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ the stakes of decided predictions (claimed or not), plus the sold share of open predictions\' stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
           // (by result, whoever claimed: a prediction whose tokens it sold before the verdict counts too, its sale in Net PnL)
           { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, title: WIN_COL_TITLE + '. Predictions whose tokens it sold before the verdict count by their result (the sale is in Net PnL)', render: winCell },
@@ -521,7 +536,7 @@
     const mt = c && c.ev && snap && snap.matches ? snap.matches[c.ev] : null;
     if (!mt || !mt.n) return null;
     const v = mt.v || {};
-    return h('span', { title: `${mt.n}${mt.t ? ', starts ' + U.fmtDateTime(mt.t) : ''}${mt.lg ? ' · ' + String(mt.lg).toUpperCase() : ''} · the match's volume on the mirrored markets as Meridian's app shows it, low-odds trading left out: ${P.fmtVol(v.d1)} in 24 hours, ${P.fmtVol(v.d7)} in 7 days` },
+    return h('span', { title: `${mt.n}${mt.t ? ', starts ' + U.fmtDateTime(mt.t) : ''}${mt.lg ? ' · ' + String(mt.lg).toUpperCase() : ''} · the match's volume on the mirrored markets, every question of it, low-odds trading left out: ${P.fmtVol(v.d1)} in 24 hours, ${P.fmtVol(v.d7)} in 7 days (the cards of Meridian's app count its open questions between 1 and 99 % only)` },
       mt.n + (mt.t ? ' · ' + U.fmtWhen(mt.t) : ''));
   };
   /** The line under a question in the lists: its match, then its first tags */
@@ -1194,32 +1209,41 @@
    *  1,200 in all. Rows carry n = predictions ever, b = open predictions, s = open stake. */
   const hasBets = (q) => q.oi > 0 || q.b > 0 || q.n > 0 || q.n == null;   // n == null: snapshot older than this field
   const betsNote = (c) => { const parts = []; if (c.b) parts.push(`${c.b} open bet${c.b > 1 ? 's' : ''}${c.s ? ' · ' + usd(c.s, { compact: true }) + ' staked' : ''}`); if (c.u) parts.push(`${c.u} decided, unclaimed`); return parts.length ? parts.join(' · ') : null; };
-  /** Meridian's Hot lists as of the snapshot (snap.hot): the questions, or groups of them, its app puts first by the
-   *  mirrored markets' volume over the last hour or 24 hours (low-odds trading left out), with what is staked on them
-   *  through Meridian where this site's list has them (a row of those opens the question). Closed until opened, the choice
-   *  kept in this browser; null without the lists (an older snapshot). */
+  /** Meridian's Hot lists as of the snapshot (snap.hot): the first page of its app's question list as it opens (open
+   *  questions in every category but prices, 1 to 99 %, the 15-minute up/down ones left out, a match as one entry),
+   *  sorted by the mirrored markets' volume over one of the windows of its sort menu (low-odds trading left out): a match,
+   *  a group of questions or a question, with what is staked on them through Meridian where this site's list has them (a
+   *  question of those opens). Closed until opened, the choice kept in this browser; null without the lists (an older
+   *  snapshot: h1 and d1 only, from a list without the app's filter). */
+  const HOT_TABS = [{ v: 'h1', label: 'Breaking', win: '1h', title: 'Breaking (1H Volume) in Meridian\'s app' }, { v: 'h4', label: 'Trending', win: '4h', title: 'Trending (4H Volume) in Meridian\'s app' }, { v: 'd1', label: 'Hot', win: '24h', title: 'Hot (24H Volume): the list Meridian\'s app opens with' }, { v: 'd7', label: 'Top', win: '7d', title: 'Top (7D Volume) in Meridian\'s app' }];
   function hotCard(snap, all, ctx) {
-    const hot = snap.hot; if (!hot || !(hot.h1 || hot.d1)) return null;
-    const KEY = 'md.predict.hotOpen'; let win = 'd1';
+    const hot = snap.hot; const tabs = hot ? HOT_TABS.filter((x) => Array.isArray(hot[x.v])) : [];
+    if (!tabs.length) return null;
+    const KEY = 'md.predict.hotOpen'; let win = tabs.some((x) => x.v === 'd1') ? 'd1' : tabs[0].v;
     const byId = new Map(all.map((q) => [String(q.id).toLowerCase(), q]));
-    const ours = (r) => (r.k === 'c' ? byId.get(String(r.id).toLowerCase()) || null : null);
+    // this site's questions of a row: the question itself, a group's questions, a match's questions
+    const oursOf = (r) => (r.k === 'c' ? [byId.get(String(r.id).toLowerCase())].filter(Boolean) : r.k === 'g' ? all.filter((q) => q.g != null && String(q.g) === String(r.id)) : r.k === 'm' ? all.filter((q) => q.ev != null && String(q.ev) === String(r.ev)) : []);
+    const appOf = (r) => P.appPageUrl(r.k === 'm' ? '/event/' + encodeURIComponent(r.ev || r.id) : '/' + encodeURIComponent(r.id));
+    const what = (r) => (r.k === 'g' ? ` · a group of ${r.n} question${r.n === 1 ? '' : 's'}` : r.k === 'm' ? ' · a match' + (r.lg ? ' · ' + String(r.lg).toUpperCase() : '') + (r.t ? ' · ' + U.fmtWhen(r.t) : '') : '');
     const body = h('div', { style: { display: 'none' } });
     const draw = () => {
-      const rows = hot[win] || [];
-      U.replace(body, h('div', { style: { padding: '8px 12px 0' } }, UI.seg([{ v: 'h1', label: 'Last hour' }, { v: 'd1', label: '24 hours' }], win, (v) => { win = v; draw(); }, 'sm')),
+      const rows = hot[win] || [], tab = tabs.find((x) => x.v === win) || tabs[0];
+      U.replace(body, h('div', { style: { padding: '8px 12px 0' } }, UI.seg(tabs.map((x) => ({ v: x.v, label: x.label + ' (' + x.win.toUpperCase() + ')', title: x.title })), win, (v) => { win = v; draw(); }, 'sm')),
         UI.table({ cols: [
           { key: 'i', label: '#', render: (r) => UI.rank(rows.indexOf(r) + 1, false) },
-          { key: 'q', label: 'Question', render: (r) => h('div', { style: { whiteSpace: 'normal', minWidth: '220px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(r.q), r.k === 'g' ? h('span.xs.dim', ` · a group of ${r.n} question${r.n === 1 ? '' : 's'}`) : null), qSub(snap, { ev: r.ev })) },
+          { key: 'q', label: 'Market', render: (r) => h('div', { style: { whiteSpace: 'normal', minWidth: '220px', maxWidth: '520px', lineHeight: '1.3' } },
+            h('div', U.kid(r.q), h('span.xs.dim', what(r)), ' ', h('a.xs.ext', { href: appOf(r), target: '_blank', rel: 'noopener', title: 'Its page on Meridian\'s app', onclick: (e) => e.stopPropagation() }, U.icon('external'))),
+            r.k === 'm' ? null : qSub(snap, { ev: r.ev })) },
           { key: 'c', label: 'Category', render: (r) => r.cat || '—' },
-          { key: 'v', label: win === 'h1' ? 'Volume 1h' : 'Volume 24h', num: true, title: 'The mirrored market\'s volume over the window, low-odds trading left out, as Meridian\'s app sorts by it; a group\'s questions added up', render: (r) => P.fmtVol(r.v) },
-          { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes placed on the question through Meridian, where this site lists it (questions with Meridian bets)', render: (r) => { const q = ours(r); return q && q.sw ? usd(q.sw, { compact: true }) : h('span.dim', '—'); } },
-        ], rows, empty: 'No list in this snapshot', onRow: (r) => { const q = ours(r); if (q) openQuestion(q, ctx); } }),
-        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ' + U.fmtAgo(hot.at || snap.builtAt) + '. Any question on the exchange can be on these lists; most have no Meridian bets yet.'));
+          { key: 'v', label: 'Volume ' + tab.win, num: true, title: `The mirrored markets' volume over the last ${tab.win}, low-odds trading left out, as Meridian's app shows it on this list: a group's questions added up (those it lists, between 1 and 99 %), a match's open questions together`, render: (r) => P.fmtVol(r.v) },
+          { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes placed through Meridian on the question, the group\'s or the match\'s questions, where this site lists them (questions with Meridian bets)', render: (r) => { const sw = oursOf(r).reduce((s, q) => s + (q.sw || 0), 0); return sw ? usd(sw, { compact: true }) : h('span.dim', '—'); } },
+        ], rows, empty: 'No list in this snapshot', onRow: (r) => { const qs = oursOf(r); if (qs.length === 1) openQuestion(qs[0], ctx); } }),
+        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ' + U.fmtAgo(hot.at || snap.builtAt) + ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with one question this site lists opens it; the arrow opens Meridian\'s page.'));
     };
     const card = h('div.card.tight.collapsible');
     const set = (open) => { card.classList.toggle('open', open); body.style.display = open ? '' : 'none'; head.setAttribute('aria-expanded', String(open)); if (open && !body.firstChild) draw(); };
     const head = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => { const open = !card.classList.contains('open'); U.storage.set(KEY, open); set(open); } },
-      h('span.chev', U.icon('chevR')), h('h2', 'Hot on Meridian\'s app'), h('span.dim.small', 'the questions its app lists first, by the volume of the mirrored markets'), h('span.grow'), h('span.dim.small.toggle-hint'));
+      h('span.chev', U.icon('chevR')), h('h2', 'Hot on Meridian\'s app'), h('span.dim.small', 'the markets its app lists first, by the volume of the mirrored markets'), h('span.grow'), h('span.dim.small.toggle-hint'));
     U.append(card, [head, body]);
     set(U.storage.get(KEY, false) === true);
     return card;

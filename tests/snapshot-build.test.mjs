@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -162,12 +162,13 @@ const out = (a) => a === WL('d');
 test('compactCompetition: window, prizes, rules, market counts and the standings best first, a left-out wallet not listed', () => {
   const c = { slug: 'nfl-week-4', title: 'NFL Week 4', label: 'NFL', startsAt: '2026-09-30T04:00:00.000Z', endsAt: '2026-10-06T13:00:00.000Z', payouts: ['200', '75', '50'], prizeUnit: 'USDe', minStake: '10', minLegs: 2, rankBy: 'MULTIPLIER', disqualifyEarlySales: true, eligibleMarketKinds: { gameEventIds: ['885112', '909431'], groupIds: [], conditionIds: [] } };
   const st = [{ rank: 2, account: WL('B'), multiplier: 8.761949443, predictionId: '0x2', payout: wei(87.62), stake: wei(10) }, { rank: 1, account: WL('a'), multiplier: 15.588582223, predictionId: '0x1', payout: wei(210.45), stake: wei(13.5) }, { rank: 3, account: WL('d'), multiplier: 5, payout: wei(50), stake: wei(10) }];
-  const x = compactCompetition(c, st, 36, out);
+  const x = compactCompetition(c, st, 36, out, new Map([['0x1', 4]]));
   assert.equal(x.start, Date.UTC(2026, 8, 30, 4)); assert.equal(x.end, Date.UTC(2026, 9, 6, 13));
   assert.deepEqual(x.payouts, [200, 75, 50]); assert.equal(x.minStake, 10); assert.equal(x.minLegs, 2); assert.equal(x.rankBy, 'MULTIPLIER'); assert.equal(x.noEarlySales, true);
   assert.deepEqual(x.markets, { games: 2, groups: 0, questions: 0, eligible: 36 });
   assert.equal(x.entries, 2);
-  assert.deepEqual(x.standings, [{ r: 1, a: WL('a'), m: 15.5886, p: 210.45, s: 13.5, id: '0x1' }, { r: 2, a: WL('b'), m: 8.7619, p: 87.62, s: 10, id: '0x2' }]);
+  // l: the legs of the prediction, where the snapshot has it
+  assert.deepEqual(x.standings, [{ r: 1, a: WL('a'), m: 15.5886, p: 210.45, s: 13.5, id: '0x1', l: 4 }, { r: 2, a: WL('b'), m: 8.7619, p: 87.62, s: 10, id: '0x2' }]);
   assert.equal(compactCompetition(c, Array.from({ length: 40 }, (_, i) => ({ rank: i + 1, account: WL(i % 9 + 1), payout: wei(1), stake: wei(1) })), null, out).standings.length, COMP_STANDINGS);
 });
 
@@ -178,14 +179,70 @@ test('rankMap: Meridian\'s own rank and PnL by wallet; compactMatch: a match\'s 
   assert.deepEqual(x, { n: 'Colts vs. Commanders', t: Date.UTC(2026, 9, 4, 13, 30), lg: 'nfl', v: { d1: 4810386.74, d7: 5000000 } });
 });
 
-test('hotRows: Meridian\'s Hot list in its order, a group\'s questions added up', () => {
-  const edges = [
-    { node: { __typename: 'Condition', conditionId: '0xc1', question: 'San Francisco wins', similarMarketVolumeFiltered1h: 120.5, similarMarketVolumeFiltered24h: 77379023.32, category: { name: 'Sports' }, conditionGroup: { externalEventId: 'KXNFLGAME-26OCT19WASSF' } } },
-    { node: { __typename: 'ConditionGroup', groupId: 960, name: 'World Cup Winner', externalEventId: '30615', category: { name: 'Sports' }, conditions: { nodes: [{ similarMarketVolumeFiltered24h: 10 }, { similarMarketVolumeFiltered24h: 5.5 }] } } },
-    { node: { __typename: 'ConditionGroupCluster' } },
+test('hotRows: the app\'s list in its order: a match, a group\'s questions added up, a question; the groups it hides left out', () => {
+  const nodes = [
+    { __typename: 'ConditionGroupCluster', preview: { name: 'Philadelphia at New York', externalEventId: 'KXNBAGAME-26OCT20PHINYK', startTime: '2026-10-20T23:30:00.000Z', category: { name: 'Sports' }, anchorGroup: { groupId: 99001 }, teams: [{ league: null }, { league: 'nba' }], vol: 25778210.4 } },
+    { __typename: 'ConditionGroup', groupId: 20516, name: 'Fed Decision in October?', externalEventId: '27824', category: { name: 'Economy & Finance' }, conditions: { nodes: [{ vol: 900000, estimatedPrice: 0.87 }, { vol: 95450.004, estimatedPrice: '0.14' }] } },
+    { __typename: 'Condition', conditionId: '0x9ed2', question: 'Kim Jong Un out by December 31?', vol: 228490, category: { name: 'Geopolitics' }, conditionGroup: null },
+    // the app does not list these: a group whose every question is under 1 % or over 99 %, its hidden groups (925, 926)
+    { __typename: 'ConditionGroup', groupId: 1, name: 'Long shots', conditions: { nodes: [{ vol: 5, estimatedPrice: 0.004 }, { vol: 5, estimatedPrice: 0.995 }] } },
+    { __typename: 'ConditionGroup', groupId: 925, name: 'Hidden', conditions: { nodes: [{ vol: 5, estimatedPrice: 0.5 }] } },
+    { __typename: 'Condition', conditionId: '0xh', question: 'In a hidden group', vol: 5, conditionGroup: { groupId: '926' } },
+    { __typename: 'ConditionGroupCluster', preview: { name: 'Hidden match', anchorGroup: { groupId: 925 }, vol: 5 } },
+    { __typename: 'ConditionGroupCluster', preview: { name: null, vol: 5 } },
   ];
-  assert.deepEqual(hotRows(edges, 'd1'), [{ k: 'c', id: '0xc1', q: 'San Francisco wins', cat: 'Sports', ev: 'KXNFLGAME-26OCT19WASSF', v: 77379023.32 }, { k: 'g', id: '960', q: 'World Cup Winner', cat: 'Sports', ev: '30615', v: 15.5, n: 2 }]);
-  assert.equal(hotRows(edges, 'h1')[0].v, 120.5);
+  assert.deepEqual(hotRows(nodes), [
+    { k: 'm', id: 'KXNBAGAME-26OCT20PHINYK', q: 'Philadelphia at New York', cat: 'Sports', ev: 'KXNBAGAME-26OCT20PHINYK', t: Date.UTC(2026, 9, 20, 23, 30), lg: 'nba', v: 25778210.4 },
+    { k: 'g', id: '20516', q: 'Fed Decision in October?', cat: 'Economy & Finance', ev: '27824', v: 995450, n: 2 },
+    { k: 'c', id: '0x9ed2', q: 'Kim Jong Un out by December 31?', cat: 'Geopolitics', ev: null, v: 228490 },
+  ]);
+  // a group without prices, or all of it settled, is listed; an empty one is not
+  assert.equal(hotRows([{ __typename: 'ConditionGroup', groupId: 2, name: 'x', conditions: { nodes: [{ vol: 1, estimatedPrice: null }] } }]).length, 1);
+  assert.equal(hotRows([{ __typename: 'ConditionGroup', groupId: 3, name: 'y', conditions: { nodes: [{ vol: 1, estimatedPrice: 1, settled: true }] } }]).length, 1);
+  assert.equal(hotRows([{ __typename: 'ConditionGroup', groupId: 4, name: 'z', conditions: { nodes: [] } }]).length, 0);
+});
+
+test('hotFilter: the app\'s list as it opens, sorted by one window of its menu', () => {
+  assert.deepEqual(hotFilter(['crypto', 'sports'], 'd1'), { categorySlugs: ['crypto', 'sports'], resolutionStatus: 'UNRESOLVED', excludeTags: ['15 Minute Up/Down'], estimatedPrice: { gte: 0.01, lte: 0.99 }, similarMarketVolumeWindow: 'TWENTY_FOUR_HOURS_FILTERED', clustered: true });
+  assert.deepEqual(Object.keys(HOT_WINDOWS), ['h1', 'h4', 'd1', 'd7']);
+  assert.equal(HOT_WINDOWS.h1.order, 'SIMILAR_MARKET_VOLUME_1H_FILTERED'); assert.equal(HOT_WINDOWS.d7.cluster, 'SEVEN_DAYS');
+});
+
+test('legacyCycle: the monthly leaderboard\'s four cycles from 1 July 16:00 UTC', () => {
+  assert.deepEqual([0, 1, 2, 3].map((i) => { const c = legacyCycle(i); return [new Date(c.start).toISOString().slice(0, 16), new Date(c.end).toISOString().slice(0, 16)]; }),
+    [['2026-07-01T16:00', '2026-07-22T16:00'], ['2026-07-22T16:00', '2026-08-12T16:00'], ['2026-08-12T16:00', '2026-09-03T16:00'], ['2026-09-03T16:00', '2026-09-30T16:00']]);
+});
+
+test('legacyStandings: a settled win of 2+ legs and 25+ placed and settled in the cycle, held to its settlement; each wallet\'s best', () => {
+  const cy = legacyCycle(3), t0 = cy.start + 86400000, H = 3600000;
+  const win = (id, who, o) => Object.assign({ id, predictor: who, t: t0, settledAt: t0 + 5 * H, settled: true, result: 'PREDICTOR_WINS', legs: 3, stake: 25, cp: 100, tokP: '0xt' + id }, o);
+  const norms = [
+    win('a1', WL('a')), win('a2', WL('a'), { cp: 200 }),                     // a: its best, 9x
+    win('b1', WL('b'), { stake: 50, cp: 100 }),                               // b: 3x
+    win('c1', WL('c'), { legs: 1, cp: 900 }),                                 // one leg
+    win('c2', WL('c'), { stake: 24.99, cp: 900 }),                            // under 25
+    win('c3', WL('c'), { t: cy.start - H, cp: 900 }),                         // placed before the cycle
+    win('c4', WL('c'), { settledAt: cy.end + H, cp: 900 }),                   // settled after it
+    win('c5', WL('c'), { viaToken: true, cp: 900 }),                          // paid by a claim on its token: the API still has it pending
+    win('c6', WL('c'), { result: 'COUNTERPARTY_WINS', cp: 900 }),
+    win('c7', WL('c'), { cp: 900 }),                                          // its token sold before the settlement
+    win('0x06cd38afaf33dd44a568f94c470c34d489c14501632f9ad7689bf653a3e9ef67', WL('c'), { cp: 900 }),   // on the blocklist
+    win('e1', WL('e'), { cp: 50 }),                                           // e: sold after the settlement, still counts
+    win('d1', WL('d'), { cp: 500 }),                                          // a left-out wallet: ranked, then dropped
+  ];
+  const trades = [{ t: t0 + H, seller: WL('c'), token: '0xtc7' }, { t: t0 + 6 * H, seller: WL('e'), token: '0xte1' }];
+  const st = legacyStandings(norms, trades, cy, out);
+  assert.deepEqual(st.map((x) => [x.r, x.a, x.id, Math.round(x.m * 100) / 100, x.l]), [[2, WL('a'), 'a2', 9, 3], [3, WL('b'), 'b1', 3, 3], [4, WL('e'), 'e1', 3, 3]]);
+  assert.equal(st[0].p, 225); assert.equal(st[0].s, 25);
+});
+
+test('legacyCompetitions: the four cycles as competitions, USD prizes and the token bonus of each', () => {
+  const cs = legacyCompetitions([], [], out);
+  assert.deepEqual(cs.map((c) => [c.slug, c.title, c.weeks, c.bonus.unit, c.bonus.payouts[0]]), [
+    ['legacy-cycle-0', 'Predict Leaderboard · Jul 1 – Jul 22', 3, '$cashcat', 25000], ['legacy-cycle-1', 'Predict Leaderboard · Jul 22 – Aug 12', 3, 'PONS', 75000],
+    ['legacy-cycle-2', 'Predict Leaderboard · Aug 12 – Sep 3', 3, '$cashcat', 12500], ['legacy-cycle-3', 'Monthly Competition', 4, 'HOOD', 25]]);
+  assert.deepEqual(cs[3].payouts, LEGACY_PAYOUTS); assert.equal(LEGACY_PAYOUTS.reduce((x, y) => x + y, 0), 5000);
+  assert.equal(cs[3].unit, 'USD'); assert.equal(cs[3].legacy, 3); assert.equal(cs[3].minStake, 25); assert.equal(cs[3].entries, 0); assert.equal(cs[3].markets, null);
 });
 
 test('cashPlan: wallets never read first, then active since their last read, then a week unread, each the most recently active first', () => {

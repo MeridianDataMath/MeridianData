@@ -502,7 +502,7 @@ export const COMP_STANDINGS = 25;
 /** A competition as the snapshot keeps it: its window (ms), prizes by place, rules, how many matches, groups and
  *  questions it names (and how many questions qualify in all), and its standings best first, up to COMP_STANDINGS: each
  *  entry's place, wallet, multiplier, payout and stake (USDe) and the prediction behind it. */
-export function compactCompetition(c, standings, eligibleN, out = outWallet) {
+export function compactCompetition(c, standings, eligibleN, out = outWallet, legsOf = null) {
   const k = (c && c.eligibleMarketKinds) || {};
   const rows = (standings || []).map((x) => Object.assign({}, x, { account: String((x && x.account) || '').toLowerCase() })).filter((x) => !out(x.account)).sort((a, b) => a.rank - b.rank);
   return {
@@ -510,10 +510,11 @@ export function compactCompetition(c, standings, eligibleN, out = outWallet) {
     payouts: (c.payouts || []).map((v) => Number(v) || 0), unit: c.prizeUnit || 'USDe', minStake: Number(c.minStake) || 0, minLegs: c.minLegs || null, rankBy: c.rankBy || null, noEarlySales: !!c.disqualifyEarlySales,
     markets: { games: (k.gameEventIds || []).length, groups: (k.groupIds || []).length, questions: (k.conditionIds || []).length, eligible: eligibleN == null ? null : eligibleN },
     entries: rows.length,
-    standings: rows.slice(0, COMP_STANDINGS).map((x) => ({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id: x.predictionId || null })),
+    // l: the prediction's legs, from the snapshot's own predictions (the standings do not carry them)
+    standings: rows.slice(0, COMP_STANDINGS).map((x) => { const id = x.predictionId || null, l = id && legsOf ? legsOf.get(String(id).toLowerCase()) : null; return Object.assign({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id }, l ? { l } : null); }),
   };
 }
-async function readCompetitions() {
+async function readCompetitions(legsOf) {
   const d = await P.gql('{ competitions { slug title label startsAt endsAt payouts prizeUnit minStake minLegs rankBy disqualifyEarlySales eligibleMarketKinds { gameEventIds groupIds conditionIds } } }');
   const out = [];
   for (const c of (d && d.competitions) || []) {
@@ -522,9 +523,52 @@ async function readCompetitions() {
       const s = await P.gql('query($s: String!) { competition(slug: $s) { eligibleConditionIds leaderboard { rank account multiplier predictionId payout stake } } }', { s: c.slug });
       st = (s.competition && s.competition.leaderboard) || []; elig = s.competition && Array.isArray(s.competition.eligibleConditionIds) ? s.competition.eligibleConditionIds.length : null;
     } catch (e) { console.warn('  predict: the standings of competition', shown(c.slug), 'failed:', e.message); }
-    out.push(compactCompetition(c, st, elig));
+    out.push(compactCompetition(c, st, elig, outWallet, legsOf));
   }
   return out.sort((a, b) => (b.end || 0) - (a.end || 0));
+}
+// Meridian's monthly Predict Leaderboard, before the competitions above: its app works the standings out from the
+// predictions (no API list) and still shows them (read from its code 2026-10-21). Four cycles from 1 July 2026 16:00 UTC,
+// three of 21 days (the third runs to 3 September), then 3 to 30 September, which its competitions page lists as "Monthly
+// Competition"; its leaderboard page steps back through the others. Each pays the same USD prizes plus a token bonus.
+const LEGACY_START = Date.UTC(2026, 6, 1, 16), LEGACY_LEN = 21 * 86400000, LEGACY_SEP = Date.UTC(2026, 8, 3, 16), LEGACY_END = Date.UTC(2026, 8, 30, 16);
+export const LEGACY_PAYOUTS = [2500, 1000, 500, 250, 250, 100, 100, 100, 100, 100];
+const LEGACY_BONUS = [['$cashcat', [25000, 10000, 5000, 2500, 2500, 1000, 1000, 1000, 1000, 1000]], ['PONS', [75000, 30000, 15000, 7500, 7500, 3000, 3000, 3000, 3000, 3000]], ['$cashcat', [12500, 5000, 2500, 1250, 1250, 500, 500, 500, 500, 500]], ['HOOD', [25, 10, 5, 2.5, 2.5, 1, 1, 1, 1, 1]]];
+// the predictions its leaderboard never counts (its blocklist)
+const LEGACY_BLOCKED = new Set(['0x06cd38afaf33dd44a568f94c470c34d489c14501632f9ad7689bf653a3e9ef67', '0x6c76074155c95246a73067468afe58048209343c162716e69d0e442ee894067a', '0x1077e445321906fd538d71a99eef82b53e5876fa399a079f5d8f0aa2c3d5ecbf', '0xc3a988f69e93b9b98949d65bb0c7f47b98fdba530e95f8dd6335781ac1c5ca62', '0xdaf737c407de9ad1f634af43de2fcba71cd9caa42ca48a24720ae3d1197225de', '0x1b2b2d8ae56dfe1c2ffe66e2f75f013df68788e11369148522fb2c161a86b368', '0x0290d6f345542f309b893c533522a7876ec0d16913e999112c03d48613d144d4', '0x0d78b3ebf74d965da67306d86f5e04a0f85c3173cc79e43f401cf5b6a3ee8f55', '0xdf8fed35fa06803db437b25e04ed0ab82ded79e184767556b08a413c45c2782b', '0xd1b7abde2332f097fa2d32fe519ad184161f04c1df3183853c5f080d0a5c0ab8', '0xeda70ffcafc0d1e1e85ca10c889993bc57707f08bb9027b6bd146c7bade4168c', '0xf165c34b7193512273387cd832d82d10bc152ffbd50b2ee9985d43a4ee25ee9f', '0x92920d295b090fc901f8f90450bdff004a53be12d07b306845342c1e3d1b0057']);
+export const legacyCycle = (i) => { const start = i <= 2 ? LEGACY_START + i * LEGACY_LEN : LEGACY_SEP; return { i, start, end: i === 2 ? LEGACY_SEP : i === 3 ? LEGACY_END : start + LEGACY_LEN }; };
+/** A cycle's standings as its app works them out: a winning prediction (settled by the API's own claim, not one paid by
+ *  a claim on its token) of 2 legs or more and a stake of 25 or more, placed and settled within the cycle, not on the
+ *  blocklist, whose bettor sold none of its tokens before the settlement (trades within the cycle); each wallet's best
+ *  multiplier (payout ÷ stake), best first, ranked before the left-out wallets go. (The app also wants every leg resolved
+ *  by Meridian's own resolver: all were in these cycles, its 37 standings of September checked 2026-10-21.) */
+export function legacyStandings(norms, trades, cy, out = outWallet) {
+  const firstSale = new Map();
+  for (const t of trades || []) { if (!(t.t >= cy.start && t.t <= cy.end)) continue; const k = t.seller + '|' + t.token, x = firstSale.get(k); if (x === undefined || t.t < x) firstSale.set(k, t.t); }
+  const best = new Map();
+  for (const n of norms || []) {
+    if (!n.settled || n.viaToken || n.result !== 'PREDICTOR_WINS' || n.legs < 2 || LEGACY_BLOCKED.has(String(n.id).toLowerCase())) continue;
+    const sa = n.settledAt; if (!sa || sa < cy.start || sa > cy.end || !(n.t >= cy.start && n.t <= cy.end)) continue;
+    if (n.tokP) { const s = firstSale.get(n.predictor + '|' + n.tokP); if (s !== undefined && s < sa) continue; }
+    if (!(n.stake >= 25)) continue;
+    const m = (n.stake + n.cp) / n.stake, b = best.get(n.predictor);
+    if (!b || m > b.m) best.set(n.predictor, { a: n.predictor, m, s: n.stake, p: n.stake + n.cp, id: n.id, l: n.legs });
+  }
+  return [...best.values()].sort((a, b) => b.m - a.m).map((x, i) => Object.assign(x, { r: i + 1 })).filter((x) => !out(x.a));
+}
+/** The four cycles as the snapshot keeps a competition (compactCompetition), with `bonus` (the token prizes by place),
+ *  `legacy` (the cycle, for its app's link) and `weeks` (its app's "3-Week Competition") */
+export function legacyCompetitions(norms, trades, out = outWallet) {
+  const day = (t) => new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(t);
+  return [0, 1, 2, 3].map((i) => {
+    const cy = legacyCycle(i), rows = legacyStandings(norms, trades, cy, out), [unit, bonus] = LEGACY_BONUS[i];
+    return {
+      slug: 'legacy-cycle-' + i, title: i === 3 ? 'Monthly Competition' : 'Predict Leaderboard · ' + day(cy.start) + ' – ' + day(cy.end), label: 'Predict Leaderboard', legacy: i, weeks: Math.round((cy.end - cy.start) / (7 * 86400000)),
+      start: cy.start, end: cy.end, payouts: LEGACY_PAYOUTS.slice(), unit: 'USD', bonus: { unit, payouts: bonus.slice() }, minStake: 25, minLegs: 2, rankBy: 'MULTIPLIER', noEarlySales: true,
+      markets: null, entries: rows.length,
+      standings: rows.slice(0, COMP_STANDINGS).map((x) => ({ r: x.r, a: x.a, m: Math.round(x.m * 1e4) / 1e4, p: round2(x.p), s: round2(x.s), id: x.id, l: x.l })),
+    };
+  });
 }
 /** Meridian's PnL ranks by wallet (its app's leaderboard): { address: [rank, PnL in USDe] }, its own ranks. */
 export function rankMap(nodes, out = outWallet) {
@@ -532,7 +576,8 @@ export function rankMap(nodes, out = outWallet) {
   for (const x of nodes || []) { const a = String((x && x.account && x.account.address) || '').toLowerCase(); if (!out(a) && x.rank != null) m[a] = [x.rank, round2(P.usd(x.pnl))]; }
   return m;
 }
-/** All time and over the last 7 days: { n (wallets ranked), all, n7, d7, at }. */
+/** All time and over the last 30 days, the window its app ranks its top traders by (its social search): { n (wallets
+ *  ranked), all, n30, d30, at }. */
 async function readPnlRanks() {
   const read = async (since) => {
     const nodes = []; let after = null, pages = 0, total = null;
@@ -544,8 +589,8 @@ async function readPnlRanks() {
     } while (after && pages < 80);
     return { n: total, map: rankMap(nodes) };
   };
-  const all = await read(0), d7 = await read(Math.floor(Date.now() / 1000) - 7 * 86400);
-  return { n: all.n, all: all.map, n7: d7.n, d7: d7.map, at: Date.now() };
+  const all = await read(0), d30 = await read(Math.floor(Date.now() / 1000) - 30 * 86400);
+  return { n: all.n, all: all.map, n30: d30.n, d30: d30.map, at: Date.now() };
 }
 /** A match (Meridian's cluster of the questions on one event) as the snapshot keeps it: name, start (ms), league, and the
  *  app's volume over 24 hours and 7 days (the mirrored markets', low-odds trading left out; the API answers at most two
@@ -561,21 +606,71 @@ export async function readMatches(evIds) {   // exported for a check against the
   }
   return out;
 }
-/** A Hot list as the snapshot keeps it: Meridian's top questions, or groups of them, by the mirrored markets' volume over
- *  the window (h1: the last hour, d1: 24 hours; low-odds trading left out), in its order, each with that volume (a group:
- *  its questions' added up), its category and match. */
-export function hotRows(edges, win) {
-  const vol = (c) => Number(win === 'h1' ? c.similarMarketVolumeFiltered1h : c.similarMarketVolumeFiltered24h) || 0;
-  return (edges || []).map((e) => e && e.node).filter(Boolean).map((n) => {
-    if (n.__typename === 'ConditionGroup') { const cs = (n.conditions && n.conditions.nodes) || []; return { k: 'g', id: String(n.groupId), q: n.name, cat: n.category ? n.category.name : null, ev: n.externalEventId != null ? String(n.externalEventId) : null, v: round2(cs.reduce((s, c) => s + vol(c), 0)), n: cs.length }; }
-    if (n.__typename === 'Condition') return { k: 'c', id: n.conditionId, q: n.question, cat: n.category ? n.category.name : null, ev: n.conditionGroup && n.conditionGroup.externalEventId != null ? String(n.conditionGroup.externalEventId) : null, v: round2(vol(n)) };
+// Meridian's app's question list as it opens (its default view, hotFilter): questions not resolved yet, in every category
+// but the price ones, the 15-minute up/down questions left out, a chance between 1 and 99 % (it hides the others until
+// asked), a match's questions as one entry; sorted by the mirrored markets' volume over a window of its sort menu
+// (Breaking 1H, Trending 4H, Hot 24H, its default, Top 7D), low-odds trading left out. As its code builds it (read
+// 2026-10-21), with the groups it never lists (its disabledPredictGroups), its price categories and its first page of 15.
+export const HOT_N = 15, HOT_HIDDEN_GROUPS = new Set([925, 926]), HOT_NO_CATS = new Set(['prices-crypto', 'prices-equity', 'prices-commodities']);
+export const HOT_WINDOWS = {
+  h1: { order: 'SIMILAR_MARKET_VOLUME_1H_FILTERED', filter: 'ONE_HOUR_FILTERED', cluster: 'ONE_HOUR', field: 'similarMarketVolumeFiltered1h' },
+  h4: { order: 'SIMILAR_MARKET_VOLUME_4H_FILTERED', filter: 'FOUR_HOURS_FILTERED', cluster: 'FOUR_HOURS', field: 'similarMarketVolumeFiltered4h' },
+  d1: { order: 'SIMILAR_MARKET_VOLUME_24H_FILTERED', filter: 'TWENTY_FOUR_HOURS_FILTERED', cluster: 'TWENTY_FOUR_HOURS', field: 'similarMarketVolumeFiltered24h' },
+  d7: { order: 'SIMILAR_MARKET_VOLUME_7D_FILTERED', filter: 'SEVEN_DAYS_FILTERED', cluster: 'SEVEN_DAYS', field: 'similarMarketVolumeFiltered7d' },
+};
+export const hotFilter = (cats, win) => ({ categorySlugs: cats, resolutionStatus: 'UNRESOLVED', excludeTags: ['15 Minute Up/Down'], estimatedPrice: { gte: 0.01, lte: 0.99 }, similarMarketVolumeWindow: HOT_WINDOWS[win].filter, clustered: true });
+/** Whether the app lists a group: one of its questions between 1 and 99 % (or without a price), or all of them settled */
+const hotGroupShown = (cs) => cs.length > 0 && (cs.every((c) => c.settled) || cs.some((c) => { const p = c.estimatedPrice == null ? NaN : Number(c.estimatedPrice); return !Number.isFinite(p) || (p >= 0.01 && p <= 0.99); }));
+/** A Hot list as the snapshot keeps it, in the app's order: a match (k 'm': its name, start, league and the API's volume
+ *  of its questions over the window), a group (k 'g': its questions' volumes added up, every one of them, and how many)
+ *  or a question (k 'c'), each with its category and match (ev). `nodes`: the list's nodes, a group's questions all read
+ *  (the API pages them 25 at a time), their volume as `vol`. The groups the app does not list are left out. */
+export function hotRows(nodes, hidden = HOT_HIDDEN_GROUPS) {
+  const gid = (x) => (x == null ? null : Number(x)), ev = (x) => (x == null || x === '' ? null : String(x));
+  return (nodes || []).filter(Boolean).map((n) => {
+    if (n.__typename === 'ConditionGroupCluster') {
+      const p = n.preview || {};
+      if (!p.name || hidden.has(gid(p.anchorGroup && p.anchorGroup.groupId))) return null;
+      return { k: 'm', id: ev(p.externalEventId), q: p.name, cat: p.category ? p.category.name : null, ev: ev(p.externalEventId), t: p.startTime ? Date.parse(p.startTime) : null, lg: (p.teams || []).map((t) => t && t.league).find(Boolean) || null, v: round2(Number(p.vol) || 0) };
+    }
+    if (n.__typename === 'ConditionGroup') {
+      const cs = (n.conditions && n.conditions.nodes) || [];
+      if (hidden.has(gid(n.groupId)) || !hotGroupShown(cs)) return null;
+      return { k: 'g', id: String(n.groupId), q: n.name, cat: n.category ? n.category.name : null, ev: ev(n.externalEventId), v: round2(cs.reduce((s, c) => s + (Number(c.vol) || 0), 0)), n: cs.length };
+    }
+    if (n.__typename === 'Condition') {
+      if (hidden.has(gid(n.conditionGroup && n.conditionGroup.groupId))) return null;
+      return { k: 'c', id: n.conditionId, q: n.question, cat: n.category ? n.category.name : null, ev: ev(n.conditionGroup && n.conditionGroup.externalEventId), v: round2(Number(n.vol) || 0) };
+    }
     return null;
   }).filter(Boolean);
 }
-async function readHot() {
-  const q = (field) => P.gql(`{ questions(first: 10, filter: {}, orderBy: { field: ${field}, direction: DESC }) { edges { node { __typename ... on Condition { conditionId question similarMarketVolumeFiltered1h similarMarketVolumeFiltered24h category { name } conditionGroup { externalEventId } } ... on ConditionGroup { groupId name externalEventId category { name } conditions(first: 25) { nodes { similarMarketVolumeFiltered1h similarMarketVolumeFiltered24h } } } } } } }`);
-  const h1 = await q('SIMILAR_MARKET_VOLUME_1H_FILTERED'), d1 = await q('SIMILAR_MARKET_VOLUME_24H_FILTERED');
-  return { h1: hotRows(h1.questions && h1.questions.edges, 'h1'), d1: hotRows(d1.questions && d1.questions.edges, 'd1'), at: Date.now() };
+/** One list (a key of HOT_WINDOWS): its first page, then the rest of each group's questions the way the app reads them
+ *  (the same request again from the group's cursor) */
+async function readHotList(cats, win) {
+  const w = HOT_WINDOWS[win], f = hotFilter(cats, win);
+  const query = `query($f: QuestionFilter!, $n: Int!, $gca: String) { questions(first: $n, filter: $f, orderBy: { field: ${w.order}, direction: DESC }) { edges { node { __typename
+    ... on Condition { conditionId question vol: ${w.field} category { name } conditionGroup { groupId externalEventId } }
+    ... on ConditionGroup { groupId name externalEventId category { name } conditions(first: 25, after: $gca) { nodes { vol: ${w.field} estimatedPrice settled } pageInfo { hasNextPage endCursor } } }
+    ... on ConditionGroupCluster { preview { name externalEventId startTime category { name } anchorGroup { groupId } teams { league } vol: displayVolume(filter: $f, window: ${w.cluster}, excludeLowOdds: true) } } } } } }`;
+  const nodesOf = (d) => ((d.questions && d.questions.edges) || []).map((e) => e && e.node).filter(Boolean);
+  const nodes = nodesOf(await P.gql(query, { f, n: HOT_N }));
+  for (const g of nodes) {
+    if (g.__typename !== 'ConditionGroup' || !g.conditions) continue;
+    let pi = g.conditions.pageInfo || {}, pages = 0;
+    while (pi.hasNextPage && pi.endCursor && pages++ < 8) {
+      const again = nodesOf(await P.gql(query, { f, n: HOT_N, gca: pi.endCursor })).find((x) => x.__typename === 'ConditionGroup' && String(x.groupId) === String(g.groupId));
+      if (!again || !again.conditions) break;
+      g.conditions.nodes = (g.conditions.nodes || []).concat(again.conditions.nodes || []); pi = again.conditions.pageInfo || {};
+    }
+  }
+  return hotRows(nodes);
+}
+export async function readHot() {   // exported for a check against the live API
+  const cats = ((await P.gql('{ categories(first: 25) { nodes { slug } } }')).categories.nodes || []).map((c) => c.slug).filter((s) => s && !HOT_NO_CATS.has(s));
+  const out = { at: Date.now() };
+  for (const win of Object.keys(HOT_WINDOWS)) out[win] = await readHotList(cats, win);
+  return out;
 }
 async function readTags() {
   const d = await P.gql('{ tags(first: 20, orderBy: { field: CONDITION_COUNT, direction: DESC }) { nodes { name } } }');
@@ -749,7 +844,7 @@ async function buildPredict() {
   try {
     for (let i = 0; i < bare.length; i += 25) {
       const pg = await P.conditions({ conditionIds: bare.slice(i, i + 25).map((q) => q.id), first: 25 });
-      for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f1: x.f1, f4: x.f4, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ev: x.ev, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
+      for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f1: x.f1, f4: x.f4, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ev: x.ev, g: x.g, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
     }
   } catch (e) { console.warn('predict: source links and volumes of the questions taken from predictions failed:', e.message); }
   // Meridian OI as Meridian counts it, read on-chain (escrowOnChain); the API's figure is kept to compare. A failed read
@@ -774,8 +869,10 @@ async function buildPredict() {
   catch (e) { console.warn('predict: relay fee quote failed:', e.message); }
   // Meridian's own lists beside the predictions (readCompetitions and the rest); each failure leaves its part out
   let competitions = null, pnlRank = null, matches = null, hot = null, tags = null;
-  try { competitions = await readCompetitions(); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { console.warn('predict: competitions failed:', e.message); }
-  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n7} over 7 days)`); } catch (e) { console.warn('predict: PnL ranks failed:', e.message); }
+  try { competitions = await readCompetitions(new Map(norms.map((n) => [String(n.id).toLowerCase(), n.legs]))); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { console.warn('predict: competitions failed:', e.message); }
+  // the monthly leaderboard of July to September, worked out from the predictions as Meridian's app does (legacyCompetitions)
+  try { const legacy = legacyCompetitions(norms, trades); competitions = (competitions || []).concat(legacy); console.log(`  predict: monthly leaderboard: ${legacy.map((c) => c.entries).join(' / ')} entries in its 4 cycles`); } catch (e) { console.warn('predict: monthly leaderboard failed:', e.message); }
+  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n30} over 30 days)`); } catch (e) { console.warn('predict: PnL ranks failed:', e.message); }
   try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { console.warn('predict: matches failed:', e.message); }
   try { hot = await readHot(); } catch (e) { console.warn('predict: Hot lists failed:', e.message); }
   try { tags = await readTags(); } catch (e) { console.warn('predict: tags failed:', e.message); }

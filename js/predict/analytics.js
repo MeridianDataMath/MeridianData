@@ -481,7 +481,7 @@
     if (Array.isArray(a.bigWins)) a.bigWins = a.bigWins.filter((w) => !out(w.p) && !out(w.c));
     // Meridian's own lists (the builder leaves them out of these already)
     if (Array.isArray(snap.competitions)) for (const c of snap.competitions) if (Array.isArray(c.standings)) c.standings = c.standings.filter((s) => !out(s.a));
-    if (snap.pnlRank) for (const k of ['all', 'd7']) if (snap.pnlRank[k]) for (const x of Object.keys(snap.pnlRank[k])) if (out(x)) delete snap.pnlRank[k][x];
+    if (snap.pnlRank) for (const k of ['all', 'd30', 'd7']) if (snap.pnlRank[k]) for (const x of Object.keys(snap.pnlRank[k])) if (out(x)) delete snap.pnlRank[k][x];
     return snap;
   };
   /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are
@@ -928,6 +928,7 @@
     va: c.similarMarketVolume == null ? undefined : Number(c.similarMarketVolume) || 0, f24: c.similarMarketVolumeFiltered24h == null ? undefined : Number(c.similarMarketVolumeFiltered24h) || 0, f7: c.similarMarketVolumeFiltered7d == null ? undefined : Number(c.similarMarketVolumeFiltered7d) || 0,
     f1: c.similarMarketVolumeFiltered1h == null ? undefined : Number(c.similarMarketVolumeFiltered1h) || 0, f4: c.similarMarketVolumeFiltered4h == null ? undefined : Number(c.similarMarketVolumeFiltered4h) || 0,
     ev: c.conditionGroup && c.conditionGroup.externalEventId != null ? String(c.conditionGroup.externalEventId) : undefined,   // its match (the snapshot's matches)
+    g: c.conditionGroup && c.conditionGroup.groupId != null ? String(c.conditionGroup.groupId) : undefined,   // its group (the Hot lists' groups)
     end: c.endTime ? c.endTime * 1000 : null, created: c.createdAt ? P.ms(c.createdAt) : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic == null ? null : !!c.isPublic, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null });
   /** A question's source-market volume as Meridian's app shows it, from a live API row or a snapshot row
    *  (P.compactQuestion): all = all time (its market page's "… Vol"), d24 / d7 = the windows its list cards show sorted

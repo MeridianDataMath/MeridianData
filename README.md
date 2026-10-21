@@ -874,11 +874,24 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     A **Competitions** card (`snap.competitions`, from the API's `competitions` and each one's
     `competition(slug) { eligibleConditionIds leaderboard }`): Meridian's contests, the running ones
     first, each with its window, prizes by place (NFL Week 4: 200 / 75 / 50, then 25 down to the
-    10th, USDe), rules (a stake of 10 USDe or more, 2 legs or more, ranked by the best multiplier,
-    a prediction sold before the verdict not counting: `disqualifyEarlySales`), the matches,
-    groups and questions it names, and its standings (place, bettor, multiplier, stake, payout,
-    the prize; the first 25). An entry opens its prediction in the dialog the tape and the big
-    wins open (from the snapshot's slip files, `findPrediction`).
+    10th, USDe), its conditions as the app words them on the competition's page (*2+ legs · Stake ≥
+    $10 · Entered & settled in-window · Held until settlement · Resolves as a win*: `minLegs`,
+    `minStake`, `rankBy`, `disqualifyEarlySales`), the matches, groups and questions it names,
+    its standings (place, bettor, legs, stake, multiplier, payout, the prize; the first 25; the legs
+    from the snapshot's predictions, the standings do not carry them) and a link to its page on the
+    app. An entry opens its prediction in the dialog the tape and the big wins open (from the
+    snapshot's slip files, `findPrediction`). With them, Meridian's monthly *Predict Leaderboard*
+    of July to September, which the app works out from the predictions rather than the API and
+    still shows (its competitions page lists the last cycle as *Monthly Competition*, its
+    `/predict/leaderboard?cycle=N` steps through all four): cycles from 1 July 16:00 UTC, three
+    of three weeks (to 22 July, 12 August, 3 September), then to 30 September; a winning prediction
+    of 2+ legs and a stake of 25 or more, placed and settled in the cycle (the API's own
+    settlement, not one paid by a claim on its token), not on the app's blocklist of 13
+    predictions, whose bettor sold none of its tokens before the settlement; each wallet's best
+    multiplier, $5,000 for the first ten plus a token bonus (50,000 $cashcat, 150,000 PONS,
+    25,000 $cashcat, 50 HOOD). The builder computes them (`legacyCompetitions`); checked on
+    2026-10-21 against the app's four boards (37, 34, 44 and 37 entries; the first 25 of each,
+    all the snapshot keeps, in the same places with the same legs, stakes and multipliers).
     Everything on it comes from one snapshot: a newer one published while the page is open is
     offered in the tape's header (*newer snapshot published · show it*) rather than mixed in,
     and the snapshot's age line keeps counting. Where the aggregate has no secondary-market
@@ -1017,8 +1030,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
     filtered board, and a full address is found whatever the filters. *Meridian rank* is the
     wallet's place in Meridian's own PnL leaderboard (`snap.pnlRank`, the API's `leaderboard(metric:
-    PNL)` paged 25 at a time: 775 wallets on 2026-10-21), all time with the last 7 days beside it,
-    the PnL it ranks by in the tooltip. Meridian ranks by the results of the wallet's own
+    PNL)` paged 25 at a time: 775 wallets on 2026-10-21), all time with the last 30 days beside it
+    (the window the app ranks its top traders by: the first 12, in its social search, not open to
+    the public yet; an older snapshot has 7 days), the PnL it ranks by in the tooltip. Meridian ranks by the results of the wallet's own
     predictions at the verdict, claimed or not, without the secondary market: checked on
     2026-10-21, that figure equals the site's sum of a bettor's own decided predictions for 763 of
     764 bettors (the other, a launch-day tester, differs by its tests); Net PnL here also counts
@@ -1051,12 +1065,23 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     sort by, `…Filtered1h` / `4h`), link to the mirrored source market. Under each question its
     match (`snap.matches`: the API's clusters of the questions on one event, by the group's
     `externalEventId`: *Colts vs. Commanders · Oct 4, 15:30*, the match's volume over 24 hours and
-    7 days in the tooltip: the API answers at most two `displayVolume` windows in one request)
+    7 days in the tooltip, every question of it: the API answers at most two `displayVolume`
+    windows in one request; the app's cards count only a match's open questions between 1 and
+    99 %, $25.78M against $30.66M for Philadelphia at New York on 2026-10-21)
     before its tags, and Meridian's most used tags (`snap.tags`, the API's `tags` by
     condition count) that the listed questions carry are filter buttons. A collapsible *Hot on
-    Meridian's app* card (`snap.hot`: the API's `questions` sorted `SIMILAR_MARKET_VOLUME_1H_FILTERED`
-    / `24H_FILTERED`, a group's questions added up) lists what the app puts first, with the stake
-    placed through Meridian where the site lists the question. *Probability* is
+    Meridian's app* card (`snap.hot`) lists the first page (15) of the app's question list as it
+    opens, for each window of its sort menu: *Breaking (1H)*, *Trending (4H)*, *Hot (24H)*, its
+    default, and *Top (7D)*. The builder asks the way the app's code does (`readHot`): questions
+    not resolved, every category but the three price ones, the *15 Minute Up/Down* tag left out,
+    a price between 1 and 99 % (the app hides the others until asked), `clustered` (a match is one
+    entry, its volume the API's `displayVolume` for the window under the same filter), sorted by
+    the window's filtered volume; a group's questions added up, all of them (the API pages them
+    25 at a time; the app asks again from the group's cursor), and the groups the app never lists
+    (925, 926) left out. Checked against the app's list on 2026-10-21: the same 15 entries and
+    volumes. Each row has a link to its page on the app and the stake placed through Meridian on
+    the question, the group's or the match's questions where the site lists them (questions
+    keep their group id, `g`). *Probability* is
     Polymarket's YES price now (its first outcome, the one Meridian's YES mirrors), loaded for the
     rows on screen; until it has loaded, the `estimatedPrice` Meridian's API reported at the
     snapshot, which stops following the market once a game starts. A settled question shows its
