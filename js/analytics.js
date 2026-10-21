@@ -357,6 +357,25 @@
     return { im, lev, imClosed: shut, levClosed: shut ? levOf(shut) : null, mm: mmField !== undefined ? mmField : 1 / (2 * maxLev) };
   };
 
+  /** The largest order Meridian's app lets one place on a market (its Market Configuration's Max Order Size, read in its
+   *  code and on its panel 2026-10-21): 10 % of the market's max position value (maxOrderNotionalRatio, its config's default)
+   *  at the price, to the lot below, never below the smallest order nor above the exchange's own per-order limit
+   *  (maxQuantity: BTC 25, while 10 % of $2M at $82,900 is 2.41254 BTC); without a price, that limit. */
+  AN.MAX_ORDER_NOTIONAL_RATIO = 0.1;
+  AN.appMaxOrder = (p, price) => {
+    const maxQ = U.num(p && p.maxQuantity), minQ = U.num(p && p.minQuantity), lot = U.num(p && p.lotSize), cap = U.num(p && p.maxPositionNotionalUsd) * AN.MAX_ORDER_NOTIONAL_RATIO;
+    if (!(price > 0) || !(cap > 0)) return maxQ;
+    let q = cap / price; if (lot > 0) q = Math.floor(q / lot + 1e-9) * lot;
+    return Math.min(maxQ > 0 ? maxQ : Infinity, Math.max(q, minQ));
+  };
+  /** The prices Meridian's app accepts in an order (its price check: "Enter … to … in steps of …"): from the min price (at
+   *  least one tick) to one tick under the max price, which it does not accept itself. { lo, hi } */
+  AN.appPriceRange = (p) => {
+    const tick = U.num(p && p.tickSize) || 0, lo = Math.max(U.num(p && p.minPrice), tick), mx = U.num(p && p.maxPrice);
+    const dp = (String((p && p.tickSize) || '').split('.')[1] || '').length, r = (x) => Number(x.toFixed(dp));
+    return { lo: tick > 0 ? r(Math.ceil(lo / tick - 1e-9) * tick) : lo, hi: tick > 0 ? r(Math.floor(mx / tick + 1e-9) * tick - tick) : mx };
+  };
+
   /**
    * Live margin state from balances + open positions + prices. Mirrors the app's pool maths:
    * pool equity = balance + Σ(uPnL − unapplied funding − unapplied position fee);

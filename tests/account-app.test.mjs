@@ -261,6 +261,20 @@ test('the leverage Meridian\'s app offers: 1 ÷ the initial margin (BTC 50×, no
   near(assert, r.mm, 810 * (0.005 + 0.00005), 1e-9, 'maintenance from the product\'s own field');
 });
 
+test('Max Order Size as Meridian\'s app shows it: 10% of the max position\'s value at the price, at most the per-order limit; its price range', () => {
+  // its Market Configuration panel, 2026-10-21: BTC 2.41257 at an oracle price of 82,899, HYPE 2,000 (the limit), VVV 953.25
+  const btc = { maxQuantity: '25', minQuantity: '0.00013', lotSize: '0.00001', maxPositionNotionalUsd: '2000000' };
+  near(assert, AN.appMaxOrder(btc, 82899), 2.41257, 1e-9);
+  assert.equal(AN.appMaxOrder({ maxQuantity: '2000', minQuantity: '0.13', lotSize: '0.01', maxPositionNotionalUsd: '2000000' }, 45), 2000);
+  near(assert, AN.appMaxOrder({ maxQuantity: '5000', minQuantity: '0.39', lotSize: '0.01', maxPositionNotionalUsd: '250000' }, 26.226), 953.25, 1e-9);
+  assert.equal(AN.appMaxOrder(btc, 0), 25, 'no price: the per-order limit');
+  assert.equal(AN.appMaxOrder(Object.assign({}, btc, { maxPositionNotionalUsd: '1' }), 82899), 0.00013, 'never below the smallest order');
+  // "Enter 1 to 10,078,803 in steps of 1": the max price itself is not accepted
+  assert.deepEqual(AN.appPriceRange({ minPrice: '1', maxPrice: '10078804', tickSize: '1' }), { lo: 1, hi: 10078803 });
+  assert.deepEqual(AN.appPriceRange({ minPrice: '0.1', maxPrice: '1004602', tickSize: '0.1' }), { lo: 0.1, hi: 1004601.9 });
+  assert.deepEqual(AN.appPriceRange({ minPrice: '0.00001', maxPrice: '100', tickSize: '0.00001' }), { lo: 0.00001, hi: 99.99999 });
+});
+
 test('order book as Meridian\'s: the mid in the centre, Total the size from the touch in the base asset at its lot size', () => {
   // BTC at 20:15:27 UTC: bid 85,658, ask 85,675
   const m = AN.bookMid(85675, 85658);

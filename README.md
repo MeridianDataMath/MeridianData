@@ -341,7 +341,16 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   `maxLeverage` field on every market, as the docs say), one side's open interest against
   `maxOpenInterestUsd` (a cap per side: `oiUse` halves `openInterest`), max position, order
   size, tick / lot, price limits, fees, funding impact size, Pyth feed id, and the listing date
-  linked to its Robinhood Chain registration block with the on-chain id and engine type. The
+  linked to its Robinhood Chain registration block with the on-chain id and engine type.
+  Checked 2026-10-21 against the *Market Configuration* panel of Meridian's app (its chart's
+  Details tab) for all 13 markets: leverage, initial and maintenance margins, tick, step and
+  min order size agree, and the Funding table's base / clamp / max with its Base Funding,
+  Funding Clamp and Max Funding. Two figures follow the app's own rules rather than the raw
+  fields: the largest order is its *Max Order Size* (`AN.appMaxOrder`: 10 % of the max position's
+  value, its config's `maxOrderNotionalRatio`, at the price now, to the step below, never above
+  the exchange's per-order `maxQuantity`: BTC about 2.41 BTC, not 25), and the price limits run
+  from the min price to one tick under the max price, which its order form does not accept
+  (`AN.appPriceRange`). The
   max leverage, here and in the Markets table, is the one Meridian's app offers
   (`AN.productMargin`, as its getProductMargin, read in its code 2026-10-21): 1 ÷ the
   `openMarketInitialMargin`, rounded down (BTC 2 % → 50×, while the product's `maxLeverage` field
