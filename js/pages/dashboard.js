@@ -281,7 +281,7 @@
             { key: 'chg', label: '24h', num: true, sortVal: 1, title: 'mark price now against the oracle price 24 hours ago', render: (r) => UI.pct(r.chg, { dp: 2 }) },
             { key: 'ba', label: 'Bid / Ask', num: true, title: 'Best bid and best ask, and the spread between them · hover a market\'s for the quantity waiting at each', render: (r) => h('span', { title: baTitle(r) }, h('span.pos', r.bid ? U.fmtPrice(r.bid, r.p.tickSize) : '—'), h('span.dim', ' / '), h('span.neg', r.ask ? U.fmtPrice(r.ask, r.p.tickSize) : '—'), r.spread != null ? h('span.xs.dim', ' ' + U.fmtPct(r.spread, { dp: 3 })) : null) },
             // the app's Funding column: the projected rate, not the last charge (they can differ in sign); Paused in a closure
-            { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged', render: (r) => projEl(r.f, r.p) },
+            { key: 'fr', label: 'Funding 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, as Meridian\'s app shows it · positive = longs pay · hover a rate for the last charge · Paused: an mPerp market inside a closure, when no funding is charged. It moves as the hour\'s samples come in: this page reads it every minute, Meridian\'s app every 5 minutes, so the two can differ in the last digit for a few minutes', render: (r) => projEl(r.f, r.p) },
             { key: 'oi', label: 'Open interest', num: true, sortVal: 1, title: 'Long and short positions added together, as Meridian reports open interest; one side is half of it', render: (r) => U.fmtUsd(r.oiUsd, { compact: true }) },
             { key: 'vol', label: '24h volume', num: true, sortVal: 1, title: '24 h traded quantity (base units) × current mark price', render: (r) => U.fmtUsd(r.volUsd, { compact: true }) },
             { key: 'spark', label: '7d', render: (r) => { const c = sparks[r.p.ticker] || (sparks[r.p.ticker] = h('canvas.spark', { width: 110, height: 30 })); return c; } },
@@ -301,7 +301,7 @@
           cols: [
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
             capCol,
-            { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows (refreshed every minute) · positive = longs pay', render: (r) => projEl(r.f, r.p) },
+            { key: 'proj', label: 'Projected 1h', num: true, sortVal: 1, title: 'Projected rate for the next hourly charge, the figure Meridian\'s app shows · positive = longs pay. It moves as the hour\'s samples come in: this page reads it every minute, Meridian\'s app every 5 minutes, so the two can differ in the last digit for a few minutes', render: (r) => projEl(r.f, r.p) },
             // history, so it stands in a closure too: the charge taken before the market closed
             { key: 'fr', label: 'Last 1h', num: true, sortVal: 1, title: 'Rate charged at the last hourly funding · positive = longs paid', render: (r) => rateEl(r.f.lastPct) },
             { key: 'apr', label: 'Annualized', num: true, sortVal: 1, title: 'Projected 1h rate × 24 × 365, the app\'s 1y figure. While an mPerp market is closed (funding paused, Meridian projects none), its last hourly charge × 24 × 365 instead, marked "last"', render: (r) => (r.f.paused ? lastAprEl(r.f, r.p) : rateEl(r.f.aprPct)) },

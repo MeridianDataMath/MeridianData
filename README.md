@@ -304,7 +304,12 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   (long + short, as Meridian reports it), 24h volume (traded quantity × current mark price),
   sparkline and mPerp closure windows; the volume and open-interest tiles are the column
   totals, and products and
-  projected funding are re-read every minute; a **stop map** (every account's take-profit,
+  projected funding are re-read every minute (checked 2026-10-21 against Meridian's app at the
+  same second, its market list and trade-page header: price, 24h change, 24h volume and open
+  interest identical on all 13 markets, so the tiles equal the sums of its figures; its
+  projected funding is the same `/v1/funding/projected-rate`, which it re-reads only every 5
+  minutes (`refetchInterval`), so the two can differ in the last digit while the hour's samples
+  move it; the columns' tooltips say so); a **stop map** (every account's take-profit,
   stop-loss and entry-stop orders per market as a ladder around the mark price, sized by
   notional, with the accounts behind each level; bands sum the stops within 1, 2 and 5 % of the
   mark that would sell or buy into the order book, each position once, at the exit the price
