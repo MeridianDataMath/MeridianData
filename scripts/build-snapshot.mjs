@@ -686,10 +686,14 @@ async function readHotList(cats, win) {
   }
   return hotRows(nodes);
 }
+/** All four lists; one that fails is left out (its tab with it) and the others kept: on 2026-10-21 18:13 CEST one
+ *  timeout cost the snapshot every list. Throws only when none could be read. */
 export async function readHot() {   // exported for a check against the live API
   const cats = ((await P.gql('{ categories(first: 25) { nodes { slug } } }')).categories.nodes || []).map((c) => c.slug).filter((s) => s && !HOT_NO_CATS.has(s));
-  const out = { at: Date.now() };
-  for (const win of Object.keys(HOT_WINDOWS)) out[win] = await readHotList(cats, win);
+  const out = { at: Date.now() }, failed = [];
+  for (const win of Object.keys(HOT_WINDOWS)) { try { out[win] = await readHotList(cats, win); } catch (e) { failed.push(win + ': ' + e.message); } }
+  if (failed.length === Object.keys(HOT_WINDOWS).length) throw new Error(failed.join('; '));
+  if (failed.length) console.warn('  predict: Hot lists left out (' + failed.join('; ') + ')');
   return out;
 }
 async function readTags() {

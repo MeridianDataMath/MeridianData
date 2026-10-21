@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -206,6 +206,25 @@ test('hotFilter: the app\'s list as it opens, sorted by one window of its menu',
   assert.deepEqual(hotFilter(['crypto', 'sports'], 'd1'), { categorySlugs: ['crypto', 'sports'], resolutionStatus: 'UNRESOLVED', excludeTags: ['15 Minute Up/Down'], estimatedPrice: { gte: 0.01, lte: 0.99 }, similarMarketVolumeWindow: 'TWENTY_FOUR_HOURS_FILTERED', clustered: true });
   assert.deepEqual(Object.keys(HOT_WINDOWS), ['h1', 'h4', 'd1', 'd7']);
   assert.equal(HOT_WINDOWS.h1.order, 'SIMILAR_MARKET_VOLUME_1H_FILTERED'); assert.equal(HOT_WINDOWS.d7.cluster, 'SEVEN_DAYS');
+});
+
+test('readHot: a list that fails is left out and the others kept; none read is an error', async () => {
+  const P = MD.predict, gql0 = P.gql; const asked = [];
+  const node = { __typename: 'Condition', conditionId: '0xc', question: 'Q', vol: 5, category: { name: 'Sports' }, conditionGroup: null };
+  try {
+    P.gql = async (q, v) => {
+      if (/categories/.test(q)) return { categories: { nodes: [{ slug: 'sports' }, { slug: 'prices-crypto' }] } };
+      const win = Object.keys(HOT_WINDOWS).find((w) => q.includes(HOT_WINDOWS[w].order)); asked.push(win);
+      assert.deepEqual(v.f.categorySlugs, ['sports']);
+      if (win === 'h4') throw new Error('Query timeout: raw.$queryRaw exceeded 8000ms');
+      return { questions: { edges: [{ node }] } };
+    };
+    const hot = await readHot();
+    assert.deepEqual(asked, ['h1', 'h4', 'd1', 'd7']);
+    assert.deepEqual(Object.keys(hot).filter((k) => k !== 'at'), ['h1', 'd1', 'd7']); assert.equal(hot.d1[0].id, '0xc');
+    P.gql = async (q) => { if (/categories/.test(q)) return { categories: { nodes: [{ slug: 'sports' }] } }; throw new Error('down'); };
+    await assert.rejects(readHot(), /h1: down; h4: down; d1: down; d7: down/);
+  } finally { P.gql = gql0; }
 });
 
 test('stakeByGroup / hotStakes: Meridian stake per group and match, a prediction once however many of its legs are in it', () => {

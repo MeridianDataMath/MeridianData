@@ -1078,8 +1078,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     entry, its volume the API's `displayVolume` for the window under the same filter), sorted by
     the window's filtered volume; a group's questions added up, all of them (the API pages them
     25 at a time; the app asks again from the group's cursor), and the groups the app never lists
-    (925, 926) left out. Checked against the app's list on 2026-10-21: the same 15 entries and
-    volumes. Each row has a link to its page on the app and the stake ever placed through
+    (925, 926) left out; a list the API fails to answer is left out, its tab with it, and the
+    others kept. Checked against the app's list on 2026-10-21: the same 15 entries and volumes.
+    Each row has a link to its page on the app and the stake ever placed through
     Meridian on the question, the group or the match (`mw`: the builder adds each prediction
     once, however many of its legs are in the group, `stakeByGroup`; the questions keep their
     group id, `g`). *Probability* is
@@ -1955,7 +1956,8 @@ agent/copy-agent.mjs    the copy agent (runs on the user's machine): keygen, lin
 agent/package.json      its one dependency (ethers 6.17.0, pinned with package-lock.json); config.example.json documents every setting
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
-js/predict/api.js       Predict (Sapience) GraphQL client
+js/predict/api.js       Predict (Sapience) GraphQL client; asks again after a 429, a network error, an HTTP 5xx or
+                        the API's 8-second "Query timeout" (two more tries, 3 and 6 s apart)
 js/predict/analytics.js Predict normalisation, aggregation, per-wallet slim records
 js/predict/resolution.js Polymarket Gamma + UMA oracle resolution tracker
 js/app.js               bootstrap, sidebar, global search

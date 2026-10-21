@@ -74,7 +74,12 @@
         if (res.status >= 500 && attempt < 3) { P.stats.retries++; await U.sleep(2000 * (attempt + 1)); continue; }
         throw new GqlError((j && j.errors && j.errors[0] && j.errors[0].message) || ('HTTP ' + res.status), res.status);
       }
-      if (j && j.errors && j.errors.length && !j.data) throw new GqlError(j.errors[0].message, (j.errors[0].extensions || {}).code);
+      if (j && j.errors && j.errors.length && !j.data) {
+        // the API stops a query after 8 s ("Query timeout: raw.$queryRaw exceeded 8000ms"), mostly a heavy list asked
+        // cold: asked again it answered in under a second (2026-10-21, the Hot lists), so it gets two more tries
+        if (/^Query timeout/i.test(String(j.errors[0].message || '')) && attempt < 2 && opts.retry !== false) { P.stats.retries++; await U.sleep(3000 * (attempt + 1)); continue; }
+        throw new GqlError(j.errors[0].message, (j.errors[0].extensions || {}).code);
+      }
       if (opts.ttl) cache.set(key, { exp: Date.now() + opts.ttl, value: j.data });
       return j.data;
     }
