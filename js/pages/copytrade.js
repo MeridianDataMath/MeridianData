@@ -77,10 +77,15 @@
   function keepCell(c) {
     const K = AN.copyKeep(c), pc = (bps) => U.fmtPct(bps / 100, { dp: 2, sign: true });
     if (!K) return h('span.dim', { title: 'Not measured yet: too few fills with one-minute candles after them, or no order-book data' }, '—');
-    if (K.kept == null) return h('span.dim', { title: `The leader's positions ${K.lead < 0 ? 'lose ' + pc(K.lead) + ' each on average' : 'make nothing on average'} after fees and funding: nothing to keep` }, '—');
-    const title = `Per position: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}` + ((c.nTrim != null ? c.nTrim : c.closed) < 10 ? ` · over only ${c.nTrim != null ? c.nTrim : c.closed} positions, so one can move it` : '');
-    if (K.kept <= 0) return h('span.num.neg', { title }, 'none');
-    return h('span', { class: 'num ' + (K.kept >= 80 ? 'pos' : K.kept >= 40 ? '' : 'neg'), title }, U.fmtPct(K.kept, { dp: 0 }));
+    // under the share, what it is a share of: the leader's average result per closed position (user 10-23: "none" beside
+    // +$6,422 read as a fault; that account's five closed trades averaged +0.02%, its dollars came from one big, long-held
+    // position and an open one)
+    const n = c.nTrim != null ? c.nTrim : c.closed;
+    const cell = (cls, text, title) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', (K.kept == null ? '' : 'of ') + pc(K.lead) + ' a trade'));
+    if (K.kept == null) return cell('dim', '—', `The leader's closed positions ${K.lead < 0 ? 'lose ' + pc(K.lead).replace('-', '').replace('−', '') + ' each on average' : 'make nothing on average'} after fees and funding (${n} of them): nothing to keep`);
+    const title = `Per closed position, on average over ${n}: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}. Each position counts once whatever its size, as for a copier copying every position at the same size; open positions are not in it` + (n < 10 ? ` · only ${n} positions, so one can move it` : '');
+    if (K.kept <= 0) return cell('num neg', 'none', title);
+    return cell('num ' + (K.kept >= 80 ? 'pos' : K.kept >= 40 ? '' : 'neg'), U.fmtPct(K.kept, { dp: 0 }), title);
   }
 
   /** The full story behind one leader's score. */
