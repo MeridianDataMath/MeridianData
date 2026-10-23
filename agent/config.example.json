@@ -1,5 +1,5 @@
 {
-  "$comment": "MeridianDataHub copy agent. The site's Copy agent page writes this file for you; every field is explained there. status.token guards the local dashboard port: leave it empty and the agent generates one into control.token next to the script.",
+  "$comment": "MeridianDataHub copy agent. The site's Copy agent page writes this file for you; every field is explained there. status.token guards the local dashboard port: leave it empty and the agent generates one into control.token next to the script. Resume and Close all from the site wait for a yes typed in the agent's terminal (status.siteControls set to direct lets the site do both unconfirmed).",
   "owner": "0xYOUR_WALLET_ADDRESS",
   "subaccountId": "00000000-0000-0000-0000-000000000000",
   "keyFile": "signer.key",
@@ -7,7 +7,7 @@
     { "sid": "00000000-0000-0000-0000-000000000000", "address": "0xLEADER", "name": "" }
   ],
   "sizing": { "mode": "fixed", "size": 200, "ratio": 10 },
-  "execution": { "type": "IOC", "slippageBps": 15, "groupMs": 1200, "maxFillAgeMs": 15000, "onLeaderFlat": "close", "onLeaderLiquidation": "close" },
+  "execution": { "type": "IOC", "slippageBps": 15, "closeSlippageBps": 200, "groupMs": 1200, "maxFillAgeMs": 15000, "onLeaderFlat": "close", "onLeaderLiquidation": "close" },
   "risk": {
     "maxOrderUsd": 1000,
     "maxPositionUsd": 5000,
@@ -21,6 +21,6 @@
     "markets": { "deny": [] },
     "onTrip": "reduceOnly"
   },
-  "status": { "port": 8790, "token": "" },
+  "status": { "port": 8790, "token": "", "siteControls": "confirm" },
   "ntfy": { "server": "https://ntfy.sh", "topic": "" }
 }

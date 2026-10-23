@@ -5,12 +5,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createHash } from 'node:crypto';
 import { root, near, load } from './_load.mjs';
 
 const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
-const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty })', { Math, Number, String, parseFloat, Infinity });
+const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty, closeSteps, fillSide, retryAfterMs, orderOutcome, rebaseStops })', { Math, Number, String, parseFloat, Infinity, Date });
 // the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util), with the
 // simulator's engine they build on (MD.copysim: episodes, the exchange's records, each position's result)
 const MD = load(['js/util.js', 'js/copy/sim.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
@@ -130,6 +131,72 @@ test('a config that must not trade is refused before anything starts', () => {
   assert.deepEqual(plain(A.checkConfig({ sizing: { mode: 'fixed', size: 2000, ratio: 0 } })), []);
   bad({ execution: { maxFillAgeMs: 0 } }, /maxFillAgeMs/);
   assert.equal(A.checkConfig({ risk: { maxLeverage: 0, maxNotionalPerMarket: 0 } }).length, 0, 'the soft limits may be 0 (off): the ceilings still hold');
+  // market orders are gone: an old config asking for them stops the agent rather than trading at any price
+  bad({ execution: { type: 'MARKET' } }, /execution\.type is "MARKET": every order is now a limit IOC/);
+  assert.deepEqual(plain(A.checkConfig({ execution: { type: 'IOC' } })), []);
+  bad({ execution: { closeSlippageBps: 0 } }, /closeSlippageBps is 0: it must be a number above 0 and at most 1000/);
+  bad({ execution: { closeSlippageBps: 5000 } }, /closeSlippageBps/);
+  bad({ status: { siteControls: 'yes' } }, /status\.siteControls is "yes": it must be confirm or direct/);
+  for (const sc of ['confirm', 'direct']) assert.deepEqual(plain(A.checkConfig({ status: { siteControls: sc } })), [], sc);
+});
+
+test('a close never goes out at an open-ended price: the slippage cap first, then wider up to the close cap', () => {
+  assert.deepEqual(plain(A.closeSteps(15, 200)), [15, 50, 100, 200]);
+  assert.deepEqual(plain(A.closeSteps(15, 50)), [15, 50], 'nothing beyond the close cap');
+  assert.deepEqual(plain(A.closeSteps(80, 200)), [80, 100, 200], 'a step below the slippage cap is skipped');
+  assert.deepEqual(plain(A.closeSteps(300, 200)), [200], 'a slippage cap above the close cap: the close cap alone');
+  assert.deepEqual(plain(A.closeSteps(undefined, undefined)), [15, 50, 100, A.LIMITS.closeSlippageBps], 'defaults');
+  assert.equal(A.LIMITS.closeSlippageBps, 200);
+});
+
+test('a fill\'s side is buy or sell, or it is not used', () => {
+  for (const sd of [0, '0', 'BUY', 'buy', ' Buy ']) assert.equal(A.fillSide(sd), 1, JSON.stringify(sd));
+  for (const sd of [1, '1', 'SELL', 'sell']) assert.equal(A.fillSide(sd), -1, JSON.stringify(sd));
+  // the old parse made anything but 0 a sell: a missing or new value must not copy the opposite trade
+  for (const sd of [undefined, null, '', 2, 'LONG', 'B', {}]) assert.equal(A.fillSide(sd), null, JSON.stringify(sd));
+});
+
+test('Retry-After: seconds or an HTTP date, never negative', () => {
+  const now = Date.UTC(2026, 9, 24, 12, 0, 0);
+  assert.equal(A.retryAfterMs('3', now), 3000);
+  assert.equal(A.retryAfterMs('0', now), 0);
+  assert.equal(A.retryAfterMs(new Date(now + 5000).toUTCString(), now), 5000);
+  assert.equal(A.retryAfterMs(new Date(now - 5000).toUTCString(), now), 0, 'a date already past: no wait');
+  for (const v of [null, undefined, '', '  ', 'soon']) assert.equal(A.retryAfterMs(v, now), null, JSON.stringify(v));
+});
+
+test('an order\'s outcome: a final order\'s own fill counts, the position change stands in when unread', () => {
+  const lot = '0.001';
+  // the positions read still shows the old size although the IOC filled: no "unfilled" (that would carry a reduction
+  // that was made, and the next reduction would take it twice)
+  assert.deepEqual(plain(A.orderOutcome({ orderStatus: 'FILLED', filled: 0.5, final: true, before: 1, after: 1, want: 0.5, lot })), { got: 0.5, status: 'filled' });
+  assert.deepEqual(plain(A.orderOutcome({ orderStatus: 'CANCELED', filled: 0.2, final: true, before: 1, after: 0.8, want: 0.5, lot })), { got: 0.2, status: 'partial' }, 'an IOC that filled part and cancelled the rest');
+  assert.deepEqual(plain(A.orderOutcome({ orderStatus: 'CANCELED', filled: 0, final: true, before: 1, after: 1, want: 0.5, lot })), { got: 0, status: 'unfilled' });
+  assert.equal(A.orderOutcome({ orderStatus: 'REJECTED', filled: 0, final: true, before: 1, after: 1, want: 0.5, lot }).status, 'rejected');
+  // unread (or not final): the change in position
+  assert.deepEqual(plain(A.orderOutcome({ orderStatus: undefined, filled: undefined, final: false, before: -1, after: -0.5, want: 0.5, lot })), { got: 0.5, status: 'filled' });
+  assert.deepEqual(plain(A.orderOutcome({ final: false, before: 0, after: 0, want: 0.5, lot })), { got: 0, status: 'unfilled' });
+  assert.equal(A.orderOutcome({ orderStatus: 'FILLED', filled: 0.4995, final: true, before: 0, after: 0, want: 0.5, lot }).status, 'filled', 'within a lot of what was asked');
+});
+
+test('a resume after a stop counts the stop that would trip again afresh, and leaves the other alone', () => {
+  const risk = { dailyLossStop: 100, drawdownStopPct: 15 };
+  // today's loss is past its stop, the drawdown is not
+  const s = { equity: 9850, dayPnl: -150, flowsDay: 0, ddPct: 5, flowsSinceStart: 0 };
+  const rb = plain(A.rebaseStops(s, risk));
+  assert.deepEqual(rb, { equityDayStart: 9850 });
+  assert.equal(s.equity - rb.equityDayStart - s.flowsDay, 0, 'today\'s loss is 0 again');
+  // a deposit earlier today stays taken out: the baseline moves, the flows since it do not
+  assert.deepEqual(plain(A.rebaseStops({ equity: 10350, dayPnl: -150, flowsDay: 500, ddPct: 2, flowsSinceStart: 500 }, risk)), { equityDayStart: 9850 });
+  // the drawdown past its stop: the peak becomes this equity (flows since it set taken out, as the drawdown counts them)
+  assert.deepEqual(plain(A.rebaseStops({ equity: 8000, dayPnl: -20, flowsDay: 0, ddPct: 20, flowsSinceStart: -1000 }, risk)), { equityPeak: 9000 });
+  assert.deepEqual(plain(A.rebaseStops({ equity: 8000, dayPnl: -20, flowsDay: 0, ddPct: 20, flowsSinceStart: 0 }, {})), {}, 'stops off: nothing moves');
+});
+
+test('the README carries the published agent\'s SHA-256', () => {
+  // the deploy publishes the file as committed (LF): a CRLF checkout on Windows must not change the answer
+  const sha = createHash('sha256').update(fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8').replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+  assert.ok(fs.readFileSync(path.join(root, 'README.md'), 'utf8').includes('`' + sha + '`'), `README.md must list agent/copy-agent.mjs's SHA-256 ${sha} (it changed: put the new one in)`);
 });
 
 test('the command line: an unknown argument stops the agent; dry comes from the flag, the environment or npm', () => {
@@ -158,7 +225,10 @@ test('a damaged state file is never taken for a fresh start', () => {
   assert.equal(ok.error, undefined); assert.equal(ok.state.tripped.why.slice(0, 11), 'today\'s los'); assert.equal(ok.state.equityDayStart, 10150);
   assert.deepEqual(plain(A.parseState('{}')), { state: {} });
   // cut short by a crash or a full disk, or garbled
-  for (const text of ['', '{"tripped":{"t":1,"wh', '[]', 'null', '{"books":[]}', '{"orders":{}}', '{"tripped":true}', '{"equityDayStart":"x"}', '{"dayKey":"yesterday"}']) assert.ok(A.parseState(text).error, JSON.stringify(text));
+  for (const text of ['', '{"tripped":{"t":1,"wh', '[]', 'null', '{"books":[]}', '{"orders":{}}', '{"tripped":true}', '{"equityDayStart":"x"}', '{"dayKey":"yesterday"}', '{"closing":[]}', '{"closing":"x"}', '{"flowsLast":5}']) assert.ok(A.parseState(text).error, JSON.stringify(text));
+  // a pending close and the last transfer amounts survive a restart
+  const kept = plain(A.parseState('{"closing":{"btc":{"why":"leader closed","tries":2,"left":0.01}},"flowsLast":{"day":-50,"peak":-200,"dayKey":"2026-10-24"}}'));
+  assert.equal(kept.state.closing.btc.tries, 2); assert.equal(kept.state.flowsLast.peak, -200);
 });
 
 test('a rejection about the time is retried once; the control port answers to its own name only', () => {

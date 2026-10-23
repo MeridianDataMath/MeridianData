@@ -31,7 +31,11 @@
  *     on a live account: balance + gross uPnL was $1,192.92 above its Trade Equity, exactly the $820.33 funding and
  *     $372.59 position fee unsettled)
  *   - the order submission response's `filled` is deprecated and always 0: fills are read back from GET /v1/order/{id}
- *   - a close order is quantity "0" + reduceOnly + close (dry-run: Ok); an IOC limit fills what it can and cancels the rest
+ *   - a close order is quantity "0" + reduceOnly + close (dry-run: Ok), a market order: the agent sends one only for dust
+ *     below a market's minimum quantity (some $10) and closes anything bigger with reduce-only limit IOCs; an IOC limit
+ *     fills what it can and cancels the rest
+ *   - GET /v1/order?subaccountId lists a subaccount's orders newest first with their clientOrderId, which finds an order
+ *     whose submission got no answer
  *   - signedAt must be within the exchange's clock tolerance: the clock offset to /v1/time is measured and applied, again
  *     every five minutes and after a rejection about the time (that order is then signed afresh and sent once more)
  *   - the WebSocket drops a connection after about a minute without a message: the Ticker stream keeps it busy
@@ -43,6 +47,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import readline from 'node:readline';
 import { execFileSync } from 'node:child_process';
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -131,7 +136,7 @@ const defaultCap = (sizing, risk) => (sizing.mode !== 'ratio' && !(num(risk.maxN
  *  limit". maxPriceDeviationPct: a leader fill further than this from the mark is not copied (the books sometimes hold
  *  only stub quotes, and one tiny trade there would size a copy as if the market were that cheap). maxFillAgeMs: a
  *  leader fill that reaches a decision older than this (a reconnect, a long queue) is listed as missed, not copied. */
-const LIMITS = { maxOrderUsd: 1000, maxPositionUsd: 5000, maxPriceDeviationPct: 3, maxFillAgeMs: 15000 };
+const LIMITS = { maxOrderUsd: 1000, maxPositionUsd: 5000, maxPriceDeviationPct: 3, maxFillAgeMs: 15000, closeSlippageBps: 200 };
 /** What in a config must stop the agent before it trades, in words (empty: nothing). Left out is fine (a default). */
 const checkConfig = (cfg) => {
   const e = []; const s = cfg.sizing || {}, r = cfg.risk || {}, x = cfg.execution || {};
@@ -147,7 +152,38 @@ const checkConfig = (cfg) => {
   // a plain-http ntfy server other than this machine would carry the pushes (and the topic, the only secret) in the clear
   const nt = cfg.ntfy || {}; if (nt.server != null && nt.server !== '' && !/^https:\/\/[^\s/]|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(String(nt.server))) e.push(`ntfy.server is ${JSON.stringify(nt.server)}: it must be an https:// address (plain http only on localhost)`);
   want(x, 'execution', 'maxFillAgeMs', 0, true); want(x, 'execution', 'slippageBps', 0, false); want(x, 'execution', 'groupMs', 0, false);
+  want(x, 'execution', 'closeSlippageBps', 0, true, 1000);
+  // market orders are no longer sent: in a book the market makers have left, one fills at whatever is there
+  if (x.type != null && x.type !== 'IOC') e.push(`execution.type is ${JSON.stringify(x.type)}: every order is now a limit IOC at the mark ± execution.slippageBps (set "IOC" or leave it out, and raise slippageBps for more fills)`);
+  const sc = (cfg.status || {}).siteControls; if (sc != null && !['confirm', 'direct'].includes(sc)) e.push(`status.siteControls is ${JSON.stringify(sc)}: it must be confirm or direct`);
   return e;
+};
+/** The price caps a close tries in turn, in bps from the mark: the order slippage cap first, then wider, up to the close
+ *  cap. A close never goes out at an open-ended price (only dust below the minimum quantity does: see place). */
+const closeSteps = (slipBps, capBps) => {
+  const cap = num(capBps) > 0 ? num(capBps) : LIMITS.closeSlippageBps; const out = [];
+  for (const b of [num(slipBps) > 0 ? num(slipBps) : 15, 50, 100, cap]) { const v = Math.min(cap, b); if (!out.length || v > out[out.length - 1]) out.push(v); }
+  return out;
+};
+/** A fill's side from the stream: 1 buy, −1 sell, null when it says neither (that fill is left to the next re-read: a
+ *  side guessed wrong would copy the opposite trade) */
+const fillSide = (sd) => { const s = String(sd == null ? '' : sd).trim().toUpperCase(); return s === '0' || s === 'BUY' ? 1 : s === '1' || s === 'SELL' ? -1 : null; };
+/** Retry-After as milliseconds to wait (seconds, or an HTTP date); null when absent or unreadable */
+const retryAfterMs = (v, now) => { if (v == null || String(v).trim() === '') return null; const s = Number(v); if (Number.isFinite(s)) return Math.max(0, s * 1000); const t = Date.parse(v); return Number.isFinite(t) ? Math.max(0, t - now) : null; };
+/** What an order did, from its read-back and the positions. Once the order's status is final its own `filled` counts (a
+ *  positions read can lag behind it); before that, or unread, the change in position stands in. want: what was asked. */
+const orderOutcome = ({ orderStatus, filled, final, before, after, want, lot }) => {
+  const got = final ? num(filled) : Math.abs(num(after) - num(before));
+  return { got, status: orderStatus === 'REJECTED' ? 'rejected' : got < 1e-12 ? 'unfilled' : Math.abs(got - want) > num(lot) ? 'partial' : 'filled' };
+};
+/** A resume after a risk stop, on a fresh reading: a stop that would trip again at once counts afresh from now (today's
+ *  loss from this equity, the drawdown from this peak), so the next reading does not undo the resume; the others keep
+ *  counting. Only the fields to change. */
+const rebaseStops = (s, risk) => {
+  const out = {};
+  if (risk.dailyLossStop && -s.dayPnl >= risk.dailyLossStop) out.equityDayStart = s.equity - s.flowsDay;   // today's loss back to 0
+  if (risk.drawdownStopPct && s.ddPct >= risk.drawdownStopPct) out.equityPeak = s.equity - s.flowsSinceStart;   // the peak is now
+  return out;
 };
 /** Why a leader's fill price must not size or gate an order (null: it may). A missing or zero price makes any quantity
  *  look cheap, and a print far from the mark (a stub quote, a hostile trade) would size the copy at that price. */
@@ -190,6 +226,7 @@ const parseState = (text) => {
   for (const k of ['books', 'marketOwner', 'carry']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
   if (s.orders != null && !Array.isArray(s.orders)) return { error: 'orders is garbled' };
   if (s.tripped != null && (typeof s.tripped !== 'object' || typeof s.tripped.why !== 'string')) return { error: 'tripped is garbled' };
+  for (const k of ['closing', 'flowsLast']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
   for (const k of ['equityDayStart', 'equityPeak', 'savedAt', 'dayBaseAt', 'peakSince']) if (s[k] != null && !Number.isFinite(s[k])) return { error: k + ' is garbled' };
   if (s.equityNet != null && typeof s.equityNet !== 'boolean') return { error: 'equityNet is garbled' };
   if (s.dayKey != null && !/^\d{4}-\d{2}-\d{2}$/.test(s.dayKey)) return { error: 'dayKey is garbled' };
@@ -241,7 +278,11 @@ if (ARGS.error) { console.error(`${ARGS.error}\nNothing was started. "node copy-
 const configPath = path.resolve(here, ARGS.config);
 const readConfig = () => { if (!fs.existsSync(configPath)) throw new Error(`No ${configPath}. Build one on the site's Copy agent page (or copy config.example.json).`); return JSON.parse(fs.readFileSync(configPath, 'utf8')); };
 const keyPath = (cfg) => path.resolve(here, (cfg && cfg.keyFile) || 'signer.key');
-const readKey = (cfg) => { const p = keyPath(cfg); if (!fs.existsSync(p)) throw new Error(`No signer key at ${p}: run "node copy-agent.mjs keygen" first.`); return new Wallet(fs.readFileSync(p, 'utf8').trim()); };
+const readKey = (cfg) => {
+  const p = keyPath(cfg); if (!fs.existsSync(p)) throw new Error(`No signer key at ${p}: run "node copy-agent.mjs keygen" first.`);
+  // ethers puts the value it could not read into its error: that message is never shown, so a damaged key is not printed
+  try { return new Wallet(fs.readFileSync(p, 'utf8').trim()); } catch (_) { throw new Error(`${p} does not hold a usable private key (its content is not shown): make a new one with "node copy-agent.mjs keygen --force" and link it on the site.`); }
+};
 /**
  * Only the current user may read a file the agent keeps a secret in. POSIX honours the 0o600 it is written with; Windows
  * ignores that mode and the file inherits its folder's ACL (on a drive root: every signed-in account), so the inheritance
@@ -297,12 +338,27 @@ const log = (...a) => { const line = `${new Date().toISOString()} ${a.map((x) =>
 // ---------------------------------------------------------------- exchange
 let clockOffset = 0;   // server time − local time, ms
 const serverNow = () => Date.now() + clockOffset;
-async function api(pathname, { method = 'GET', body, params } = {}) {
+/**
+ * One request to the exchange, with a time limit. A read that gets no answer, a 5xx or a 429 is tried again (after the
+ * Retry-After the exchange asks for, at most 30 s). A write is sent once: when it gets no answer or a 5xx its outcome is
+ * unknown (e.unknown), and place() looks the order up rather than sending it again (that could fill it twice).
+ */
+async function api(pathname, { method = 'GET', body, params, timeoutMs, once = false } = {}) {
   const url = new URL(API + pathname); if (params) for (const [k, v] of Object.entries(params)) if (v != null && v !== '') url.searchParams.set(k, String(v));
-  const r = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
-  const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch (_) {}
-  if (!r.ok) { const e = new Error((j && (Array.isArray(j.message) ? j.message.join('; ') : j.message)) || `HTTP ${r.status}`); e.status = r.status; e.body = j; throw e; }
-  return j;
+  const read = method === 'GET'; const tries = read && !once ? 3 : 1; const limit = timeoutMs || (read ? 15000 : 10000);
+  for (let attempt = 1; ; attempt++) {
+    let r, text;
+    try { r = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(limit) }); text = await r.text(); }
+    catch (err) {
+      if (attempt < tries) { await sleep(500 * Math.pow(3, attempt - 1)); continue; }
+      const e = new Error(err && err.name === 'TimeoutError' ? `no answer from ${pathname} within ${limit / 1000} s` : `${pathname}: ${(err && err.message) || err}`); e.status = 0; e.unknown = !read; throw e;
+    }
+    let j = null; try { j = JSON.parse(text); } catch (_) {}
+    if (r.ok) return j;
+    const wait = retryAfterMs(r.headers.get('retry-after'), Date.now());
+    if ((r.status === 429 || r.status >= 500) && attempt < tries) { await sleep(wait != null ? Math.min(wait, 30000) : 500 * Math.pow(3, attempt - 1)); continue; }
+    const e = new Error((j && (Array.isArray(j.message) ? j.message.join('; ') : j.message)) || `HTTP ${r.status}${r.status === 429 ? ' (too many requests)' : ''}`); e.status = r.status; e.body = j; e.unknown = !read && r.status >= 500; if (r.status === 429) e.retryAfter = wait; throw e;
+  }
 }
 const nonce = (() => { let last = 0n; return () => { let n = BigInt(serverNow()) * 1000000n; if (n <= last) n = last + 1n; last = n; return n; }; })();
 const typesOf = (rpc, primary) => ({ [primary]: rpc.signatureTypes[primary].split(',').map((f) => { const [type, name] = f.trim().split(' '); return { name, type }; }) });
@@ -311,7 +367,8 @@ async function sign(wallet, rpc, primary, message) {
   return wallet.signTypedData(domain, typesOf(rpc, primary), message);
 }
 /** The offset to the exchange's clock, from the middle of the request's round trip; a failed read keeps the last one */
-async function syncClock() { try { const t0 = Date.now(); const t = await api('/v1/time'); const t1 = Date.now(); if (num(t.time) > 0) clockOffset = Math.round(num(t.time) - (t0 + t1) / 2); } catch (_) {} return clockOffset; }   // whole ms: the nonce is a BigInt of it
+// one try (a retry's wait would skew the midpoint); whole ms: the nonce is a BigInt of it
+async function syncClock() { try { const t0 = Date.now(); const t = await api('/v1/time', { once: true, timeoutMs: 5000 }); const t1 = Date.now(); if (num(t.time) > 0) clockOffset = Math.round(num(t.time) - (t0 + t1) / 2); } catch (_) {} return clockOffset; }
 
 // ---------------------------------------------------------------- commands
 async function keygen() {
@@ -357,7 +414,8 @@ async function run() {
   if (problems.length) throw new Error(`${configPath} cannot be used, nothing was started:\n  - ${problems.join('\n  - ')}`);
   const ctl = controlToken(cfg, true); const w = readKey(cfg);
   if (!DRY && process.stdout.isTTY) { console.log('Starting in 5 s: Ctrl+C now if you meant --dry.'); await sleep(5000); }
-  const ex = Object.assign({ type: 'IOC', slippageBps: 15, groupMs: 1200, onLeaderFlat: 'close', onLeaderLiquidation: 'close', onOrphan: 'hold' }, cfg.execution || {});
+  const ex = Object.assign({ type: 'IOC', slippageBps: 15, closeSlippageBps: LIMITS.closeSlippageBps, groupMs: 1200, onLeaderFlat: 'close', onLeaderLiquidation: 'close', onOrphan: 'hold' }, cfg.execution || {});
+  if (ex.closeSlippageBps == null) ex.closeSlippageBps = LIMITS.closeSlippageBps;
   const risk = Object.assign({ maxNotionalPerMarket: 0, maxOpenPositions: 0, maxLeverage: 0, dailyLossStop: 0, drawdownStopPct: 0, minOrderUsd: 0, markets: {}, onTrip: 'reduceOnly' }, cfg.risk || {});
   const sizing = Object.assign({ mode: 'fixed', size: 200, ratio: 10 }, cfg.sizing || {});
   // the hard limits are never off: left out (or null) they take the defaults, whatever the sizing mode
@@ -382,14 +440,14 @@ async function run() {
   // the risk stop set (see loadState): only an explicit resume clears it
   const { saved, damaged } = loadState();
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: damaged ? { t: Date.now(), why: `${damaged}${saved.tripped ? '; the stop it had: ' + saved.tripped.why : ''}: check the positions and resume` } : saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
-    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, upnl: 0, unsettled: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [] };
+    books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, upnl: 0, unsettled: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [], closing: saved.closing || {}, flowsLast: saved.flowsLast || null, asking: null };
   let persistErr = null, onDiskGood = !damaged;   // a damaged file must not become the backup
   // a baseline or peak saved by an agent that counted equity gross is moved onto the net basis at the first reading
   // (toNetBasis); until then a save keeps saying it is gross, so a stop in between cannot skip the move
   let grossBasis = !saved.equityNet && (S.equityDayStart != null || S.equityPeak != null);
   const persist = () => {
     try {
-      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
+      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, closing: S.closing, flowsLast: S.flowsLast, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
       // written whole beside it and swapped in: a crash or a full disk mid-write leaves the last good file, never half of one
       if (onDiskGood && fs.existsSync(statePath)) fs.copyFileSync(statePath, statePath + '.bak');
       fs.renameSync(statePath + '.tmp', statePath); persistErr = null; onDiskGood = true;
@@ -411,7 +469,7 @@ async function run() {
   // ---- one thing at a time: every decision and order goes through this queue, so two leader orders arriving
   //      together cannot both size against the same stale position
   let chain = Promise.resolve();
-  const serial = (fn) => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; };
+  const serial = (fn) => { const p = chain.then(fn, fn); chain = p.catch((e) => { S.errors++; S.lastError = { t: Date.now(), msg: (e && e.message) || String(e) }; note('error', S.lastError.msg); }); return p; };   // a failure is logged, and the queue goes on
 
   // ---- own account: balances, positions, marks, and the deposits / withdrawals that must not count as PnL
   const dayKeyOf = (t) => new Date(t).toISOString().slice(0, 10);
@@ -459,53 +517,89 @@ async function run() {
     if (!S.tripped && ((risk.dailyLossStop && -S.dayPnl >= risk.dailyLossStop) || (risk.drawdownStopPct && S.ddPct >= risk.drawdownStopPct))) {
       S.tripped = { t: Date.now(), why: -S.dayPnl >= (risk.dailyLossStop || Infinity) ? `today's loss ${(-S.dayPnl).toFixed(2)} USD reached the stop of ${risk.dailyLossStop}` : `drawdown ${S.ddPct.toFixed(1)}% reached the stop of ${risk.drawdownStopPct}%` };
       note('trip', S.tripped.why); push('Copy agent stopped', S.tripped.why); persist();
-      if (risk.onTrip === 'closeAll') await closeAll('risk stop');
+      // a reading taken inside an order (settle) must not close under it: the close-all then waits its turn in the queue
+      if (risk.onTrip === 'closeAll') { if (placing) serial(() => closeAll('risk stop')); else await closeAll('risk stop'); }
     }
     persist();
   };
-  /** Positions read again until the exchange shows the order's effect (or three tries), then the book is refreshed. */
-  const settle = async (pid, before) => { for (let i = 0; i < 4; i++) { await sleep(i ? 700 : 300); await refreshOwn().catch(() => {}); const now = S.own[pid] ? S.own[pid].size : 0; if (Math.abs(now - before) > 1e-12 || i === 3) return now; } return S.own[pid] ? S.own[pid].size : 0; };
+  /** Positions read again (the book refreshed each time) until they show the order's effect: the size its own fill says
+   *  (expected), or any change when that is unknown; four reads at most. */
+  const settle = async (pid, before, expected, lot) => {
+    const tol = Math.max(1e-12, num(lot) / 2);
+    for (let i = 0; i < 4; i++) { await sleep(i ? 700 : 300); await refreshOwn().catch(() => {}); const now = S.own[pid] ? S.own[pid].size : 0; if (expected != null ? Math.abs(now - expected) < tol : Math.abs(now - before) > 1e-12) return now; }
+    return S.own[pid] ? S.own[pid].size : 0;
+  };
+  /** The positions read still lags the order's own fill: the book takes the order's figure until a read catches up */
+  const patchOwn = (pid, size, px) => {
+    if (Math.abs(size) < 1e-12) { delete S.own[pid]; return; }
+    const o = S.own[pid]; const m = markOf(pid) || px || (o && o.mark) || 0;
+    S.own[pid] = Object.assign({ entry: px || m, upnl: 0, funding: 0, posFee: 0 }, o || {}, { size, mark: m, notional: Math.abs(size) * m, lagging: true });
+  };
+  /** An order of ours by its clientOrderId among the copy account's newest orders (three looks: one still being taken in
+   *  shows up late); null when it is not there */
+  const findOrder = async (cid) => {
+    for (let i = 1; i <= 3; i++) { await sleep(1000 * i); try { const o = ((await api('/v1/order', { params: { subaccountId: SID, limit: 25 } })).data || []).find((x) => x.clientOrderId === cid); if (o) return o; } catch (_) {} }
+    return null;
+  };
 
   // ---- orders
-  /** Sign, submit and read back one order. side 0 buy / 1 sell. close: quantity 0 + reduceOnly closes the whole position. */
-  async function place({ prod, side, qty, reduceOnly = false, close = false, why, leader, leaderSid, leaderPx, leaderT, kind, resync = false }) {
-    const mark = markOf(prod.id);
-    let q = close ? 0 : roundDown(Math.min(qty, num(prod.maxQuantity) || Infinity), prod.lotSize);
+  /**
+   * Sign, submit and read back one order. side 0 buy / 1 sell. Every order is a limit IOC at the mark ± a cap. close: the
+   * whole position as a reduce-only one at the mark ± capBps (closePosition widens it step by step); only dust below the
+   * market's minimum quantity, which the exchange takes as no other order, goes as its close order (quantity 0 +
+   * reduceOnly + close, at market: some $10 at most).
+   */
+  let placing = 0;   // orders in flight: refreshOwn's risk stop leaves them alone (see there)
+  async function place(o) { placing++; try { return await placeOne(o); } finally { placing--; } }
+  async function placeOne({ prod, side, qty, reduceOnly = false, close = false, capBps, why, leader, leaderSid, leaderPx, leaderT, kind, resync = false }) {
+    const mark = markOf(prod.id); const before = S.own[prod.id] ? S.own[prod.id].size : 0;
+    if (close && !before) return null;
+    const dust = close && Math.abs(before) < num(prod.minQuantity);
+    let q = dust ? 0 : roundDown(Math.min(close ? Math.abs(before) : qty, num(prod.maxQuantity) || Infinity), prod.lotSize);
     // a reduction the exchange will not take yet (below its minimum, or a remainder an IOC left) is not lost: it is
     // carried and folded into the next reduction of that market, so the copy does not stay bigger than the leader's share
     const carry = (dq, why) => { if (!(reduceOnly && !close) || !(dq > 1e-12)) return; S.carry[prod.id] = (S.carry[prod.id] || 0) + dq; if (why) note('leader', `${prod.displayTicker}: ${dq} of the reduction ${why}; carried to the next one (${S.carry[prod.id]} pending)`, { leader }); };
     if (!close && q < num(prod.minQuantity)) { if (reduceOnly) carry(qty, `is below the minimum ${prod.minQuantity}`); else note('skip', `${prod.displayTicker}: ${qty} is below the minimum ${prod.minQuantity}`, { leader }); return null; }
     if (!close && mark && q * mark < (risk.minOrderUsd || 0)) { if (reduceOnly) carry(qty, 'is below minOrderUsd'); else note('skip', `${prod.displayTicker}: ${(q * mark).toFixed(2)} USD is below minOrderUsd`, { leader }); return null; }
-    if (!close && !mark) { note('skip', `${prod.displayTicker}: no mark price, not trading blind`, { leader }); carry(qty, 'had no mark price'); return null; }
+    if (!dust && !mark) { note('skip', `${prod.displayTicker}: no mark price, not trading blind`, { leader }); carry(qty, 'had no mark price'); return null; }
     // the last word before signing: an order that adds exposure is checked at the mark against every size limit again,
     // whatever computed its quantity (reductions and closes only ever shrink a position and are never held back here)
     if (!reduceOnly && !close) { const lim = roomFor(prod); if (q * mark > lim * (1 + 1e-9) + 1e-9) { note('skip', `${prod.displayTicker}: ${(q * mark).toFixed(2)} USD at the mark is over the ${Math.max(0, lim).toFixed(2)} USD the limits leave; not sent`, { leader }); return null; } }
     carry(qty - q, null);   // the lot-size rounding remainder, kept quietly
-    const useLimit = !close && ex.type !== 'MARKET'; const type = useLimit ? 'LIMIT' : 'MARKET'; const ro = !!(reduceOnly || close);
-    const px = useLimit ? roundTick(mark * (1 + (side === 0 ? 1 : -1) * ((ex.slippageBps || 15) / 1e4)), prod.tickSize, side === 0) : 0;
+    const type = dust ? 'MARKET' : 'LIMIT'; const ro = !!(reduceOnly || close); const bps = (close && capBps) || ex.slippageBps || 15;
+    const px = dust ? 0 : roundTick(mark * (1 + (side === 0 ? 1 : -1) * (bps / 1e4)), prod.tickSize, side === 0);
     // signed afresh for every attempt: a retry after the clock is measured again needs a new nonce and signedAt
     const signed = async () => {
       const n = nonce(); const signedAt = Math.floor(serverNow() / 1000); const cid = randomUUID();
       const msg = { sender: w.address, subaccount: sub, quantity: BigInt(Math.round(q * 1e9)), price: BigInt(Math.round(px * 1e9)), reduceOnly: ro, side, engineType: 0, productId: Number(prod.onchainId), nonce: n, signedAt };
       const signature = await sign(w, rpc, 'TradeOrder', msg);
       const data = { sender: w.address, subaccount: sub, quantity: String(q), side, engineType: 0, onchainId: Number(prod.onchainId), nonce: n.toString(), signedAt, type, reduceOnly: ro, clientOrderId: cid };
-      if (useLimit) { data.price = String(px); data.timeInForce = 'IOC'; }
-      if (close) data.close = true;
+      if (dust) data.close = true; else { data.price = String(px); data.timeInForce = 'IOC'; }
       return { data, signature };
     };
     const submit = (o) => (DRY ? api('/v1/order/dry-run', { method: 'POST', body: { data: Object.assign({}, o.data, { sender: sa.account }) } }) : api('/v1/order', { method: 'POST', body: { data: o.data, signature: o.signature } }));
     let ord = await signed();
-    const before = S.own[prod.id] ? S.own[prod.id].size : 0;
-    const rec = { t: Date.now(), leader, leaderSid: leaderSid || null, leaderPx: leaderPx || null, leaderT: leaderT || null, kind: kind || (close ? 'close' : reduceOnly ? 'reduce' : 'open'), cid: ord.data.clientOrderId, pid: prod.id, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, reduceOnly: ro, type, px: px || null, mark, why, status: 'sent', before, fills: [], resync: !!resync };
+    const rec = { t: Date.now(), leader, leaderSid: leaderSid || null, leaderPx: leaderPx || null, leaderT: leaderT || null, kind: kind || (close ? 'close' : reduceOnly ? 'reduce' : 'open'), cid: ord.data.clientOrderId, pid: prod.id, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, dust: dust || undefined, reduceOnly: ro, type, px: px || null, capBps: dust ? undefined : bps, mark, why, status: 'sent', before, fills: [], resync: !!resync };
     S.orders.unshift(rec); if (S.orders.length > 1000) S.orders.length = 1000;
-    try {
-      let r;
-      try { r = await submit(ord); }
-      catch (e) {   // the exchange refused the order's time: measure the clock again and send it once more
+    // the exchange refused the order's time: the clock is measured again and the order signed afresh and sent once more
+    const send = async () => {
+      try { return await submit(ord); }
+      catch (e) {
         if (!isClockReject(e.status, e.message)) throw e;
         const was = clockOffset; await syncClock(); S.clockOffset = clockOffset;
         note('warn', `${prod.displayTicker}: the exchange refused the order's time (${e.message}); clock measured again (${((clockOffset - was) / 1000).toFixed(1)} s change), sending it once more`);
-        ord = await signed(); rec.cid = ord.data.clientOrderId; r = await submit(ord);
+        ord = await signed(); rec.cid = ord.data.clientOrderId; return await submit(ord);
+      }
+    };
+    try {
+      let r = null;
+      try { r = await send(); }
+      catch (e) {
+        if (DRY || !e.unknown) throw e;
+        // no answer, or the exchange failed while answering: the order may be in all the same. It is looked up by its
+        // clientOrderId, never sent again blind (that could fill it twice)
+        rec.lost = e.message; note('warn', `${prod.displayTicker} ${rec.side}: ${e.message}; looking the order up by its clientOrderId`);
+        const found = await findOrder(rec.cid); if (found) r = { id: found.id, result: 'found by its clientOrderId' };
       }
       if (DRY) {   // the exchange checks margin and fields, places nothing; a virtual book stands in for the fill
         rec.status = 'dry'; rec.margin = r && r.marginRequired != null ? num(r.marginRequired) : null; rec.code = r && r.code;
@@ -516,29 +610,69 @@ async function run() {
         if (rec.filled) rec.fills.push({ id: 'dry-' + rec.cid, t: Date.now(), px: fillPx, qty: rec.filled, fee: rec.filled * fillPx * (num(prod.takerFee) || 0.0003), maker: false, virtual: true });
         note('order', `DRY ${rec.side} ${close ? 'close' : q} ${prod.displayTicker} ${type}${px ? ' @ ' + px : ''} · ${why} · margin ${rec.margin} · ${rec.code}`);
       } else {
-        rec.id = r && r.id; rec.code = r && r.result; rec.status = 'accepted';
+        if (r) { rec.id = r.id; rec.code = r.result; rec.status = 'accepted'; }
         // the submission response's `filled` is deprecated (always 0): read the order back until it is final
-        let o = null; for (let i = 0; i < 8; i++) { await sleep(i ? 500 : 250); try { o = await api('/v1/order/' + rec.id); } catch (_) {} if (o && FINAL.has(o.status)) break; }
+        let o = null; if (rec.id) for (let i = 0; i < 8; i++) { await sleep(i ? 500 : 250); try { o = await api('/v1/order/' + rec.id); } catch (_) {} if (o && FINAL.has(o.status)) break; }
         if (o) { rec.orderStatus = o.status; rec.filled = num(o.filled); rec.reason = o.rejectedReason || null; }
-        rec.after = await settle(prod.id, before);
-        const got = close ? Math.abs(before - rec.after) : Math.abs(rec.after - before);
-        rec.status = rec.orderStatus === 'REJECTED' ? 'rejected' : got < 1e-12 ? 'unfilled' : Math.abs(got - (close ? Math.abs(before) : q)) > num(prod.lotSize) ? 'partial' : 'filled';
-        note(rec.status === 'filled' ? 'order' : 'warn', `${rec.side} ${close ? 'close' : q} ${prod.displayTicker} ${type}${px ? ' @ ' + px : ''} · ${why} · ${rec.status}${rec.filled != null ? ' ' + rec.filled : ''}${rec.reason ? ' · ' + rec.reason : ''}`, { id: rec.id });
-        if (rec.reason === 'SignerRevoked' || rec.code === 'SignerRevoked') { S.paused = true; note('error', 'the signer was revoked: paused; link a new one on the site'); push('Copy agent paused', 'signer revoked'); }
+        // a final order's own fill is what counts; the positions are read until they show it (any change, when unknown)
+        const final = !!(o && FINAL.has(o.status)); const expected = final ? before + (side === 0 ? 1 : -1) * rec.filled : null;
+        rec.after = await settle(prod.id, before, expected, prod.lotSize);
+        if (final && Math.abs(rec.after - expected) >= Math.max(1e-12, num(prod.lotSize) / 2)) { note('warn', `${prod.displayTicker}: the positions read ${rec.after} while the order reports ${rec.filled} filled; the order's figure counts until a read catches up`); patchOwn(prod.id, expected, px || mark); rec.after = expected; }
+        const { got, status } = orderOutcome({ orderStatus: rec.orderStatus, filled: rec.filled, final, before, after: rec.after, want: dust ? Math.abs(before) : q, lot: prod.lotSize });
+        // an order that got no answer and is not on the exchange went in only if the position moved
+        if (r) rec.status = status; else if (got > 1e-12) rec.status = 'unconfirmed'; else { rec.status = 'rejected'; rec.error = `${rec.lost} (not on the exchange afterwards, and the position did not change)`; S.errors++; S.lastError = { t: Date.now(), msg: rec.error }; push('Copy agent order lost', `${prod.displayTicker} ${rec.side}: ${rec.error}`); }
+        note(rec.status === 'filled' ? 'order' : 'warn', `${rec.side} ${close ? 'close ' + (dust ? 'dust' : q) : q} ${prod.displayTicker} ${type}${px ? ' @ ' + px : ''} · ${why} · ${rec.status}${rec.filled != null ? ' ' + rec.filled : ''}${rec.reason ? ' · ' + rec.reason : ''}${rec.error ? ' · ' + rec.error : ''}`, { id: rec.id });
+        if (rec.reason === 'SignerRevoked' || rec.code === 'SignerRevoked') signerLost('the signer was revoked');
         if (!close && got < q - 1e-12) carry(q - got, rec.status === 'rejected' ? 'was rejected' : 'did not fill inside the slippage cap');   // an opening is never chased; a reduction is owed
       }
     } catch (e) {
       rec.status = 'rejected'; rec.error = e.message; S.errors++; S.lastError = { t: Date.now(), msg: e.message };
       note('error', `${prod.displayTicker} ${rec.side} rejected: ${e.message}`, { why }); push('Copy agent order rejected', `${prod.displayTicker} ${rec.side}: ${e.message}`);
-      if (/SignerRevoked|Unauthorized/i.test(e.message) || e.status === 401) { S.paused = true; note('error', 'the exchange no longer accepts this signer: paused'); }
+      if (/signer|unauthori[sz]ed|forbidden/i.test(e.message) || e.status === 401 || e.status === 403) signerLost(`the exchange refused the signer (${e.message})`);
       if (!close) carry(q, 'was rejected');
     }
     if (DRY) await refreshOwn().catch(() => {});
     persist();
     return rec;
   }
-  async function closeAll(why) { for (const [pid, o] of Object.entries(S.own)) { const prod = byId[pid]; if (prod && o.size) { delete S.carry[pid]; await place({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why }); } } }
-  const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; const prod = byId[pid]; if (!o || !o.size || !prod) return null; delete S.carry[pid]; const r = await place(Object.assign({ prod, side: o.size > 0 ? 1 : 0, qty: 0, close: true, why, leader: leaderName }, ctxL || {}, { kind: 'close' })); if (!S.own[pid]) { for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; } return r; };
+  /** Any sign that the exchange no longer takes this signer (revoked, expired, refused): new and larger positions stop
+   *  (paused) and the owner hears of it once */
+  const signerLost = (why) => { if (S.paused && S.pausedBy === 'signer') return; S.paused = true; S.pausedBy = 'signer'; note('error', `${why}: paused; make a new key (node copy-agent.mjs keygen --force), link it on the site, restart the agent and resume`); push('Copy agent paused', why); persist(); };
+
+  // ---- closes: never at an open-ended price. Reduce-only limit IOCs for what is left, at the mark ± each cap of
+  //      closeSteps in turn (the mark read again for each), until flat. What the widest leaves stays pending in S.closing:
+  //      tried again from the refresh timer, ever less often (30 s doubling to 5 min), pushed once, and nothing else is
+  //      traded in that market meanwhile.
+  const closeCaps = closeSteps(ex.slippageBps, ex.closeSlippageBps);
+  const closedOut = (pid) => { delete S.closing[pid]; delete S.carry[pid]; for (const b of Object.values(S.books)) delete b[pid]; delete S.marketOwner[pid]; };
+  async function closePosition(pid, why, args) {
+    const prod = byId[pid]; if (!prod) return null;
+    let last = null;
+    for (let i = 0, n = 0; i < closeCaps.length && n < closeCaps.length + 6; n++) {
+      const o = S.own[pid]; if (!o || !o.size) break;
+      const r = await place(Object.assign({}, args || {}, { prod, side: o.size > 0 ? 1 : 0, qty: Math.abs(o.size), close: true, capBps: closeCaps[i], why: i ? `${why} (cap ${closeCaps[i]} bps)` : why, kind: 'close' }));
+      if (r) last = r;
+      if (!r || r.status === 'rejected' || r.dust) break;   // not sent (no mark), refused, or the dust order: a wider price would not help
+      if (r.status !== 'filled') i++;   // not all of it inside this cap: the next is wider (all of it with some left: an order capped at maxQuantity, again)
+    }
+    const left = S.own[pid] ? S.own[pid].size : 0;
+    if (!left) { const was = S.closing[pid]; closedOut(pid); if (was) { note('order', `${prod.displayTicker}: closed at try ${was.tries + 1}`); push('Copy agent closed', `${prod.displayTicker} at try ${was.tries + 1}`); } persist(); return last; }
+    const p = S.closing[pid] || (S.closing[pid] = { why, since: Date.now(), tries: 0, leader: (args && args.leader) || null });
+    p.tries++; p.left = left; p.next = Date.now() + Math.min(300000, 30000 * Math.pow(2, p.tries - 1));
+    p.last = last ? last.status + (last.reason ? ' · ' + last.reason : last.error ? ' · ' + last.error : '') : 'not sent: no mark price';
+    const msg = `${prod.displayTicker}: ${Math.abs(left)} still open after reduce-only IOCs up to ${closeCaps[closeCaps.length - 1]} bps from the mark (${p.last}); tried again from ${new Date(p.next).toLocaleTimeString()}`;
+    note('warn', msg); if (p.tries === 1) push('Copy agent could not close', msg);
+    persist(); return last;
+  }
+  async function closeAll(why) { for (const pid of Object.keys(S.own)) if (S.own[pid] && S.own[pid].size && byId[pid]) await closePosition(pid, why); }
+  const closeMarket = async (pid, why, leaderName, ctxL) => { const o = S.own[pid]; if (!o || !o.size || !byId[pid]) return null; return closePosition(pid, why, Object.assign({ leader: leaderName }, ctxL || {})); };
+  /** The pending closes whose next try is due; from the refresh timer only, never from a read inside an order */
+  const retryCloses = async () => {
+    for (const [pid, p] of Object.entries(S.closing)) {
+      if (!S.own[pid] || !S.own[pid].size) { note('order', `${byId[pid] ? byId[pid].displayTicker : pid}: no longer open (closed on the exchange or by hand)`); closedOut(pid); persist(); continue; }
+      if (Date.now() >= (p.next || 0)) await closePosition(pid, `${p.why} (try ${p.tries + 1})`, { leader: p.leader });
+    }
+  };
   /** A reduction of `share` of what is held, plus whatever earlier reductions of that market still owe (see place). */
   const reduceBy = async (pid, share, args) => { const o = S.own[pid]; if (!o || !o.size) return null; const owed = Math.min(S.carry[pid] || 0, Math.abs(o.size)); delete S.carry[pid]; const qty = reduceQty(o.size, share, owed); return place(Object.assign({ prod: byId[pid], side: o.size > 0 ? 1 : 0, qty, reduceOnly: true }, args, owed ? { why: args.why + ` + ${owed} carried` } : {})); };   // the share applies to what should be held, i.e. without what is still owed
 
@@ -546,6 +680,7 @@ async function run() {
   const allowed = (prod, addNotional, leaderSid) => {
     if (S.paused) return 'paused';
     if (S.tripped) return 'risk stop is on (reduce-only)';
+    if (S.closing[prod.id]) return `a close of ours in ${prod.displayTicker} is still pending`;
     if (Date.now() - S.ownAt > 120000) return 'own account data is stale (exchange unreachable?)';
     if (!S.leaderSeeded[leaderSid]) return 'leader positions not read yet';
     if (risk.markets && risk.markets.deny && risk.markets.deny.includes(prod.displayTicker)) return `${prod.displayTicker} is denied`;
@@ -588,9 +723,17 @@ async function run() {
 
   // ---- preflight: what would make an order fail or a result mislead
   if (Math.abs(offset) > 5000) note('warn', `this machine's clock is ${(offset / 1000).toFixed(1)} s off the exchange's; corrected for signing`);
-  if (!DRY && signer && num(signer.expiresAt) && num(signer.expiresAt) < Date.now() + 3 * 86400000) { note('warn', `the linked signer expires ${new Date(num(signer.expiresAt)).toISOString()}: before then make a new key (node copy-agent.mjs keygen --force), link it on the site and restart the agent`); push('Copy agent signer expiring', new Date(num(signer.expiresAt)).toISOString()); }
+  // the signer, at start and hourly: a revoked or expired one fails every order, closes included, so the agent pauses at
+  // the first sign of it; one expiring within three days is pushed once a day
+  const checkSigner = async () => {
+    if (DRY) return;
+    let sg = null; try { sg = await api('/v1/linked-signer/address/' + w.address); } catch (e) { if (e.status !== 404) { note('warn', 'signer check: ' + e.message); return; } }
+    if (!sg || sg.status !== 'ACTIVE') return signerLost(`the signer is ${sg ? sg.status : 'no longer linked'}`);
+    S.signerExpiresAt = num(sg.expiresAt) || null;
+    if (S.signerExpiresAt && S.signerExpiresAt < Date.now() + 3 * 86400000 && Date.now() - (S.expiryWarnedAt || 0) > 86400000) { S.expiryWarnedAt = Date.now(); const msg = `the linked signer expires ${new Date(S.signerExpiresAt).toLocaleString()}: before then make a new key (node copy-agent.mjs keygen --force), link it on the site and restart the agent`; note('warn', msg); push('Copy agent signer expiring', msg); }
+  };
+  await checkSigner();
   if (S.equity <= 0) note('warn', 'the copy account has no equity; nothing can be opened');
-  if (ex.type === 'MARKET') note('warn', 'execution.type is MARKET: the only slippage protection is the exchange\'s own cap (MarketOrderReachedMaxSlippage); IOC with a bps cap is safer');
   if (sizing.mode !== 'ratio' && num(sizing.size) < (risk.minOrderUsd || 0)) note('warn', `sizing.size ${sizing.size} is below risk.minOrderUsd ${risk.minOrderUsd}: every order would be skipped`);
   if (capDerived) note('start', `risk.maxNotionalPerMarket is not set: using ${MAX_SCALE} × sizing.size = ${risk.maxNotionalPerMarket} USD per market, the most a position may grow to when a leader adds to it`);
   if (sizing.mode !== 'ratio' && num(sizing.size) > num(risk.maxOrderUsd)) note('warn', `sizing.size ${sizing.size} is above risk.maxOrderUsd ${risk.maxOrderUsd}: every opening is cut to ${risk.maxOrderUsd} USD (raise risk.maxOrderUsd to copy at full size)`);
@@ -608,7 +751,8 @@ async function run() {
     else { S.orphans.push(pid); note('warn', `${byId[pid].displayTicker}: an open position no leader holds (orphan); ${ex.onOrphan === 'close' ? 'closing it' : 'left alone — close it yourself or set execution.onOrphan to "close"'}`); if (ex.onOrphan === 'close') await closeMarket(pid, 'orphan on start'); }
   }
   persist();
-  note('start', `copy agent up · ${DRY ? 'DRY RUN, nothing is placed' : 'LIVE, real orders'} · signer ${w.address} · ${cfg.leaders.length} leader(s) · equity ${S.equity.toFixed(2)} USD (Meridian's Trade Equity) · sizing ${sizing.mode} ${sizing.mode === 'ratio' ? sizing.ratio + '%' : sizing.size + ' USD'} · ${ex.type}${ex.type === 'IOC' ? ' ±' + ex.slippageBps + ' bps' : ''}`);
+  note('start', `copy agent up · ${DRY ? 'DRY RUN, nothing is placed' : 'LIVE, real orders'} · signer ${w.address} · ${cfg.leaders.length} leader(s) · equity ${S.equity.toFixed(2)} USD (Meridian's Trade Equity) · sizing ${sizing.mode} ${sizing.mode === 'ratio' ? sizing.ratio + '%' : sizing.size + ' USD'} · limit IOC ±${ex.slippageBps} bps, closes widening to ±${closeCaps[closeCaps.length - 1]} bps`);
+  if (Object.keys(S.closing).length) note('start', `closes left pending by the last run: ${Object.keys(S.closing).map((pid) => (byId[pid] ? byId[pid].displayTicker : pid)).join(', ')}; tried again from the first refresh`);
 
   /** One leader order (its fills grouped): decide and place the mirror. Runs inside the serial queue. */
   async function onLeaderOrder(l, prod, g) {
@@ -630,6 +774,7 @@ async function run() {
     if (g.oid && cp) { if (!S.orderClosed || Object.keys(S.orderClosed).length > 200) S.orderClosed = {}; S.orderClosed[g.oid] = (S.orderClosed[g.oid] || 0) + cp; }
     note('leader',`${name} ${kind} ${prod.displayTicker} ${g.q > 0 ? '+' : ''}${g.q} @ ${Number.isFinite(px) ? px : 'no price'}`);
     const ctxL = { leaderSid: l.sid, leaderPx: px > 0 && Number.isFinite(px) ? px : null, leaderT: g.t || serverNow(), kind };
+    if (S.closing[prod.id]) { note('leader', `${prod.displayTicker}: a close of ours is pending there; this ${kind} is not mirrored`); return; }
     if (kind === 'close') { if (followed && ownQty) await closeMarket(prod.id, `${name} closed`, name, ctxL); return; }
     if (kind === 'reduce') {
       if (!followed || !ownQty) return;
@@ -648,6 +793,8 @@ async function run() {
     const mark = markOf(prod.id); const age = serverNow() - (g.t || serverNow());
     const bad = (age > ex.maxFillAgeMs ? `the leader's fill is ${(age / 1000).toFixed(1)} s old (the limit is ${ex.maxFillAgeMs / 1000} s)` : null) || priceProblem(px, mark, risk.maxPriceDeviationPct);
     if (bad) { missed({ leader: name, sid: l.sid, pid: prod.id, ticker: prod.displayTicker, kind, q: g.q, px: ctxL.leaderPx, t: g.t || null, why: bad }); return; }
+    // a fixed-size copy is sized on the leader's whole order (sizeOrder): unread, its first piece would pass for all of it
+    if (sizing.mode === 'fixed' && g.orderQtyErr && !(kind === 'add' && followed && ownNow && prev)) { missed({ leader: name, sid: l.sid, pid: prod.id, ticker: prod.displayTicker, kind, q: g.q, px: ctxL.leaderPx, t: g.t || null, why: `the leader's order could not be read (${g.orderQtyErr}), so its size is unknown` }); return; }
     // sized and limited at the mark: the leader's price only had to be near it
     const leaderDelta = kind === 'reverse' ? Math.abs(next) : Math.abs(g.q);
     const sz = sizeOrder(sizing, { kind, leaderDelta, px: mark, followed, ownNow, prev, orderQty: openingOrderQty(g.orderQty, (S.orderClosed || {})[g.oid]), owed: S.carry[prod.id] || 0 });
@@ -678,7 +825,7 @@ async function run() {
       if (grew > 1e-12) missed({ leader: who(l), sid: l.sid, pid, ticker: byId[pid].displayTicker, kind, q: Math.sign(a) * grew, px: null, t: read.at[pid] || null, why: `seen only on a re-read of the leader's positions (${why}); no fill for it came over the socket`, reread: true });
     }
     for (const pid of Object.keys(S.own)) {
-      if (S.marketOwner[pid] !== l.sid) continue;
+      if (S.marketOwner[pid] !== l.sid || S.closing[pid]) continue;   // a pending close is retried on its own
       // fills of this market still being grouped: the flush mirrors them with the read just taken, so nothing is done twice
       if (Array.from(pending.keys()).some((k) => k.startsWith(l.sid + '|' + pid + '|'))) continue;
       const prod = byId[pid]; const b = before[pid] || 0, a = after[pid] || 0; const ownQty = S.own[pid].size;
@@ -712,7 +859,8 @@ async function run() {
   };
   const flush = (key) => serial(async () => {
     const g = pending.get(key); pending.delete(key); if (!g) return;
-    if (sizing.mode === 'fixed' && g.oid && !/^sim-/.test(g.oid)) { try { const o = await api('/v1/order/' + g.oid); g.orderQty = num(o.quantity); } catch (_) {} }   // the whole order, not its first piece
+    // the whole order, not its first piece; unreadable, a fixed-size opening is listed as missed (onLeaderOrder)
+    if (sizing.mode === 'fixed' && g.oid && !/^sim-/.test(g.oid)) { try { const o = await api('/v1/order/' + g.oid); g.orderQty = num(o.quantity); if (!(g.orderQty > 0)) g.orderQtyErr = 'it gives no quantity'; } catch (e) { g.orderQtyErr = e.message; } }
     try { await onLeaderOrder(g.l, g.prod, g); } catch (e) { S.errors++; S.lastError = { t: Date.now(), msg: e.message }; note('error', e.message); }
   });
   let sock = null, retry = 0;
@@ -740,18 +888,52 @@ async function run() {
       const sid = it.sid || d.sid; const l = cfg.leaders.find((x) => x.sid === sid);
       if (m.e === 'OrderFill' && sid === SID) { attachFill({ id: it.id, orderId: it.oid, t: num(it.t || d.t) || Date.now(), px: num(it.px), qty: num(it.sz), fee: num(it.fee), maker: !!it.m }); serial(() => refreshOwn().catch(() => {})); continue; }
       if (!l) continue;
-      if (m.e === 'OrderFill') { const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); } onFill(l, prod, { q: (String(it.sd) === '0' ? 1 : -1) * num(it.sz), px: num(it.px), oid: it.oid || it.id, t: num(it.t || d.t) || serverNow() }); }
+      if (m.e === 'OrderFill') {
+        const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); }
+        const sd = fillSide(it.sd);
+        if (sd == null) { note('warn', `${who(l)} ${prod.displayTicker}: a fill whose side reads neither buy nor sell (${JSON.stringify(it.sd)}); the leader's positions are read again instead`); serial(() => resync(l, 'a fill without a side')); continue; }
+        onFill(l, prod, { q: sd * num(it.sz), px: num(it.px), oid: it.oid || it.id, t: num(it.t || d.t) || serverNow() });
+      }
       else if (m.e === 'SubaccountLiquidation') { note('leader', `${who(l)}: liquidation event`); push('Leader liquidated', who(l)); setTimeout(() => serial(() => resync(l, 'liquidation')), 1500); }
       else if (m.e === 'PositionUpdate') { clearTimeout(puTimer[l.sid]); puTimer[l.sid] = setTimeout(() => { delete puTimer[l.sid]; serial(() => resync(l, 'position update')); }, 4000); }   // after the fills of the same order have been handled
     }
   };
   connect();
   setInterval(() => { if (sock && sock.readyState === 1 && Date.now() - (S.lastMsg || S.startedAt) > 120000) { try { sock.close(); } catch (_) {} } }, 30000);   // a silent socket is a dead socket
-  setInterval(() => serial(() => refreshOwn().catch((e) => note('warn', 'own account: ' + e.message))), 30000);
+  setInterval(() => serial(() => refreshOwn().then(retryCloses).catch((e) => note('warn', 'own account: ' + e.message))), 30000);
+  setInterval(() => serial(() => checkSigner().catch((e) => note('warn', 'signer check: ' + e.message))), 3600000);
   setInterval(() => { for (const l of cfg.leaders) serial(() => resync(l, 'periodic')); }, 5 * 60000);
   // the clock drifts (and Windows may step it): a signedAt outside the exchange's tolerance would fail every order, closes
   // included, so the offset is measured again every five minutes (and after any rejection about the time, in place)
   setInterval(async () => { const was = clockOffset; await syncClock(); S.clockOffset = clockOffset; if (Math.abs(clockOffset - was) > 1000) note('warn', `the clock offset to the exchange moved ${((clockOffset - was) / 1000).toFixed(1)} s (now ${(clockOffset / 1000).toFixed(1)} s); signing uses the new one`); }, 5 * 60000);
+
+  /** Resume, from the site and confirmed: on a fresh reading, a stop that would trip again at once counts afresh from now
+   *  (rebaseStops), so the next reading does not undo it */
+  const resume = async () => {
+    await refreshOwn().catch((e) => note('warn', 'own account: ' + e.message));
+    const was = S.tripped; const rb = was ? rebaseStops(S, risk) : {};
+    if (rb.equityDayStart != null) { S.equityDayStart = rb.equityDayStart; S.dayPnl = 0; }
+    if (rb.equityPeak != null) { S.equityPeak = rb.equityPeak; S.ddPct = 0; }
+    S.paused = false; S.pausedBy = null; S.tripped = null;
+    note('control', 'resumed from the site' + (was ? ` (the stop was: ${was.why})` : '') + (rb.equityDayStart != null ? '; today\'s loss counts afresh from now' : '') + (rb.equityPeak != null ? '; the drawdown counts from this equity' : ''));
+    persist();
+  };
+  // ---- Resume and Close all from the site wait for a yes typed here: the control token sits in the site's browser
+  //      storage, and a page that got hold of it must not clear a stop or close everything on its own. status.siteControls
+  //      "direct" lets the page do both unconfirmed (an agent without a terminal needs that)
+  const confirmHere = (what, act) => {
+    const run = () => { Promise.resolve().then(act).catch((e) => note('error', `${what}: ${e.message}`)); };
+    if (cfg.status && cfg.status.siteControls === 'direct') { note('control', `${what}: asked from the site`); run(); return { code: 200, body: { ok: true } }; }
+    if (S.asking) return { code: 409, body: { error: 'busy', msg: `"${S.asking}" is already waiting for a yes in the agent's terminal` } };
+    if (!process.stdin.isTTY) return { code: 409, body: { error: 'terminal', msg: `the agent has no terminal to confirm in: to let this page ${what} unconfirmed, set status.siteControls to "direct" in config.json and restart the agent` } };
+    S.asking = what; const rl = readline.createInterface({ input: process.stdin, terminal: false });
+    const done = (yes) => { if (!S.asking) return; S.asking = null; clearTimeout(timer); rl.close(); if (yes) { note('control', `${what}: confirmed in the terminal`); run(); } else note('control', `${what}: not confirmed in the terminal, nothing done`); };
+    const timer = setTimeout(() => done(false), 120000);
+    rl.once('line', (line) => done(/^\s*yes\s*$/i.test(line)));
+    console.log(`\n>>> The site asks to ${what}. Type yes and press Enter here within 2 minutes to do it; anything else cancels.\n`);
+    note('control', `${what}: asked from the site, waiting for a yes in the terminal`);
+    return { code: 202, body: { ok: true, confirm: `type yes in the agent's terminal to ${what}` } };
+  };
 
   // ---- local status port for the site's Copy agent page: 127.0.0.1 only, answering to its own Host name only (DNS
   //      rebinding), to the site's origin and the local dev server's only, and the token on every request, /status too
@@ -759,7 +941,10 @@ async function run() {
   const origins = new Set([SITE, 'http://localhost:8787', 'http://127.0.0.1:8787'].concat(((cfg.status && cfg.status.origins) || []).filter((o) => typeof o === 'string')));
   const tokenHash = createHash('sha256').update(ctl.token).digest();
   const tokenOk = (t) => typeof t === 'string' && timingSafeEqual(createHash('sha256').update(t).digest(), tokenHash);   // hashed: equal lengths, and the time taken says nothing about the token
-  http.createServer(async (req, res) => {
+  // a request that fails answers 500 and is logged: an error thrown here must not end the agent (an unhandled rejection would)
+  http.createServer((req, res) => handle(req, res).catch((e) => { note('error', `status port ${req.url}: ${e.message}`); try { if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"failed"}'); } catch (_) {} }))
+    .listen(port, '127.0.0.1', () => log(`status on http://127.0.0.1:${port}/status (token from ${ctl.from}) · open ${SITE}/#/copytrade/agent`));
+  async function handle(req, res) {
     const origin = req.headers.origin; const cors = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', Vary: 'Origin' };
     if (origin && origins.has(origin)) Object.assign(cors, { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Headers': 'content-type, x-agent-token', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Private-Network': 'true' });
     const deny = (code, error) => { res.writeHead(code, cors); res.end(JSON.stringify({ error })); };
@@ -772,18 +957,21 @@ async function run() {
     if (req.method === 'POST') {
       let bodyTxt = ''; for await (const c of req) { bodyTxt += c; if (bodyTxt.length > 65536) return deny(413, 'body'); } let bodyJ = {}; try { bodyJ = JSON.parse(bodyTxt || '{}'); } catch (_) {}
       if (url.pathname === '/pause') { S.paused = true; note('control', 'paused from the site'); persist(); }
-      else if (url.pathname === '/resume') { S.paused = false; S.tripped = null; note('control', 'resumed from the site'); persist(); }
-      else if (url.pathname === '/close-all') { note('control', 'close all from the site'); await serial(() => closeAll('closed from the site')); }
+      else if (url.pathname === '/resume' || url.pathname === '/close-all') {
+        const a = url.pathname === '/resume' ? confirmHere('resume (clear the pause and any risk stop)', () => serial(resume))
+          : confirmHere('close every open position', () => serial(() => { note('control', 'close all from the site'); return closeAll('closed from the site'); }));
+        res.writeHead(a.code, cors); return res.end(JSON.stringify(a.body));
+      }
       else if (url.pathname === '/resync') { note('control', 'resync from the site'); for (const l of cfg.leaders) await serial(() => resync(l, 'manual')); await serial(() => refreshOwn().catch(() => {})); }
       else if (url.pathname === '/simulate' && DRY) { const l = cfg.leaders[0]; const prod = Object.values(byId).find((p) => p.displayTicker === bodyJ.ticker); if (l && prod) { note('control', `simulated leader fill ${bodyJ.side} ${bodyJ.qty} ${bodyJ.ticker}`); route({ e: 'OrderFill', data: { sid: l.sid, d: [{ sid: l.sid, s: prod.ticker, sd: bodyJ.side === 'SELL' ? 1 : 0, sz: String(bodyJ.qty), px: String(bodyJ.px != null ? bodyJ.px : markOf(prod.id)), t: bodyJ.t ? num(bodyJ.t) : undefined, oid: bodyJ.oid || 'sim-' + Date.now(), id: 'sim-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) }] } }); } }
       else { res.writeHead(404, cors); return res.end('{"error":"unknown"}'); }
       res.writeHead(200, cors); return res.end('{"ok":true}');
     }
     res.writeHead(404, cors); res.end('{"error":"unknown"}');
-  }).listen(port, '127.0.0.1', () => log(`status on http://127.0.0.1:${port}/status (token from ${ctl.from}) · open ${SITE}/#/copytrade/agent`));
+  }
   process.on('SIGINT', () => { note('stop', 'agent stopped (positions stay open; the next start adopts them)'); persist(); process.exit(0); });
 }
 
 // ---------------------------------------------------------------- main
-const commands = { keygen, link, run, status, help: async () => console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0].replace(/^\/\*\*?\s?/, '')) };
+const commands = { keygen, link, run, status, help: async () => console.log(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0].replace(/^#!.*\r?\n/, '').replace(/^\/\*\*?\s?/, '')) };
 commands[ARGS.cmd]().catch((e) => { console.error(e.message || e); process.exit(1); });

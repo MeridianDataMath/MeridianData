@@ -1753,8 +1753,15 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   → close (or hold, by config); when the leader's last position record in that market is a
   liquidation (or a liquidation event prompted the re-read), the liquidation option applies
   instead, on every re-read, and a position held after a liquidation is no longer followed
-  (an orphan). Openings, adds and reductions are limit IOC at the mark ± a slippage cap (or
-  market orders, by config); closes always go out as market orders. Every order is
+  (an orphan). Every order is a limit IOC at the mark ± a slippage cap; market orders are not
+  sent (an `execution.type` other than IOC stops the agent), since in a book the market makers
+  have left one fills at whatever is there. A close is a reduce-only IOC for what is held: at
+  the slippage cap, then wider in steps (50, 100 bps) up to `execution.closeSlippageBps` (200 by
+  default, at most 1000), each at the current mark. What the widest leaves stays pending
+  (`closing` in `state.json`): tried again from the refresh timer, 30 s doubling to 5 min,
+  pushed once, with nothing else traded in that market meanwhile. Only dust below the market's
+  minimum quantity (about $10) goes as the exchange's close order (quantity 0 + reduceOnly +
+  close, a market order), the one order it takes for that size. Every order is
   EIP-712-signed with the domain and type strings from `/v1/rpc/config`, exactly as the
   official SDK does; the unfilled part of an opening or add is logged, never chased, and that
   of a reduction is carried to the next reduction of the market. Risk limits, checked before every new
@@ -1764,15 +1771,21 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   limits cut an order to what they allow rather than dropping it, so a leader scaling in is
   followed up to the cap; in the fixed modes a per-market cap of 0 is replaced by five times
   the size (logged at start), because proportional adds would otherwise make a position any
-  multiple of the size. A local status
+  multiple of the size. Pause blocks new and larger positions while closes and reductions keep
+  following the leaders, as during a risk stop (to stop every order, stop the agent). A resume
+  re-reads the account first, and a stop that would trip again at once counts afresh from then
+  (today's loss from that equity, the drawdown peak at it). A local status
   port (127.0.0.1 only, origin-checked, token-guarded for pause / resume / close all) feeds
-  the page's dashboard: equity, day and peak change, leverage, own positions against the
-  leaders', the latest 30 orders with their status and fill (the daily log files in `logs/`
+  the page's dashboard; resume and close all from the page wait for `yes` typed in the agent's
+  terminal, since the token sits in the site's browser storage (`status.siteControls`
+  `direct` skips that, for an agent run without a terminal). The dashboard shows equity, day
+  and peak change, leverage, own positions against the leaders', closes still pending, the
+  latest 30 orders with their status and fill (the daily log files in `logs/`
   keep every one), the event log. `run --dry` sends every order
   to the exchange's dry-run endpoint instead (margin check, nothing placed) and keeps a virtual
   book, so the whole loop can be watched before any money moves; `/simulate` on the status
-  port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected orders,
-  risk stops and leader liquidations. The page builds `config.json` from the followed leaders
+  port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected or lost
+  orders, closes left pending, risk stops, leader liquidations and a signer expiring or refused. The page builds `config.json` from the followed leaders
   and the limits, lists and revokes signers, and shows the dashboard. The deploy publishes only
   `copy-agent.mjs`, `package.json`, `package-lock.json` and `config.example.json`. Keys, configs,
   link requests, state and logs are gitignored: everything in `agent/` except those four files.
@@ -1799,6 +1812,22 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **ntfy.** A plain-http ntfy server other than localhost is refused.
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
+  - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
+    `2d2ccd874a02515bfde696a3cba94062644441bcdaceddfdb3eadc93d8749d1b` (`tests/agent.test.mjs` fails when this line is
+    stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
+    `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
+  - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
+    on no answer, a 5xx or a 429 (after its Retry-After, at most 30 s). An order is sent once:
+    one whose submission got no answer or a 5xx is looked up by its clientOrderId among the
+    account's newest orders before anything is concluded. Found, it is read back as usual; not
+    found, it counts as placed only if the position moved (`unconfirmed`), else as rejected. A
+    final order's own `filled` counts over a positions read that lags behind it.
+  - **Signer.** It is checked at start and hourly. Revoked, expired or refused (401 / 403), it
+    pauses the agent with one push; one expiring within three days is pushed daily. A key file
+    ethers cannot read is reported without its content.
+  - **Leader fills.** A fill whose side reads neither 0 / BUY nor 1 / SELL is not used; the
+    leader's positions are read again instead. In fixed sizing, an opening whose leader order
+    cannot be read is listed as missed rather than sized on its first piece.
   Facts the agent relies on, each checked against the exchange rather than assumed: a position's
   `size` is signed (long > 0) and its `fundingAccruedUsd` is positive when *paid* (the SDK's
   docstring says the opposite; the archive ledger, which reconciles to the cent, settles it:
@@ -1807,7 +1836,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   final and the position is re-read until it reflects the order (status filled / partial /
   unfilled / rejected, with the exchange's `rejectedReason`); a close is quantity "0" +
   reduceOnly + close, and a reduce-only IOC on an existing position, both accepted by the
-  dry-run endpoint; `signedAt` must sit inside the exchange's clock tolerance, so the offset to
+  dry-run endpoint; `GET /v1/order?subaccountId` lists a subaccount's orders newest first with
+  their clientOrderId, which finds an order whose submission got no answer; `signedAt` must sit inside the exchange's clock tolerance, so the offset to
   `/v1/time` is measured and applied (this PC was 3 s off); a signer's `expiresAt` is in
   milliseconds and a revoked signer fails every order with `SignerRevoked`, on which the agent
   pauses. The agent cannot extend its signer (the exchange currently sets 90 days from
@@ -1828,14 +1858,15 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   will not take yet (below the market's minimum quantity, or the remainder an IOC left, or a
   rejection) is carried and folded into the next reduction of that market, with adds sized on
   what should be held, so the copy does not stay bigger than the leader's share ("owed" on the
-  dashboard's positions; a close clears it); no opening, add or reduction without a mark
-  (closes are market orders), no opening or add while the own-account read is more
+  dashboard's positions; a close clears it); no order without a mark (only a dust close goes
+  at market), no opening or add while the own-account read is more
   than two minutes stale or a leader's positions could not be read; the daily-loss and drawdown
   stops take deposits and withdrawals out (`/v1/token/transfer`, every page), counted from the
   day's first reading and from the time the drawdown peak was set, both kept in `state.json`
   across restarts (a state file from an older agent starts both afresh), so a transfer can
-  neither trip nor mask them; while the transfers cannot be read the stops are not checked and
-  the dashboard says so; quantities are capped at the market's `maxQuantity` and rounded to its lot.
+  neither trip nor mask them; while the transfers cannot be read the stops run on the last
+  amounts read (kept in `state.json` too), a withdrawal made since counting as a loss, and the
+  dashboard says so; quantities are capped at the market's `maxQuantity` and rounded to its lot.
 * **Copy history** (the last card of the Copy agent page) – attribution of what the agent did.
   Every mirrored order carries the leader's own fill price and time; the exchange's fills for
   the agent's orders attach to their order (from the `OrderFill` stream, backfilled from
