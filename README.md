@@ -31,10 +31,15 @@ directly to Meridian's public APIs, which allow cross-origin requests:
 ## Publish it
 
 `.github/workflows/pages.yml` runs on every push, every 30 minutes and on demand. It builds the
-perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the `snapshots` branch,
-reads the Tax center's official exchange rates and the USDe/USD price (`data/fx/`, see the Tax center
-below), assembles
-`dist/` and deploys it:
+perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the MeridianData-snapshots
+repository, reads the Tax center's official exchange rates and the USDe/USD price (`data/fx/`, see
+the Tax center below), assembles `dist/` and deploys it. A builder that fails does not stop the
+deploy: its file from the live site goes out again (`scripts/keep-live.mjs`: the leaderboard, each
+exchange-rate source). A health job after the deploy fails the run, which GitHub mails, when the
+Predict snapshot live on the site is over two hours old or the Cloudflare timer has stopped
+dispatching: once when it starts, then daily (`scripts/deploy-health.mjs`; also pushed to ntfy
+when a repository secret `NTFY_TOPIC` is set). A new run waits for the one in progress instead of
+cancelling it. The timer itself (`cron/`) deploys from `.github/workflows/cron.yml` when it changes.
 
 * **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
   named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
@@ -48,7 +53,8 @@ below), assembles
   `meridian.thedatahub.xyz` is a custom domain on the Worker (Settings → Domains & Routes) on the
   zone `thedatahub.xyz`, registered through Cloudflare Registrar; Cloudflare issues and renews the
   certificate itself. Turn on *Always Use HTTPS* under the zone's SSL/TLS → Edge Certificates.
-  Private repos get 2,000 free Actions minutes a month; the 30-minute schedule uses about 1,500.
+  The repository is public, and GitHub's standard runners cost a public repository nothing. A
+  private one would not fit its 2,000 free minutes a month: a run takes about five minutes, 48 a day.
 * Without those secrets the run fails rather than deploying anywhere else (the GitHub Pages
   fallback is gone: it only worked for public repos).
 
@@ -58,10 +64,13 @@ How the workflow keeps the Cloudflare token safe:
 - The build tools (the card renderer and wrangler 4.141.0) install from the root
   `package-lock.json` with `npm ci --ignore-scripts`, every package with its integrity hash.
 - Nothing is checked out with stored credentials.
-- From the `snapshots` branch, only regular JSON files in the published layout are copied.
-- A missing or empty Predict snapshot fails the run, so the previous deploy stays live.
+- From the snapshot repository, only regular JSON files in the published layout are copied
+  (`scripts/check-snapshot.mjs`), at most 8,000 files and 150 MB in all (25 MB a file).
+- A Predict snapshot that cannot be read, or that is missing or empty, fails the run, so the
+  previous deploy stays live. Nothing older is used in its place.
 
-The Predict snapshot is produced on a PC (see the Predict section below) whichever host is used.
+The Predict snapshot is produced on a home connection, the Mac mini's kit (see the Predict
+section below), whichever host is used.
 `_headers` sets cache and security headers on Cloudflare, including a Content-Security-Policy:
 - Scripts may come only from the site itself, plus `index.html`'s one inline script, allowed by its
   sha256. Recompute the hash when that script changes; `tests/cards.test.mjs` fails when they
@@ -92,7 +101,9 @@ formatter (`charts`), the Tax center's time zones, periods and archive ledger (`
 day after the end left out), its exchange rates (`tax-fx`: each currency's source and
 convention, the fallbacks, the session cache, the rate and rate date on every converted amount)
 and the deploy-time rate builder (`fx-build`: parsers and checks on answers captured once from
-the ECB, NBP, the Bank of Canada and DefiLlama's USDe price, in `tests/fixtures/fx/`), and its per-fill core
+the ECB, NBP, the Bank of Canada and DefiLlama's USDe price, in `tests/fixtures/fx/`), the
+deploy's own scripts (`deploy`: the Predict snapshot gate, the files kept from the live site when
+a build fails, when the health job raises the alarm), and its per-fill core
 (`tax-fills`, `tax-funding`): fills to positions at a close/open tie, the replay at average entry
 against the exchange's own per-fill realized PnL, every UTC day's disposals against the archive,
 the liquidation fill as a disposal of its own, the holding period in calendar dates (and Form 8949's

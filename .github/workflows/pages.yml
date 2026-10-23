@@ -2,10 +2,11 @@
 # see below), and deploys the site to the Cloudflare Worker with static assets (project "meridiandatahub", see
 # wrangler.jsonc; works from a private repo). Needs the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID:
 # without them the run fails instead of deploying anywhere else. Runs on every push to main, every 30 minutes when the
-# Cloudflare timer (cron/) dispatches it at :14 and :44 (a few minutes after the snapshot machine's runs at :09 and :39),
-# on its own schedule every two hours as a backup (GitHub drops most scheduled runs under load), and on demand.
+# Cloudflare timer (cron/, deployed by cron.yml) dispatches it at :14 and :44 (a few minutes after the snapshot machine's
+# runs at :09 and :39), on its own schedule every two hours as a backup (GitHub drops most scheduled runs under load), and
+# on demand. A health job after it fails the run when the site's data has stopped updating (scripts/deploy-health.mjs).
 #
-# The Cloudflare token reaches the two deploy steps only, never the tests, the builders, npm or git. Third-party actions are
+# The Cloudflare token reaches the deploy step only, never the tests, the builders, npm or git. Third-party actions are
 # pinned to commits (a moved tag cannot swap in other code) and wrangler to one version. To update an action:
 # `git ls-remote https://github.com/<owner>/<repo> 'refs/tags/<tag>*'` (an annotated tag's commit is the ^{} line),
 # read the changes, then replace the SHA and the version comment.
@@ -23,9 +24,11 @@ on:
 permissions:
   contents: read
 
+# one deploy at a time, and a new one waits for the running one rather than cancelling it (a push every few minutes
+# would otherwise cancel each run before its cards and deploy); GitHub keeps only the newest waiting run
 concurrency:
   group: deploy
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -54,77 +57,54 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
           persist-credentials: false   # no GitHub token left in .git/config for the steps below
+      # no npm cache: restoring it once stalled this step for ten minutes (run 2834, 2026-10-23), and npm ci below takes
+      # under half a minute without it
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5.0.0
         with:
           node-version: '24'
-          cache: npm   # the card renderer (package-lock.json at the root)
 
       # the money math (Predict ledger and figures, copy sizing, the agent's decisions, analytics, formatting): no network,
-      # under a second; a failure stops the job here, so nothing is deployed
+      # a few seconds; a failure stops the job here, so nothing is deployed
       - name: Tests
         run: node --test "tests/*.test.mjs"
 
+      # a failure here does not stop the deploy: the published leaderboard.json goes out again (keep-live below)
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
-        continue-on-error: true   # an API hiccup must not take the site down; visitors fall back to a browser build
+        continue-on-error: true
 
-      # The Predict snapshot, built on a home connection (scripts/Update-PredictSnapshot.ps1 on the PC, or the Mac kit's
-      # copy) and published to a repository of its own, MeridianDataMath/MeridianData-snapshots: the machine that builds it
-      # holds a token for that repository only, so nothing on it can change this site's code, and what it publishes is
-      # taken as data only. Before that repository existed, the PC published to this repository's "snapshots" branch: both
-      # are read, the newer snapshot is used. Required: the Predict pages cannot query the API from the site's origin, so a
-      # run without a snapshot fails here and the live deploy keeps the last one.
+      # The Predict snapshot, built on a home connection (the Mac mini's kit) and published to a repository of its own,
+      # MeridianData-snapshots: the machine that builds it holds a token for that repository only, so nothing on it can
+      # change this site's code, and what it publishes is taken as data only. Required: the Predict pages cannot query the
+      # API from the site's origin, so a run that cannot read the snapshot fails here and the live deploy keeps the last
+      # one (no fallback to anything older).
       - name: Fetch the Predict snapshot (MeridianData-snapshots, public)
         run: |
-          GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo || echo "MeridianData-snapshots: no snapshot there"
+          for i in 1 2 3; do
+            rm -rf .snap-repo
+            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo && exit 0
+            echo "clone failed (try $i of 3)"; sleep $((i * 10))
+          done
+          echo "::error::MeridianData-snapshots could not be read: nothing is deployed, the live site keeps its snapshot"; exit 1
 
-      # (once MeridianData-snapshots carries the snapshot, the "snapshots" branch can be deleted and this step with it)
-      - name: Check out the Predict snapshot (branch "snapshots", from before MeridianData-snapshots)
-        continue-on-error: true
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
-        with:
-          ref: snapshots
-          path: .snap-branch
-          persist-credentials: false
-
+      # only regular JSON files in the published layout, within caps on their number and size, and a predict.json with
+      # Predict data (scripts/check-snapshot.mjs); anything else fails the run
       - name: Add the Predict snapshot (data/predict.json, bettors/, questions/, slips/)
-        run: |
-          # the newer of the two by predict-status.json's build time
-          src=$(node -e "
-            const fs = require('fs');
-            const at = (d) => { try { return Number(JSON.parse(fs.readFileSync(d + '/predict-status.json', 'utf8')).builtAt) || 0; } catch (e) { return -1; } };
-            const r = at('.snap-repo'), b = at('.snap-branch');
-            console.log(r < 0 && b < 0 ? '' : r >= b ? '.snap-repo' : '.snap-branch');")
-          if [ -z "$src" ]; then echo "::error::no Predict snapshot in MeridianData-snapshots or the snapshots branch"; exit 1; fi
-          echo "Predict snapshot from $src"
-          # Only regular files named as the snapshot machine publishes them. A link would publish whatever it points at (the
-          # runner's environment, say), any other file would be served from the site's origin, and leaderboard.json is
-          # built above.
-          mkdir -p data
-          (cd "$src" && find . -regextype posix-extended -type f \
-            -regex '\./(predict\.json|predict-status\.json|predict-ideas\.json|bettors/0x[0-9a-f]{40}\.json|questions/0x[0-9a-fA-F]{64}\.json|slips/[0-9a-f]{2}\.json)' \
-            -print0 | xargs -0 -r cp --parents -t ../data)
-          # and each of them JSON, at most 25 MB (Cloudflare's limit for one file)
-          node -e "
-            const fs = require('fs'), path = require('path'); let n = 0;
-            const files = ['predict.json', 'predict-status.json', 'predict-ideas.json'].map((f) => 'data/' + f).filter((f) => fs.existsSync(f));
-            for (const d of ['bettors', 'questions', 'slips']) if (fs.existsSync('data/' + d)) for (const f of fs.readdirSync('data/' + d)) files.push(path.join('data', d, f));
-            for (const f of files) {
-              if (fs.statSync(f).size > 25e6) { console.error(f + ' is over 25 MB'); process.exit(1); }
-              try { JSON.parse(fs.readFileSync(f, 'utf8')); n++; } catch (e) { console.error(f + ' is not JSON: ' + e.message); process.exit(1); }
-            }
-            const j = JSON.parse(fs.readFileSync('data/predict.json', 'utf8'));
-            if (!j.agg || !(j.predictions > 0)) { console.error('data/predict.json holds no Predict data'); process.exit(1); }
-            console.log(n + ' snapshot files, all JSON');"
-          echo "snapshot copied: $(find data -path 'data/bettors/*' -type f | wc -l) wallet files, $(find data -path 'data/questions/*' -type f | wc -l) question files, $(find data -path 'data/slips/*' -type f | wc -l) slip files"
+        run: node scripts/check-snapshot.mjs --from .snap-repo --to data
 
       # The Tax center's official exchange rates (data/fx/*.json): the ECB's euro reference rates, NBP table A for USD/PLN
       # and the Bank of Canada's USD/CAD, about one GET per source from a fixed start date (scripts/build-fx.mjs), plus
       # DefiLlama's daily USDe/USD price (one GET: the USDe lots' market valuation; without it the page reads DefiLlama). A
-      # visitor's browser cannot read most central banks itself (no CORS). A source that fails is left out with a warning
-      # and the page falls back to the ECB's rates (frankfurter.dev), so this step never blocks the deploy.
+      # visitor's browser cannot read most central banks itself (no CORS). A source that fails is left out with a warning,
+      # and keep-live below puts the published file back, so this step never blocks the deploy.
       - name: Official exchange rates (data/fx)
         run: node scripts/build-fx.mjs --out data/fx
+        continue-on-error: true
+
+      # what a builder above failed to write comes from the live site: the published leaderboard.json, and each exchange-
+      # rate file this run lacks (scripts/keep-live.mjs). Never blocks the deploy.
+      - name: Keep the live files a build did not write
+        run: node scripts/keep-live.mjs
         continue-on-error: true
 
       # The home page's summary (data/home.json, a few KB: js/home-summary.js) from the snapshots above, so the home page
@@ -147,7 +127,7 @@ jobs:
       # prebuilt binaries; an assets-only deploy needs neither esbuild's nor workerd's), so the deploy action finds this
       # wrangler and skips its own `npm i`, which would run with the token set. Required: without it nothing deploys.
       # To update wrangler: bump it in package.json, `npm install --package-lock-only --ignore-scripts`, and change
-      # wranglerVersion below to match.
+      # wranglerVersion below (and in cron.yml) to match.
       - name: Install the build tools (package-lock.json)
         run: npm ci --ignore-scripts --no-audit --no-fund
 
@@ -160,6 +140,13 @@ jobs:
         run: node scripts/build-cards.mjs --dist dist --jobs "$(nproc)" --deadline "$((JOB_START + 720))"
         continue-on-error: true
 
+      # Cloudflare takes at most 20,000 files in one version of the Worker's assets: said plainly here rather than as a
+      # wrangler failure halfway through the upload
+      - name: Within Cloudflare's file limit
+        run: |
+          n=$(find dist -type f | wc -l); echo "dist: $n files"
+          if [ "$n" -gt 19500 ]; then echo "::error::dist holds $n files: Cloudflare takes 20,000 per version"; exit 1; fi
+
       - name: Deploy to Cloudflare
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
         with:
@@ -168,19 +155,31 @@ jobs:
           wranglerVersion: '4.141.0'   # the one package-lock.json installs above (the action's default, wrangler 3, cannot deploy an assets-only Worker)
           command: deploy
 
-      # The timer that starts this workflow every 30 minutes (cron/: a Worker of its own whose Cron Trigger fires at :14 and
-      # :44 and dispatches this workflow; GitHub's own schedule drops most of its runs under load). Deployed with the code,
-      # on a push only; its GitHub token is a secret set in the Cloudflare dashboard, kept across deploys. A failure here
-      # leaves the timer as it was and never blocks the site.
-      - name: Deploy the timer (cron/)
-        if: github.event_name == 'push'
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
+  # Fails the run (GitHub mails it) when the site's data has stopped updating: the Predict snapshot live on the site over
+  # two hours old, or, on a scheduled run, the timer not dispatching for over 75 minutes. Once when it starts, then daily,
+  # never on every run (scripts/deploy-health.mjs); also to ntfy when the repository secret NTFY_TOPIC is set. Runs
+  # whether the deploy worked or not: a failed deploy leaves the live data as it was, and that is what is checked.
+  health:
+    needs: deploy
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read   # the timer's dispatched runs
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.141.0'
-          command: deploy --config cron/wrangler.jsonc
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5.0.0
+        with:
+          node-version: '24'
+      - name: The site's data is fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: node scripts/deploy-health.mjs --event "${{ github.event_name }}"
 
   # GitHub turns a public repository's schedule off after 60 days without a commit. With the Predict snapshot published to
   # its own repository, weeks can pass without one here, so once a day a scheduled run enables this workflow again, as

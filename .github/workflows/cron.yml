@@ -1,0 +1,53 @@
+# Deploys the site's timer (cron/): a Worker of its own whose Cron Trigger fires at :14 and :44 and dispatches pages.yml
+# (GitHub's own schedule drops most of its runs under load). Runs when cron/ changes, and on demand. Its GitHub token is a
+# secret set in the Cloudflare dashboard (DISPATCH_TOKEN), kept across deploys. Same care as pages.yml: the Cloudflare
+# token reaches the deploy step only, actions are pinned to commits, wrangler installs from package-lock.json without
+# install scripts (so the action finds it and skips its own `npm i`, which would run with the token set).
+name: Deploy the timer
+
+on:
+  push:
+    branches: [main]
+    paths: ['cron/**', '.github/workflows/cron.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-timer
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # only whether the secrets exist reaches this step, not their values
+      - name: Cloudflare secrets are set
+        env:
+          HAS_CF: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          if [ "$HAS_CF" != true ]; then
+            echo "::error::Add the repository secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444   # v5.0.0
+        with:
+          node-version: '24'
+      - name: Install wrangler (package-lock.json)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Deploy the timer (cron/)
+        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.141.0'   # the one package-lock.json installs, as in pages.yml
+          command: deploy --config cron/wrangler.jsonc
