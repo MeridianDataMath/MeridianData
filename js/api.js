@@ -34,30 +34,46 @@
     let host = ''; try { host = new URL(url).host; } catch (_) { return; }
     A.rateLimits[host] = { limit: U.num(lim), remaining: U.num(res.headers.get('ratelimit-remaining')), reset: U.num(res.headers.get('ratelimit-reset')), at: Date.now() };
   };
+  A.TIMEOUT_MS = 60000;   // a request still unanswered then is given up (and tried again: rawGet)
+  const abortErr = () => new DOMException('Aborted', 'AbortError');
+  /** Retry-After or RateLimit-Reset (seconds, or an HTTP date) in ms; null when absent */
+  const waitAsked = (res) => { const v = res.headers && res.headers.get && (res.headers.get('retry-after') || res.headers.get('ratelimit-reset')); if (v == null || v === '') return null; const s = Number(v); if (Number.isFinite(s)) return Math.max(0, s * 1000); const t = Date.parse(v); return Number.isFinite(t) ? Math.max(0, t - Date.now()) : null; };
+  /** One fetch, body included, within A.TIMEOUT_MS: the caller's abort comes through as an AbortError, the time limit
+   *  as ApiError 0 (a request that hangs would otherwise hold a page, or the snapshot build, for good) */
+  async function fetchOnce(url, signal) {
+    if (signal && signal.aborted) throw abortErr();
+    const ctl = new AbortController(); let timedOut = false;
+    const onAbort = () => ctl.abort(); if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, A.TIMEOUT_MS);
+    try { const res = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json' } }); return { res, text: await res.text() }; }
+    catch (e) {
+      if (signal && signal.aborted) throw abortErr();
+      throw new ApiError(0, timedOut ? `No answer within ${A.TIMEOUT_MS / 1000} s` : 'Network error: ' + (e && e.message ? e.message : e), url);
+    }
+    finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
+  }
+  /** GET, tried up to three times: after no answer, a 5xx, or a 429 (waiting what Retry-After asks, 1 to 10 s; 3 s when it
+   *  says nothing). Any other 4xx is final at once, and the caller's abort stops it between tries too. */
   async function rawGet(url, signal) {
-    let res;
-    try {
-      res = await fetch(url, { signal, headers: { accept: 'application/json' } });
-    } catch (e) {
-      if (e && e.name === 'AbortError') throw e;
-      throw new ApiError(0, 'Network error: ' + (e && e.message ? e.message : e), url);
+    for (let attempt = 1; ; attempt++) {
+      let r;
+      try { r = await fetchOnce(url, signal); }
+      catch (e) { if ((e && e.name === 'AbortError') || attempt >= 3) throw e; await U.sleep(500 * Math.pow(3, attempt - 1)); if (signal && signal.aborted) throw abortErr(); continue; }
+      const res = r.res; noteLimit(url, res);
+      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+        const asked = waitAsked(res);
+        await U.sleep(res.status === 429 ? Math.min(10000, Math.max(1000, asked != null ? asked : 3000)) : 500 * Math.pow(3, attempt - 1));
+        if (signal && signal.aborted) throw abortErr();
+        continue;
+      }
+      let body = null;
+      try { body = r.text ? JSON.parse(r.text) : null; } catch (_) { body = null; }
+      if (!res.ok) {
+        const msg = body && body.message ? (Array.isArray(body.message) ? body.message.join('; ') : body.message) : res.statusText || ('HTTP ' + res.status);
+        throw new ApiError(res.status, msg, url);
+      }
+      return body;
     }
-    noteLimit(url, res);
-    if (res.status === 429) {
-      const reset = parseInt(res.headers.get('retry-after') || res.headers.get('ratelimit-reset') || '3', 10);
-      await U.sleep(Math.min(10, Math.max(1, reset)) * 1000);
-      if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      res = await fetch(url, { signal, headers: { accept: 'application/json' } });
-      noteLimit(url, res);
-    }
-    const text = await res.text();
-    let body = null;
-    try { body = text ? JSON.parse(text) : null; } catch (_) { body = null; }
-    if (!res.ok) {
-      const msg = body && body.message ? (Array.isArray(body.message) ? body.message.join('; ') : body.message) : res.statusText || ('HTTP ' + res.status);
-      throw new ApiError(res.status, msg, url);
-    }
-    return body;
   }
 
   /** GET with optional TTL cache (ms). Identical concurrent requests share one fetch. */

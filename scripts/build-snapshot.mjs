@@ -1044,6 +1044,26 @@ export function mergeRows(subs, built, prevs, now = Date.now()) {
   }
   return { rows, carried, missing };
 }
+/** The build order: an account without a row in the earlier snapshots first, then by the age of its newest row, oldest
+ *  first (the account list's order among equals). When the time budget runs out, the accounts left are then the ones
+ *  built most recently, never the same ones every run (the list is newest first, and the oldest accounts went last). */
+export function stalestFirst(subs, prevs) {
+  const at = new Map();
+  for (const s of prevs || []) {
+    if (!s || !Array.isArray(s.rows)) continue;
+    for (const r of s.rows) { if (!r || typeof r.sid !== 'string') continue; const t = r.carried && r.builtAt ? r.builtAt : s.builtAt; if (t > (at.get(r.sid) || 0)) at.set(r.sid, t); }
+  }
+  return subs.map((sa, i) => ({ sa, i, t: at.get(sa.id) || 0 })).sort((a, b) => a.t - b.t || a.i - b.i).map((x) => x.sa);
+}
+/** Why a build must not replace the published snapshot (null: it may): no rows, or more than 5% fewer accounts than the
+ *  newest earlier snapshot while that one is under 6 hours old (an account list the API cut short; after 6 hours of
+ *  refusals the smaller list is taken as real). */
+export function publishProblem(out, prevs, now = Date.now()) {
+  if (!out.rows.length) return 'no rows';
+  const last = (prevs || []).filter((s) => s && Number(s.accounts) > 0 && s.builtAt > 0).sort((a, b) => b.builtAt - a.builtAt)[0];
+  if (last && now - last.builtAt < 6 * 3600000 && out.accounts < last.accounts * 0.95) return `${out.accounts} accounts against ${last.accounts} in the snapshot of ${new Date(last.builtAt).toISOString()} (more than 5% fewer)`;
+  return null;
+}
 /** The snapshots this build replaces: the one in the output directory (a local run's) and the published one (an
  *  Action's checkout has no data/). Either can be absent; nothing here fails the build. */
 async function previousSnapshots() {
@@ -1058,14 +1078,18 @@ async function previousSnapshots() {
 async function buildPerps() {
   const started = Date.now();
   const ctx = { signal: new AbortController().signal };
-  const ref = await A.ref(ctx);
+  // the setup reads, each tried once more after a pause (every request already retries its own failures)
+  const twice = async (what, f) => { try { return await f(); } catch (e) { console.warn(`${what} failed (${e.message}); once more in 20 s`); await sleep(20000); return f(); } };
+  const ref = await twice('products', () => A.ref(ctx));
   // the left-out wallets' accounts (U.EXCLUDED) are not built at all, nor counted
-  const subs = (await A.allSubaccounts({ signal: ctx.signal, ttl: 0 })).filter((sa) => !U.isExcluded(sa.account));
-  const prices = await A.marketPrices(ref.active.map((p) => p.id), ctx);
+  const subs = (await twice('account list', () => A.allSubaccounts({ signal: ctx.signal, ttl: 0 }))).filter((sa) => !U.isExcluded(sa.account));
+  const prices = await twice('prices', () => A.marketPrices(ref.active.map((p) => p.id), ctx));
   // copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
   // the price drift after each account's fills, shared across accounts
   ctx.copy = await AN.copyContext(ref, ctx);
-  console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}`);
+  console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}` + (ctx.copy.missing.length ? ` (no book read: ${ctx.copy.missing.join(', ')})` : ''));
+  const prevs = await previousSnapshots();   // the rows to carry over, and the order of this build
+  const order = stalestFirst(subs, prevs);
 
   // A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
   // built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
@@ -1075,11 +1099,13 @@ async function buildPerps() {
   // rather than the whole deploy failing.
   const budgetMs = (args.includes('--budget') ? Number(args[args.indexOf('--budget') + 1]) : 540) * 1000;
   let skipped = 0;
-  const results = await U.pLimit(
-    subs.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
+  // built stalest first (stalestFirst); results[i] is order[i]'s, mapped back to the account list's order here
+  const byOrder = await U.pLimit(
+    order.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
     4,
     (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
   );
+  const resOf = new Map(order.map((sa, i) => [sa.id, byOrder[i]])); const results = subs.map((sa) => resOf.get(sa.id));
   const built = new Map(), failedAt = [], lastErr = new Map();
   // why a row failed, in a form that adds up across accounts (no addresses, ids or URLs)
   const why = (r) => (r.ok ? 'time budget reached' : String((r.error && r.error.message) || 'error').replace(/https?:\/\/\S+/g, '').replace(/0x[0-9a-f]{6,}|[0-9a-f]{8}-[0-9a-f-]{27,}/gi, '…').replace(/\s+/g, ' ').trim().slice(0, 80));
@@ -1103,13 +1129,21 @@ async function buildPerps() {
   const failedIx = failedAt.filter((i) => !built.has(subs[i].id)), failed = failedIx.length;
   const failReasons = {}; for (const i of failedIx) { const w = lastErr.get(i) || 'error'; failReasons[w] = (failReasons[w] || 0) + 1; }
 
-  const merged = mergeRows(subs, built, built.size < subs.length ? await previousSnapshots() : []);
+  const merged = mergeRows(subs, built, built.size < subs.length ? prevs : []);
   const { carried, missing } = merged, rows = merged.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED)
   // partial: not every account was built by this run (carried: rows from an earlier snapshot; missing: accounts without a row)
   const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, failReasons, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
+  if (ctx.copy.missing.length) out.booksMissing = ctx.copy.missing;
+  // a build that would replace the published snapshot with an empty or cut-short list writes nothing: the step fails,
+  // and the deploy sends the published one out again (scripts/keep-live.mjs)
+  const refused = publishProblem(out, prevs);
+  if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
   fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
   console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
   if (!built.size) process.exit(1);   // nothing built this run: the step fails (the file still carries the earlier rows)
 }
-if (doPerps) await buildPerps();
+if (doPerps) {
+  // a failure before any row is written leaves no file: the deploy then sends the published one out again (keep-live)
+  try { await buildPerps(); } catch (e) { console.error('perps snapshot failed:', (e && (e.stack || e.message)) || e); process.exit(1); }
+}

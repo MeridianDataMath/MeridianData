@@ -453,13 +453,15 @@
   AN.buildLeaderboardRow = async function (sa, ref, prices, ctx) {
     const sid = sa.id;
     const o = { signal: ctx && ctx.signal };
-    const [balances, positionsOpen, vol] = await Promise.all([A.balances(sid, o), A.openPositions(sid, o), A.totalVolume(sid, o).catch(() => 0)]);
+    // an unreadable total volume is unknown (null), never 0: with no balance and no open position, 0 would mark an
+    // account that traded inactive and blank its row
+    const [balances, positionsOpen, vol] = await Promise.all([A.balances(sid, o), A.openPositions(sid, o), A.totalVolume(sid, o).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; })]);
     const acct = AN.accountState({ balances, positions: positionsOpen, ref, prices });
     const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
     // for the share cards, which have no MD.analytics: one of Meridian's own accounts, and the label of a named wallet
     if (AN.exchangeAccount({ sid, account: sa.account })) row.exchange = true;
     const known = AN.known({ account: sa.account }); if (known) row.role = known.label;
-    if (acct.balance === 0 && !positionsOpen.length && !vol) {
+    if (acct.balance === 0 && !positionsOpen.length && vol === 0) {
       row.inactive = true;
       for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, posFees: 0, funding: 0, sitePnl: 0, siteVolume: 0, siteRoi: null };
       return row;
@@ -469,7 +471,7 @@
     const sAll = AN.startFor('all', sa.createdAt), s7 = AN.startFor('7d', sa.createdAt), s30 = AN.startFor('30d', sa.createdAt), s24 = Date.now() - U.DAY;
     const so = { signal: o.signal, ttl: 60000 };
     const [positions, daily, hourly, h2, h8, charges] = await Promise.all([
-      A.positions(sid, { maxPages: copyCtx ? 5 : 3, signal: o.signal }),
+      A.positions(sid, { maxPages: copyCtx ? 25 : 3, signal: o.signal }),   // the snapshot: up to 5,000 positions (the most active account had 1,000+ in October 2026)
       AN.loadSeries(sid, Object.assign({ start: sAll, resolution: 'day1' }, so)),
       AN.loadSeries(sid, Object.assign({ start: s24, resolution: 'hour1' }, so)),
       AN.loadSeries(sid, Object.assign({ start: s7, resolution: 'hour2' }, so)),
@@ -486,6 +488,7 @@
     const dailyN = net(daily, U.DAY);
     const ps = AN.positionStats(positions, ref);
     row.winRate = ps.winRate; row.positionsCount = ps.count; row.style = ps.style; row.closedCount = ps.closed.length; row.liquidated = ps.liquidated;
+    if (positions.truncated) row.posTrunc = true;   // the newest positions only: the counts and win rate are over those
     const live = { upnl: acct.upnl, equity: acct.equity };
     // Meridian's figures: 24h from the hourly series (it starts an hour before the app's window), 7d, 30d and all time from
     // the daily one, the app's own buckets for them
@@ -494,7 +497,7 @@
       '24h': AN.appStats(hourly, '24h', Object.assign({ bucketMs: U.HOUR }, ao)),
       '7d': AN.appStats(daily, '7d', Object.assign({ bucketMs: U.DAY }, ao)),
       '30d': AN.appStats(daily, '30d', Object.assign({ bucketMs: U.DAY }, ao)),
-      all: AN.appStats(daily, 'all', Object.assign({ bucketMs: U.DAY, volumeAll: vol || null }, ao)),   // a failed read (caught as 0) falls back to the daily buckets
+      all: AN.appStats(daily, 'all', Object.assign({ bucketMs: U.DAY, volumeAll: vol || null }, ao)),   // a failed read (null) falls back to the daily buckets
     };
     // the site's: funding and posFees (mPerp position fees) as charged when the charges were readable, else as settled, so
     // that sitePnl = realized − fees − posFees + funding + the change in price uPnL; fees are trading fees
@@ -664,7 +667,8 @@
     const W = 3000 * 60000; const wins = new Map();
     const load = async (ticker, k) => {
       const key = ticker + '|' + k; if (wins.has(key)) return wins.get(key);
-      const p = A.candles(ticker, '1', k * W, (k + 1) * W, 3000, o).then((rows) => { const m = new Map(); for (const c of rows) m.set(c.t, c.c); return m; }).catch(() => new Map());
+      // a failed read is not kept: this lookup gets no bars, the next one of that window reads it again
+      const p = A.candles(ticker, '1', k * W, (k + 1) * W, 3000, o).then((rows) => { const m = new Map(); for (const c of rows) m.set(c.t, c.c); return m; }).catch((e) => { if (wins.get(key) === p) wins.delete(key); if (e && e.name === 'AbortError') throw e; return new Map(); });
       wins.set(key, p); return p;
     };
     return {
@@ -699,7 +703,14 @@
     // sizes (entry notional of each position: what a copier would mirror)
     const sizes = closed.concat(ps.open).map((c) => U.num(c.p.totalIncreaseNotional)).filter((x) => x > 0);
     out.notMed = sizes.length ? Math.round(median(sizes)) : null; out.notP90 = sizes.length ? Math.round(pct(sizes, 0.9)) : null;
-    out.lev = out.notMed && equity > 0 ? Math.round((out.notMed / equity) * 100) / 100 : null;
+    // ÷ the equity the account traded with: the median of balance + uPnL over its active days. The equity now can be what
+    // is left after a withdrawal, which made typical sizes read as 1,000× and more; now's stands in without an active day.
+    // Above the exchange's highest leverage (1 ÷ the lowest initial margin) it is no measurement: null
+    const eqActive = daily.filter((b) => b.volume > 0 && b.hasBalance).map((b) => U.num(b.balance) + U.num(b.upnl)).filter((x) => x > 0);
+    const eqRef = eqActive.length ? median(eqActive) : equity;
+    const levMax = ref && ref.products ? Math.max(0, ...ref.products.map((p) => (U.num(p.openMarketInitialMargin) > 0 ? 1 / U.num(p.openMarketInitialMargin) : 0))) || 100 : 100;
+    const lev = out.notMed && eqRef > 0 ? Math.round((out.notMed / eqRef) * 100) / 100 : null;
+    out.lev = lev != null && lev <= levMax ? lev : null;
     // markets (share of positions)
     const all = closed.concat(ps.open); const byT = U.groupBy(all, (c) => c.ticker);
     out.markets = Object.entries(byT).map(([t, arr]) => ({ t, n: arr.length, share: r1((arr.length / all.length) * 100) })).sort((a, b) => b.n - a.n).slice(0, 6);
@@ -725,7 +736,9 @@
     out.nTrim = wNet.length;   // the count the mean is over: under 10 nothing is winsorized
     out.netTrimBps = wNet.length ? r1(mean(wNet)) : null;
     const sd = wNet.length > 2 ? Math.sqrt(U.sum(wNet, (x) => (x - mean(wNet)) ** 2) / (wNet.length - 1)) : null;
-    out.tStat = sd > 0 ? r1(mean(wNet) / (sd / Math.sqrt(wNet.length))) : null;
+    // results all alike (a spread under 0.01 bps) leave no noise to measure against: no t (it came out in the billions);
+    // beyond ±99.9 it says nothing more
+    out.tStat = sd > 0.01 ? r1(Math.max(-99.9, Math.min(99.9, mean(wNet) / (sd / Math.sqrt(wNet.length))))) : null;
     const feesRaw = withCost.length ? mean(perPos((c) => U.num(c.p.feesAccruedUsd))) : null;   // the leader's trading fees per position: a copier pays its own instead
     out.feesBps = r1(feesRaw);
     out.posFeeBps = withCost.length ? r1(mean(perPos((c) => U.num(c.p.positionFeeAccruedUsd)))) : null;   // mPerp position fees: a copier holding the same position pays the same per unit, so they stay in the result, like funding
@@ -813,9 +826,9 @@
 
   /** Shared inputs for the copy profiles of one build: today's books for every active market, and a candle cache. */
   AN.copyContext = async function (ref, o) {
-    const depth = {};
-    await U.pLimit(ref.active.map((p) => async () => { try { depth[p.id] = await A.liquidity(p.id, o); } catch (_) {} }), 4);
-    return { depth, candles: AN.candleCache(o) };
+    const depth = {}, missing = [];   // a book that cannot be read (after the request's own retries) is named, not hidden
+    await U.pLimit(ref.active.map((p) => async () => { try { depth[p.id] = await A.liquidity(p.id, o); } catch (e) { if (e && e.name === 'AbortError') throw e; missing.push(p.displayTicker); } }), 4);
+    return { depth, missing, candles: AN.candleCache(o) };
   };
 
   /**

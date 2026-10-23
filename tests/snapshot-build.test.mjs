@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, stalestFirst, publishProblem, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -297,4 +297,17 @@ test('cashPlan: wallets never read first, then active since their last read, the
   assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 12), 5]]), Date.UTC(2026, 9, 8));
   assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 3), 5]]), Date.UTC(2026, 9, 1));
   assert.equal(cashFrom(null, []), MD.predict.EXCHANGE_START_SEC * 1000);
+});
+
+test('the perps build goes stalest first, and never replaces the published list with an empty or cut-short one', () => {
+  const prev = { builtAt: NOW - H, accounts: 4, rows: [row('a'), row('b'), row('c', { carried: true, builtAt: NOW - 30 * H })] };
+  // d has no row (first), c's row is a day old (next), a and b were built last run (last, in list order)
+  assert.deepEqual(stalestFirst(subs('a', 'b', 'c', 'd'), [prev]).map((s) => s.id), ['d', 'c', 'a', 'b']);
+  assert.deepEqual(stalestFirst(subs('a', 'b'), []).map((s) => s.id), ['a', 'b'], 'nothing earlier: the list\'s order');
+  assert.equal(publishProblem({ rows: [row('a')], accounts: 4 }, [prev], NOW), null);
+  assert.equal(publishProblem({ rows: [], accounts: 4 }, [prev], NOW), 'no rows');
+  const many = { builtAt: NOW - H, accounts: 378, rows: [] };
+  assert.match(publishProblem({ rows: [row('a')], accounts: 350 }, [many], NOW), /350 accounts against 378 .*more than 5% fewer/);
+  assert.equal(publishProblem({ rows: [row('a')], accounts: 360 }, [many], NOW), null, 'under 5% fewer');
+  assert.equal(publishProblem({ rows: [row('a')], accounts: 350 }, [Object.assign({}, many, { builtAt: NOW - 7 * H })], NOW), null, 'after 6 hours of refusals the smaller list is taken');
 });

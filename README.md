@@ -218,7 +218,18 @@ funding charges are read three days at a time, one request after another; the jo
 a row that fails is built once more after a pause, and an account still not built (or not reached)
 keeps its newest row from an earlier snapshot no older than 7 days, marked `carried` with its own
 `builtAt` (`mergeRows`); the snapshot is marked partial and counts `failed`, `skipped`, `retried`,
-`carried` and `missing` (no row at all) rather than the deploy failing. The Leaderboard, Copy
+`carried` and `missing` (no row at all) rather than the deploy failing. Accounts are built
+stalest first (`stalestFirst`: no row yet, then the oldest row), so when the budget runs out it is
+the ones built last run that wait, never the same ones (the account list is newest first). A build
+that would publish no rows, or 5% fewer accounts than a snapshot under 6 hours old, writes nothing
+(`publishProblem`), and the deploy sends the published file out again. Every request has a 60 s
+limit and is tried again on no answer, a 5xx or a 429 (after its Retry-After), the setup reads
+once more after 20 s; an unreadable total volume counts as unknown, never as an inactive account;
+a market whose book cannot be read is named (`booksMissing`); a candle window that fails is read
+again next time instead of kept empty. Up to 5,000 positions are read per account (`posTrunc`
+and a "+" on the count beyond that). The copy profile's leverage is the typical size ÷ the equity
+the account traded with (its active days), none past the exchange's highest leverage, and its t
+is left out when the results show no spread. The Leaderboard, Copy
 trading and Home say how many rows are carried or missing, and a carried row reads "older". `#/status` (**Data status**, linked from the home page's footer and from every
 "stale" note) shows both snapshots' age, builder, counts and build time, plus the exchange's
 round trip, maintenance flag and clock offset; the Predict builder writes a few hundred bytes to

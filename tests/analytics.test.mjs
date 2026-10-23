@@ -443,3 +443,34 @@ test('Meridian\'s own accounts are named by wallet (the liquidator, the fee coll
     assert.equal('exchange' in other, false, 'an ordinary row gains no field'); assert.equal('role' in other, false);
   } finally { Object.assign(A, saved); }
 });
+
+test('a total volume that cannot be read is unknown, not 0: an account that traded is never blanked as inactive', async () => {
+  const A = MD.api, saved = { balances: A.balances, openPositions: A.openPositions, totalVolume: A.totalVolume, positions: A.positions, fundingCharges: A.fundingCharges }, ls = AN.loadSeries;
+  Object.assign(A, { balances: async () => [], openPositions: async () => [], totalVolume: async () => { throw new A.ApiError(503, 'Service Unavailable', 'u'); }, positions: async () => [], fundingCharges: async () => [] });
+  AN.loadSeries = async () => [];
+  try {
+    const sa = { id: 's', account: '0x' + '2'.repeat(40), createdAt: T0 }, ref = { byId: {}, active: [] };
+    const row = await AN.buildLeaderboardRow(sa, ref, {}, {});
+    assert.equal(row.inactive, false, 'unread: built in full'); assert.equal(row.volumeAll, null);
+    A.totalVolume = async () => 0;
+    assert.equal((await AN.buildLeaderboardRow(sa, ref, {}, {})).inactive, true, 'read as 0 with nothing held: inactive');
+  } finally { Object.assign(A, saved); AN.loadSeries = ls; }
+});
+
+test('copy profile: leverage on the equity the account traded with, none past the exchange\'s highest; no t without noise', () => {
+  const ten = Array.from({ length: 10 }, (_, i) => closedPos(i, { realizedPnl: atBps(10 + (i % 3)) }));   // $1,000 positions
+  const day = (t, balance, volume) => ({ t, pnl: 0, upnl: 0, volume, balance, hasBalance: true });
+  // traded on $500 (two active days), withdrew down to $1: 2× on the equity traded with, not 1,000×
+  const daily = [day(T0, 500, 2000), day(T0 + D, 500, 1000), day(T0 + 2 * D, 1, 0)];
+  assert.equal(AN.buildCopyProfile({ positions: ten, ref: cref, daily, equity: 1 }).lev, 2);
+  assert.equal(AN.buildCopyProfile({ positions: ten, ref: cref, equity: 400 }).lev, 2.5, 'no active day on record: the equity now');
+  assert.equal(AN.buildCopyProfile({ positions: ten, ref: cref, equity: 1 }).lev, null, '1,000× is past any market\'s leverage: no figure');
+  const capped = Object.assign({}, cref, { products: [{ openMarketInitialMargin: '0.02' }, { openMarketInitialMargin: '0.04' }] });
+  assert.equal(AN.buildCopyProfile({ positions: ten, ref: capped, equity: 25 }).lev, 40);
+  assert.equal(AN.buildCopyProfile({ positions: ten, ref: capped, equity: 19 }).lev, null, 'past 50×, the highest here');
+  // results all alike: no spread to measure against, so no t (it came out in the billions)
+  const same = Array.from({ length: 6 }, (_, i) => closedPos(i, { realizedPnl: String(0.26 + i * 1e-12) }));
+  assert.equal(AN.buildCopyProfile({ positions: same, ref: cref }).tStat, null);
+  const t = AN.buildCopyProfile({ positions: ten, ref: cref }).tStat;
+  assert.ok(Number.isFinite(t) && Math.abs(t) <= 99.9, String(t));
+});
