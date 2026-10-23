@@ -72,6 +72,17 @@
     return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
   }
 
+  /** The "Copier keeps" cell: the share of the leader's result per position left after a copier's costs (AN.copyKeep),
+   *  the figures in % of a position in its tooltip */
+  function keepCell(c) {
+    const K = AN.copyKeep(c), pc = (bps) => U.fmtPct(bps / 100, { dp: 2, sign: true });
+    if (!K) return h('span.dim', { title: 'Not measured yet: too few fills with one-minute candles after them, or no order-book data' }, '—');
+    if (K.kept == null) return h('span.dim', { title: `The leader's positions ${K.lead < 0 ? 'lose ' + pc(K.lead) + ' each on average' : 'make nothing on average'} after fees and funding: nothing to keep` }, '—');
+    const title = `Per position: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}` + ((c.nTrim != null ? c.nTrim : c.closed) < 10 ? ` · over only ${c.nTrim != null ? c.nTrim : c.closed} positions, so one can move it` : '');
+    if (K.kept <= 0) return h('span.num.neg', { title }, 'none');
+    return h('span', { class: 'num ' + (K.kept >= 80 ? 'pos' : K.kept >= 40 ? '' : 'neg'), title }, U.fmtPct(K.kept, { dp: 0 }));
+  }
+
   /** The full story behind one leader's score. */
   function openLeader(r, sc) {
     const c = r.copy; const s = (r.stats && r.stats.all) || {};
@@ -84,17 +95,18 @@
     // (each row's mean is taken on its own, so the first row's parts are stated as averages, not as a sum to its value)
     const nMean = c.nTrim != null ? c.nTrim : c.closed;
     const after = [`their trading fees (${U.fmtNum(c.feesBps, 1)} bps on average)`].concat(c.posFeeBps ? [`mPerp position fees (${U.fmtNum(c.posFeeBps, 1)} bps)`] : [], c.fundPosBps ? [`funding (${U.fmtNum(Math.abs(c.fundPosBps), 1)} bps ${c.fundPosBps > 0 ? 'received' : 'paid'} on average)`] : []);
-    const wf = c.copyBps != null && c.netTrimBps != null && c.feesBps != null ? [
-      ['Leader, per position', c.netTrimBps, `each position's result after ${after.length > 1 ? after.slice(0, -1).join(', ') + ' and ' + after[after.length - 1] : after[0]}, ` + (nMean >= 10 ? 'a plain mean over positions with the most extreme 5% on each side (at least one position) winsorized, so one jackpot or blow-up cannot carry it' : `a plain mean over ${nMean} positions, too few to winsorize, so one position can move it`)],
-      ['+ Their trading fees back', c.feesBps, 'a copier pays its own trading fees instead; position fees and funding stay in, as a copier holding the same position pays or receives them too'],
-      ['− Copier taker fees', -2 * c.feeBps, `${U.fmtNum(c.feeBps, 1)} bps in and out`],
-      ['− Price drift after their fills', -2 * c.drift1, `${U.fmtNum(c.drift1, 1)} bps per fill one minute later, in and out · measured over their latest ${U.fmtNum(c.driftN, 0)} fills (${U.fmtNum(c.drift5, 1)} bps after five minutes)`],
-      ['− Slippage for a copier', -2 * c.slipBps, `${U.fmtNum(c.slipBps, 1)} bps to fill ${usd0(c.copySize)} against today's books, in and out` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` · ${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${usd0(c.notMed)}` : '')],
-      ['= Copier, per position', c.copyBps, c.netTrimBps <= 0 ? 'the leader\'s positions do not make money after fees and funding, so there is no edge to keep' : c.edgeLeft > 100 ? `the copier keeps more per position than the leader (${U.fmtNum(c.copyBps, 1)} vs ${U.fmtNum(c.leaderBps, 1)} bps)` : c.edgeLeft <= 0 ? 'nothing survives: the copier\'s costs exceed the leader\'s result' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's result survives`],
+    // a copier's costs (AN.copyKeep): what it pays beyond the leader, never a gain where prices or fees favoured it
+    const K = AN.copyKeep(c), fn1 = (x) => U.fmtNum(x, 1);
+    const wf = K ? [
+      ['Leader, per position', K.lead, `each position's result after ${after.length > 1 ? after.slice(0, -1).join(', ') + ' and ' + after[after.length - 1] : after[0]}, ` + (nMean >= 10 ? 'a plain mean over positions with the most extreme 5% on each side (at least one position) winsorized, so one jackpot or blow-up cannot carry it' : `a plain mean over ${nMean} positions, too few to winsorize, so one position can move it`)],
+      ['− Copier fees beyond theirs', -K.fees, `a copier pays ${fn1(c.feeBps)} bps taker fees in and out, ${fn1(2 * c.feeBps)} bps a position; the leader paid ${fn1(c.feesBps)} bps` + (2 * c.feeBps < c.feesBps ? ', more, which is not counted as a gain' : '') + '. Position fees and funding stay in the leader\'s result: a copier holding the same position pays or receives them too'],
+      ['− Slippage for a copier', -K.slip, `${fn1(c.slipBps)} bps to fill ${usd0(c.copySize)} against today's books, in and out` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` · ${fn1(c.slipOwnBps)} bps at their own ${usd0(c.notMed)}` : '')],
+      ['− A minute\'s delay', -K.drift, (c.drift1 > 0 ? `the price moved ${fn1(c.drift1)} bps against a copier in the minute after their fills, in and out` : c.drift1 < 0 ? `the price moved ${fn1(-c.drift1)} bps in a copier's favour in the minute after their fills: not counted, as a copier cannot count on it` : 'no move in the minute after their fills') + ` · measured over their latest ${U.fmtNum(c.driftN, 0)} fills (${fn1(c.drift5)} bps after five minutes)`],
+      ['= Copier, per position', K.copier, K.kept == null ? 'the leader\'s positions do not make money after fees and funding, so there is nothing to keep' : K.kept <= 0 ? 'nothing survives: a copier\'s costs are more than the leader makes' : `a copier keeps ${U.fmtPct(K.kept, { dp: 0 })} of the leader's result`],
     ] : null;
     const wfTbl = wf ? UI.table({ cols: [
       { key: 'k', label: 'Per position, on entry notional', render: (x) => h('span', { class: /^=/.test(x[0]) ? 'bold' : '' }, x[0]) },
-      { key: 'v', label: 'bps', num: true, render: (x) => h('span', { class: 'num ' + (/^=|Leader/.test(x[0]) ? U.pnlClass(x[1]) : x[1] < 0 ? 'neg' : '') }, (x[1] > 0 ? '+' : '') + U.fmtNum(x[1], 1)) },
+      { key: 'v', label: 'bps', num: true, render: (x) => { const v = x[1] || 0; return h('span', { class: 'num ' + (/^=|Leader/.test(x[0]) ? U.pnlClass(v) : v < 0 ? 'neg' : '') }, (v > 0 ? '+' : '') + U.fmtNum(v, 1)); } },
       { key: 'n', label: '', render: (x) => h('div.dim.small', { style: { whiteSpace: 'normal', minWidth: '260px', lineHeight: '1.35' } }, x[2]) },   // the explanations wrap rather than scroll the table sideways
     ], rows: wf }) : h('div.empty', 'The frictions are measured from the leader\'s fills against one-minute oracle candles and today\'s books; this account has too few fills for that yet.');
     const holdTotal = c.closed || 1;
@@ -163,15 +175,16 @@
           U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No leaderboard snapshot yet.'), h('a.btn.primary', { href: '#/leaderboard' }, 'Open the leaderboard')));
           U.replace(summary, ''); return;
         }
-        const traders = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !AN.noTrades(r) && !AN.exchangeAccount(r));
+        // Meridian's own accounts and the market maker are no traders to copy (as on the home page; the Leaderboard keeps them, labelled)
+        const traders = data.rows.filter((r) => !r.inactive && r.stats && r.stats.all && !AN.noTrades(r) && !AN.exchangeAccount(r) && !AN.marketMaker(r));
         const scored = traders.map((r) => ({ r, sc: AN.copyScore(r), c: r.copy }));
         let rows = scored;
         if (state.filter === 'scored') rows = rows.filter((x) => x.sc);
         if (state.filter === 'copyable') rows = rows.filter((x) => x.sc && x.sc.verdict === 'Copyable');
         // the PnL and ROI columns' window (a row without that window's figures counts as none)
         const win = (x) => x.r.stats[state.win] || null;
-        // edge left over 100% shows as '>100%', so those rows sort as one value rather than by a ratio never shown
-        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': return c.edgeLeft == null ? null : Math.min(c.edgeLeft, 100.5); case 'pnl': return win(x) ? win(x).pnl : null; case 'roi': return win(x) ? win(x).roi : null; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
+        // a leader with nothing to keep (no result per position) sorts under one whose result a copier's costs take in full
+        const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': { const K = AN.copyKeep(x.c); return !K ? null : K.kept == null ? -1 : K.kept; } case 'pnl': return win(x) ? win(x).pnl : null; case 'roi': return win(x) ? win(x).roi : null; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
         rows = U.sortBy(rows, (x) => val(x, state.sort.key), state.sort.desc);
         if (state.sort.key === 'score') rows = rows.slice().sort((a, b) => { const d = (b.sc ? b.sc.total : -1) - (a.sc ? a.sc.total : -1); return (state.sort.desc ? d : -d) || (b.r.stats.all.pnl - a.r.stats.all.pnl); });
         const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; render(); };
@@ -184,7 +197,7 @@
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return UI.rank(i, !!(x.sc && x.sc.verdict === 'Copyable')); } },
               { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account), AN.known(x.r) ? h('span.chip.amber', { title: AN.known(x.r).title }, AN.known(x.r).label) : null, LB ? LB.carriedChip(x.r) : null) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: `0–100: results (all-time PnL and ROI) 55%, risk 25%, copy friction 20%; Copyable from ${AN.COPY.copyableAt} with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time; click a row for the breakdown`, render: (x) => scorePill(x.sc, x.c) },
-              { key: 'edge', label: 'Edge left', num: true, sortVal: 1, title: 'Share of the leader\'s per-position result (after fees and funding) that survives a copier\'s taker fees, the one-minute drift after their most recent fills (up to 400) and slippage at the leader\'s median position size, capped at $2K', render: (x) => (x.c && x.c.leaderBps != null && x.c.leaderBps <= 0 ? h('span.dim', { title: 'The leader\'s positions do not make money after fees and funding: there is no edge to keep' }, '—') : x.c && x.c.edgeLeft != null ? h('span', { class: 'num ' + (x.c.edgeLeft >= 50 ? 'pos' : x.c.edgeLeft > 0 ? '' : 'neg'), title: `per position: leader ${U.fmtNum(x.c.leaderBps, 1)} bps, copier ${U.fmtNum(x.c.copyBps, 1)} bps` }, x.c.edgeLeft > 100 ? '>100%' : U.fmtPct(x.c.edgeLeft, { dp: 0 })) : h('span.dim', '—')) },
+              { key: 'edge', label: 'Copier keeps', num: true, sortVal: 1, title: `How much of the leader's average result per position a copier keeps after its own costs: the trading fees it pays beyond the leader's, slippage at the leader's median position size (at most $2K) and the price move in the minute after the leader's fills (their latest, up to 400), in and out. A price move in the copier's favour is not counted, so it is never more than 100%. Hover a cell for the figures, click a row for the breakdown`, render: (x) => keepCell(x.c) },
               // PnL and ROI as Meridian's app (the Leaderboard's, row basis 'app'); the site's net figures in a cell's tooltip
               { key: 'pnl', label: state.win === 'all' ? 'All-time PnL' : `PnL ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]}, as Meridian's Trade Stats: realized PnL, settled funding and trading fees, plus unrealized PnL; mPerp position fees are not in it. Hover a cell for the site's net figure`, render: (x) => (win(x) ? h('span', { title: AN.sitePnlTitle(x.r, state.win) }, U.pnlEl(win(x).pnl, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'roi', label: state.win === 'all' ? 'ROI' : `ROI ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]} (as Meridian's app) ÷ deposits`, render: (x) => (win(x) ? h('span', { title: AN.siteRowNote(x.r, state.win) }, UI.pct(win(x).roi, { dp: 1 })) : h('span.dim', '—')) },

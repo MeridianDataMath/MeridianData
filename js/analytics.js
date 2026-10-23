@@ -713,8 +713,7 @@
     const wNet = wins5(perPos((c) => U.num(c.p.realizedPnl) - U.num(c.p.feesAccruedUsd) - U.num(c.p.positionFeeAccruedUsd) - U.num(c.p.fundingAccruedUsd)));   // what the leader kept: gross − fees + funding received
     out.grossTrimBps = wGross.length ? r1(mean(wGross)) : null;
     out.nTrim = wNet.length;   // the count the mean is over: under 10 nothing is winsorized
-    const leadRaw = wNet.length ? mean(wNet) : null;   // unrounded, for edge left
-    out.netTrimBps = r1(leadRaw);
+    out.netTrimBps = wNet.length ? r1(mean(wNet)) : null;
     const sd = wNet.length > 2 ? Math.sqrt(U.sum(wNet, (x) => (x - mean(wNet)) ** 2) / (wNet.length - 1)) : null;
     out.tStat = sd > 0 ? r1(mean(wNet) / (sd / Math.sqrt(wNet.length))) : null;
     const feesRaw = withCost.length ? mean(perPos((c) => U.num(c.p.feesAccruedUsd))) : null;   // the leader's trading fees per position: a copier pays its own instead
@@ -753,17 +752,30 @@
     // copier gives up by acting exactly 1 and 5 minutes later, positive = worse price (fills more than 5% from the
     // oracle at the time are left out)
     out.drift1 = decays ? decays.drift1 : null; out.drift5 = decays ? decays.drift5 : null; out.driftN = decays ? decays.n : 0;
-    // what is left for a copier per position: the leader's trimmed result plus funding (both sides get it) net of fees,
-    // minus a copier's own taker fees, drift and slippage on the way in and out (fills per position ≈ 2)
-    if (out.grossTrimBps != null && out.feeBps != null && out.slipBps != null && out.drift1 != null) {
-      out.leaderBps = out.netTrimBps;
-      out.copyBps = r1(out.netTrimBps + out.feesBps - 2 * (out.feeBps + out.slipBps + out.drift1));   // the leader's trading fees swapped for the copier's (from the rounded rows, so the page's waterfall adds up)
-      // edge left from the unrounded means: a leader result near zero must not be divided at its rounded value.
-      // A leader whose positions do not make money after fees leaves nothing to copy: a measured zero, not an unknown
-      const copyRaw = leadRaw + feesRaw - 2 * (out.feeBps + out.slipBps + out.drift1);
-      out.edgeLeft = out.leaderBps > 0 ? r1(Math.max(-100, (copyRaw / leadRaw) * 100)) : 0;
-    } else { out.leaderBps = null; out.copyBps = null; out.edgeLeft = null; }
+    // what is left for a copier per position (AN.copyKeep, from the rounded rows so the page's waterfall adds up)
+    const K = out.grossTrimBps != null ? AN.copyKeep(out) : null;
+    out.leaderBps = K ? K.lead : null; out.copyBps = K ? K.copier : null; out.edgeLeft = K ? K.kept : null;
     return out;
+  };
+
+  /**
+   * What a copier keeps of a leader's average result per position, in bps of entry notional, from a copy profile's
+   * parts: the leader's result after its fees and funding, minus a copier's own costs on the way in and out (the
+   * trading fees it pays beyond the leader's, slippage at the copy size, and the price move in the minute after the
+   * leader's fills). Nothing a copier cannot count on is credited: a leader who paid more in fees, or prices that moved
+   * in the copier's favour after the leader's fills (measured on most leaders, a few bps, mostly a resting order filled
+   * just before the price turned), count as no cost, so a copier never keeps more than the leader (until 2026-10-23
+   * they counted as gains, and "Edge left" read 877% for a leader making 1.7 bps a position).
+   * { lead, fees, slip, drift, cost, copier, kept: 0–100 (null when the leader makes nothing per position) }, or null
+   * while a part is not measured.
+   */
+  AN.copyKeep = (c) => {
+    if (!c || [c.netTrimBps, c.feesBps, c.feeBps, c.slipBps, c.drift1].some((x) => x == null || !Number.isFinite(x))) return null;
+    const r1 = (x) => Math.round(x * 10) / 10;
+    const lead = c.netTrimBps;
+    const fees = r1(Math.max(0, 2 * c.feeBps - c.feesBps)), slip = r1(2 * c.slipBps), drift = r1(2 * Math.max(0, c.drift1));
+    const cost = r1(fees + slip + drift), copier = r1(lead - cost);
+    return { lead, fees, slip, drift, cost, copier, kept: lead > 0 ? r1(Math.max(0, Math.min(100, (copier / lead) * 100))) : null };
   };
 
   /**
@@ -830,8 +842,11 @@
     add('risk', 'conc', 'Concentration', c.top == null ? null : cl(1 - (c.top - 30) / 70, 0, 1), 0.15, c.top == null ? 'no winning position yet' : `largest win is ${U.fmtPct(c.top, { dp: 0 })} of all wins`);
     // copy friction
     const scalp = c.closed ? c.hold.scalp / c.closed : 0, intra = c.closed ? c.hold.intra / c.closed : 0;
-    const noEdge = c.leaderBps != null && c.leaderBps <= 0;   // edge left is 0 then, but not because of a copier's costs
-    add('friction', 'edge', 'Edge left after copying', c.edgeLeft == null ? null : cl(c.edgeLeft / 100, 0, 1), 0.45, c.edgeLeft == null ? 'not measurable yet' : noEdge ? 'the leader\'s positions do not make money after fees and funding: no edge to keep' : c.edgeLeft > 100 ? `the copier keeps more per position than the leader (${U.fmtNum(c.copyBps, 1)} vs ${U.fmtNum(c.leaderBps, 1)} bps)` : c.edgeLeft <= 0 ? 'nothing survives a copier\'s fees, drift and slippage' : `${U.fmtPct(c.edgeLeft, { dp: 0 })} of the leader's per-trade result survives fees, drift and slippage`);
+    // what a copier keeps of the leader's result per position (AN.copyKeep); a leader whose positions do not make money
+    // after fees leaves nothing to keep: a measured zero, not an unknown
+    const KP = AN.copyKeep(c);
+    add('friction', 'edge', 'Kept by a copier', KP == null ? null : KP.kept == null ? 0 : KP.kept / 100, 0.45, KP == null ? 'not measurable yet' : KP.kept == null ? 'the leader\'s positions do not make money after fees and funding: nothing to keep'
+      : KP.kept <= 0 ? `a copier's costs (${U.fmtNum(KP.cost, 1)} bps a position) are more than the leader makes (${U.fmtNum(KP.lead, 1)} bps)` : `a copier keeps ${U.fmtPct(KP.kept, { dp: 0 })} of the leader's ${U.fmtNum(KP.lead, 1)} bps a position after fees, slippage and a minute's delay`);
     add('friction', 'hold', 'Hold times', cl(1 - scalp - intra * 0.4, 0, 1), 0.25, `median hold ${c.holdMed == null ? '—' : U.fmtDuration(c.holdMed)} · ${U.fmtPct(scalp * 100, { dp: 0 })} scalps`);
     add('friction', 'slip', 'Slippage for a copier', c.slipBps == null ? null : cl(1 - c.slipBps / 30, 0, 1), 0.15, c.slipBps == null ? 'no book data' : `${U.fmtNum(c.slipBps, 1)} bps to enter ${U.fmtUsd(c.copySize || AN.COPY_SIZE, { compact: true, dp: 0 })} at today's depth` + (c.slipOwnBps != null && c.slipOwnBps > c.slipBps ? ` (${U.fmtNum(c.slipOwnBps, 1)} bps at their own ${U.fmtUsd(c.notMed, { compact: true, dp: 0 })})` : ''));
     add('friction', 'depth', 'Depth for their big trades', c.depthOk == null ? null : c.depthOk / 100, 0.15, c.depthOk == null ? 'no book data' : `${U.fmtPct(c.depthOk, { dp: 0 })} of a ${U.fmtUsd(c.notP90 || 0, { compact: true, dp: 0 })} order fills within 1%`);

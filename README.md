@@ -1493,21 +1493,28 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   position) is winsorized so one jackpot or blow-up cannot carry it, below 10 it is the plain
   mean (the breakdown says which, from `nTrim`), with a t-statistic saying whether it is clear
   of the noise. Funding and mPerp position fees count on both sides (a copier holding the same
-  position receives or pays them too, `posFeeBps`); only the leader's trading fees (`feesBps`)
-  are swapped for the copier's taker fees. "Edge left" = the share of that result that
-  survives a copier's taker fees, drift and slippage (for a $2,000 position, `AN.COPY_SIZE`, or
-  the leader's median entry size when smaller) in and out, divided on the unrounded means; over
-  100% the page shows ">100%" with both per-position figures. The score (`AN.copyScore`, 0–100,
-  computed on the site so the formula can change without a rebuild) is 35% track record, 45%
-  copy friction, 20% activity, each pillar a weighted mean of its measured parts (unmeasured
-  parts are left out, not zeroed), then capped with the reason shown: a per-position result
-  not positive after fees and funding, or nothing of it surviving copying → 40; less than all
-  of it → 30 + 0.7 × edge left; fewer than 10 / 20 closed positions → 55 / 65; from 10 closed
-  positions, the result not clear of the noise (t < 2) → 60; under 50% of a 90th-percentile
-  order filling within 1% of the mid → 60; no trade for 30 / 60 days → 60 / 45; a tenth of
-  positions liquidated → 55; one position 60% or more of all wins → 60; drawdown of 40% or more
-  → 60; not profitable → scaled down by 40% and capped at 45; fewer than 5 closed positions
-  means no score. Verdicts: Copyable (70+), Copy with care (50+), Hard to copy, Losing so far.
+  position receives or pays them too, `posFeeBps`). "Copier keeps" (`AN.copyKeep`) = the share
+  of that result left after a copier's own costs, in and out: the taker fees it pays beyond the
+  leader's trading fees (`feesBps`), slippage for a $2,000 position (`AN.COPY_SIZE`, or the
+  leader's median entry size when smaller) and the price move a minute after the leader's
+  fills. Nothing a copier cannot count on is credited: a leader who paid more in fees, or a
+  price that moved in the copier's favour after the leader's fills (a few bps on most leaders,
+  mostly a resting order filled just before the price turned), counts as no cost, so it is
+  never above 100% (until 2026-10-23 they counted as gains, and one leader making 1.7 bps a
+  position read 877%). None when the costs are more than the leader makes; nothing to keep
+  when the leader's positions do not make money. The score (`AN.copyScore`, 0–100, computed on
+  the site so the formula can change without a rebuild) puts results first, as the large
+  exchanges rank their lead traders: 55% results (all-time PnL on a log scale, $10,000 or more
+  for full marks, and ROI on deposits, 50% or more), 25% risk (drawdown, liquidations,
+  profitable weeks, the largest win's share of all wins) and 20% copy friction (what a copier
+  keeps 45%, hold times 25%, slippage 15%, depth for a 90th-percentile order 15%), each pillar
+  a weighted mean of its measured parts (unmeasured parts are left out, not zeroed). Only hard
+  limits cap it, with the reason shown: not profitable → 30; no trade for 30 days, a drawdown
+  of 60% or more or a quarter of positions liquidated → 50; under $500 made all-time → 59
+  (listed, never Copyable); fewer than 3 closed positions means no score. Verdicts: Copyable
+  (60+), Copy with care (45+), Hard to copy, Losing so far. Meridian's own accounts and its
+  market maker are no traders to copy, so the list leaves them out (the Leaderboard keeps them,
+  labelled).
   Every row opens a breakdown with each part's value and reason, the score before caps (`raw`)
   and the caps that applied, the per-position waterfall from the leader's result to the
   copier's, hold-time strip, sizes, markets and track record. `js/dev/sim-leaders.mjs`

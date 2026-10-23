@@ -240,14 +240,15 @@ test('book slippage walks the book from the mid; an order the book cannot absorb
 });
 
 // a profile that is copyable on every count; each test breaks one thing and expects its limit
-const good = () => ({ stats: { all: { pnl: 5000, roi: 25, ddPct: 8 } }, copy: { closed: 60, hold: { scalp: 2, intra: 10, swing: 40, long: 8 }, holdMed: 2 * D, tStat: 5, netTrimBps: 60, weeksActive: 12, weeksPos: 10, liq: 0, top: 12, edgeLeft: 85, slipBps: 2, copySize: 2000, notMed: 3000, slipOwnBps: 3, depthOk: 100, notP90: 6000, lastAt: Date.now() - D, perWeek: 5, tenureD: 120 } });
+const good = () => ({ stats: { all: { pnl: 5000, roi: 25, ddPct: 8 } }, copy: { closed: 60, hold: { scalp: 2, intra: 10, swing: 40, long: 8 }, holdMed: 2 * D, tStat: 5, netTrimBps: 60, feesBps: 1, feeBps: 0.5, drift1: 2.5, weeksActive: 12, weeksPos: 10, liq: 0, top: 12, slipBps: 2, copySize: 2000, notMed: 3000, slipOwnBps: 3, depthOk: 100, notP90: 6000, lastAt: Date.now() - D, perWeek: 5, tenureD: 120 } });
 const with_ = (patch, stats) => { const r = good(); Object.assign(r.copy, patch); if (stats) Object.assign(r.stats.all, stats); return r; };
 
 test('copyability: results first; a profitable, steady account is Copyable and a bigger result scores higher', () => {
   const sc = AN.copyScore(good()); assert.equal(sc.verdict, 'Copyable'); assert.ok(sc.total >= AN.COPY.copyableAt, 'score ' + sc.total);
   assert.ok(AN.copyScore(with_({}, { pnl: 50000 })).total > AN.copyScore(with_({}, { pnl: 1000 })).total, 'more PnL, higher score');
   // a scalper with a thin edge but a big result stays copyable: friction is a fifth of the score, not a veto
-  const busy = AN.copyScore(with_({ hold: { scalp: 50, intra: 10, swing: 0, long: 0 }, edgeLeft: 20, tStat: 1 }, { pnl: 20000, roi: 60 }));
+  const busy = AN.copyScore(with_({ hold: { scalp: 50, intra: 10, swing: 0, long: 0 }, netTrimBps: 10, drift1: 2, tStat: 1 }, { pnl: 20000, roi: 60 }));
+  assert.equal(busy.parts.find((p) => p.key === 'edge').v, 0.2, 'keeps 20%: 10 bps, 8 bps of costs');
   assert.equal(busy.verdict, 'Copyable', 'score ' + busy.total);
 });
 
@@ -269,15 +270,15 @@ test('copyability limits: only the hard ones cap the score, each with its reason
   assert.equal(AN.copyScore(with_({ closed: 2 })), null, 'fewer than 3 closed: no score');
   assert.ok(AN.copyScore(with_({ closed: 3 })), '3 closed: scored');
   // no longer limits: few positions, a noisy mean, one jackpot, sizes beyond the books, a thin edge left
-  for (const row of [with_({ closed: 8 }), with_({ tStat: 1.2 }), with_({ top: 70 }), with_({ depthOk: 30 }), with_({ edgeLeft: 30 })]) assert.equal(AN.copyScore(row).caps.length, 0);
+  for (const row of [with_({ closed: 8 }), with_({ tStat: 1.2 }), with_({ top: 70 }), with_({ depthOk: 30 }), with_({ netTrimBps: 12, drift1: 2.2 })]) assert.equal(AN.copyScore(row).caps.length, 0);
 });
 
 test('copyability: a leader without a positive per-position result says so in its friction; nothing capped keeps raw = total', () => {
-  const sc = AN.copyScore(with_({ leaderBps: -3, copyBps: -1, edgeLeft: 0 }));
-  assert.match(sc.parts.find((p) => p.key === 'edge').note, /do not make money/);
+  const sc = AN.copyScore(with_({ netTrimBps: -3 }));
+  const edge = sc.parts.find((p) => p.key === 'edge'); assert.match(edge.note, /do not make money/); assert.equal(edge.v, 0, 'nothing to keep: a measured zero');
   assert.ok(sc.raw >= sc.total, `raw ${sc.raw} ≥ total ${sc.total}`);
-  // a copier who keeps more than the leader: no ratio as a "share"
-  assert.match(AN.copyScore(with_({ leaderBps: 0.1, copyBps: 3.6, edgeLeft: 3600 })).parts.find((p) => p.key === 'edge').note, /keeps more per position than the leader \(3\.6 vs 0\.1 bps\)/);
+  // costs above a thin result: none kept, said with both figures (a price move in the copier's favour is no gain)
+  assert.match(AN.copyScore(with_({ netTrimBps: 0.1, drift1: -5 })).parts.find((p) => p.key === 'edge').note, /a copier's costs \(4\.0 bps a position\) are more than the leader makes \(0\.1 bps\)/);
   const plain = AN.copyScore(good()); assert.equal(plain.caps.length, 0); assert.equal(plain.raw, plain.total, 'nothing capped: raw = total');
 });
 
@@ -329,19 +330,31 @@ test('book slippage within a band: depth for big trades counts only the asks wit
   assert.equal(p.depthOk, 1, '1% of a 90th-percentile order fills within 1%');
 });
 
-test('copy profile: position fees stay in the result, only trading fees are swapped; edge left from the unrounded means', () => {
+test('copy profile: position fees stay in the result; a copier\'s costs, never a gain, so it keeps at most all of it', () => {
   // 50 bps gross, 5 bps trading fees, 2 bps position fees: 43 bps kept
   const pos = Array.from({ length: 5 }, (_, i) => closedPos(i, { realizedPnl: atBps(50), feesAccruedUsd: atBps(5), positionFeeAccruedUsd: atBps(2) }));
   const decays = { drift1: 1, drift5: 2, n: 10 };
   const p = AN.buildCopyProfile({ positions: pos, ref: cref, depth: { [P_ID]: tight }, decays });
   near(assert, p.netTrimBps, 43, 1e-9); near(assert, p.feesBps, 5, 1e-9); near(assert, p.posFeeBps, 2, 1e-9);
   near(assert, p.feeBps, 0.5, 1e-9); near(assert, p.slipBps, 1, 1e-9);
-  near(assert, p.copyBps, 43 + 5 - 2 * (0.5 + 1 + 1), 1e-9, 'the copier pays the position fees too');
-  // a leader result of 0.07 bps rounds to 0.1: the ratio is taken on 0.07 (5,100%), not on the rounded 0.1 (3,600%)
+  // the leader paid 5 bps in trading fees, a copier 1: not counted as a saving (a copier mirroring every fill pays as many)
+  near(assert, p.copyBps, 43 - 2 * (1 + 1), 1e-9, 'slippage and drift in and out; the position fees stay in');
+  near(assert, p.edgeLeft, Math.round((39 / 43) * 1000) / 10, 1e-9);
+  // a thin result with the price turning in the copier's favour after the fills: not counted, nothing kept
   const thin = Array.from({ length: 5 }, (_, i) => closedPos(i, { realizedPnl: atBps(4.57), feesAccruedUsd: atBps(4.5) }));
   const q = AN.buildCopyProfile({ positions: thin, ref: cref, depth: { [P_ID]: tight }, decays: { drift1: -1, drift5: 0, n: 10 } });
-  near(assert, q.leaderBps, 0.1, 1e-9); near(assert, q.copyBps, 3.6, 1e-9, 'the waterfall line from the rounded rows');
-  near(assert, q.edgeLeft, 5100, 0.5);
+  near(assert, q.leaderBps, 0.1, 1e-9); near(assert, q.copyBps, -1.9, 1e-9, 'the waterfall line from the rounded rows');
+  assert.equal(q.edgeLeft, 0);
+});
+
+test('AN.copyKeep: what a copier keeps, from the waterfall\'s rounded rows; nothing in its favour counted, never above 100%', () => {
+  assert.deepEqual(AN.copyKeep({ netTrimBps: 246.6, feesBps: 0.1, feeBps: 0.5, slipBps: 1, drift1: -1.6 }), { lead: 246.6, fees: 0.9, slip: 2, drift: 0, cost: 2.9, copier: 243.7, kept: 98.8 });
+  const k = AN.copyKeep({ netTrimBps: 372.6, feesBps: 0.2, feeBps: 0.5, slipBps: 0.9, drift1: 147.9 });   // a bot: the price moves 148 bps in the minute after its fills
+  assert.equal(k.cost, 298.4); assert.equal(k.copier, 74.2); assert.equal(k.kept, 19.9);
+  assert.equal(AN.copyKeep({ netTrimBps: 1.7, feesBps: 1, feeBps: 0.5, slipBps: 0.8, drift1: -7.5 }).kept, 5.9, 'was 877% while a favourable move counted as a gain');
+  assert.equal(AN.copyKeep({ netTrimBps: 2.3, feesBps: 1, feeBps: 0.5, slipBps: 0.8, drift1: 3.6 }).kept, 0, 'costs above the result: none kept');
+  assert.equal(AN.copyKeep({ netTrimBps: -77.2, feesBps: 1, feeBps: 0.5, slipBps: 1, drift1: 2.8 }).kept, null, 'no result per position: nothing to keep');
+  assert.equal(AN.copyKeep({ netTrimBps: 60, feesBps: 1, feeBps: 0.5, slipBps: 1 }), null, 'a part not measured');
 });
 
 test('price drift: exactly one and five minutes after the fill, a fill far off the oracle left out', async () => {
