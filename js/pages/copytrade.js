@@ -76,13 +76,15 @@
    *  the figures in % of a position in its tooltip */
   function keepCell(c, r) {
     const K = AN.copyKeep(c), pc = (bps) => U.fmtPct(bps / 100, { dp: 2, sign: true });
-    if (!K) return h('span.dim', { title: 'Not measured yet: too few fills with one-minute candles after them, or no order-book data' }, '—');
+    if (!c) return h('span.dim', { title: 'No copy profile for this account in the snapshot' }, '—');
+    if (!K) return h('span.dim', { title: 'Not measured yet: too few fills with one-minute candles after them, or no order-book data' }, 'not measured');
     // under the share, what it is a share of: the leader's average result per closed position (user 10-23: "none" beside
     // +$6,422 read as a fault; that account's five closed trades averaged +0.02%, its dollars came from one big, long-held
     // position and an open one)
     const n = c.nTrim != null ? c.nTrim : c.closed;
     const cell = (cls, text, title, sub) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', sub || (K.kept == null ? '' : 'of ') + pc(K.lead) + ' a trade'));
-    if (K.kept == null) return cell('dim', '—', `The leader's closed positions ${K.lead < 0 ? 'lose ' + pc(K.lead).replace('-', '').replace('−', '') + ' each on average' : 'make nothing on average'} after fees and funding (${n} of them): nothing to keep`);
+    // its closed trades lose on average (or make nothing): no edge to keep (user 10-23: a word, not "—")
+    if (K.kept == null) return cell('dim', 'no edge', `The leader's closed positions ${K.lead < 0 ? 'lose ' + pc(K.lead).replace('-', '').replace('−', '') + ' each on average' : 'make nothing on average'} after fees and funding (${n} of them): nothing for a copier to keep`);
     const title = `Per closed position, on average over ${n}: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}. Each position counts once whatever its size, as for a copier copying every position at the same size; open positions are not in it` + (n < 10 ? ` · only ${n} positions, so one can move it` : '');
     // nothing left to keep: why, rather than "none" (user 10-23). Its profit is in its open positions; the minute's delay
     // costs more than it makes a trade; or its closed trades make less than a copier's costs

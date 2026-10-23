@@ -1509,8 +1509,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   position read 877%). Where nothing would be left it says why instead of a share (user
   10-23: not "none"): *unrealized profit* when at least half the account's all-time PnL is in
   its open positions (with that amount under it), *too fast to copy* when the minute's delay
-  costs more than fees and slippage, otherwise *edge too thin*; "—" when the leader's
-  positions do not make money at all. Under a share the cell says what it is a share of, the
+  costs more than fees and slippage, otherwise *edge too thin*; *no edge* when the leader's
+  closed positions lose money on average, *not measured* where the fills or order books to
+  measure it are missing. Under a share the cell says what it is a share of, the
   leader's average per closed position (*99% · of +2.47% a trade*): every position counts once
   whatever its size, as for a copier copying each at the same size, and open positions are
   not in it. The score (`AN.copyScore`, 0–100, computed on
@@ -1524,10 +1525,12 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   of 60% or more or a quarter of positions liquidated → 50; under $500 made all-time → 59
   (listed, never Copyable); fewer than 3 closed positions means no score. Verdicts: Copyable
   (60+), Copy with care (45+), Hard to copy, Losing so far. Meridian's own accounts, its
-  market maker (0x2f46…56b2) and the quoting bot 0x5eee…f77f (orders 2–5% either side of the
-  price on every market, moved within a second; left out at the user's request 10-23) are no
-  traders to copy, so the list leaves them out (`AN.KNOWN`; the Leaderboard keeps them,
-  labelled).
+  market maker (0x2f46…56b2) and the eight automated quoters (left out at the user's request
+  10-23; thousands of orders a day, none from Meridian's app, following the price, measured on
+  every account's orders 16–23 Oct: 0x5eee 2–5% either side on every market, 0xfb2b, 0x6dc0,
+  0xce92, 0x5d47, 0x7d7b and 0xb056 small orders next to the price, 0x4716 a ladder 1–6% out on
+  all 13 markets) are no traders to copy, so the list leaves them out (`AN.KNOWN`, kind maker;
+  the Leaderboard keeps them, labelled "Quoting bot").
   Every row opens a breakdown with each part's value and reason, the score before caps (`raw`)
   and the caps that applied, the per-position waterfall from the leader's result to the
   copier's, hold-time strip, sizes, markets and track record. `js/dev/sim-leaders.mjs`
