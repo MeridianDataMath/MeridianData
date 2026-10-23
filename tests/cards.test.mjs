@@ -162,6 +162,17 @@ test('the CSP in _headers allows index.html\'s inline script by its hash, and no
   const hosts = [...new Set([...fs.readFileSync(path.join(root, 'js/tax/fx.js'), 'utf8').matchAll(/https:\/\/([a-z0-9.-]+)/g)].map((m) => 'https://' + m[1]))];
   assert.deepEqual(hosts, ['https://api.frankfurter.dev', 'https://coins.llama.fi']);
   for (const x of hosts) assert.ok(dir['connect-src'].includes(x), x + ' in connect-src');
+  // and no bare 'https:': every host any page script fetches is named. A host turns up as a string the code asks
+  // (A.get / fetch / a base URL constant); the links the pages show (app, explorers, papers) are not fetched and need no entry
+  assert.ok(!dir['connect-src'].includes('https:'), 'no bare https: in connect-src');
+  const walk = (d) => fs.readdirSync(path.join(root, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(d + '/' + e.name) : e.name.endsWith('.js') ? [d + '/' + e.name] : []));
+  const asked = new Set();
+  for (const f of walk('js').filter((f) => !f.startsWith('js/dev/'))) {
+    const src = fs.readFileSync(path.join(root, f), 'utf8');
+    for (const m of src.matchAll(/(?:A\.get\(|fetch\(|(?<![A-Za-z0-9_])(?:BASE|ARCHIVE|TV|URL|RPC|RPCS|GAMMA|CLOB|ENDPOINT|API)[A-Z_]*\s*=\s*\[?)\s*'(https:\/\/[a-z0-9.-]+)/g)) asked.add(m[1]);
+  }
+  for (const x of ['https://api.coingecko.com', 'https://api.meridian.xyz', 'https://gamma-api.polymarket.com']) assert.ok(asked.has(x), x + ' found as fetched');
+  for (const x of asked) assert.ok(dir['connect-src'].includes(x), x + ' in connect-src');
   assert.match(fs.readFileSync(path.join(root, 'Start-MeridianData.ps1'), 'utf8'), /\$headersFile = Join-Path \$root '_headers'/);
 });
 

@@ -135,6 +135,9 @@ test('ntfy: generated topics are long and random, guessable ones are flagged, se
   const t0 = Date.now(); AL.topicWarning('a'.repeat(5000) + '!'); assert.ok(Date.now() - t0 < 200, 'no catastrophic backtracking');
   for (const s of ['https://ntfy.sh', 'https://push.example.org/', 'http://localhost:8080', 'http://127.0.0.1']) assert.equal(AL.serverOk(s), true, s);
   for (const s of ['http://ntfy.sh', 'http://192.168.1.5', 'ntfy.sh', 'javascript:alert(1)', '']) assert.equal(AL.serverOk(s), false, s);
+  // what the page itself may push to: ntfy.sh or this machine (the CSP names no other host); any https server suits the agent
+  for (const s of ['https://ntfy.sh', 'https://ntfy.sh/', 'http://localhost:8080', 'http://127.0.0.1', 'https://localhost:2586']) assert.equal(AL.pageServerOk(s), true, s);
+  for (const s of ['https://push.example.org/', 'https://ntfy.sh.evil.example', 'https://ntfy.sh:8443', 'http://ntfy.sh', '']) assert.equal(AL.pageServerOk(s), false, s);
 });
 
 test('toast: a polite live region screen readers read out, shown 1.6 s by default and as long as asked (B41)', (t) => {

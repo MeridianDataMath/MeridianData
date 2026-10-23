@@ -44,8 +44,12 @@ cancelling it. The timer itself (`cron/`) deploys from `.github/workflows/cron.y
 * **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
   named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
   Create → *Upload assets*, upload the site folder without `.git` and `data/bettors`), create an
-  API token from the *Edit Cloudflare Workers* template, and add two repository secrets:
-  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. From the next run the workflow runs
+  API token, and add two repository secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+  The token needs no more than a custom token with *Account → Workers Scripts → Edit*, for this
+  account only and no zone: both Workers (the site's assets and the timer with its Cron Trigger)
+  deploy with it, since neither `wrangler.jsonc` names a route or domain (the custom domain is set
+  once in the dashboard). The *Edit Cloudflare Workers* template grants far more (routes, KV, R2,
+  every zone), all of it reachable by anything that gets the token. From the next run the workflow runs
   `wrangler deploy` with `dist/`. The `*.workers.dev` address and the per-version preview URLs are
   switched off in `wrangler.jsonc` (`workers_dev: false`, `preview_urls: false`): wrangler treats a
   missing setting as "on" and re-enabled both at every deploy, even after they were disabled in the
@@ -76,8 +80,10 @@ section below), whichever host is used.
   sha256. Recompute the hash when that script changes; `tests/cards.test.mjs` fails when they
   disagree.
 - `connect-src` lists the APIs the site calls (the Tax center's rate and USDe price fallbacks, frankfurter.dev and
-  DefiLlama's coins.llama.fi, included; `tests/cards.test.mjs` checks every host `js/tax/fx.js` calls is named), plus
-  `https:` for a self-hosted ntfy server. `Start-MeridianData.ps1` reads the same block from `_headers` when it starts.
+  DefiLlama's coins.llama.fi, included; `tests/cards.test.mjs` checks every host `js/tax/fx.js` calls is named), and no
+  other: no bare `https:`, which would let an injected script send anything anywhere. So the page's own phone pushes go
+  to ntfy.sh or a ntfy on the same machine (`AL.pageServerOk`); a self-hosted server works with the copy agent, which
+  runs outside the browser. `Start-MeridianData.ps1` reads the same block from `_headers` when it starts.
 - The share pages under `/a/` and `/p/` redirect through `js/share.js`. They avoid a meta refresh,
   because Facebook's crawler would follow it to the home page's card.
 - User-supplied links (`href`/`src`) must be relative or http(s). `U.h` never writes raw HTML, and
@@ -1441,14 +1447,19 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
       $0 Volume, and has no share card of its own (its flex card links the site).
   **How the Predict data gets there.** The Predict API refuses datacenter IPs (GitHub's
   runners get 403) and answers browsers only from an allowlist of origins (Meridian's and
-  Sapience's domains, localhost), which this site is not on, so:
-  `scripts/Update-PredictSnapshot.ps1` runs on a normal PC (portable Node in `../tools/node`
-  or any `node` on PATH), pulls every prediction since launch paced under the API's 200
-  requests/minute, and force-pushes a single parentless commit to the `snapshots` branch
-  (`predict.json` + one slim file per wallet in `bettors/` and per question in `questions/`).
-  `scripts/Install-SnapshotTask.ps1` schedules that every 30 minutes.
-  - **Local code only:** the task runs this checkout's code as it is and never pulls. Review what
-    changed on GitHub and `git pull` by hand.
+  Sapience's domains, localhost), which this site is not on, so a Mac mini on a home connection
+  builds the snapshot every 30 minutes (at :09 and :39), from a kit kept in a private repository:
+  `scripts/build-snapshot.mjs --predict` pulls every prediction since launch, paced under the
+  API's 200 requests/minute, and the kit force-pushes a single parentless commit to the
+  snapshot's own repository, MeridianData-snapshots (`predict.json` + one slim file per wallet in
+  `bettors/`, per question in `questions/` and per first two hex digits of a prediction id in
+  `slips/`). Its token can write to that repository only, never the site's code, and git offers
+  it to that repository alone. It pushes through a small repository of its own that keeps only
+  the snapshot last published, so a push sends only the files that changed and nothing piles up.
+  When nothing has been published for two hours it pushes that to a phone (as the deploy's health
+  job does from GitHub, for a machine that is down).
+  - **Code updated by hand:** the Mac runs the site's code as the kit's update script last brought
+    it, never by itself.
     - A snapshot-format change reaches the live site with the next run, before the new page code
       is deployed.
     - So a format change only adds fields: the page code that is live must still read the new
@@ -1497,11 +1508,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     Each new step runs in its own `try`/`catch`: a failure leaves its field out and never stops
     the snapshot.
   - **Complete history only:** an incomplete history (a time window hitting its page cap) writes
-    no snapshot. The deploy workflow copies the branch into `data/` on each
-  run, which is where the site reads it from; after each push the PC script triggers that
-  workflow (`workflow_dispatch`, with the GitHub credential git pushed with), so the site
-  carries a new snapshot a few minutes after it is built instead of waiting for the workflow's
-  own 30-minute schedule, which GitHub often runs late. On the public domain every Predict page
+    no snapshot. The deploy workflow copies the snapshot repository into `data/` on each
+  run, which is where the site reads it from; the Cloudflare timer starts that workflow at :14
+  and :44, a few minutes after each build, rather than waiting for GitHub's own schedule, which
+  drops most of its runs. On the public domain every Predict page
   therefore renders from the snapshot; live
   queries (full-text question search, exchange-side account stats, 20-second tape) switch on
   automatically on an allowed origin such as localhost. Without any snapshot the browser
@@ -2030,7 +2040,8 @@ difference explained (the owner's call, 2026-10-06; the in-app definitions, `MD.
 index.html              shell + script order
 css/app.css             theme (Meridian palette, Geist font)
 js/util.js              DOM/format/storage helpers, favorites
-js/api.js               REST + Archive + candles + WebSocket client
+js/api.js               REST + Archive + candles + WebSocket client; every GET has a 60 s limit and is tried again after
+                        no answer, a 5xx or a 429 (after its Retry-After)
 js/analytics.js         series building, interval stats, position stats, margin state
 js/charts.js            Chart.js wrappers
 js/ui.js                tables, pagers, tiles, segmented controls
@@ -2051,6 +2062,9 @@ js/tax/*.js             tax center modules (MD.tax): core (presets, currencies, 
                         lots card), view-holdings (the Holdings card); pure except load, fx.load, fx.usde, ui and view-*
 scripts/build-fx.mjs    deploy-time official exchange rates for the tax center (data/fx/: ECB, NBP, Bank of Canada) and
                         DefiLlama's USDe/USD price (the USDe lots' market valuation)
+scripts/check-snapshot.mjs  the deploy's gate for the Predict snapshot: published names only, JSON, caps on files and size
+scripts/keep-live.mjs   the deploy: what a build failed to write (the leaderboard, an exchange-rate source) from the live site
+scripts/deploy-health.mjs  after the deploy: fails the run when the live Predict snapshot or the timer has stopped
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy
@@ -2059,7 +2073,8 @@ agent/package.json      its one dependency (ethers 6.17.0, pinned with package-l
 js/dev/*                development only, not loaded by the site: sim-tax.js (a fake busy account for the tax center),
                         sim-leaders.mjs (twenty synthetic traders through the copyability score and the simulator)
 js/predict/api.js       Predict (Sapience) GraphQL client; asks again after a 429, a network error, an HTTP 5xx or
-                        the API's 8-second "Query timeout" (two more tries, 3 and 6 s apart)
+                        the API's 8-second "Query timeout" (two more tries, 3 and 6 s apart); in the snapshot builder
+                        (P.strict) an answer with errors beside its data is asked again the same way, then fails
 js/predict/analytics.js Predict normalisation, aggregation, per-wallet slim records
 js/predict/resolution.js Polymarket Gamma + UMA oracle resolution tracker
 js/app.js               bootstrap, sidebar, global search

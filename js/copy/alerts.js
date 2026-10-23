@@ -162,10 +162,18 @@
     let u; try { u = new URL(server); } catch (_) { return false; }
     return u.protocol === 'https:' || (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1'));
   };
+  /** The servers this page can push to: ntfy.sh, or a ntfy on this machine. The site's Content-Security-Policy names no
+   *  other host (an injected script could otherwise send anything anywhere over https:); a server of one's own works with
+   *  the copy agent, which runs outside the browser (AL.serverOk). */
+  AL.pageServerOk = (server) => {
+    let u; try { u = new URL(server); } catch (_) { return false; }
+    return (u.protocol === 'https:' && u.hostname === 'ntfy.sh' && !u.port) || ((u.protocol === 'http:' || u.protocol === 'https:') && (u.hostname === 'localhost' || u.hostname === '127.0.0.1'));
+  };
+  AL.PAGE_SERVER_MSG = 'the site can push through https://ntfy.sh or a ntfy on this machine (http://localhost) only; a server of your own works with the copy agent, which runs outside the browser';
   /** Publish one alert to ntfy (CORS-enabled; the topic is the only secret). */
   AL.push = async (a, url) => {
     const s = AL.state(); const server = (s.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '');
-    if (!AL.serverOk(server)) throw new Error('the ntfy server must be an https:// address (plain http only on localhost)');
+    if (!AL.pageServerOk(server)) throw new Error(AL.PAGE_SERVER_MSG);
     const r = await fetch(server + '/' + encodeURIComponent(s.ntfy.topic), { method: 'POST', body: a.msg, headers: { Title: a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], Tags: a.kind === 'liq' ? 'rotating_light' : a.kind === 'open' || a.kind === 'add' ? 'chart_with_upwards_trend' : 'chart_with_downwards_trend', Priority: a.kind === 'liq' ? '4' : '3', Click: url || location.href } });
     if (!r.ok) throw new Error('ntfy ' + r.status);
     return true;
