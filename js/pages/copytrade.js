@@ -74,17 +74,24 @@
 
   /** The "Copier keeps" cell: the share of the leader's result per position left after a copier's costs (AN.copyKeep),
    *  the figures in % of a position in its tooltip */
-  function keepCell(c) {
+  function keepCell(c, r) {
     const K = AN.copyKeep(c), pc = (bps) => U.fmtPct(bps / 100, { dp: 2, sign: true });
     if (!K) return h('span.dim', { title: 'Not measured yet: too few fills with one-minute candles after them, or no order-book data' }, '—');
     // under the share, what it is a share of: the leader's average result per closed position (user 10-23: "none" beside
     // +$6,422 read as a fault; that account's five closed trades averaged +0.02%, its dollars came from one big, long-held
     // position and an open one)
     const n = c.nTrim != null ? c.nTrim : c.closed;
-    const cell = (cls, text, title) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', (K.kept == null ? '' : 'of ') + pc(K.lead) + ' a trade'));
+    const cell = (cls, text, title, sub) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', sub || (K.kept == null ? '' : 'of ') + pc(K.lead) + ' a trade'));
     if (K.kept == null) return cell('dim', '—', `The leader's closed positions ${K.lead < 0 ? 'lose ' + pc(K.lead).replace('-', '').replace('−', '') + ' each on average' : 'make nothing on average'} after fees and funding (${n} of them): nothing to keep`);
     const title = `Per closed position, on average over ${n}: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}. Each position counts once whatever its size, as for a copier copying every position at the same size; open positions are not in it` + (n < 10 ? ` · only ${n} positions, so one can move it` : '');
-    if (K.kept <= 0) return cell('num neg', 'none', title);
+    // nothing left to keep: why, rather than "none" (user 10-23). Its profit is in its open positions; the minute's delay
+    // costs more than it makes a trade; or its closed trades make less than a copier's costs
+    if (K.kept <= 0) {
+      const pnl = r && r.stats && r.stats.all ? U.num(r.stats.all.pnl) : 0, up = r ? U.num(r.upnl) : 0;
+      if (pnl > 0 && up >= pnl / 2) return cell('caution', 'unrealized profit', `${usd0(up)} of its ${usd0(pnl)} all-time PnL is the unrealized result of its open positions, which this leaves out until they close. ${title}`, usd0(up) + ' in open positions');
+      if (K.drift > K.fees + K.slip) return cell('caution', 'too fast to copy', `The price moves ${pc(K.drift / 2).replace('+', '')} against a copier in the minute after its fills, in and out: more than it makes a trade. ${title}`);
+      return cell('caution', 'edge too thin', `Its closed trades make less than a copier's costs, so nothing would be left. ${title}`);
+    }
     return cell('num ' + (K.kept >= 80 ? 'pos' : K.kept >= 40 ? '' : 'neg'), U.fmtPct(K.kept, { dp: 0 }), title);
   }
 
@@ -202,7 +209,7 @@
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return UI.rank(i, !!(x.sc && x.sc.verdict === 'Copyable')); } },
               { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account), AN.known(x.r) ? h('span.chip.amber', { title: AN.known(x.r).title }, AN.known(x.r).label) : null, LB ? LB.carriedChip(x.r) : null) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: `0–100: results (all-time PnL and ROI) 55%, risk 25%, copy friction 20%; Copyable from ${AN.COPY.copyableAt} with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time; click a row for the breakdown`, render: (x) => scorePill(x.sc, x.c) },
-              { key: 'edge', label: 'Copier keeps', num: true, sortVal: 1, title: `How much of the leader's average result per position a copier keeps after its own costs: the trading fees it pays beyond the leader's, slippage at the leader's median position size (at most $2K) and the price move in the minute after the leader's fills (their latest, up to 400), in and out. A price move in the copier's favour is not counted, so it is never more than 100%. Hover a cell for the figures, click a row for the breakdown`, render: (x) => keepCell(x.c) },
+              { key: 'edge', label: 'Copier keeps', num: true, sortVal: 1, title: `How much of the leader's average result per position a copier keeps after its own costs: the trading fees it pays beyond the leader's, slippage at the leader's median position size (at most $2K) and the price move in the minute after the leader's fills (their latest, up to 400), in and out. A price move in the copier's favour is not counted, so it is never more than 100%. Hover a cell for the figures, click a row for the breakdown`, render: (x) => keepCell(x.c, x.r) },
               // PnL and ROI as Meridian's app (the Leaderboard's, row basis 'app'); the site's net figures in a cell's tooltip
               { key: 'pnl', label: state.win === 'all' ? 'All-time PnL' : `PnL ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]}, as Meridian's Trade Stats: realized PnL, settled funding and trading fees, plus unrealized PnL; mPerp position fees are not in it. Hover a cell for the site's net figure`, render: (x) => (win(x) ? h('span', { title: AN.sitePnlTitle(x.r, state.win) }, U.pnlEl(win(x).pnl, { dp: 0 })) : h('span.dim', '—')) },
               { key: 'roi', label: state.win === 'all' ? 'ROI' : `ROI ${WINDOWS.find((w) => w.v === state.win).label}`, num: true, sortVal: 1, title: `PnL over the ${WIN_TXT[state.win]} (as Meridian's app) ÷ deposits`, render: (x) => (win(x) ? h('span', { title: AN.siteRowNote(x.r, state.win) }, UI.pct(win(x).roi, { dp: 1 })) : h('span.dim', '—')) },

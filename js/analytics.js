@@ -542,6 +542,8 @@
     '0x15982b91cfbcb0ef69d8d4c4c98c0003881917f7': { kind: 'exchange', label: 'Meridian liquidator account', title: 'Meridian\'s liquidator account: created with the markets at launch, days before any user account. It takes over liquidated traders\' positions (SOL, 25 Sep 2026), and the position fees charged on mPerps are credited to it. Its PnL is not trading.' },
     '0xff68fda91b0e785b4aee674d3b428c4ab6d8eaa7': { kind: 'exchange', label: 'Meridian fee collector', title: 'Meridian\'s fee collector: the exchange\'s trading fees are paid into it. It never trades, so its PnL is fees received, not trading.' },
     '0x2f46c3fce6bda596c2771bca618c4f69ae3e56b2': { kind: 'maker', label: 'Market maker', title: 'Quotes both sides of every market: the exchange\'s market maker, not a trader to copy.' },
+    // left out of Copy trading at the user's request (10-23), as the market maker is
+    '0x5eee1e16d60db74da4b1c57eae862edc45f2f77f': { kind: 'maker', label: 'Quoting bot', title: 'An automated quoter: it keeps orders 2–5% either side of the price on every market (3% on most) and moves them within about a second of the price moving. Not a trader to copy.' },
   };
   AN.known = (r) => (r && AN.KNOWN[String(r.account || '').toLowerCase()]) || null;
   /** The liquidator account's subaccount: its margin pools are what it can lose on the positions it takes over

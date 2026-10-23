@@ -1506,12 +1506,14 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   price that moved in the copier's favour after the leader's fills (a few bps on most leaders,
   mostly a resting order filled just before the price turned), counts as no cost, so it is
   never above 100% (until 2026-10-23 they counted as gains, and one leader making 1.7 bps a
-  position read 877%). None when the costs are more than the leader makes; nothing to keep
-  when the leader's positions do not make money. Under the share the cell says what it is a
-  share of, the leader's average per closed position (*none · of +0.02% a trade*): every
-  position counts once whatever its size, as for a copier copying each at the same size, and
-  open positions are not in it, so an account whose dollars came from one big or one open
-  position can keep none of a tiny average. The score (`AN.copyScore`, 0–100, computed on
+  position read 877%). Where nothing would be left it says why instead of a share (user
+  10-23: not "none"): *unrealized profit* when at least half the account's all-time PnL is in
+  its open positions (with that amount under it), *too fast to copy* when the minute's delay
+  costs more than fees and slippage, otherwise *edge too thin*; "—" when the leader's
+  positions do not make money at all. Under a share the cell says what it is a share of, the
+  leader's average per closed position (*99% · of +2.47% a trade*): every position counts once
+  whatever its size, as for a copier copying each at the same size, and open positions are
+  not in it. The score (`AN.copyScore`, 0–100, computed on
   the site so the formula can change without a rebuild) puts results first, as the large
   exchanges rank their lead traders: 55% results (all-time PnL on a log scale, $10,000 or more
   for full marks, and ROI on deposits, 50% or more), 25% risk (drawdown, liquidations,
@@ -1521,8 +1523,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   limits cap it, with the reason shown: not profitable → 30; no trade for 30 days, a drawdown
   of 60% or more or a quarter of positions liquidated → 50; under $500 made all-time → 59
   (listed, never Copyable); fewer than 3 closed positions means no score. Verdicts: Copyable
-  (60+), Copy with care (45+), Hard to copy, Losing so far. Meridian's own accounts and its
-  market maker are no traders to copy, so the list leaves them out (the Leaderboard keeps them,
+  (60+), Copy with care (45+), Hard to copy, Losing so far. Meridian's own accounts, its
+  market maker (0x2f46…56b2) and the quoting bot 0x5eee…f77f (orders 2–5% either side of the
+  price on every market, moved within a second; left out at the user's request 10-23) are no
+  traders to copy, so the list leaves them out (`AN.KNOWN`; the Leaderboard keeps them,
   labelled).
   Every row opens a breakdown with each part's value and reason, the score before caps (`raw`)
   and the caps that applied, the per-position waterfall from the leader's result to the

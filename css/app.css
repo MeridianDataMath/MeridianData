@@ -175,6 +175,7 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
 .dim { color: var(--text-3); }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
+.caution { color: var(--amber); }
 .amb { color: var(--amber); }
 .accent { color: var(--accent); }
 .small { font-size: 12px; }
