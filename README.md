@@ -252,7 +252,12 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     mPerp position fees. Line charts plot each archive bucket at its end and end on the live
     figures (the PnL line, the app's running total, at the PnL tile's end); the all-time bars
     are UTC days. Auto-refresh reloads the archive series whenever a balance moves
-    (a close, funding settlement, fee or transfer). An *Order history* table lists every order,
+    (a close, funding settlement, fee or transfer). The tables under it come in the order an
+    account is read: what it holds now (*Open positions*, their stops in the TP / SL column), how
+    its positions ended (*Positions history*), what it has waiting (*Orders & stops*); then each
+    fill and each order; then funding and position fees; then the money in and out, the groups
+    set apart by a thin divider and the two live tabs carrying their count. An account holding
+    nothing opens on its Positions history. An *Order history* table lists every order,
     newest first (`/v1/order` unfiltered): its status, Meridian's reason for one that ended
     unfilled (`rejectedReason`, found on canceled orders too: immediate-or-cancel remainders,
     reduce-only orders that would add, not enough balance…; `reasonTxt` words the unambiguous

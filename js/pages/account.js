@@ -372,7 +372,7 @@
       base = { balances, positions, orders, working, pending, acct, vol, prices };
       lastLoad = Date.now(); updLbl.textContent = 'updated just now';
       renderState();
-      if (refresh) { if (tt === 'positions' || tt === 'orders') renderTT(); } else renderTables();
+      if (refresh) { ttCounts(); if (tt === 'positions' || tt === 'orders') renderTT(); } else renderTables();
       drawChart();
       if (refresh && seriesStale) reloadSeries().catch((e) => { if (!isAbort(e)) console.warn('series reload', e); });
     }
@@ -415,7 +415,13 @@
     }
 
     // ---- tables ----
-    const TT = [['positions', 'Open positions'], ['orders', 'Orders & stops'], ['allorders', 'Order history'], ['fills', 'Fills history'], ['history', 'Positions history'], ['funding', 'Funding payments'], ['posfees', 'Position fees'], ['transfers', 'Deposits, withdrawals & conversions'], ['usde', 'Wallet USDe']];
+    // in the order an account is read (user 10-23: open positions first, then how positions ended): what it holds now
+    // (its stops are in the TP / SL column), how its positions ended, what it has waiting; then each fill and each
+    // order; then what holding cost; then the money in and out. null: a divider between those groups
+    const TT = [['positions', 'Open positions'], ['history', 'Positions history'], ['orders', 'Orders & stops'], null, ['fills', 'Fills history'], ['allorders', 'Order history'], null, ['funding', 'Funding payments'], ['posfees', 'Position fees'], null, ['transfers', 'Deposits, withdrawals & conversions'], ['usde', 'Wallet USDe']];
+    // the live tabs' counts, kept current by the refresh
+    const ttCount = { positions: () => (base ? base.acct.positions.length : 0), orders: () => (base ? base.orders.length : 0) };
+    const ttCounts = () => { for (const [k, f] of Object.entries(ttCount)) { const el = tablesCard.querySelector(`.tabs button[data-v="${k}"] .tab-n`); if (el) el.textContent = f() ? String(f()) : ''; } };
     // the account's linked signers by address, for the Order history's "Placed by" (read once, when that tab opens)
     let sigsP = null;
     const signerMap = () => (sigsP = sigsP || A.signers(sid, cx).then((list) => { const m = {}; for (const s of list) m[String(s.signer).toLowerCase()] = s; return m; }, () => ({})));
@@ -472,11 +478,13 @@
         }),
         list.length > 25 ? UI.pager({ page: pg, pageSize: 25, total: list.length, onPage: (p) => { chargePage[k] = p; renderCharges(k); } }) : null);
     }
-    let tt = 'positions';
+    let tt = null;   // set on the first render: an account holding nothing opens on how its positions ended
     const ttBody = h('div');
     function renderTables() {
-      const tabs = h('div.tabs', { style: { padding: '0 8px' } }, TT.map(([v, l]) => h('button', { class: v === tt ? 'on' : '', dataset: { v }, onclick: () => { tt = v; U.$$('button', tabs).forEach((b) => b.classList.toggle('on', b.dataset.v === v)); renderTT(); } }, l)));
+      if (tt == null) tt = base && !base.acct.positions.length ? 'history' : 'positions';
+      const tabs = h('div.tabs', { style: { padding: '0 8px' } }, TT.map((x) => (x ? h('button', { class: x[0] === tt ? 'on' : '', dataset: { v: x[0] }, onclick: () => { tt = x[0]; U.$$('button', tabs).forEach((b) => b.classList.toggle('on', b.dataset.v === x[0])); renderTT(); } }, x[1], ttCount[x[0]] ? h('span.tab-n') : null) : h('span.tab-sep', { 'aria-hidden': 'true' }))));
       U.replace(tablesCard, tabs, ttBody);
+      ttCounts();
       renderTT();
     }
     function renderTT() {

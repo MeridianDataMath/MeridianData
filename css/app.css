@@ -263,6 +263,11 @@ button.card-head.toggle-head { width: 100%; background: transparent; border: 0; 
 }
 .tabs button:hover { color: var(--text-1); }
 .tabs button.on { color: var(--text-1); border-bottom-color: var(--accent); }
+/* a live tab's count (the account's open positions, its orders) and a thin divider between groups of tabs */
+.tabs .tab-n { margin-left: 6px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.tabs .tab-n:empty { display: none; }
+.tabs button.on .tab-n { color: var(--accent); }
+.tabs .tab-sep { flex: none; width: 1px; margin: 10px 6px; background: var(--border-3); }
 
 .input {
   background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px;
