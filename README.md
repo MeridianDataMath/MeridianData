@@ -1507,7 +1507,11 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   mostly a resting order filled just before the price turned), counts as no cost, so it is
   never above 100% (until 2026-10-23 they counted as gains, and one leader making 1.7 bps a
   position read 877%). None when the costs are more than the leader makes; nothing to keep
-  when the leader's positions do not make money. The score (`AN.copyScore`, 0–100, computed on
+  when the leader's positions do not make money. Under the share the cell says what it is a
+  share of, the leader's average per closed position (*none · of +0.02% a trade*): every
+  position counts once whatever its size, as for a copier copying each at the same size, and
+  open positions are not in it, so an account whose dollars came from one big or one open
+  position can keep none of a tiny average. The score (`AN.copyScore`, 0–100, computed on
   the site so the formula can change without a rebuild) puts results first, as the large
   exchanges rank their lead traders: 55% results (all-time PnL on a log scale, $10,000 or more
   for full marks, and ROI on deposits, 50% or more), 25% risk (drawdown, liquidations,
