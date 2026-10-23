@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, stalestFirst, publishProblem, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, stalestFirst, publishProblem, completeTrades, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -310,4 +310,34 @@ test('the perps build goes stalest first, and never replaces the published list 
   assert.match(publishProblem({ rows: [row('a')], accounts: 350 }, [many], NOW), /350 accounts against 378 .*more than 5% fewer/);
   assert.equal(publishProblem({ rows: [row('a')], accounts: 360 }, [many], NOW), null, 'under 5% fewer');
   assert.equal(publishProblem({ rows: [row('a')], accounts: 350 }, [Object.assign({}, many, { builtAt: NOW - 7 * H })], NOW), null, 'after 6 hours of refusals the smaller list is taken');
+});
+
+test('trades: every one the API counts, once each, without a left-out wallet\'s; a short read throws', () => {
+  const t = (id, seller, buyer) => ({ id, seller, buyer });
+  const out = new Set([WL('x')]);
+  assert.deepEqual(completeTrades([t('1', WL(1), WL(2)), t('2', WL(2), WL(3)), t('2', WL(2), WL(3))], 2, out).map((x) => x.id), ['1', '2'], 'a trade read twice (pages shifting) counts once');
+  assert.throws(() => completeTrades([t('1', WL(1), WL(2))], 3, out), /read 1 of the 3 the API counts/);
+  assert.deepEqual(completeTrades([t('1', WL(1), WL(2)), t('2', WL('x'), WL(2)), t('3', WL(1), WL('X'))], 3, out).map((x) => x.id), ['1'], 'either side, any case');
+  assert.equal(completeTrades([t('1', WL(1), WL(2))], null, out).length, 1, 'no count given: what was read');
+});
+
+test('a competition whose standings could not be read keeps the last ones read, dated; with none, says so (never 0 entries)', () => {
+  const fresh = { slug: 'oct', title: 'October', entries: 0, standings: [], markets: { games: 3, groups: 0, questions: 0, eligible: null } };
+  const prev = { slug: 'oct', entries: 41, standings: [{ r: 1, a: WL(1) }], markets: { eligible: 120 } };
+  const c = carryStandings(fresh, prev, 1792790000000);
+  assert.equal(c.entries, 41); assert.equal(c.standings.length, 1); assert.equal(c.asOf, 1792790000000); assert.equal(c.markets.eligible, 120); assert.equal(c.markets.games, 3);
+  assert.equal(carryStandings(fresh, Object.assign({}, prev, { asOf: 1792700000000 }), 1792790000000).asOf, 1792700000000, 'carried again: its first read\'s time');
+  const none = carryStandings(fresh, null, null);
+  assert.equal(none.entries, null); assert.equal(none.standingsUnread, true); assert.deepEqual(none.standings, []);
+});
+
+test('cash read since the last build merges into what was kept: transfers once each, the latest days replaced', () => {
+  const D = 86400000, T = Date.UTC(2026, 9, 20);
+  const kept = [[T, -50, WL(2), '0xb'], [T - 3 * D, 100, WL(1), '0xa']];
+  assert.deepEqual(mergeTransfers([[T + D, 20, WL(3), '0xc'], [T, -50, WL(2), '0xb']], kept), [[T + D, 20, WL(3), '0xc'], [T, -50, WL(2), '0xb'], [T - 3 * D, 100, WL(1), '0xa']]);
+  assert.deepEqual(mergeBalances([[T, 60], [T + D, 0]], [[T - 2 * D, 100], [T - D, 100], [T, 50]]), [[T - 2 * D, 100], [T - D, 100], [T, 60], [T + D, 0]]);
+  // a read of the latest days only keeps its zeros (the wallet emptied): no trimming as for a whole history
+  const day = (d, v) => ({ timestamp: new Date(T + d * D).toISOString(), amount: wei(v) });
+  assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T, false).map((x) => x[1]), [0, 0]);
+  assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T), []);
 });

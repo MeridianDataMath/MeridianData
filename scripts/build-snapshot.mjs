@@ -61,6 +61,13 @@ const GAMMA = 'https://gamma-api.polymarket.com/markets';
 const CLOB_HISTORY = 'https://clob.polymarket.com/prices-history';
 const cacheFile = args.includes('--cache') ? path.resolve(args[args.indexOf('--cache') + 1]) : path.join(root, 'data', 'cache', 'polymarket-prices.json');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** The price cache, whole (an unreadable one reads as empty) */
+const readCache = () => { try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) { return {}; } };
+/** A file written whole beside its place and swapped in: a crash or a full disk mid-write leaves the last good file, never
+ *  half of one (a half-written price cache read as empty, and the next run asked Polymarket for every price again) */
+export const writeAtomic = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); const tmp = `${file}.tmp-${process.pid}`; fs.writeFileSync(tmp, text); fs.renameSync(tmp, file); };
+/** Fields of the price cache replaced, the others kept as they are on disk */
+const updateCache = (fields) => writeAtomic(cacheFile, JSON.stringify(Object.assign(readCache(), fields)));
 async function getJson(url, tries = 3) {
   for (let i = 0; ; i++) {
     try {
@@ -72,9 +79,9 @@ async function getJson(url, tries = 3) {
   }
 }
 async function attachPricesAtBet(norms) {
-  let cache = { v: 1, tokens: {}, preds: {} };
-  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const cache = Object.assign({ v: 1, tokens: {}, preds: {} }, readCache());
   cache.tokens = Object.assign(dict(), cache.tokens); cache.preds = Object.assign(dict(), cache.preds);
+  const save = () => updateCache({ v: cache.v || 1, tokens: cache.tokens, preds: cache.preds });
   const now = Date.now();
   // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried every 3 days until
   // priced, and at once if they were looked up before the windows were split (w: their history request spanned over 15
@@ -113,11 +120,12 @@ async function attachPricesAtBet(norms) {
     if (!tokFailed) for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, evv: 2, at: now });
   }
   for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
-  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); fs.writeFileSync(cacheFile, JSON.stringify(cache)); return; }
+  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); save(); return; }
   // 3. history requests per condition covering its new bets, then the last price at or before each bet
   const byCond = dict();
   for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
   const conds = Object.keys(byCond); let done = 0, lastLog = Date.now(), next = 0;
+  const failedPred = new Set();   // a history request that failed (not one Polymarket refused): its predictions are asked again next run
   const oneCondition = async (id) => {
     // the CLOB refuses a window longer than 15 days (HTTP 400 "interval is too long"), so one request per run of bets within
     // 13 days (with the 6 h before and 1 h after, under 15)
@@ -129,7 +137,7 @@ async function attachPricesAtBet(norms) {
       const fidelity = (to - from) / 86400 <= 3 ? 1 : 5;
       let hist = [];
       try { const j = await getJson(CLOB_HISTORY + '?market=' + encodeURIComponent(cache.tokens[id].yes) + '&startTs=' + from + '&endTs=' + to + '&fidelity=' + fidelity); if (!j) console.warn('  predict: history refused for', id.slice(0, 12), from, to); hist = (j && j.history) || []; }
-      catch (e) { console.warn('  predict: history failed for', id.slice(0, 12), e.message); }
+      catch (e) { console.warn('  predict: history failed for', id.slice(0, 12), e.message); for (const { n } of legs) failedPred.add(n.id); }
       for (const { n, i } of legs) {
         const t = n.t / 1000; let best = null;
         for (const h of hist) { if (h.t <= t) best = h; else break; }                         // last sample at or before the bet
@@ -142,11 +150,14 @@ async function attachPricesAtBet(norms) {
   };
   // a few requests in flight, ~8/s overall; the CLOB answered 5/s sequential bursts without complaint
   await Promise.all(Array.from({ length: 3 }, async () => { while (next < conds.length) { const id = conds[next++]; await oneCondition(id); await sleep(250); } }));
-  // 4. record, apply, save
-  for (const n of todo) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now, w: 1 };
-  for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p);
-  fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
-  fs.writeFileSync(cacheFile, JSON.stringify(cache));
+  // 4. record, apply, save. A leg without a price is kept as such (asked again after 3 days) only when Polymarket answered:
+  // a failed history request, or a market whose token lookup failed this run, leaves its predictions to the next run
+  const unasked = (n) => failedPred.has(n.id) || n.picks.some((k) => isCond(k.id) && !cache.tokens[k.id]);
+  const runOnly = new Map(todo.filter(unasked).map((n) => [n.id, n.picks.map((k) => (k.priceAtBet == null ? null : k.priceAtBet))]));   // this run's prices still count
+  for (const n of todo) if (!runOnly.has(n.id)) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now, w: 1 };
+  for (const n of norms) P.applyAtBet(n, runOnly.get(n.id) || (cache.preds[n.id] || {}).p);
+  if (runOnly.size) console.warn(`  predict: ${runOnly.size} predictions not cached (a Polymarket request failed): asked again next run`);
+  save();
   const got = norms.filter((n) => n.vig != null).length;
   console.log(`  predict: price-at-bet ready for ${got}/${norms.length} predictions (${conds.length} history requests)`);
 }
@@ -158,8 +169,7 @@ async function attachPricesAtBet(norms) {
 // Looked up once per question for the big wins' legs and kept in the price cache (resolved: id → {t, at}).
 const gammaTime = (s) => { const t = typeof s === 'string' ? Date.parse(s.replace(' ', 'T').replace(/\+00$/, 'Z')) : NaN; return Number.isFinite(t) ? t : null; };
 async function attachDecidedAt(norms) {
-  let cache = {};
-  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const cache = readCache();
   const resolved = Object.assign(dict(), cache.resolved);
   const now = Date.now();
   // Every decided prediction first, from Meridian's own leg settlement times (condition.settledAt): a win when its last
@@ -209,8 +219,7 @@ async function attachDecidedAt(norms) {
   let withVt = 0;
   try { for (const n of norms) if (n.decided) for (const k of n.picks) { const r = resolved[lc(k.id)]; k.verdictAt = r && r.t ? r.t : null; if (k.verdictAt) withVt++; } }
   catch (e) { console.warn('  predict: source resolution times not attached:', e.message); }
-  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.resolved = resolved; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
-  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ resolved })); }
+  updateCache({ resolved });
   console.log(`  predict: ${fromLegs} decided predictions dated from Meridian's leg settlement times; big wins without them dated ${dated} of ${wins.length} (${need.length} resolution times to look up, ${requests} requests this run, ${Object.keys(resolved).length} cached, ${withVt} decided legs with a source time)`);
 }
 
@@ -218,10 +227,19 @@ async function attachDecidedAt(norms) {
 // Every trade (the market is small), each tied to its pick configuration and side through the predictions' position
 // tokens (predictorToken / counterpartyToken, shared by every prediction on the same picks), with the value per token
 // once the picks are decided: 1 for the winning side, 0 for the losing one, the side's collateral share when void.
+/** The trades read, once each (by id), checked against the count the API gave with the first page: a list read only in
+ *  part would book the missing sales as never made, so it throws (no snapshot this run; the published one stays). A
+ *  left-out wallet's trades, either side (P.EXCLUDED), are dropped. */
+export function completeTrades(raw, total, excluded = P.EXCLUDED) {
+  const ids = new Set(), all = [];
+  for (const x of raw || []) { const k = x && x.id != null ? String(x.id) : JSON.stringify(x); if (ids.has(k)) continue; ids.add(k); all.push(x); }
+  if (total != null && all.length < total) throw new Error(`trades: read ${all.length} of the ${total} the API counts`);
+  return all.filter((x) => !excluded.has(String(x.seller || '').toLowerCase()) && !excluded.has(String(x.buyer || '').toLowerCase()));
+}
 async function buildTrades(norms) {
-  const raw = []; let after = null;
-  try { do { const pg = await P.trades({ first: 25, after }); raw.push(...pg.nodes); after = pg.pageInfo.hasNextPage ? pg.pageInfo.endCursor : null; } while (after); }
-  catch (e) { console.warn('predict: trades failed', e.message); }
+  const got = []; let after = null, total = null;
+  do { const pg = await P.trades({ first: 25, after }); if (total == null) total = pg.totalCount; got.push(...pg.nodes); after = pg.pageInfo.hasNextPage ? pg.pageInfo.endCursor : null; } while (after);
+  const raw = completeTrades(got, total);
   const byTok = dict();
   for (const n of norms) for (const [tok, side] of [[n.tokP, 'P'], [n.tokC, 'C']]) if (tok) (byTok[tok] || (byTok[tok] = { side, list: [] })).list.push(n);
   let unmapped = 0;
@@ -290,8 +308,7 @@ async function attachRedemptions(norms, trades) {
     if (n.tokC) { byTok[n.tokC] = n.pc + '|C'; tokOf[n.pc + '|C'] = n.tokC; }
     if (n.pc && n.tx && !(first[n.pc] && first[n.pc].t <= n.t)) first[n.pc] = { t: n.t, tx: n.tx };
   }
-  let cache = {};
-  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const cache = readCache();
   const state = cache.burnRead && cache.burnRead.t ? cache.burnRead : { t: {} };
   const head = parseInt((await rpcBatch([{ method: 'eth_blockNumber', params: [] }]))[0].result, 16);
   if (!(head > 0)) throw new Error('no chain head');
@@ -299,8 +316,7 @@ async function attachRedemptions(norms, trades) {
   const want = Array.from(B.redemptions(args0).open).map((token) => { const f = first[byTok[token].split('|')[0]]; return { token, tx: f ? f.tx : null }; });
   const r = await B.readBurns({ rpc: rpcBatch, state, want, head, cap: BURN_CAP, batch: 10, pause: 300, sleep, log: (s) => console.warn(s) });
   // 'burns' was the whole-wallet reader's progress, never advanced: replaced
-  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.burnRead = state; delete cur.burns; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
-  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ burnRead: state })); }
+  { const cur = readCache(); cur.burnRead = state; delete cur.burns; writeAtomic(cacheFile, JSON.stringify(cur)); }
   const { rd } = B.redemptions(args0);
   const found = Object.values(rd).reduce((a, x) => a + Object.keys(x).length, 0);
   const blind = Object.values(held).reduce((a, h) => a + Object.keys(h).filter((k) => !tokOf[k]).length, 0);
@@ -363,8 +379,7 @@ const claimQuery = (k) => `query Claimable(${Array.from({ length: k }, (_, i) =>
  *  its last answer and nothing new since); throws when a request fails, after keeping the answers already complete. */
 async function attachClaims(norms, trades) {
   const at = Date.now();
-  let cache = {};
-  try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const cache = readCache();
   const seen = Object.assign(dict(), cache.claimRead && cache.claimRead.w);
   const cand = claimCandidates(norms, trades);
   const ask = claimPlan(cand, seen, at);
@@ -383,8 +398,7 @@ async function attachClaims(norms, trades) {
       else seen[a] = { at, k: cand[a], n: of[a].length };   // complete: remembered
     });
   }
-  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.claimRead = { w: seen }; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
-  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ claimRead: { w: seen } })); }
+  updateCache({ claimRead: { w: seen } });
   if (failure) throw new Error(`${failure.message} (${requests} requests, ${ask.length} wallets to ask)`);
   for (const a of Object.keys(cand)) if (!of[a]) of[a] = [];
   const holders = Object.values(of).filter((l) => l.length).length, total = Object.values(of).reduce((s, l) => s + l.reduce((x, e) => x + e.bal, 0), 0);
@@ -461,15 +475,14 @@ export function escrowSum(reads, results) {
   return { per, drained, unread };
 }
 async function escrowOnChain(norms, want) {
-  let cache = {}; try { cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch (_) {}
+  const cache = readCache();
   const done = Object.assign(dict(), cache.oiDone && typeof cache.oiDone === 'object' ? cache.oiDone : null);
   const reads = escrowReads(norms, want, done), results = [];
   for (let i = 0; i < reads.length; i += 25) { if (i) await sleep(250); results.push(...await rpcBatch(reads.slice(i, i + 25).map((r) => ({ method: 'eth_call', params: [{ to: r.tok, data: '0x18160ddd' }, 'latest'] })))); }
   const s = escrowSum(reads, results);
   if (s.unread) throw new Error(`${s.unread} of ${reads.length} token supplies unread`);
   for (const pc of s.drained) done[pc] = 1;
-  try { const cur = JSON.parse(fs.readFileSync(cacheFile, 'utf8')); cur.oiDone = done; fs.writeFileSync(cacheFile, JSON.stringify(cur)); }
-  catch (_) { fs.mkdirSync(path.dirname(cacheFile), { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify({ oiDone: done })); }
+  updateCache({ oiDone: done });
   return s.per;
 }
 // The fee Meridian's Polygon reader asks to send a question's result over to Robinhood Chain (quoteResolution; anyone can
@@ -514,16 +527,24 @@ export function compactCompetition(c, standings, eligibleN, out = outWallet, leg
     standings: rows.slice(0, COMP_STANDINGS).map((x) => { const id = x.predictionId || null, l = id && legsOf ? legsOf.get(String(id).toLowerCase()) : null; return Object.assign({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id }, l ? { l } : null); }),
   };
 }
-async function readCompetitions(legsOf) {
+/** A competition whose standings could not be read: the last snapshot's standings of it, marked with when they were read
+ *  (`asOf`), else none and `standingsUnread` (never "0 entries", which it would have read as) */
+export function carryStandings(fresh, prev, prevAt) {
+  if (prev && Array.isArray(prev.standings)) return Object.assign({}, fresh, { entries: prev.entries, standings: prev.standings, markets: Object.assign({}, fresh.markets, { eligible: prev.markets ? prev.markets.eligible : null }), asOf: prev.asOf || prevAt || null });
+  return Object.assign({}, fresh, { entries: null, standings: [], standingsUnread: true });
+}
+async function readCompetitions(legsOf, prevList, prevAt, failed) {
   const d = await P.gql('{ competitions { slug title label startsAt endsAt payouts prizeUnit minStake minLegs rankBy disqualifyEarlySales eligibleMarketKinds { gameEventIds groupIds conditionIds } } }');
+  const prevOf = new Map((prevList || []).filter((c) => c && c.slug && c.legacy == null).map((c) => [c.slug, c]));
   const out = [];
   for (const c of (d && d.competitions) || []) {
-    let st = [], elig = null;
+    let st = null, elig = null;
     try {
       const s = await P.gql('query($s: String!) { competition(slug: $s) { eligibleConditionIds leaderboard { rank account multiplier predictionId payout stake } } }', { s: c.slug });
       st = (s.competition && s.competition.leaderboard) || []; elig = s.competition && Array.isArray(s.competition.eligibleConditionIds) ? s.competition.eligibleConditionIds.length : null;
-    } catch (e) { console.warn('  predict: the standings of competition', shown(c.slug), 'failed:', e.message); }
-    out.push(compactCompetition(c, st, elig, outWallet, legsOf));
+    } catch (e) { console.warn('  predict: the standings of competition', shown(c.slug), 'failed, the last ones read stand in:', e.message); if (failed) failed.push('standings'); }
+    const row = compactCompetition(c, st || [], elig, outWallet, legsOf);
+    out.push(st ? row : carryStandings(row, prevOf.get(c.slug), prevAt));
   }
   return out.sort((a, b) => (b.end || 0) - (a.end || 0));
 }
@@ -707,7 +728,7 @@ async function readTags() {
 // build reads the wallets never read (the most recently active first), then those active since their last read, then
 // those not read for a week, within a request budget; the rest wait for a later build.
 const cashFile = path.join(path.dirname(cacheFile), 'predict-cash.json');
-export const CASH_BUDGET = 240, CASH_PAGES = 8, CASH_STALE_MS = 7 * 86400000;
+export const CASH_BUDGET = 240, CASH_PAGES = 40, CASH_STALE_MS = 7 * 86400000;   // 40 pages: 1,000 transfers (8 cut them at 200 unsaid)
 /** The wallets a build reads, in order: `active` maps each wallet to its last activity (ms), `cache` holds what was read. */
 export function cashPlan(active, cache, now, max) {
   const never = [], since = [], stale = [];
@@ -727,17 +748,34 @@ export function cashTransfers(nodes, addr) {
 }
 /** Its balance day by day, oldest first: [ms, USDe], from `from` on (the history runs back as far as it is paged, at 0
  *  before the wallet had anything) and from the day before its first balance that is not 0. */
-export const cashBalances = (nodes, from = 0) => {
+export const cashBalances = (nodes, from = 0, trim = true) => {
   const list = (nodes || []).map((x) => [Date.parse(x.timestamp), round2(P.usd(x.amount))]).filter((x) => x[0] && x[0] >= from).sort((a, b) => a[0] - b[0]);
+  if (!trim) return list;   // a read of the latest days only, to merge into the kept ones (mergeBalances): its zeros are real
   const i = list.findIndex((x) => x[1] !== 0);
   return i < 0 ? [] : list.slice(Math.max(0, i - 1));
 };
+/** The transfers read since a wallet's last read merged into the kept ones: newest first, each once */
+export function mergeTransfers(fresh, kept) {
+  const seen = new Set(), out = [];
+  for (const x of (fresh || []).concat(kept || [])) { const k = x[0] + '|' + x[1] + '|' + (x[3] || ''); if (seen.has(k)) continue; seen.add(k); out.push(x); }
+  return out.sort((a, b) => b[0] - a[0]);
+}
+/** Its daily balances: the kept ones, each day the fresh read covers taken from it; oldest first */
+export function mergeBalances(fresh, kept) {
+  const m = new Map((kept || []).map((x) => [x[0], x[1]]));
+  for (const x of fresh || []) m.set(x[0], x[1]);
+  return Array.from(m.entries()).sort((a, b) => a[0] - b[0]);
+}
 /** Where a wallet's balance history needs reading back to: two days before its first activity or transfer, not before
  *  the exchange's start. */
 export const cashFrom = (first, xf) => { const t = Math.min(first || Infinity, ...(xf || []).map((x) => x[0])); return Number.isFinite(t) ? Math.max(P.EXCHANGE_START_SEC * 1000, t - 2 * 86400000) : P.EXCHANGE_START_SEC * 1000; };
-/** One wallet, at most `budget` requests; `first` its first prediction or trade (ms). cut: the budget ran out before its
- *  history did (then it is read again later). */
-async function readCashOf(addr, budget, first) {
+/**
+ * One wallet, at most `budget` requests; `first` its first prediction or trade (ms). With `kept`, an entry an earlier build
+ * read in full (v 2), only what is newer is read and merged in: the transfers back to a day before the newest kept one,
+ * the balances back to two days before the last kept day. cut: the budget ran out before what was needed (read again
+ * later). more: there were more than CASH_PAGES pages of transfers, so the oldest are not in the list (the page says so).
+ */
+async function readCashOf(addr, budget, first, kept) {
   let used = 0;
   const all = async (q, pick, stop) => {
     const nodes = []; let after = null, pages = 0;
@@ -746,12 +784,18 @@ async function readCashOf(addr, budget, first) {
       nodes.push(...got); pages++; after = c.pageInfo && c.pageInfo.hasNextPage ? c.pageInfo.endCursor : null;
       if (stop && got.length && stop(got[got.length - 1])) after = null;   // the page reached back far enough
     } while (after && pages < CASH_PAGES && used < budget);
-    return { nodes, cut: !!after && pages < CASH_PAGES };
+    return { nodes, cut: !!after && pages < CASH_PAGES, capped: !!after && pages >= CASH_PAGES };
   };
-  const xf = await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { collateralTransfers(first: $first, after: $after, filter: { account: $a, chainId: $c, excludeProtocol: true }, orderBy: { field: TIMESTAMP, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { from to timestamp transactionHash value } } }', (d) => d.collateralTransfers);
-  const transfers = cashTransfers(xf.nodes, addr), from = cashFrom(first, transfers);
-  const bh = xf.cut ? { nodes: [], cut: true } : await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { account(address: $a, chainId: $c) { collateralBalanceHistory(first: $first, after: $after, intervalSeconds: 86400) { pageInfo { hasNextPage endCursor } nodes { timestamp amount } } } }', (d) => d.account && d.account.collateralBalanceHistory, (x) => Date.parse(x.timestamp) < from);
-  return { used, cut: xf.cut || bh.cut, entry: { at: Date.now(), xf: transfers, bh: cashBalances(bh.nodes, from) } };
+  const inc = !!(kept && kept.v === 2 && Array.isArray(kept.xf) && Array.isArray(kept.bh));
+  const newest = inc && kept.xf.length ? kept.xf[0][0] : null;
+  const xf = await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { collateralTransfers(first: $first, after: $after, filter: { account: $a, chainId: $c, excludeProtocol: true }, orderBy: { field: TIMESTAMP, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { from to timestamp transactionHash value } } }', (d) => d.collateralTransfers, newest ? (x) => Date.parse(x.timestamp) < newest - 86400000 : null);
+  // more new transfers than CASH_PAGES pages since the last read leave a gap before the kept ones: this read stands alone
+  const merge = inc && !xf.capped;
+  const fresh = cashTransfers(xf.nodes, addr), transfers = merge ? mergeTransfers(fresh, kept.xf) : fresh, from = cashFrom(first, transfers);
+  const lastDay = merge && kept.bh.length ? kept.bh[kept.bh.length - 1][0] : null, since = lastDay ? Math.max(from, lastDay - 2 * 86400000) : from;
+  const bh = xf.cut ? { nodes: [], cut: true } : await all('query($a: Address!, $c: Int, $first: Int!, $after: String) { account(address: $a, chainId: $c) { collateralBalanceHistory(first: $first, after: $after, intervalSeconds: 86400) { pageInfo { hasNextPage endCursor } nodes { timestamp amount } } } }', (d) => d.account && d.account.collateralBalanceHistory, (x) => Date.parse(x.timestamp) < since);
+  const balances = lastDay ? mergeBalances(cashBalances(bh.nodes, since, false), kept.bh) : cashBalances(bh.nodes, from);
+  return { used, cut: xf.cut || bh.cut, entry: { v: 2, at: Date.now(), xf: transfers, bh: balances, more: xf.capped || (merge && kept.more) || undefined } };
 }
 async function readCash(active, first) {
   let cache = dict();
@@ -759,10 +803,10 @@ async function readCash(active, first) {
   let used = 0, read = 0;
   for (const a of cashPlan(active, cache, Date.now(), CASH_BUDGET)) {
     if (used >= CASH_BUDGET) break;
-    try { const r = await readCashOf(a, CASH_BUDGET - used, first[a]); used += r.used; if (!r.cut) { cache[a] = r.entry; read++; } }
+    try { const r = await readCashOf(a, CASH_BUDGET - used, first[a], cache[a]); used += r.used; if (!r.cut) { cache[a] = r.entry; read++; } }
     catch (e) { used++; console.warn('  predict: the cash of', a, 'failed:', e.message); }
   }
-  try { fs.mkdirSync(path.dirname(cashFile), { recursive: true }); fs.writeFileSync(cashFile, JSON.stringify({ v: 1, w: cache })); }
+  try { writeAtomic(cashFile, JSON.stringify({ v: 1, w: cache })); }
   catch (e) { console.warn('  predict: the cash cache was not saved:', e.message); }
   console.log(`  predict: cash of ${read} wallets read (${used} requests), ${Object.keys(cache).length} kept, ${cashPlan(active, cache, Date.now(), Infinity).length} left for later builds`);
   return cache;
@@ -773,6 +817,12 @@ async function buildPredict() {
   const t0 = Date.now();
   const toSec = Math.floor(Date.now() / 1000);
   P.minIntervalMs = 330;                       // ≈180 requests/min, under the API's 200/min per IP
+  P.strict = true;                             // a partial answer (errors beside data) fails rather than being published
+  // the parts this build left out or carried over, each logged where it failed: predict-status.json's health.failed
+  const failed = [];
+  const lost = (part, e, what) => { failed.push(part); console.warn('predict: ' + what + ':', e && e.message); };
+  // the last snapshot this machine published (the kit keeps a copy in the clone's data/): what a failed read carries over
+  const prevSnap = (() => { for (const p of [path.join(outDir, 'predict.json'), path.join(root, 'data', 'predict.json')]) { try { const j = JSON.parse(fs.readFileSync(p, 'utf8')); if (j && j.agg) return j; } catch (_) {} } return null; })();
   // sanity probe first so a blocked runner fails loudly with the real reason
   const probe = await P.predictionsCount();
   console.log(`  predict: API reachable, ${probe} predictions in total`);
@@ -789,33 +839,36 @@ async function buildPredict() {
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
   // has its file (the publish step checks that, and that the count stays close to the API's)
   // a left-out wallet's bets (P.EXCLUDED) are not in any file the site reads
+  // every prediction the API counts was read (left-out wallets' included: they leave below): the kit refuses a build
+  // that is not (predict-status.json health.complete), as after an indexer resync
+  const complete = !!limit || raw.length >= 0.98 * (probe - preLaunch);
   const all = (limit ? raw.slice(0, limit) : raw).map(P.norm).filter((n) => !P.excluded(n));
   const norms = all.filter((n) => [n.predictor, n.counterparty].filter(keepWallet).length === 2);   // both checked: both logged
   const dropped = all.length - norms.length;
   // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
   // (before attachDecidedAt, whose dates are never after the claim)
   console.log('  predict: ' + P.markTokenClaims(norms) + ' decided predictions paid by a claim on the same token');
-  try { await attachPricesAtBet(norms); } catch (e) { console.warn('predict: price-at-bet lookup failed, vig will be missing for new predictions:', e.message); }
-  try { await attachDecidedAt(norms); } catch (e) { console.warn('predict: settlement times failed, the page estimates them:', e.message); }
+  try { await attachPricesAtBet(norms); } catch (e) { lost('prices', e, 'price-at-bet lookup failed, vig will be missing for new predictions'); }
+  try { await attachDecidedAt(norms); } catch (e) { lost('settlement-times', e, 'settlement times failed, the page estimates them'); }
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
   // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
   const trades = await buildTrades(norms);
   // when each trading wallet redeemed the tokens it still held at a verdict (rd in its file; the tax center's claim dates)
   let rdOf = dict();
-  try { rdOf = await attachRedemptions(norms, trades); } catch (e) { console.warn('predict: own redemptions failed, the tax center keeps the latest claim for now:', e.message); }
+  try { rdOf = await attachRedemptions(norms, trades); } catch (e) { lost('redemptions', e, 'own redemptions failed, the tax center keeps the latest claim for now'); }
   // the app's Claimable Payout per wallet (claim in its file, agg.claimAt): with these balances P.aggregate counts a win
   // as unclaimed while its winner still holds the winning tokens; a failed read leaves all of it out (the settled flag)
   let claims = null;
   try { claims = await attachClaims(norms, trades); }
-  catch (e) { console.warn('predict: claimable positions failed, the files go out without them:', e.message); }
+  catch (e) { lost('claims', e, 'claimable positions failed, the files go out without them'); }
   let claimOnChain = false;
-  if (claims) { try { claimOnChain = await checkClaimsOnChain(norms, claims); } catch (e) { console.warn('predict: on-chain read of the claimable positions failed, the API\'s balances stand:', e.message); } }
+  if (claims) { try { claimOnChain = await checkClaimsOnChain(norms, claims); } catch (e) { lost('claims-onchain', e, 'on-chain read of the claimable positions failed, the API\'s balances stand'); } }
   const agg = P.aggregate(norms, { tapeSize: 25, trades, claims: claims ? claims.of : null });   // the Overview's tape shows 25
   if (claims) { agg.claimAt = claims.at; if (claimOnChain) agg.claimOnChain = true; }
   if (agg.secondary) console.log(`  predict: secondary market ${agg.secondary.trades} trades (${agg.secondary.mapped} mapped), ${agg.secondary.volume.toFixed(2)} USDe; to bettors ${agg.secondary.toBettors.toFixed(2)}, makers ${agg.secondary.toMakers.toFixed(2)}, others ${agg.secondary.toOthers.toFixed(2)}`);
   console.log(`  predict: vig coverage ${agg.vig.coverage.withAtBet}/${agg.vig.coverage.total} predictions have a source price at bet time`);
   let counts = null;
-  try { counts = await P.conditionCounts(); } catch (e) { console.warn('predict: condition counts failed', e.message); }
+  try { counts = await P.conditionCounts(); } catch (e) { lost('condition-counts', e, 'condition counts failed'); }
   // questions with Meridian open interest (the explorer's offline set) + the latest secondary-market trades
   const questions = []; let after = null; let pages = 0;
   try {
@@ -824,7 +877,7 @@ async function buildPredict() {
       const rows = pg.nodes.map(P.compactQuestion); questions.push(...rows); pages++;
       after = pg.pageInfo.hasNextPage && rows[rows.length - 1].oi > 0 ? pg.pageInfo.endCursor : null;
     } while (after && pages < 60);
-  } catch (e) { console.warn('predict: questions failed', e.message); }
+  } catch (e) { lost('questions', e, 'questions failed'); }
   const withOi = questions.filter((q) => q.oi > 0 && keepCond(q.id));
   // Meridian activity per question from the predictions themselves: n = predictions ever, b = open predictions (not yet
   // decided), s = bettor stake in those, u = decided but unclaimed, l = last prediction. The explorer shows only questions with bets.
@@ -870,7 +923,7 @@ async function buildPredict() {
       const pg = await P.conditions({ conditionIds: bare.slice(i, i + 25).map((q) => q.id), first: 25 });
       for (const c of pg.nodes || []) { const q = byQid.get(String(c.conditionId).toLowerCase()); if (!q) continue; const x = P.compactQuestion(c); Object.assign(q, { src: x.src, va: x.va, f1: x.f1, f4: x.f4, f24: x.f24, f7: x.f7, v24: x.v24, v7: x.v7, ev: x.ev, g: x.g, ep: x.ep != null ? x.ep : q.ep, pub: x.pub != null ? x.pub : q.pub, tags: x.tags.length ? x.tags : q.tags }); }
     }
-  } catch (e) { console.warn('predict: source links and volumes of the questions taken from predictions failed:', e.message); }
+  } catch (e) { lost('question-sources', e, 'source links and volumes of the questions taken from predictions failed'); }
   // Meridian OI as Meridian counts it, read on-chain (escrowOnChain); the API's figure is kept to compare. A failed read
   // falls back to the pools of the predictions not yet settled, which overstate it where a maker merged a bought-back bet
   const apiOi = new Map(questions.map((q) => [String(q.id).toLowerCase(), q.oi]));
@@ -882,7 +935,7 @@ async function buildPredict() {
     const listed = withOi.filter((q) => apiOi.get(String(q.id).toLowerCase()) > 0), same = listed.filter((q) => Math.abs(apiOi.get(String(q.id).toLowerCase()) - q.oi) < 0.02).length;
     console.log(`  predict: Meridian OI read on-chain for ${withOi.length} questions; equal to the API's openInterest on ${same} of the ${listed.length} it lists (bets placed between the reads differ)`);
   } catch (e) {
-    console.warn('predict: open interest on-chain failed, the pools of the predictions not yet settled stand in:', e.message);
+    lost('oi-onchain', e, 'open interest on-chain failed, the pools of the predictions not yet settled stand in');
     const escrow = dict();
     for (const n of qNorms) { if (n.settled) continue; for (const id of new Set(n.picks.map((k) => k.id))) escrow[id] = (escrow[id] || 0) + n.pool; }
     for (const q of withOi) q.oi = r2(escrow[q.id] || 0);
@@ -890,16 +943,16 @@ async function buildPredict() {
   // the fee for sending a question's result from Polygon (anyone can): the Questions page quotes it
   let relayFee = null;
   try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; }
-  catch (e) { console.warn('predict: relay fee quote failed:', e.message); }
+  catch (e) { lost('relay-fee', e, 'relay fee quote failed'); }
   // Meridian's own lists beside the predictions (readCompetitions and the rest); each failure leaves its part out
   let competitions = null, pnlRank = null, matches = null, hot = null, tags = null;
-  try { competitions = await readCompetitions(new Map(norms.map((n) => [String(n.id).toLowerCase(), n.legs]))); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { console.warn('predict: competitions failed:', e.message); }
+  try { competitions = await readCompetitions(new Map(norms.map((n) => [String(n.id).toLowerCase(), n.legs])), prevSnap && prevSnap.competitions, prevSnap && prevSnap.builtAt, failed); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { lost('competitions', e, 'competitions failed'); }
   // the monthly leaderboard of July to September, worked out from the predictions as Meridian's app does (legacyCompetitions)
-  try { const legacy = legacyCompetitions(norms, trades); competitions = (competitions || []).concat(legacy); console.log(`  predict: monthly leaderboard: ${legacy.map((c) => c.entries).join(' / ')} entries in its 4 cycles`); } catch (e) { console.warn('predict: monthly leaderboard failed:', e.message); }
-  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n30} over 30 days)`); } catch (e) { console.warn('predict: PnL ranks failed:', e.message); }
-  try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { console.warn('predict: matches failed:', e.message); }
-  try { hot = await readHot(); hotStakes(hot, (id) => (act[id] ? act[id].sw : 0), stakeByGroup(qNorms, new Map(withOi.map((q) => [q.id, q])))); } catch (e) { console.warn('predict: Hot lists failed:', e.message); }
-  try { tags = await readTags(); } catch (e) { console.warn('predict: tags failed:', e.message); }
+  try { const legacy = legacyCompetitions(norms, trades); competitions = (competitions || []).concat(legacy); console.log(`  predict: monthly leaderboard: ${legacy.map((c) => c.entries).join(' / ')} entries in its 4 cycles`); } catch (e) { lost('monthly-leaderboard', e, 'monthly leaderboard failed'); }
+  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n30} over 30 days)`); } catch (e) { lost('pnl-ranks', e, 'PnL ranks failed'); }
+  try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { lost('matches', e, 'matches failed'); }
+  try { hot = await readHot(); hotStakes(hot, (id) => (act[id] ? act[id].sw : 0), stakeByGroup(qNorms, new Map(withOi.map((q) => [q.id, q])))); } catch (e) { lost('hot', e, 'Hot lists failed'); }
+  try { tags = await readTags(); } catch (e) { lost('tags', e, 'tags failed'); }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   // x: 1 marks an open prediction whose bettor has sold all its tokens to market makers (its ledger holds none of them):
@@ -928,17 +981,17 @@ async function buildPredict() {
   for (const q of withOi) {
     const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t);
     // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do
-    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, builtAt: Date.now(), total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
+    fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, matches, hot, tags, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, matches, hot, tags, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries, health: { complete, failed: Array.from(new Set(failed)) } };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);
   fs.writeFileSync(path.join(outDir, 'predict-ideas.json'), JSON.stringify(Object.assign({ builtAt: out.builtAt, criteria: P.IDEAS }, ideas)));
   console.log(`  predict: ${ideas.bettors.length} winning bettors, ${ideas.ideas.length} open ideas`);
   // a few hundred bytes the site's status page can read without the 1 MB snapshot
-  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: P.splitMakers(agg.makers).makers.length, questions: withOi.length, questionsLive, recentFrom, vigCoverage: agg.vig.coverage.withAtBet, vigTotal: agg.vig.coverage.total, vigClean: agg.vig.coverage.clean, vigSameEvent: agg.vig.coverage.sameEvent, selfMatched: agg.totals.selfMatched || 0, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs }));
+  fs.writeFileSync(path.join(outDir, 'predict-status.json'), JSON.stringify({ builtAt: out.builtAt, source: out.source, predictions: norms.length, apiTotal: probe, preLaunch, bettors: agg.bettors.length, makers: P.splitMakers(agg.makers).makers.length, questions: withOi.length, questionsLive, recentFrom, vigCoverage: agg.vig.coverage.withAtBet, vigTotal: agg.vig.coverage.total, vigClean: agg.vig.coverage.clean, vigSameEvent: agg.vig.coverage.sameEvent, selfMatched: agg.totals.selfMatched || 0, trades: trades.length, tradesMapped: trades.filter((t) => t.pc).length, requests: P.stats.requests, retries: P.stats.retries, durationMs: out.durationMs, health: out.health }));
   // one file per wallet (bettor or maker) so a bettor page works without API access; makers keep their latest 600
   const byWallet = dict();
   for (const n of norms) for (const a of [n.predictor, n.counterparty]) if (keepWallet(a)) (byWallet[a] || (byWallet[a] = [])).push(n);
@@ -955,7 +1008,7 @@ async function buildPredict() {
       active[a] = ts.length ? Math.max(...ts) : 0; first[a] = ts.length ? Math.min(...ts) : null;
     }
     cash = await readCash(active, first);
-  } catch (e) { console.warn('predict: wallet cash failed, the files go out without it:', e.message); }
+  } catch (e) { lost('cash', e, 'wallet cash failed, the files go out without it'); }
   let files = 0;
   for (const [addr, list] of Object.entries(byWallet)) {
     list.sort((a, b) => b.t - a.t);
@@ -976,7 +1029,7 @@ async function buildPredict() {
     let rows;
     if (truncated) {
       try { const myPcs = new Set((tradesOf[addr] || []).map((t) => t.pc).filter(Boolean)); rows = P.taxRows(list, addr, (n) => !!(n.pcTraded && myPcs.has(n.pc))); }
-      catch (e) { rows = undefined; console.warn('  predict: tax rows failed for', addr, e.message); }
+      catch (e) { rows = undefined; if (!failed.includes('tax-rows')) failed.push('tax-rows'); console.warn('  predict: tax rows failed for', addr, e.message); }
     }
     // what it can claim now, as the app's Claim card counts it (attachClaims; [] for nothing, left out when the read failed)
     const claim = claims ? claims.of[addr] || [] : undefined;
@@ -984,8 +1037,8 @@ async function buildPredict() {
     // its prediction opened from the maker's page shows the bettor's side as it stood
     // its deposits and withdrawals (the newest 200) and daily cash as last read (cash.at), when read yet
     const cs = cash[addr];
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, builtAt: out.builtAt, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
-      cash: cs ? { at: cs.at, xf: cs.xf.slice(0, 200), xfN: cs.xf.length, bh: cs.bh } : undefined }));
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
+      cash: cs ? { at: cs.at, xf: cs.xf.slice(0, 200), xfN: cs.xf.length, xfMore: cs.more || undefined, bh: cs.bh } : undefined }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id
@@ -996,13 +1049,24 @@ async function buildPredict() {
   const sdir = path.join(outDir, 'slips'); fs.mkdirSync(sdir, { recursive: true });
   const shards = dict(); let slips = 0;
   for (const n of norms) { if (!isPid(n.id)) continue; const k = n.id.slice(2, 4).toLowerCase(); (shards[k] || (shards[k] = dict()))[n.id.toLowerCase()] = Object.assign(P.slim(n), agg.soldOf(n)); slips++; }
-  for (const [k, list] of Object.entries(shards)) fs.writeFileSync(path.join(sdir, k + '.json'), JSON.stringify({ builtAt: out.builtAt, slips: list }));
+  for (const [k, list] of Object.entries(shards)) fs.writeFileSync(path.join(sdir, k + '.json'), JSON.stringify({ slips: list }));
   console.log(`  predict: ${slips} slips in ${Object.keys(shards).length} files`);
   if (badWallets.size) console.warn(`  predict: skipped ${badWallets.size} wallet values that are not addresses (${dropped} predictions left out, the rest trade parties without a file), e.g. ${Array.from(badWallets).slice(0, 3).map(shown).join(', ')}`);
   if (badConds.size) console.warn(`  predict: skipped ${badConds.size} question ids that are not condition ids (no question file, not in the list), e.g. ${Array.from(badConds).slice(0, 3).map(shown).join(', ')}`);
   console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (doPredict) {
+  // one Predict build at a time on this machine: two would read and write the same caches. A lock file beside the price
+  // cache; one over an hour old is a crashed run's and is taken over
+  const lock = cacheFile + '.lock';
+  try { fs.mkdirSync(path.dirname(lock), { recursive: true }); fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); }
+  catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    const age = Date.now() - fs.statSync(lock).mtimeMs;
+    if (age < 3600000) { console.error(`predict: another build holds ${lock} (${Math.round(age / 60000)} min old); not building`); process.exit(1); }
+    fs.writeFileSync(lock, String(process.pid));
+  }
+  process.on('exit', () => { try { if (fs.readFileSync(lock, 'utf8') === String(process.pid)) fs.unlinkSync(lock); } catch (_) {} });
   try { await buildPredict(); }
   catch (e) {
     // No agg → the site falls back; the error is published so it can be read without Action logs.

@@ -906,7 +906,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     `minStake`, `rankBy`, `disqualifyEarlySales`), the matches, groups and questions it names,
     its standings (place, bettor, legs, stake, multiplier, payout, the prize; the first 25; the legs
     from the snapshot's predictions, the standings do not carry them) and a link to its page on the
-    app. An entry opens its prediction in the dialog the tape and the big wins open (from the
+    app. When a build cannot read a competition's standings it keeps the last ones read, with when
+    (`asOf`, shown in amber), or says the standings could not be read (`standingsUnread`), never
+    "0 entries". An entry opens its prediction in the dialog the tape and the big wins open (from the
     snapshot's slip files, `findPrediction`). With them, Meridian's monthly *Predict Leaderboard*
     of July to September, which the app works out from the predictions rather than the API and
     still shows (its competitions page lists the last cycle as *Monthly Competition*, its
@@ -1265,7 +1267,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     builder keeps these in `data/cache/predict-cash.json` and reads, within 240 requests a build
     (`CASH_BUDGET`), the wallets never read (the most recently active first), then those active
     since their last read, then those unread for a week (`cashPlan`); a wallet waits for a later
-    build until then. Offline, a wallet page's
+    build until then. A wallet read before is read only back to its newest kept transfer (less a
+    day) and its last kept day (less two), merged in (`mergeTransfers`, `mergeBalances`). Up to
+    40 pages of transfers (1,000) are read; beyond them the file says so (`xfMore`, "1,000+ in
+    all" on the page). Offline, a wallet page's
     *Cumulative PnL* chart is drawn from the verdicts too (`curveFromPredictions`). The old
     claim-based chart ended at +$508 for maker 0xdd9b…, whose PnL is +$1,500. When the file holds
     only the newest predictions (and older ones on traded positions), the chart and the *Daily
@@ -1365,7 +1370,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet, else the
     first one up to 6 h after; 1-minute samples for windows up to 3 days, 5-minute up to 15) and
     caches it per prediction in `data/cache/polymarket-prices.json`, so a run only looks up new
-    predictions. The CLOB refuses any window longer than 15 days (HTTP 400 "interval is too
+    predictions. A leg Polymarket has no price for is asked again after 3 days; a request that
+    failed is not cached at all and is asked again next run. The cache is written whole beside
+    itself and swapped in (`writeAtomic`), so a crash never leaves half a file, and a lock beside
+    it keeps a second build on the same machine from running at the same time. The CLOB refuses any window longer than 15 days (HTTP 400 "interval is too
     long"), so a question's bets are fetched in runs of at most 13 days. Until 2026-10-01 they
     went in one window per question, and 549 predictions on questions bet on over more than 15
     days stayed unpriced (the page called them "without Polymarket history", which was wrong);
@@ -1445,9 +1453,19 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
       is deployed.
     - So a format change only adds fields: the page code that is live must still read the new
       snapshot, and the new page code must read the old one.
-  - **Checked before the force-push:** the snapshot must parse, hold at least 98% of the
-    predictions the API counts, and not fall more than 5% below the published one. Otherwise it
-    logs "snapshot not published". `-Force` publishes a real drop once.
+  - **Checked before the push:** the snapshot must parse, the builder must have read every
+    prediction the API counts (`health.complete`), the count must not fall more than 5% below the
+    published one, and every wallet and question listed must have its file. Otherwise it logs
+    "snapshot not published". `-Force` publishes a real drop once.
+  - **What the builder will not publish:** a list of trades shorter than the API's count (a sale
+    missing books wrong PnL for everyone who traded), and any GraphQL answer that came back with
+    errors beside its data (`P.strict`: asked twice more, then the build fails). What it can do
+    without is left out or carried over and named in `health.failed` (the kit logs it): prices at
+    bet time, claimable positions, a competition's standings (the last ones read stand in),
+    wallet cash and the like.
+  - **No build time in the wallet, question and slip files:** the page takes the snapshot's
+    (`predict-status.json`, `P.snapshotAt`), so a file whose content did not change is the same
+    file at every build, and neither the push nor the deploy carries it again.
   - **Safe file names:** addresses and condition ids from the API become file names only when they
     are well-formed hex.
   - **Tax center fields** (additive; page code from before them ignores them, and the page reads

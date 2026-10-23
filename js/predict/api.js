@@ -49,6 +49,7 @@
   // The API allows 200 requests per minute per IP (RateLimit-Limit header). Bulk jobs set minIntervalMs to pace
   // themselves; every caller gets a retry with backoff on 429 / transient network errors.
   P.minIntervalMs = 0; P.stats = { requests: 0, retries: 0 };
+  P.strict = false;   // the snapshot builder sets it: a partial answer (errors beside data) fails instead of being taken
   let gate = Promise.resolve(), lastStart = 0;
   const pace = () => { if (!P.minIntervalMs) return Promise.resolve(); gate = gate.then(async () => { const wait = lastStart + P.minIntervalMs - Date.now(); if (wait > 0) await U.sleep(wait); lastStart = Date.now(); }); return gate; };
   /** POST a query. opts: {variables, ttl (ms cache), signal} */
@@ -74,11 +75,13 @@
         if (res.status >= 500 && attempt < 3) { P.stats.retries++; await U.sleep(2000 * (attempt + 1)); continue; }
         throw new GqlError((j && j.errors && j.errors[0] && j.errors[0].message) || ('HTTP ' + res.status), res.status);
       }
-      if (j && j.errors && j.errors.length && !j.data) {
+      // errors beside data (a partial answer): the pages take what came back; the snapshot builder (P.strict) publishes no
+      // half answer, so it asks twice more, as after a timeout, and then fails
+      if (j && j.errors && j.errors.length && (!j.data || P.strict)) {
         // the API stops a query after 8 s ("Query timeout: raw.$queryRaw exceeded 8000ms"), mostly a heavy list asked
         // cold: asked again it answered in under a second (2026-10-21, the Hot lists), so it gets two more tries
-        if (/^Query timeout/i.test(String(j.errors[0].message || '')) && attempt < 2 && opts.retry !== false) { P.stats.retries++; await U.sleep(3000 * (attempt + 1)); continue; }
-        throw new GqlError(j.errors[0].message, (j.errors[0].extensions || {}).code);
+        if ((j.data || /^Query timeout/i.test(String(j.errors[0].message || ''))) && attempt < 2 && opts.retry !== false) { P.stats.retries++; await U.sleep(3000 * (attempt + 1)); continue; }
+        throw new GqlError((j.data ? 'Partial answer: ' : '') + j.errors[0].message, (j.errors[0].extensions || {}).code);
       }
       if (opts.ttl) cache.set(key, { exp: Date.now() + opts.ttl, value: j.data });
       return j.data;
@@ -123,7 +126,17 @@
   P.SNAPSHOT_BASES = ['data/'];
   P.snapshotFile = async function (rel, { signal } = {}) {
     const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => { try { const r = await fetch(b + rel, { cache: 'no-cache', signal }); if (!r.ok) return null; return await r.json(); } catch (e) { if (e && e.name === 'AbortError') throw e; return null; } }));
-    return got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;
+    const best = got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;
+    // the wallet, question and slip files carry no build time of their own, so one whose content did not change is the
+    // same file at every build: theirs is the snapshot's
+    if (best && best.builtAt == null && /^(bettors|questions|slips)\//.test(rel)) best.builtAt = await P.snapshotAt();
+    return best;
+  };
+  /** The published snapshot's build time, from predict-status.json (a few hundred bytes, read at most once a minute) */
+  let statusAt = null;
+  P.snapshotAt = function () {
+    if (!statusAt || Date.now() - statusAt.at > 60000) statusAt = { at: Date.now(), p: P.snapshotFile('predict-status.json').then((s) => (s && s.builtAt) || null, () => null) };
+    return statusAt.p;
   };
 
   // ---------- predictions ----------

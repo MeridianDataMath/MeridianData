@@ -214,7 +214,9 @@
           { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
           { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
           { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => { const p = prizeOf(s.r); return p ? h('span.pos', p) : h('span.dim', '—'); } },
-        ], rows: c.standings || [], onRow: openStanding, empty: st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
+        ], rows: c.standings || [], onRow: openStanding, empty: c.standingsUnread ? 'The standings could not be read for this snapshot; a later one brings them' : st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
+        // standings the snapshot kept from an earlier read (its own read of them failed)
+        c.asOf ? h('div.xs', { style: { padding: '6px 14px 0', color: 'var(--amber)' } }, `Standings as read ${U.fmtAgo(c.asOf)}: the latest read failed`) : null,
         c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
     };
     const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
@@ -1959,7 +1961,8 @@
         { key: 'p', label: 'From / to', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x)) },
         { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction' }, U.icon('external')) : '') },
       ], rows: xf.slice(0, 25), empty: 'No deposits or withdrawals', phone: false });
-      const note = `${U.fmtNum(all, 0)} in all${all > xf.length ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (trades ? ` · ${usd(trades, { sign: true })} for position tokens traded` : '') + (xf.length > 25 ? ' · the newest 25 listed' : '');
+      // xfMore: the snapshot read the newest 1,000 of more (the oldest are not counted)
+      const note = `${U.fmtNum(all, 0)}${c.xfMore ? '+' : ''} in all${all > xf.length || c.xfMore ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (trades ? ` · ${usd(trades, { sign: true })} for position tokens traded` : '') + (xf.length > 25 ? ' · the newest 25 listed' : '');
       return {
         el: h('div.grid.cols-2',
           h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: 'The USDe the wallet held day by day (Meridian\'s balance history of the account), as the snapshot last read it' }, 'Cash in the wallet'), h('span.grow'), h('span.dim.xs', 'USDe · read ' + U.fmtAgo(c.at))),
