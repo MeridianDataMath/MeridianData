@@ -147,8 +147,10 @@
     const outside = (e) => { if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close(); };
     const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
     const links = U.$$('#rail a.nav').filter((a) => a.classList.contains('ph-more')).map((a) => h('a.more-link', { href: a.getAttribute('href'), class: a.classList.contains('active') ? 'active' : null, 'aria-current': a.classList.contains('active') ? 'page' : null, onclick: () => close() }, a.querySelector('svg').cloneNode(true), h('span', a.dataset.label || '')));
-    const menu = h('nav.more-menu', { 'aria-label': 'More pages' }, links,
-      h('a.more-link', { href: A.APP_URL, target: '_blank', rel: 'noopener', onclick: () => close() }, U.svg(U.icons.meridian), h('span', 'Trade on Meridian')));
+    // the rail's outside links, in its order (Trade on Meridian, Meridian on X, @LookonMeridian, Docs): a phone's bar hides them
+    const exts = U.$$('#rail a.nav.ext').map((a) => { const ic = a.querySelector('svg'), lbl = a.querySelector('.lbl');
+      return h('a.more-link', { href: a.getAttribute('href'), target: '_blank', rel: 'noopener', class: Array.from(a.classList).filter((c) => c.startsWith('ic-')).join(' ') || null, onclick: () => close() }, ic ? ic.cloneNode(true) : null, h('span', lbl ? lbl.textContent : a.textContent)); });
+    const menu = h('nav.more-menu', { 'aria-label': 'More pages' }, links, exts.length ? h('div.more-rule') : null, exts);
     document.body.appendChild(menu); btn.setAttribute('aria-expanded', 'true');
     document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
     const first = menu.querySelector('a'); if (first) first.focus();
