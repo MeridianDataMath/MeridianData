@@ -43,7 +43,6 @@
           cols: [
             // the name the user gave the wallet (the home page's favorites, or the pencil here), then its address
             { key: 'acct', label: 'Account', render: (r) => h('div.row', r.f.label ? h('b.fav-label', { title: 'Your name for this wallet' }, r.f.label) : null, U.addrLink(r.f.address, r.f.subaccountId), U.copyBtn(r.f.address)) },
-            { key: 'sub', label: 'Subaccount', render: (r) => h('span.dim', r.f.name || 'primary') },
             { key: 'equity', label: 'Equity', num: true, render: (r) => (r.error ? h('span.neg', 'error') : UI.usd(r.st.equity)) },
             // Meridian's Unrealized P&L (gross); the site's net figure, what equity counts, in the cell's tooltip
             { key: 'upnl', label: 'Unrealized PnL', num: true, title: 'As Meridian\'s app (Unrealized P&L): the open positions\' (oracle price − entry) × size, before funding and fees. Hover a cell for the site\'s net figure, the unsettled funding and mPerp position fees counted too (the amount that counts in equity)', render: (r) => (r.error ? '—' : h('span', { title: 'Site\'s net figure incl. unsettled funding and position fees: ' + U.fmtUsd(r.st.upnl, { sign: true }) }, U.pnlEl(r.st.grossUpnl))) },

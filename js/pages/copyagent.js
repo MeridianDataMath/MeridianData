@@ -187,8 +187,8 @@
       ntfyCheck();
       const fld = (label, el, hint) => h('div', { style: { marginBottom: '8px' } }, h('div.field-lbl', label), el, hint ? h('div.dim.xs', { style: { marginTop: '2px' } }, hint) : null);
       const leadersWrap = h('div');
-      const renderLeaders = () => U.replace(leadersWrap, h('div.row.wrap', { style: { gap: '6px' } }, c.leaders.map((l) => h('span.chip', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)), h('button', { style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' }, onclick: () => { c.leaders = c.leaders.filter((x) => x.sid !== l.sid); save(); renderLeaders(); renderJson(); } }, U.icon('x')))),
-        AL.state().leaders.filter((l) => !c.leaders.some((x) => x.sid === l.sid)).map((l) => h('button.btn.sm.ghost', { onclick: () => { c.leaders.push({ sid: l.sid, address: l.address, name: l.name || '' }); save(); renderLeaders(); renderJson(); } }, '+ ' + (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4))))),
+      const renderLeaders = () => U.replace(leadersWrap, h('div.row.wrap', { style: { gap: '6px' } }, c.leaders.map((l) => h('span.chip', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button', { style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' }, onclick: () => { c.leaders = c.leaders.filter((x) => x.sid !== l.sid); save(); renderLeaders(); renderJson(); } }, U.icon('x')))),
+        AL.state().leaders.filter((l) => !c.leaders.some((x) => x.sid === l.sid)).map((l) => h('button.btn.sm.ghost', { onclick: () => { c.leaders.push({ sid: l.sid, address: l.address, name: l.name || '' }); save(); renderLeaders(); renderJson(); } }, '+ ' + (U.shortAddr(l.address, 4))))),
         c.leaders.length ? null : h('div.dim.small', { style: { marginTop: '4px' } }, 'No leader yet: follow some with the bell on the Leaders page, they appear here to add.'));
       renderLeaders();
       const addrIn = h('input.input.sm', { placeholder: 'or a wallet address (0x…) to add', style: { width: '320px' }, spellcheck: false });
@@ -254,7 +254,7 @@
         if (!last) { U.replace(histWrap, h('div.empty', 'Appears once the agent is running: every position it opens, attributed to the leader whose order caused it, with your slippage against their fills and the delay behind them.')); return; }
         const H = history(last, MD._agentRef, ownPositions);
         if (!H) { U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
-        const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : 'no leader');
+        const who = (l) => (l ? (U.shortAddr(l.address, 4)) : 'no leader');
         const col = C.colors(); const palette = [col.accent, col.blue, col.amber, col.green, col.red];
         const usd2 = (v) => U.fmtUsd(v, { sign: true, dp: 2 });
         // Meridian's figures in the tiles; the site's net, with what it adds, in their tooltips
@@ -306,7 +306,7 @@
         const posRows = Object.entries(S.own || {}).map(([pid, o]) => ({ pid, ticker: ref && ref.byId[pid] ? ref.byId[pid].displayTicker : pid, o, leader: (S.leaders || []).find((l) => l.sid === (S.marketOwner || {})[pid]) }));
         const lpRows = [];
         for (const l of S.leaders || []) for (const [pid, q] of Object.entries((S.leaderPos || {})[l.sid] || {})) if (q) lpRows.push({ l, pid, ticker: ref && ref.byId[pid] ? ref.byId[pid].displayTicker : pid, q, mine: (S.own || {})[pid], owner: (S.marketOwner || {})[pid] === l.sid });
-        const who = (l) => (l ? (l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)) : '—');
+        const who = (l) => (l ? (U.shortAddr(l.address, 4)) : '—');
         // equity is Meridian's Trade Equity (balance + gross uPnL − funding and position fees charged and not yet settled);
         // an agent from before that sends no `unsettled`, and its equity is the gross one: said, not hidden
         const netEq = S.unsettled != null; const upnl = U.sum(Object.values(S.own || {}), (o) => U.num(o.upnl));

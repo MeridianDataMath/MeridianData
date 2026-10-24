@@ -254,7 +254,7 @@
     let m = null;
     const save = (v) => { const name = String(v || '').replace(/\s+/g, ' ').trim(); U.favorites.setLabel(sid, name); if (m) m.close(); U.toast(name ? 'Saved as ' + name : 'Name removed'); };
     const form = h('form.fav-name', { onsubmit: (e) => { e.preventDefault(); save(input.value); } },
-      h('div.small.dim.addr-full', f.address + (f.name && f.name !== 'primary' ? ' · ' + f.name : '')),
+      h('div.small.dim.addr-full', f.address),
       input,
       h('div.row.wrap', { style: { gap: '8px' } },
         h('button.btn.sm.primary', { type: 'submit' }, 'Save'),

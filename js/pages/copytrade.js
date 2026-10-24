@@ -21,7 +21,7 @@
     const render = () => {
       const ae = document.activeElement; if (ae && card.contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName) && ae.type !== 'checkbox') return;   // an alert arriving must not clobber a field being typed in
       const s = AL.state(); const has = 'Notification' in window; const perm = has ? Notification.permission : 'unsupported';
-      const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, l.name && l.name !== 'primary' ? l.name : U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
+      const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
       const ev = (k, label) => UI.checkbox(label, !!s.events[k], (v) => { s.events[k] = v; AL.save(); });
       const events = h('div.row.wrap', { style: { gap: '4px 14px' } }, ev('open', 'opens'), ev('add', 'adds'), ev('reduce', 'reduces'), ev('close', 'closes'), ev('reverse', 'reverses'), ev('liq', 'is liquidated'));
       const minIn = h('input.input.sm', { type: 'number', min: 0, step: 100, value: s.minNotional || '', placeholder: '0', style: { width: '100px' }, onchange: (e) => { s.minNotional = Math.max(0, U.num(e.target.value)); AL.save(); } });
@@ -40,7 +40,7 @@
       const hist = s.history.slice(0, 30);
       const feed = UI.table({ cols: [
         { key: 't', label: 'When', render: (a) => h('span.dim', U.fmtAgo(a.t)) },
-        { key: 'w', label: 'Leader', render: (a) => h('a.addr', { href: U.accountUrl(a.address, a.sid) }, a.name && a.name !== 'primary' ? a.name : U.shortAddr(a.address, 4)) },
+        { key: 'w', label: 'Leader', render: (a) => h('a.addr', { href: U.accountUrl(a.address, a.sid) }, U.shortAddr(a.address, 4)) },
         { key: 'k', label: 'Event', render: (a) => UI.chip(a.kind === 'liq' ? 'liquidated' : a.kind, a.kind === 'liq' ? 'red' : a.kind === 'open' || a.kind === 'add' ? 'green' : a.kind === 'reverse' ? 'amber' : '') },
         { key: 'm', label: 'Market', render: (a) => (a.ticker ? UI.marketCell(a.ticker) : h('span.dim', '—')) },
         { key: 's', label: 'Side', render: (a) => (a.side ? U.sideEl(a.side === 'LONG', true) : h('span.dim', '—')) },

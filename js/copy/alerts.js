@@ -116,7 +116,7 @@
 
   const VERB = { open: 'opened', add: 'added to', reduce: 'reduced', close: 'closed', reverse: 'reversed into', liq: 'was liquidated on' };
   AL.describe = (a) => {
-    const who = a.name && a.name !== 'primary' ? a.name : U.shortAddr(a.address || '', 4);
+    const who = U.shortAddr(a.address || '', 4);   // the wallet, never its subaccount's name (names are whatever a script typed)
     const size = a.notional ? U.fmtUsd(a.notional, { compact: true, dp: 0 }) : '';
     if (a.kind === 'liq') return `${who} was liquidated${a.ticker ? ' on ' + a.ticker : ''}${size ? ' · ' + size : ''}`;
     return `${who} ${VERB[a.kind]} a ${a.side} on ${a.ticker}${size ? ' · ' + size : ''}${a.px ? ' @ ' + U.fmtPrice(a.px, a.tick) : ''}`;
