@@ -168,9 +168,15 @@ test('funding charges bounded by an end: the windows stop there and nothing afte
     const end = Math.floor(Date.now() / H) * H - 20 * DAY + 30 * 60000, start = end - 5 * DAY;
     const prog = [];
     const rows = await A.fundingCharges('sid', start, { end, onProgress: (d, n) => prog.push([d, n]) });
-    assert.ok(calls.every((c) => c.endTime != null && c.endTime <= end + H), 'every window ends by the hour after the end');
+    const W = 3 * DAY - H;
+    assert.ok(calls.every((c) => c.endTime != null && c.endTime < end + W && c.endTime % W === 0), 'every window ends on the windows\' grid, the last one within a window of the end');
     assert.ok(rows.every((r) => r.time < end) && rows.length >= 5 * 24, 'charges before the end only');
     assert.equal(prog[prog.length - 1][0], calls.length, 'progress counts the windows');
+    // a read with a later end (the USDe lots' lifetime) asks the same windows where the two overlap: the cache answers them once
+    const first = new Set(calls.map((c) => c.startTime + ':' + c.endTime)); calls.length = 0;
+    await A.fundingCharges('sid', start, { end: end + 9 * DAY });
+    const second = new Set(calls.map((c) => c.startTime + ':' + c.endTime));
+    assert.ok([...first].every((k) => second.has(k)), 'the overlapping windows are the same requests');
   } finally { A.page = page; }
 });
 

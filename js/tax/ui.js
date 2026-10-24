@@ -21,7 +21,7 @@
   /** Saves a built export (MD.tax.exports.build): a report with its methodology rows first, a tool file as it is. */
   TUI.save = (file, meth) => {
     const EX = T.exports, tool = file.kind === 'tool';
-    TUI.download(EX.fileName(file), EX.render(file, tool ? null : meth), { warn: file.warnings, bom: !tool });
+    TUI.download(EX.fileName(file), EX.render(file, tool ? null : meth, T.csvSep()), { warn: file.warnings, bom: !tool });
   };
   /** A click handler that shows a spinner on the button while fn runs, and a toast if it fails. */
   TUI.busyFn = (btn, fn) => async () => { btn.disabled = true; const old = Array.from(btn.childNodes); U.replace(btn, h('span.spinner'), ' Preparing…'); try { await fn(); } catch (e) { if (!T.isAbort(e)) U.toast('Export failed: ' + e.message, TUI.WARN_MS); } btn.disabled = false; U.replace(btn, old); };
@@ -35,7 +35,7 @@
   TUI.progress = (el, onCancel) => {
     const txt = h('span', 'Loading…');
     const btn = onCancel ? h('button.btn.sm.ghost', { style: { marginLeft: '10px' }, onclick: () => { btn.disabled = true; onCancel(); } }, 'Cancel') : null;
-    U.replace(el, h('div.empty', h('span.loading', h('span.spinner'), txt), btn));
+    U.replace(el, h('div.empty', { role: 'status', 'aria-live': 'polite' }, h('span.loading', h('span.spinner'), txt), btn));   // read out as it counts
     return { set(label, done, total) { txt.textContent = label + (total ? ` ${done} / ${total}` : ''); } };
   };
   /** Text with a break opportunity after each '/' and '_', for a zone name in a narrow column heading ('Time

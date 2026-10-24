@@ -131,7 +131,7 @@
     if (!current && ctx.upnlEnd) ctx.upnlEnd.then((v) => { upnlEnd = v; renderTiles(); }, () => { upnlEnd = null; renderTiles(); });
 
     // ---- the detail's progress, and what the checks found ----
-    const evLine = h('div', { style: { marginTop: '10px' } });
+    const evLine = h('div', { role: 'status', 'aria-live': 'polite', style: { marginTop: '10px' } });   // its progress, result or failure is read out
     const checksEl = h('div');
     const renderChecks = () => {
       if (!D) { U.replace(checksEl); return; }
@@ -192,19 +192,19 @@
         { key: 'l', label: 'Losses', num: true, title: 'the sum of the negative results', render: (x) => amt(x.C.losses, x.losses) },
         { key: 'net', label: 'Net', num: true, render: (x) => amt(x.C.net, x.net) },
       ];
-      const tables = S.READINGS.map((r) => h('div', { style: { marginBottom: '12px' } }, h('div.small.dim', { style: { margin: '0 0 6px' } }, S.READING_LABEL[r]), h('div.card.tight', tableRoles(UI.table({ cols: cols('Class'), rows: S.byClass(D.inP, r, money), empty: 'No disposals in this period' })))));
+      const tables = S.READINGS.map((r) => h('div', { style: { marginBottom: '12px' } }, h('div.small.dim', { style: { margin: '0 0 6px' } }, S.READING_LABEL[r]), h('div.card.tight', tableRoles(UI.table({ phone: false, cols: cols('Class'), rows: S.byClass(D.inP, r, money), empty: 'No disposals in this period' })))));
       // the other sections: Predict under the card's basis, the USDe lots under both deposit readings
       const ex = ctx.classExtras ? ctx.classExtras() : {}, other = [];
       if (ex.predict && ex.predict.prep) { const x = S.predict(ex.predict.prep, ex.predict.mode, period, money); other.push(Object.assign(x, { label: 'Meridian Predict · results dated ' + T.predict.MODE_FILE[x.mode] })); }
       if (ex.lots && ex.lots.runs) for (const u of S.usde(ex.lots.runs, period)) other.push({ cls: 'USDe', label: 'USDe lots · ' + T.lots.READING_LABEL[u.reading].toLowerCase(), n: u.n, nG: null, nL: null, proceeds: u.proceedsUsd, costs: u.costUsd, gains: u.gainsUsd, losses: u.lossesUsd, net: u.netUsd, C: { proceeds: u.proceedsC, costs: u.costC, gains: u.gainsC, losses: u.lossesC, net: u.netC } });
       const otherCols = cols('Section'); otherCols[0] = { key: 'c', label: 'Section', render: (x) => h('div', x.label, folded(x)) };
       U.replace(classWrap, ...tables,
-        other.length ? h('div', h('div.small.dim', { style: { margin: '0 0 6px' } }, 'Other sections, each on its own: not summed with perps or with each other'), h('div.card.tight', tableRoles(UI.table({ cols: otherCols, rows: other })))) : null,
+        other.length ? h('div', h('div.small.dim', { style: { margin: '0 0 6px' } }, 'Other sections, each on its own: not summed with perps or with each other'), h('div.card.tight', tableRoles(UI.table({ phone: false, cols: otherCols, rows: other })))) : null,
         h('div.dim.small', { style: { marginTop: '8px' } }, 'Each perps disposal (a reduction, partial close, liquidation or auto-deleverage) is counted once, on its own date, after its own trading fees. Proceeds and costs are its cash flows, not notional: credits are a positive result (and, inside, funding received), debits a negative result and its fees (and, inside, funding paid and position fees). Gains add up the positive results, losses the negative ones. Both readings of funding and position fees are shown and neither is marked as the one that applies. Meridian Predict: proceeds are what each result paid (a loss pays nothing), costs its stake, collateral or average cost. Classes by the market\'s base token; which box or line a class goes in is not said here.'));
     };
 
     // ---- monthly / quarterly ----
-    const mCanvas = h('canvas');
+    const mCanvas = h('canvas', { role: 'img', 'aria-label': 'Net result per month of the period (the table below has the figures)' });
     const monthlyWrap = h('div'), quarterWrap = h('div.wrap-cells');
     // the monthly and quarterly tables, drawn again when the trade detail recasts their report-currency figures
     const renderPeriods = () => {
@@ -333,7 +333,9 @@
     const renderTx = () => {
       if (!events) { U.replace(txWrap, UI.empty(evErr ? 'The trade detail did not load.' : waitText())); U.replace(txCheck); txCount.textContent = ''; return; }
       const rows = txType === 'all' ? events : events.filter((e) => e.type === txType || (txType === 'funding' && e.type === 'posfee'));
-      const slice = printAll ? rows : rows.slice((txPage - 1) * PAGE, txPage * PAGE);
+      // print: every row up to PRINT_MAX (a busy year has tens of thousands: a long freeze and a print of a thousand
+      // pages), then a note pointing to the export, which has them all
+      const slice = printAll ? rows.slice(0, PRINT_MAX) : rows.slice((txPage - 1) * PAGE, txPage * PAGE);
       // the filter is named in the count: print hides the filter itself, and the heading still says every transaction
       txCount.textContent = (txType === 'all' ? '' : TX_TYPES.find((x) => x.v === txType).label + ': ') + `${U.fmtNum(rows.length, 0)} of ${U.fmtNum(events.length, 0)} events`;
       const dust = (v) => (Math.abs(v) < 0.005 ? 0 : v);   // no "-$0.00"
@@ -348,7 +350,8 @@
         { key: 'f', label: 'Fee', num: true, title: 'the fee part of the cash effect', render: (e) => (e.fee ? fmtC(money.fx(e.fee, e.t)) : h('span.dim', '—')) },
         { key: 'n', label: 'Notional', num: true, render: (e) => (e.notional ? fmtC(money.fx(e.notional, e.t)) : h('span.dim', '—')) },
         { key: 'd', label: '', render: (e) => h('span.dim.small', e.detail, e.tx ? [' · ', h('a', { href: U.explorerTx(e.tx), target: '_blank', rel: 'noopener' }, 'tx')] : null) },
-      ], rows: slice, empty: 'No events of this type in the period', phone: { title: 'w', aside: 'a' } }), !printAll && rows.length > PAGE ? UI.pager({ page: txPage, pageSize: PAGE, total: rows.length, onPage: (p) => { txPage = p; renderTx(); } }) : null);
+      ], rows: slice, empty: 'No events of this type in the period', phone: { title: 'w', aside: 'a' } }), !printAll && rows.length > PAGE ? UI.pager({ page: txPage, pageSize: PAGE, total: rows.length, onPage: (p) => { txPage = p; renderTx(); } }) : null,
+        printAll && rows.length > PRINT_MAX ? h('div.small.dim', { style: { padding: '8px 14px' } }, `The first ${U.fmtNum(PRINT_MAX, 0)} of ${U.fmtNum(rows.length, 0)} events are printed; the All transactions file has every one.`) : null);
     };
     const txHead = h('div.row.wrap', { style: { gap: '8px', padding: '10px 14px 0' } }, UI.seg(TX_TYPES, txType, (v) => { txType = v; txPage = 1; renderTx(); }, 'sm'), h('span.grow'), txCount);
     // left out of print until the detail is in: a printed report holds the rows or not the card
@@ -374,7 +377,10 @@
       const prog = TUI.progress(evLine, stop);
       const say = (s) => prog.set('Loading trade detail: ' + [s.fillPages ? `fills ${plural(s.fillPages, 'page')}` + (s.fillRows ? ` (${U.fmtNum(s.fillRows, 0)})` : '') : 'fills…', s.posTotal ? `positions ${s.posDone}/${s.posTotal}` : null, s.fundTotal ? `funding ${s.fundDone}/${s.fundTotal}` : null].filter(Boolean).join(' · '));
       say({ fillPages: 0 });
-      evPromise = T.load.events(sid, { start, end, ref, dayRows: ctx.arch.balance, signal: ac.signal, progress: say }).then((x) => {
+      // a fiscal year still running is kept under its own end (the next year's start), not under now, so a later report of
+      // it (a currency change, a remount) reads only what happened since (T.load.events' extension) instead of all of it
+      const keyEnd = mode === 'year' && period.ongoing ? T.periods.fyStart(period.preset, period.year + 1, tz) : null;
+      evPromise = T.load.events(sid, { start, end, keyEnd, ref, dayRows: ctx.arch.balance, signal: ac.signal, progress: say }).then((x) => {
         ev = x; D = F.disposals(ev, { ledger: led, period, ref, tz, fx: money.fx });
         // every report-currency total from the same events, each at its own local date (the ledger's whole-day
         // conversion stays only where the detail does not add up): the tiles, months, quarters, summary and holdings

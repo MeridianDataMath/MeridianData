@@ -528,3 +528,30 @@ test('the daily ledger in another currency: each UTC day\'s net at its middle\'s
   assert.ok(f.rows.some((b) => Math.abs(Number(col('Net EUR')(b)) - Number(col(evC)(b))) > 1e-4), 'in Sydney a UTC day can hold two local dates');
   assert.match(EX.text(EX.get('perps-daily').sub, c), /the net in EUR at the rate of the local date holding the day's middle \(with that rate and its date\) and as the totals have it/);
 });
+
+test('a day netted per day, or whose position fees match no fill, marks the per-fill files incomplete (and not twice in the tool files)', () => {
+  const D = { failed: [], day: { bad: [] }, unassigned: [], funding: { fig: { fallback: [{}, {}] } }, fees: { bad: [{}] } };
+  const w = EX.eventWarnings({ ev: { truncated: {} }, D });
+  assert.equal(w.length, 2); assert.match(w[0], /^2 UTC day\(s\) whose funding settlements do not add up/); assert.match(w[1], /^1 UTC day\(s\) whose mPerp position fees match no fill/);
+  assert.deepEqual(EX.eventWarnings({ ev: { truncated: {} }, D }, { netted: false }), [], 'a tool file lists those days itself');
+  assert.deepEqual(EX.eventWarnings({ ev: { truncated: { charges: true }, failed: [] } }), ['could not read the funding charges']);
+  assert.deepEqual(EX.eventWarnings({ ev: { truncated: { charges: true }, failed: ['funding charges (HTTP 503)'] } }), ['could not read funding charges (HTTP 503)'], 'said once');
+});
+
+test('All transactions counts completed transfers only, as the ledger and the tool files do', () => {
+  const c = perpsCtx('perps-0x2f46-to-2026-10-01.json', '2026-09-01', '2026-09-30', { transfers: true, money: USD });
+  const before = EX.transactions(c), sum0 = before.reduce((a, e) => a + e.amount, 0);
+  const t0 = c.ev.transfers[0];
+  assert.ok(t0, 'the fixture has transfers');
+  c.ev.transfers = c.ev.transfers.concat([Object.assign({}, t0, { id: 'rejected-1', status: 'REJECTED', amount: '100', fee: '1' }), Object.assign({}, t0, { id: 'pending-1', status: 'PENDING', amount: '50', fee: '0' })]);
+  const after = EX.transactions(c);
+  assert.equal(after.length, before.length); near(assert, after.reduce((a, e) => a + e.amount, 0), sum0, 1e-9);
+});
+
+test('report CSVs in the semicolon style take decimal commas; a tool file keeps commas', () => {
+  assert.equal(T.cell(1.5, ';'), '1,5'); assert.equal(T.cell('-60.84', ';'), '-60,84'); assert.equal(T.cell('a;b', ';'), '"a;b"'); assert.equal(T.cell('a,b', ';'), 'a,b');
+  assert.equal(T.cell(1.5), '1.5'); assert.equal(T.cell('a,b'), '"a,b"');
+  const file = { kind: 'report', columns: [['Day', (r) => r.d], ['Net', (r) => r.v]], rows: [{ d: '2026-09-01', v: '12.5' }] };
+  assert.equal(EX.render(file, [['Report', 'x']], ';'), 'Report;x\r\n\r\nDay;Net\r\n2026-09-01;12,5');
+  assert.equal(EX.render(Object.assign({}, file, { kind: 'tool' }), null, ';'), 'Day,Net\r\n2026-09-01,12.5');
+});

@@ -57,9 +57,14 @@
       // Predict activity can predate the perps subaccount: the year list starts at Meridian Predict's launch at the latest
       const period = PER.resolve(route.params, { firstT: sa ? (U.num(sa.createdAt) || now) : now, now, browserZone: TZ.browser() });
       const { mode, preset: fy, year, years, tz, start, end, label } = period;
-      // the zone a report defaults to is written into the link, so a shared link reports the same instants
-      if (route.params.tz !== tz && !ctx.signal.aborted) MD.router.setParams({ tz }, { silent: true });
-      const ccy = TX.CCY.includes(route.params.ccy) ? route.params.ccy : (U.storage.get('md.tax.ccy', 'USD') || 'USD');
+      const ccy0 = TX.CCY.includes(route.params.ccy) ? route.params.ccy : (U.storage.get('md.tax.ccy', 'USD') || 'USD');
+      const ccy = TX.CCY.includes(ccy0) ? ccy0 : 'USD';
+      // what a report defaults to is written into the link (and so into every file's "Report link" row), so a shared link
+      // reports the same thing: the zone (the same instants), the currency (USD too: the receiver's remembered one must
+      // not take its place), the fiscal year (a 2026 report's link must not open 2027 next January) and the subaccount
+      const fixed = { tz, ccy, year: mode === 'year' ? String(year) : null, sub: sid };
+      const patch = {}; for (const [k, v] of Object.entries(fixed)) if (v != null && route.params[k] !== v) patch[k] = v;
+      if (Object.keys(patch).length && !ctx.signal.aborted) MD.router.setParams(patch, { silent: true });
       // PLN and CAD have their own central bank's rates by default; src=ecb (the Rate source select) picks the ECB's
       const srcChoices = FX.choices(ccy), src = srcChoices && route.params.src === 'ecb' ? 'ecb' : null;
       // every control is named by the same text it shows
@@ -78,12 +83,17 @@
         if (f && t && f <= t) MD.router.setParams({ from: f, to: t, year: null });
         else U.toast(!f || !t ? 'Choose both a start and an end date' : 'The start date must be on or before the end date');
       };
-      const ccySel = UI.pick({ options: TX.ccyChoices(), value: ccy, label: CCY_LBL, title: 'Reporting currency, at official daily rates: ' + FX.MAP_TEXT, placeholder: 'Currency or country…', onChange: (v) => { U.storage.set('md.tax.ccy', v); MD.router.setParams({ ccy: v === 'USD' ? null : v, src: null }); } });
+      const ccySel = UI.pick({ options: TX.ccyChoices(), value: ccy, label: CCY_LBL, title: 'Reporting currency, at official daily rates: ' + FX.MAP_TEXT, placeholder: 'Currency or country…', onChange: (v) => { U.storage.set('md.tax.ccy', v); MD.router.setParams({ ccy: v, src: null }); } });
       const srcSel = srcChoices ? h('select.input.sm', { style: { width: 'auto' }, 'aria-label': SRC_LBL, title: SRC_LBL + ' for ' + ccy + ': ' + srcChoices.map((x) => x.label + ' (' + FX.SOURCES[x.v].ruleLong + ')').join(' or '), onchange: (e) => MD.router.setParams({ src: e.target.value === 'ecb' ? 'ecb' : null }) }, srcChoices.map((x) => h('option', { value: x.v, selected: x.v === FX.sourceFor(ccy, src) }, x.label))) : null;
+      // the report files' CSV style (TX.csvSep): commas, or semicolons with decimal commas for an Excel set to a
+      // semicolon list separator (Germany, Poland, France…); the tax-tool files keep commas
+      const CSV_LBL = 'CSV style of the report files: commas and decimal points, or semicolons and decimal commas for Excel where the list separator is a semicolon (Germany, Poland, France…). The tax-tool files keep commas.';
+      const csvSel = h('select.input.sm', { style: { width: 'auto' }, 'aria-label': 'CSV style', title: CSV_LBL, onchange: (e) => { U.storage.set(TX.CSV_KEY, e.target.value); U.toast(e.target.value === ';' ? 'Report files: semicolons, decimal commas' : 'Report files: commas, decimal points'); } },
+        h('option', { value: ',', selected: TX.csvSep() === ',' }, 'CSV  ,  1.5'), h('option', { value: ';', selected: TX.csvSep() === ';' }, 'CSV  ;  1,5'));
       const controls = h('div.card.no-print', h('div.row.wrap', { style: { rowGap: '10px' } },
         h('span.dim.small', FY_LBL), fySel, h('span.dim.small', TZ_LBL), tzSel, yearSeg, h('span.dim.small', `or custom (${tz})`), fromIn, h('span.dim', '→'), toIn,
         h('button.btn.sm', { onclick: apply }, 'Apply'),
-        h('span.grow'), h('span.dim.small', CCY_LBL), ccySel, srcSel ? h('span.dim.small', SRC_LBL) : null, srcSel),
+        h('span.grow'), h('span.dim.small', CCY_LBL), ccySel, srcSel ? h('span.dim.small', SRC_LBL) : null, srcSel, csvSel),
         h('div.dim.xs', { style: { marginTop: '8px', textAlign: 'right' } }, FX.ONLY_TEXT));
       const notices = [
         period.badRange ? TUI.notice(`The custom range in this link (${period.from || '?'} → ${period.to || '?'}) is not a valid period; showing ${label}.`) : null,
@@ -95,6 +105,21 @@
       U.replace(body, controls, ...notices, status);
       const periodLine = h('div.small.dim', { style: { marginBottom: '10px' } }, 'Period ', period.startText, ' → ', period.endText, period.ongoing && mode === 'custom' ? ' (not over yet)' : '');
 
+      // ---- the reads: the archive cut at the period's local boundaries and the positions start at once, beside the exchange
+      // rates (they do not need them), under one Cancel ----
+      const ac = new AbortController(); const stop = () => ac.abort();
+      ctx.signal.addEventListener('abort', stop); ctx.onCleanup(() => ctx.signal.removeEventListener('abort', stop));
+      const prog = TUI.progress(status, stop);
+      let fxWait = ccy !== 'USD';
+      const say = (text, done, total) => prog.set((fxWait ? 'Reading the ' + ccy + ' exchange rates · ' : '') + text, done, total);
+      say('Collecting daily ledgers and position history…');
+      const readsP = sa ? Promise.all([
+        TX.load.archive(sa.id, period, { firstT: sa.createdAt, signal: ac.signal, progress: (stage, done, total) => say(stage === 'daily' ? 'Collecting daily ledgers and position history…' : 'Reading the hourly ledger of the UTC days the period\'s local boundaries cut…', done, total) }),
+        A.positions(sa.id, { maxPages: 100, signal: ac.signal, ttl: 5 * 60000 }),   // the same pages the trade detail reads
+      ]) : null;
+      if (readsP) readsP.catch(() => {});   // awaited below
+      const cancelled = () => U.replace(status, h('div.empty', 'Cancelled. ', h('button.btn.sm', { onclick: () => MD.router.reload() }, 'Load again')));
+
       // ---- money: each amount at the rate of its own local date, from its currency's source (MD.tax.fx); CSVs always carry
       // USD and, when another currency is chosen, the converted amount with its rate and the rate's date ----
       let rates = null, fxNote = null;
@@ -102,14 +127,17 @@
         // rates are needed from the first day anything can have happened (the subaccount's creation, or Predict's launch),
         // whatever the period: the USDe lots and the Predict record convert amounts dated before it. A date before the
         // first rate has none (FX.rates), never a later one in its place
-        try { rates = await FX.load({ ccy, src, fromKey: FX.fromKey({ createdAt: sa ? sa.createdAt : null, now, tz }), toKey: period.toKey, tz, now, signal: ctx.signal }); }
-        catch (e) { if (isAbort(e)) return; fxNote = 'Rates for ' + ccy + ' could not be loaded (' + e.message + '); amounts are in USD.'; }
+        try { rates = await FX.load({ ccy, src, fromKey: FX.fromKey({ createdAt: sa ? sa.createdAt : null, now, tz }), toKey: period.toKey, tz, now, signal: ac.signal }); }
+        catch (e) { if (ctx.signal.aborted) return; if (isAbort(e)) { cancelled(); return; } fxNote = 'Rates for ' + ccy + ' could not be loaded (' + e.message + '); amounts are in USD.'; }
+        fxWait = false;
         if (rates) for (const n of rates.notes) notices.push(TUI.notice(n.text));   // a step down to another source, said at the top
       }
       const cur = rates ? ccy : 'USD';
       const money = FX.money(rates, tz);
       const pnlEl = TUI.pnlEl(money);
-      const fname = (kind) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}-${period.fromKey}_${period.toKey}.csv`;
+      // the subaccount (a wallet with several) and the currency (not USD) in the name too: two subaccounts' or two currencies'
+      // files of one period would otherwise download under the same name
+      const fname = (kind) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}${sid && subs.length > 1 ? '-sub-' + sid.slice(-6) : ''}${cur !== 'USD' ? '-' + cur : ''}-${period.fromKey}_${period.toKey}.csv`;
       const EX = TX.exports, M = TX.methodology;
       let vp = null, hv = null;
 
@@ -122,7 +150,8 @@
       // held: how the claim basis dates tokens held to a winning verdict (the wallet's own redemption times, or the fallback)
       const predictInfo = () => (rep.predict ? (rep.predict.missing ? { missing: true } : { mode: rep.predictMode, live: rep.predict.live, builtAt: rep.predict.builtAt, held: TX.predict.heldClaimText(rep.predict.prep) }) : rep.predictFailed ? { failed: true } : null);
       // the Predict record for the summary and the classes: {prep, mode}, {missing}, or {failed} when it did not load
-      const predictState = async () => { const D = await predictData; return !D ? { failed: true } : D.missing ? { missing: true } : { prep: D.prep, mode: rep.predictMode }; };
+      // the summary and the ZIP wait for it at most two minutes: a Predict read that hangs leaves them "Predict not loaded"
+      const predictState = async () => { const D = await Promise.race([predictData, U.sleep(120000).then(() => null)]); return !D ? { failed: true } : D.missing ? { missing: true } : { prep: D.prep, mode: rep.predictMode }; };
       // what the report found missing, for the methodology's Completeness row (each section says it once)
       const allWarnings = () => {
         const w = vp ? vp.warnings().slice() : [];
@@ -218,22 +247,15 @@
         return;
       }
 
-      // ---- data: the archive cut at the period's local boundaries, and the positions ----
+      // ---- data: the archive cut at the period's local boundaries, and the positions (read since the rates started) ----
       let positions, led, arch;
-      const ac = new AbortController(); const stop = () => ac.abort();
-      ctx.signal.addEventListener('abort', stop); ctx.onCleanup(() => ctx.signal.removeEventListener('abort', stop));
-      const prog = TUI.progress(status, stop);
-      prog.set('Collecting daily ledgers and position history…');
       try {
-        const [a, pos] = await Promise.all([
-          TX.load.archive(sid, period, { signal: ac.signal, progress: (stage, done, total) => prog.set(stage === 'daily' ? 'Collecting daily ledgers and position history…' : 'Reading the hourly ledger of the UTC days the period\'s local boundaries cut…', done, total) }),
-          A.positions(sid, { maxPages: 100, signal: ac.signal, ttl: 5 * 60000 }),   // the same pages the trade detail reads
-        ]);
+        const [a, pos] = await readsP;
         arch = a; positions = pos;
         led = TX.ledger.build({ balance: arch.balance, volume: arch.volume, hour: arch.hour, ref, period, fx: money.fx });
       } catch (e) {
         if (ctx.signal.aborted) return;
-        U.replace(status, isAbort(e) ? h('div.empty', 'Cancelled. ', h('button.btn.sm', { onclick: () => MD.router.reload() }, 'Load again')) : UI.error(e, () => MD.router.reload()));
+        if (isAbort(e)) cancelled(); else U.replace(status, UI.error(e, () => MD.router.reload()));
         return;
       }
 

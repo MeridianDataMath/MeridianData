@@ -47,7 +47,8 @@
     const body = JSON.stringify(calls.map((c, i) => ({ jsonrpc: '2.0', id: i, method: 'eth_call', params: [{ to: c.to, data: c.data }, 'latest'] })));
     for (let attempt = 0; ; attempt++) {
       let j = null, status = 0;
-      try { const r = await fetch(W.RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); status = r.status; j = await r.json().catch(() => null); }
+      // 15 s an attempt: a hung RPC fails (and is tried again) instead of holding a page, or the tax summary, for good
+      try { const r = await fetch(W.RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined }); status = r.status; j = await r.json().catch(() => null); }
       catch (e) { status = -1; }
       if (Array.isArray(j)) { const by = new Map(j.map((x) => [x.id, x])); return calls.map((c, i) => by.get(i) || { error: { message: 'no answer' } }); }
       if (attempt < 4) { await U.sleep(1000 * (attempt + 1)); continue; }   // 429 on bursts, the odd network error

@@ -275,8 +275,11 @@
 
   // ---------- loading ----------
   const session = () => { try { return window.sessionStorage || null; } catch (_) { return null; } };
+  // every rate read gives up after 20 s (a stalled one held every report of the tab for the five minutes it is shared)
+  const TIMEOUT = 20000;
+  const timed = (signal) => { if (typeof AbortSignal === 'undefined' || !AbortSignal.timeout) return signal; const t = AbortSignal.timeout(TIMEOUT); return signal && AbortSignal.any ? AbortSignal.any([signal, t]) : signal || t; };
   const jsonOf = async (io, url, init) => {
-    const r = await io.fetch(url, init);
+    const r = await io.fetch(url, Object.assign({}, init, { signal: timed(init && init.signal) }));
     if (!r.ok) throw new Error('HTTP ' + r.status);
     // Cloudflare answers a path it does not have with index.html (200): only JSON is a file
     if (!/json/i.test((r.headers && r.headers.get && r.headers.get('content-type')) || '')) throw new Error('not published');
@@ -310,7 +313,7 @@
     let raw = c && c.raw && typeof c.at === 'number' ? c.raw : null;
     if (raw && live && (raw.end_date || raw.date || '') < today && io.now - c.at >= FRESH) raw = null;
     if (!raw) {
-      const r = await io.fetch(FRANKFURTER + path, { signal: io.signal, cache: live ? 'no-cache' : 'default' });
+      const r = await io.fetch(FRANKFURTER + path, { signal: timed(io.signal), cache: live ? 'no-cache' : 'default' });
       if (!r.ok) throw new Error('frankfurter.dev answered ' + r.status);
       raw = await r.json();
       try { if (io.storage) io.storage.setItem(key, JSON.stringify({ at: io.now, raw })); } catch (_) {}

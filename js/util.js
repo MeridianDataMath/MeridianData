@@ -319,13 +319,16 @@
   };
   /** One CSV field. Excel and Sheets run a text field that starts like a formula (= + - @, tab, CR) when the file is
    *  opened, and question titles, categories and tickers come from the exchange, so such text gets a leading apostrophe;
-   *  a number, negative ones included, is written as it is. */
+   *  a number, negative ones included, is written as it is. sep ';': the semicolon style Excel opens in columns where
+   *  the list separator is a semicolon (Germany, Poland, France…), whose numbers take a decimal comma. */
   const CSV_NUM = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
-  U.csvCell = (v) => {
+  U.csvCell = (v, sep) => {
     if (v == null) return '';
     let s = String(v);
-    if (/^[=+\-@\t\r]/.test(s) && !CSV_NUM.test(s)) s = "'" + s;
-    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    const num = CSV_NUM.test(s);
+    if (/^[=+\-@\t\r]/.test(s) && !num) s = "'" + s;
+    if (sep === ';' && num) s = s.replace('.', ',');
+    return (sep === ';' ? /[";\r\n]/ : /[",\r\n]/).test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
   U.sideName = (s) => (String(s) === '0' || s === 'BUY' ? 'BUY' : 'SELL');
   U.sideEl = (s, long) => { const buy = String(s) === '0' || s === 'BUY' || s === 'LONG' || s === true; const t = long ? (buy ? 'LONG' : 'SHORT') : (buy ? 'BUY' : 'SELL'); return U.h('span', { class: 'bold ' + (buy ? 'pos' : 'neg') }, t); };

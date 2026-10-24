@@ -265,7 +265,9 @@
    *  after the kept ones are read and the kept ones come back as {time, fundingCharge}. */
   A.fundingCharges = async function (sid, start, o) {
     const now = Date.now(), end = o && o.end != null ? Math.min(U.num(o.end), now) : null;
-    const W = 3 * U.DAY - U.HOUR, top = Math.ceil((end != null ? end : now) / U.HOUR) * U.HOUR;
+    // windows on one grid (whole multiples of W), whatever the range: two reads that overlap (a tax period and the USDe
+    // lots' lifetime) ask for the same windows, which the request cache then answers once
+    const W = 3 * U.DAY - U.HOUR, top = Math.ceil((end != null ? end : now) / W) * W;
     const cache = end == null && o && o.cache ? o.cache : null;
     const kept0 = cache ? cache.get(sid) : null, kept = kept0 && kept0.from <= start && kept0.until > start && Array.isArray(kept0.rows) ? kept0 : null;
     const readFrom = kept ? kept.until : start;
@@ -305,7 +307,8 @@
    * History rows for kind in {balance, unrealized-pnl, volume}, automatically chunked to the
    * resolution's max range and paginated. Returns rows sorted ascending by time.
    */
-  A.history = async function (kind, sid, { start, end, resolution, signal, ttl }) {
+  /** onChunk(n, total): after each of the requests a long range takes (one per resolution's maximum span) */
+  A.history = async function (kind, sid, { start, end, resolution, signal, ttl, onChunk }) {
     const res = A.RES[resolution]; if (!res) throw new Error('bad resolution ' + resolution);
     end = end || Date.now();
     start = Math.floor(start / res.ms) * res.ms;
@@ -313,6 +316,7 @@
     let s = start;
     const chunk = Math.min(res.max, 400 * U.DAY) - 1000;
     const seen = new Set();
+    const chunks = Math.max(1, Math.ceil((end - start) / chunk)); let n = 0;
     while (s < end) {
       const e = Math.min(end, s + chunk);
       // the archive rejects an endTime later than its own clock; when the chunk ends "now", let the server default it
@@ -321,6 +325,7 @@
       // chunks (and the server's clamping to bucket boundaries) can repeat the boundary bucket → dedupe
       for (const r of part) { const k = r.time + '|' + (r.tokenId || ''); if (seen.has(k)) continue; seen.add(k); rows.push(r); }
       s = e;
+      if (onChunk) onChunk(++n, chunks);
     }
     rows.sort((a, b) => a.time - b.time);
     return rows;

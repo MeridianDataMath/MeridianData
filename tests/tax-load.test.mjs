@@ -45,3 +45,17 @@ test('archive: an hourly read that failed is read again, a complete archive is k
   const c = await T.load.archive('sid', period);
   assert.equal(calls.history, m, 'complete: kept for the tab'); assert.equal(c, b);
 });
+
+test('a custom range from long before the account read no archive before it existed, and no funding windows when nothing was held', async () => {
+  T.cache.clear();
+  const asked = []; const h0 = A.history;
+  A.history = async (kind, sid, o) => { asked.push(o.start); return []; };
+  try {
+    const period = { start: Date.UTC(2020, 0, 1), end: Date.UTC(2026, 6, 1), tz: 'UTC' };
+    await T.load.archive('sid3', period, { firstT: Date.UTC(2026, 5, 15) });
+    assert.ok(asked.length && asked.every((t) => t >= Date.UTC(2026, 5, 14)), 'from the day before the account, not from 2020');
+  } finally { A.history = h0; }
+  const n = calls.charges;
+  await T.load.events('sid4', { start: Date.UTC(2025, 0, 1), end: Date.UTC(2025, 6, 1), ref, dayRows: [] });   // before the only position
+  assert.equal(calls.charges, n, 'no position touched: no funding window read');
+});

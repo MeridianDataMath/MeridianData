@@ -21,16 +21,21 @@
     const key = ['archive', sid, period.start, period.end, splits.join(',')].join('|');
     const hit = T.cache.get(key);
     if (hit && hit.closed) return hit.value;
-    const from = Math.floor(period.start / U.DAY) * U.DAY - U.DAY, to = Math.min(period.end, now);
-    let total = 2 + 2 * splits.length, done = 0;
-    const tick = () => { done++; progress(done <= 2 ? 'daily' : 'hourly', done, total); };
+    // from the day before the period, but no earlier than the day before the account existed (o.firstT): a custom range
+    // from 2020 for an account opened in 2026 read dozens of empty archive chunks, one after the other
+    const from0 = Math.floor(period.start / U.DAY) * U.DAY - U.DAY, born = o.firstT ? Math.floor(U.num(o.firstT) / U.DAY) * U.DAY - U.DAY : null;
+    const from = born != null && born > from0 ? born : from0, to = Math.min(period.end, now);
+    // the progress counts every request: each daily read's chunks, then the split days' hourly reads
+    const perKind = Math.max(1, Math.ceil((to - from) / (A.RES.day1.max - 1000)));
+    let total = 2 * perKind + 2 * splits.length, done = 0;
+    const tick = () => { done++; progress(done <= 2 * perKind ? 'daily' : 'hourly', done, total); };
     progress('daily', 0, total);
-    const day = (kind) => A.history(kind, sid, { start: from, end: to, resolution: 'day1', signal, ttl: CLOSED }).then((r) => { tick(); return r; });
+    const day = (kind) => (from >= to ? Promise.resolve([]) : A.history(kind, sid, { start: from, end: to, resolution: 'day1', signal, ttl: CLOSED, onChunk: tick }));
     const [balance, volume] = await Promise.all([day('balance'), day('volume')]);
     // a split day on which nothing moved (before the account existed, or a quiet day) has nothing to split
     const quiet = new Set(T.ledger.quietDays(balance, volume, splits));
     const busy = splits.filter((S) => !quiet.has(S));
-    total = 2 + 2 * busy.length;
+    total = 2 * perKind + 2 * busy.length;
     const hour = new Map(); for (const S of busy) hour.set(S, { balance: null, volume: null });
     const tasks = [];
     for (const S of busy) for (const kind of ['balance', 'volume']) tasks.push(async () => {
@@ -181,7 +186,8 @@
     // the ledger counts there (the hour its start cuts is the previous period's); the period's own rows still cut at its
     // exact instants
     const endH = Math.ceil(o.end / HOUR) * HOUR, to = Math.min(endH, now);
-    const key = ['events', sid, o.start, o.end].join('|');
+    // o.keyEnd: the end a running range is kept under (a fiscal year's next start: its end, now, moves on every report)
+    const key = ['events', sid, o.start, o.keyEnd || o.end].join('|');
     const hit = T.cache.get(key);
     if (hit && hit.closed) return hit.value;
     tell({});
@@ -197,7 +203,8 @@
       // what another range of this tab read (the period's trade detail, for the lifetime lots) is not read again
       LD.span('/v1/order/fill', sid, fillsFrom, to, { maxPages: 500, signal, onPage: (n, rows) => tell({ fillPages: n, fillRows: rows }) }),
       LD.span('/v1/token/transfer', sid, o.start, to, { maxPages: 20, signal, closedOnly: true }),
-      A.fundingCharges(sid, prev ? prev.to - HOUR : from, { end: to, signal, ttl: CLOSED, onProgress: (d, n) => tell({ fundDone: d, fundTotal: n }) })
+      // no position touched: nothing could be charged, so no window is read (from a custom range's start, hundreds of them)
+      !touched.length ? Promise.resolve([]) : A.fundingCharges(sid, prev ? prev.to - HOUR : from, { end: to, signal, ttl: CLOSED, onProgress: (d, n) => tell({ fundDone: d, fundTotal: n }) })
         .catch((e) => { if (T.isAbort(e)) throw e; failed.push('funding charges (' + e.message + ')'); return null; }),
     ]);
     const fills = (prev ? merge(prev.fills, fillsNew, (f) => f.id) : fillsNew.slice()).filter((f) => U.num(f.createdAt) >= from && U.num(f.createdAt) < to);

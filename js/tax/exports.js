@@ -33,12 +33,14 @@
   /** The file's name: '-INCOMPLETE' before the extension when it carries warnings. */
   EX.fileName = (file) => (file.warnings && file.warnings.length && !/-INCOMPLETE(\.[a-z0-9]+)?$/i.test(String(file.name)) ? String(file.name).replace(/(\.[a-z0-9]+)?$/i, (m) => '-INCOMPLETE' + (m || '')) : file.name);
   /** A built file as CSV text. A report gets its methodology rows (key, value) and a blank line first, when given; its
-   *  sections are separated by a blank line. A tool file gets nothing but its table. */
-  EX.render = (file, methodology) => {
+   *  sections are separated by a blank line. A tool file gets nothing but its table, always comma-separated (sep, the
+   *  report style T.csvSep, is for the reports). */
+  EX.render = (file, methodology, sep) => {
+    const tool = file.kind === 'tool', sp = !tool && sep === ';' ? ';' : ',';
     const tables = file.sections || [{ columns: file.columns, rows: file.rows }];
-    const body = tables.map((s) => (s.title ? T.cell(s.title) + '\r\n' : '') + T.toCsv(s.columns, s.rows)).join('\r\n\r\n');
-    if (file.kind === 'tool' || !methodology || !methodology.length) return body;
-    return methodology.map(([k, v]) => T.cell(k) + ',' + T.cell(v)).join('\r\n') + '\r\n\r\n' + body;
+    const body = tables.map((s) => (s.title ? T.cell(s.title, sp) + '\r\n' : '') + T.toCsv(s.columns, s.rows, sp)).join('\r\n\r\n');
+    if (tool || !methodology || !methodology.length) return body;
+    return methodology.map(([k, v]) => T.cell(k, sp) + sp + T.cell(v, sp)).join('\r\n') + '\r\n\r\n' + body;
   };
 
   // ---------- shared columns ----------
@@ -67,17 +69,25 @@
     const i = (days || []).findIndex((b) => b.balance || b.realizedPnl || b.fee || b.pfees || b.funding || b.deposit || b.withdrawal || b.wfee || b.volume);
     return i < 0 ? [] : days.slice(i);
   };
-  /** What makes the per-fill files incomplete, in words (empty when nothing does). ctx: {ev (load.events), D (F.disposals)}. */
-  EX.eventWarnings = (ctx) => {
+  /** What makes the per-fill files incomplete, in words (empty when nothing does). ctx: {ev (load.events), D (F.disposals)};
+   *  o.netted false: without the UTC days netted per day (a file that lists those days as daily totals names them itself). */
+  EX.eventWarnings = (ctx, o = {}) => {
     const ev = ctx.ev || {}, D = ctx.D, tr = ev.truncated || {}, out = [];
     if (tr.positions) out.push('the exchange returned only the newest positions');
     if (tr.fills) out.push('more order fills than could be read (500 pages)');
     if (tr.posFills && tr.posFills.length) out.push(tr.posFills.length + ' position(s) with more fills than could be read');
     for (const f of ev.failed || []) out.push('could not read ' + f);
+    if (tr.charges && !(ev.failed || []).some((f) => /^funding charges/.test(f))) out.push('could not read the funding charges');
     if (D) {
       if (D.failed.length) out.push(D.failed.length + ' position(s) whose fills do not reproduce the exchange\'s totals');
       if (D.day.bad.length) out.push(D.day.bad.length + ' UTC day(s) whose disposals do not add up to the exchange\'s realized PnL');
       if (D.unassigned.length) out.push(D.unassigned.length + ' fill(s) no position holds');
+      // a day whose funding settlements or position fees could not be tied to the fills: the disposals of that day carry
+      // part of it, so they are as incomplete as the funding file that nets the day
+      const netted = o.netted === false ? 0 : D.funding && D.funding.fig && D.funding.fig.fallback ? D.funding.fig.fallback.length : 0;
+      if (netted) out.push(netted + ' UTC day(s) whose funding settlements do not add up to the exchange\'s ledger: netted per day, so the funding inside those days\' disposals is incomplete');
+      const feeDays = o.netted === false ? 0 : D.fees && D.fees.bad ? D.fees.bad.length : 0;
+      if (feeDays) out.push(feeDays + ' UTC day(s) whose mPerp position fees match no fill: the position fees inside those days\' disposals are incomplete');
     }
     return out;
   };
@@ -163,7 +173,8 @@
     for (const seg of D.funding.fig.fallback) if (Math.abs(seg.funding) >= 1e-6) out.push({ t: Math.min(seg.t1 - 1, now), type: 'funding', what: 'Funding · ' + (seg.part ? 'net ' + seg.part + ' UTC' : 'daily net'), amount: seg.funding, fee: 0, notional: 0, detail: (seg.funding > 0 ? 'received' : 'paid') + ' · netted per day: settlement detail unavailable', id: 'funding-' + new Date(seg.t0).toISOString().slice(0, 10) + (seg.part ? '-' + seg.part.replace(/[^0-9]/g, '') : '') });
     for (const s of D.fees.inP) out.push({ t: s.t, type: 'posfee', what: what(s, 'Position fee'), amount: -s.amount, fee: s.amount, notional: 0, detail: 'mPerp position fee settled at this fill', id: 'posfee-' + s.positionId + '-' + s.t });
     for (const b of D.fees.bad) out.push({ t: Math.min(b.seg.t1 - 1, now), type: 'posfee', what: 'Position fees · ' + dayText(b.seg), amount: -b.diff, fee: b.diff, notional: 0, detail: 'the mPerp pools\' residual that day not matched to a fill', id: 'posfee-' + new Date(b.seg.t0).toISOString().slice(0, 10) });
-    for (const t of ev.transfers) { const type = String(t.type || '').toUpperCase(); const isDep = /DEPOSIT/.test(type), isWd = /WITHDRAW/.test(type); out.push({ t: U.num(t.createdAt), type: 'transfer', what: (isDep ? 'Deposit' : isWd ? 'Withdrawal' : 'Conversion') + (t.tokenName ? ' · ' + t.tokenName + (t.toTokenName ? ' → ' + t.toTokenName : '') : ''), amount: isWd ? -(U.num(t.amount) + U.num(t.fee)) : isDep ? U.num(t.amount) - U.num(t.fee) : 0, fee: U.num(t.fee), notional: U.num(t.amount), detail: String(t.status || '').toLowerCase() + (U.num(t.fee) ? ' · fee ' + U.fmtUsd(t.fee, { dp: 2 }) + (isWd ? ' on top' : ' deducted') : ''), id: t.id, tx: t.finalizedTransactionHash || t.initiatedTransactionHash || null }); }
+    for (const t of ev.transfers) { if (t.status && String(t.status).toUpperCase() !== 'COMPLETED') continue;   // a rejected or pending transfer moved nothing (as the ledger, the tool files and the lots count them)
+      const type = String(t.type || '').toUpperCase(); const isDep = /DEPOSIT/.test(type), isWd = /WITHDRAW/.test(type); out.push({ t: U.num(t.createdAt), type: 'transfer', what: (isDep ? 'Deposit' : isWd ? 'Withdrawal' : 'Conversion') + (t.tokenName ? ' · ' + t.tokenName + (t.toTokenName ? ' → ' + t.toTokenName : '') : ''), amount: isWd ? -(U.num(t.amount) + U.num(t.fee)) : isDep ? U.num(t.amount) - U.num(t.fee) : 0, fee: U.num(t.fee), notional: U.num(t.amount), detail: String(t.status || '').toLowerCase() + (U.num(t.fee) ? ' · fee ' + U.fmtUsd(t.fee, { dp: 2 }) + (isWd ? ' on top' : ' deducted') : ''), id: t.id, tx: t.finalizedTransactionHash || t.initiatedTransactionHash || null }); }
     for (const x of c.closed || []) out.push({ t: x.t, type: 'close', what: x.ticker + ' · ' + (x.long ? 'long' : 'short') + ' ' + U.fmtQty(x.size) + ' closed' + (x.liq ? ' (liquidated)' : x.adl ? ' (auto-deleveraged)' : ''), amount: 0, fee: 0, notional: 0, detail: 'marker, no cash effect · whole result ' + U.fmtUsd(x.net, { sign: true, dp: 2 }) + ' (Closed positions)', id: x.p.id });
     return out.sort((a, b) => b.t - a.t);
   };
@@ -254,7 +265,7 @@
     }
     for (const i of badX) { fb.transfer.push(segs[i]); dailyTransfers(segs[i]); }
     out.sort((a, b) => a.t - b.t || ORDER[a.kind] - ORDER[b.kind]);
-    const warnings = EX.eventWarnings(c);
+    const warnings = EX.eventWarnings(c, { netted: false });   // the netted days are listed below, by kind
     if (ev.truncated && ev.truncated.transfers) warnings.push('more transfers than could be read');
     const words = { trade: 'realized PnL and trading fees', funding: 'funding', posfee: 'position fees', transfer: 'deposits and withdrawals' };
     for (const k of Object.keys(fb)) if (fb[k].length) warnings.push(`${fb[k].length} UTC day(s) of ${words[k]} as one daily total stamped 10:00 UTC (the per-event detail does not add up to the exchange's ledger there)`);
@@ -716,7 +727,7 @@
     const M = T.methodology, out = [], files = [];
     for (const { file, meth } of items) {
       const name = EX.fileName(file);
-      out.push({ name, data: (file.kind === 'tool' ? '' : '﻿') + EX.render(file, file.kind === 'tool' ? null : meth) });
+      out.push({ name, data: (file.kind === 'tool' ? '' : '﻿') + EX.render(file, file.kind === 'tool' ? null : meth, T.csvSep()) });
       files.push({ name, kind: file.kind, warnings: file.warnings || [] });
     }
     const x = { files, skipped: o.skipped || [], notes: M.toolNotes() };

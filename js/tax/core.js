@@ -10,8 +10,13 @@
   T.isAbort = (e) => !!e && e.name === 'AbortError';
   T.n6 = (x) => String(Math.round(U.num(x) * 1e6) / 1e6);
   T.cell = U.csvCell;   // quotes, and defuses text that a spreadsheet would run as a formula
-  /** cols: [[header, row => value], …] */
-  T.toCsv = (cols, rows) => [cols.map((c) => T.cell(c[0])).join(',')].concat(rows.map((r) => cols.map((c) => T.cell(c[1](r))).join(','))).join('\r\n');
+  /** cols: [[header, row => value], …]; sep: ',' (the default), or ';' with decimal commas (T.csvSep) */
+  T.toCsv = (cols, rows, sep = ',') => [cols.map((c) => T.cell(c[0], sep)).join(sep)].concat(rows.map((r) => cols.map((c) => T.cell(c[1](r), sep)).join(sep))).join('\r\n');
+  /** The report files' CSV style, chosen on the page and kept in this browser: ',' (decimal points), or ';' with decimal
+   *  commas, which Excel opens in columns where the list separator is a semicolon (Germany, Poland, France…). The
+   *  tax-tool files keep commas: the tools read them that way. */
+  T.CSV_KEY = 'md.tax.csv';
+  T.csvSep = () => (U.storage.get(T.CSV_KEY, ',') === ';' ? ';' : ',');
 
   // ---------- fiscal years ----------
   // key → first local day of the fiscal year (m: month index as in Date.UTC, d: day), the zone a report defaults to when the

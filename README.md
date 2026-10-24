@@ -419,12 +419,12 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
 
     | Link parameter | What it sets | Default |
     |---|---|---|
-    | `address`, `sub` | wallet; subaccount when there are several | the last account viewed; its first subaccount |
+    | `address`, `sub` | wallet; subaccount when there are several | the last account viewed; its first subaccount (written into the link silently) |
     | `fy` | fiscal-year preset: `uk`, `au`, `nz`, `in`, `za`, `pk` | calendar year (left out of the link) |
-    | `year` | the calendar year the fiscal year starts in | the newest year with activity |
+    | `year` | the calendar year the fiscal year starts in | the newest year with activity (written into the link silently) |
     | `from`, `to` | a custom range of local dates, both included | none (the fiscal year) |
     | `tz` | IANA time zone | from the preset (below), written into the link silently |
-    | `ccy`, `src` | report currency; `src=ecb` takes the ECB's rates for PLN or CAD | USD, or the last one chosen in this browser |
+    | `ccy`, `src` | report currency; `src=ecb` takes the ECB's rates for PLN or CAD | USD, or the last one chosen in this browser (the currency is written into the link silently, USD too) |
     | `pdate` | Predict date basis: `claimable`, `verdict` | claim (left out of the link) |
     | `lot`, `lscope`, `px`, `dep` | USDe lots: method, scope (`global` whenever `lot=uk`), `market` valuation, `disposal` deposit reading | none chosen (the lots are built on request) |
 
@@ -668,10 +668,10 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
       purchases), +$743.12, all of it in the secondary-market file and read as *bought position tokens redeemed*;
       0x79cb…, a maker with 5,690 predictions, +$14,465.09 from its compact rows.
     * **Big makers**: a wallet file keeps the newest 600 predictions (and older ones on pick configurations it
-      traded, and every older one still open); its `rows` hold one compact row for every prediction, so the period figures stay whole, and only the
-      per-prediction record is limited to the loaded predictions (said in an amber note and in that file, whose name
-      then ends in `-INCOMPLETE`). Without rows the figures are incomplete, said on the card and in every Predict
-      file.
+      traded, and every older one still open); its `rows` hold one compact row for every prediction, so the period
+      figures stay whole, and only the per-prediction record is limited to the loaded predictions (said in an amber
+      note and in that file, whose name then ends in `-INCOMPLETE`). Without rows the figures are incomplete, said on
+      the card and in every Predict file.
   * *USDe lots* (`lots.js`, card `view-lots.js`; on request, after the Predict card) – perps balances are
     MeridianUSD, which the exchange mints 1:1 when USDe is deposited and burns when it is withdrawn; Predict settles
     in USDe. If the reader's rules treat USDe as a cryptoasset rather than money, spending it can itself give a gain
@@ -725,7 +725,11 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     reconcile, a day as a daily total, an incomplete Predict file) ends in `-INCOMPLETE`; a report says why in its
     `Completeness` row, a tool file in the download's notice (about 6 s, a polite live region) and the import notes.
     In another currency, "+ CCY" below means each amount also as `<name> <CCY>` with `USD→<CCY> rate` and the rate
-    date, at the row's own date.
+    date, at the row's own date. Files are named `meridian-<kind>-<wallet>[-sub-<subaccount>][-<CCY>]-<from>_<to>`
+    (the subaccount, the last six characters of its id, when the wallet has several; the currency when not USD). The
+    reports can be written with semicolons and decimal commas instead (the page's CSV select, kept in this browser),
+    which Excel opens in columns where the list separator is a semicolon (Germany, Poland, France…); the tool files
+    always use commas, as the tools read them.
 
     | File | Kind | One row per | Columns |
     |---|---|---|---|
