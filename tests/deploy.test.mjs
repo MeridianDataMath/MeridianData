@@ -60,6 +60,10 @@ test('a perps build that wrote nothing deploys the published leaderboard again; 
   assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'leaderboard.json'), 'utf8')).rows[0].sid, 'new', 'this run\'s file stays');
   const e = tmp(); assert.match(await keepLeaderboard({ site, data: e, fetchImpl: fakeSite({ 'data/leaderboard.json': { rows: [] } }) }), /not read \(it has no rows\)/);
   assert.equal(fs.existsSync(path.join(e, 'leaderboard.json')), false, 'an empty published file is not deployed');
+  // a file cut short (a build stopped mid-write) is replaced by the published one
+  const g = tmp(); fs.writeFileSync(path.join(g, 'leaderboard.json'), '{"builtAt":1,"rows":[{"sid":"a"},{"si');
+  assert.match(await keepLeaderboard({ site, data: g, fetchImpl: fakeSite({ 'data/leaderboard.json': live }) }), /left a leaderboard.json that is not one: the published one/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(g, 'leaderboard.json'), 'utf8')), live);
 });
 
 test('an exchange-rate source this run did not write comes from the live site, with its index entry', async () => {

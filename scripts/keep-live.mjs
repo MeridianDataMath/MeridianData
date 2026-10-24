@@ -27,13 +27,16 @@ async function getLive(site, rel, fetchImpl) {
 /** data/leaderboard.json from the live site when this run has none. → what was done, in words (null: nothing) */
 export async function keepLeaderboard({ site, data, fetchImpl = globalThis.fetch }) {
   const f = path.join(data, 'leaderboard.json');
-  if (fs.existsSync(f)) return null;
+  // a file this run wrote stays, unless it is no leaderboard (a build stopped mid-write by an older builder, a full disk)
+  let broken = false;
+  if (fs.existsSync(f)) { try { const j = JSON.parse(fs.readFileSync(f, 'utf8')); if (Array.isArray(j.rows) && j.rows.length) return null; } catch (_) {} broken = true; fs.rmSync(f, { force: true }); }
+  const what = broken ? 'the perps build left a leaderboard.json that is not one' : 'the perps build wrote no leaderboard.json';
   try {
     const { json, text } = await getLive(site, 'data/leaderboard.json', fetchImpl);
     if (!Array.isArray(json.rows) || !json.rows.length) throw new Error('it has no rows');
     fs.mkdirSync(data, { recursive: true }); fs.writeFileSync(f, text);
-    return `the perps build wrote no leaderboard.json: the published one (built ${new Date(json.builtAt).toISOString()}) goes out again`;
-  } catch (e) { return `the perps build wrote no leaderboard.json, and the published one was not read (${e.message}): the pages build it in the browser`; }
+    return `${what}: the published one (built ${new Date(json.builtAt).toISOString()}) goes out again`;
+  } catch (e) { return `${what}, and the published one was not read (${e.message}): the pages build it in the browser`; }
 }
 
 /** The FX sources this run did not write, from the live site. → what was done, in words (null: nothing) */

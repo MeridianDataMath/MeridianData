@@ -664,18 +664,31 @@
    * fill" is two lookups and a straight line between those closes. Shared by every account of a snapshot build (the same
    * market-days come up again and again).
    */
+  AN.CANDLE_WINDOW_MS = 20000; AN.CANDLE_FAILS_MAX = 3;
   AN.candleCache = function (o) {
-    const W = 3000 * 60000; const wins = new Map();
+    const W = 3000 * 60000; const wins = new Map(); let fails = 0; const outer = o && o.signal;
     const load = async (ticker, k) => {
       const key = ticker + '|' + k; if (wins.has(key)) return wins.get(key);
-      // a failed read is not kept: this lookup gets no bars, the next one of that window reads it again
-      const p = A.candles(ticker, '1', k * W, (k + 1) * W, 3000, o).then((rows) => { const m = new Map(); for (const c of rows) m.set(c.t, c.c); return m; }).catch((e) => { if (wins.get(key) === p) wins.delete(key); if (e && e.name === 'AbortError') throw e; return new Map(); });
+      // the candle host failing or hanging must not stall a build: a window gets CANDLE_WINDOW_MS in all, its retries
+      // included; one that failed stays empty for this cache's life (one build, one simulator run); after CANDLE_FAILS_MAX
+      // failed windows no more are asked for, and the drift reads "not measured". (Every lookup of a failed window asked
+      // again before, three tries each: some 200 requests an account while the host failed, hours while it hung.)
+      if (fails >= AN.CANDLE_FAILS_MAX) { const p = Promise.resolve(new Map()); wins.set(key, p); return p; }
+      const c = new AbortController(); const onAbort = () => c.abort();
+      if (outer) { if (outer.aborted) c.abort(); else outer.addEventListener('abort', onAbort, { once: true }); }
+      const timer = setTimeout(() => c.abort(), AN.CANDLE_WINDOW_MS);
+      const p = A.candles(ticker, '1', k * W, (k + 1) * W, 3000, { signal: c.signal })
+        .then((rows) => { const m = new Map(); for (const x of rows) m.set(x.t, x.c); return m; })
+        .catch((e) => { if (outer && outer.aborted) throw e; fails++; return new Map(); })
+        .finally(() => { clearTimeout(timer); if (outer) outer.removeEventListener('abort', onAbort); });
       wins.set(key, p); return p;
     };
     return {
       /** close of the minute containing t (ms), or null when the window has no bar there */
       async at(ticker, t) { const minute = Math.floor(t / 60000) * 60000; const m = await load(ticker, Math.floor(minute / W)); const v = m.get(minute); return v == null ? null : U.num(v); },
       size() { return wins.size; },
+      /** windows that could not be read */
+      failed() { return fails; },
     };
   };
 

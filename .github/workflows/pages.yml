@@ -77,9 +77,11 @@ jobs:
           key: perps-funding-${{ github.run_id }}
           restore-keys: perps-funding-
 
-      # a failure here does not stop the deploy: the published leaderboard.json goes out again (keep-live below)
+      # a failure here does not stop the deploy: the published leaderboard.json goes out again (keep-live below). Stopped
+      # after 10 minutes whatever it waits on, so the job's 15 still deploy the rest (a hang ran into them: nothing deployed)
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
+        timeout-minutes: 10
         continue-on-error: true
 
       - name: Keep the perps cache

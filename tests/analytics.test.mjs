@@ -377,6 +377,29 @@ test('price drift: exactly one and five minutes after the fill, a fill far off t
   assert.equal(fresh.n, 0);
 });
 
+test('a candle host that fails or hangs costs a bounded number of requests and seconds, not hours', async () => {
+  const A = MD.api, real = A.candles, realMs = AN.CANDLE_WINDOW_MS; const M = 60000, W = 3000 * M, T = Math.floor((Date.now() - 86400000 * 30) / W) * W;
+  try {
+    // down: a window that failed is not asked again; after three failed windows nothing more is asked
+    let calls = 0; A.candles = async () => { calls++; throw new Error('HTTP 503'); };
+    const c = AN.candleCache({});
+    for (let i = 0; i < 20; i++) assert.equal(await c.at('P', T + i * M), null);
+    assert.equal(calls, 1, 'one window, read once (it was read again on every lookup, three tries each)');
+    for (let w = 1; w <= 6; w++) await c.at('P', T + w * W);
+    assert.equal(calls, 3, 'after three failed windows the host is not asked again in this build'); assert.equal(c.failed(), 3);
+    // hanging: the window is given up after CANDLE_WINDOW_MS, its retries included
+    AN.CANDLE_WINDOW_MS = 60;
+    A.candles = (t, r, f, to, n, o) => new Promise((_, rej) => o.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' }))));
+    const t0 = Date.now(); assert.equal(await AN.candleCache({}).at('P', T), null); assert.ok(Date.now() - t0 < 2000, 'cut at the window limit');
+    // the caller leaving still ends the lookup with its abort
+    const ctl = new AbortController(); const p = AN.candleCache({ signal: ctl.signal }).at('P', T); ctl.abort();
+    await assert.rejects(p, (e) => e.name === 'AbortError');
+    // healthy: one request per window, closes by minute
+    A.candles = async (t, r, f) => [{ t: f, c: 101 }, { t: f + M, c: 102 }];
+    const h = AN.candleCache({}); assert.equal(await h.at('P', T + 30000), 101); assert.equal(await h.at('P', T + M + 5), 102); assert.equal(h.failed(), 0);
+  } finally { A.candles = real; AN.CANDLE_WINDOW_MS = realMs; }
+});
+
 test('market categories as Hyperliquid files them: a cross market is crypto; an mPerp an index, commodity, currency or pre-IPO by name, else a stock', () => {
   const cat = (base, mode = 'ISOLATED') => AN.marketCategory({ baseTokenName: base, marginMode: mode });
   assert.deepEqual(AN.MARKET_CATS.map(([k]) => k), ['crypto', 'stocks', 'indices', 'commodities', 'fx', 'preipo'], 'Hyperliquid\'s order: Crypto, then its Tradfi tabs');

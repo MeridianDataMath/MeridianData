@@ -1244,9 +1244,9 @@ async function buildPerps() {
   catch (e) { console.warn('funding cache not saved:', e.message); }
   const refused = publishProblem(out, prevs);
   if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
-  fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
+  writeAtomic(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));   // whole or not at all: a step stopped mid-write deploys no half file
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
-  console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows${ctx.copy.candles.failed() ? ', ' + ctx.copy.candles.failed() + ' of them unread' : ''}), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
   if (!built.size) process.exit(1);   // nothing built this run: the step fails (the file still carries the earlier rows)
 }
 if (doPerps) {
