@@ -97,14 +97,23 @@
     P._loading = (async () => {
     // no abort signal on the shared download: a page change must not kill the fetch the next page is waiting for
     const tell = (got, total) => bytesListeners.forEach((f) => f(got, total));
-    const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) return null; const j = await readJson(r, tell); return j && j.agg ? j : null; } catch (e) { return null; } }));
+    let why = null;   // why no snapshot came: not published (the site's page in its place), or no connection / an error
+    const found = await Promise.all(P.SNAPSHOT_URLS.map(async (u) => { try { const r = await fetch(u, { cache: 'no-cache' }); if (!r.ok) { why = why || (r.status === 404 ? 'not published' : 'HTTP ' + r.status); return null; } const j = await readJson(r, tell); return j && j.agg ? j : null; } catch (e) { why = why || (e && e.name === 'SyntaxError' ? 'not published' : 'no connection'); return null; } }));
     const best = found.filter(Boolean).sort((a, b) => b.builtAt - a.builtAt)[0];
     if (best && (!P._snap || best.builtAt >= P._snap.builtAt)) { P._snap = Object.assign(P.dropExcluded(best), { remote: true }); P._snapAt = Date.now(); return P._snap; }
     if (P._snap && P._snap.builtAt > Date.now() - 15 * 60000) return P._snap;
+    // building one in the browser needs the Predict API, which answers this domain only once it allows it (P.live): the
+    // public site says the snapshot could not be read (and keeps an older one it has) instead of 28 refused requests
+    if (!(await P.live())) {
+      if (P._snap) return P._snap;
+      throw new Error('The Predict snapshot could not be read (' + (why || 'no data') + '): live queries are not available from this domain, so there is nothing to show until it can be. Try again in a moment.');
+    }
     if (!P._building) {
       P._building = (async () => {
         const days = 14; const to = Math.floor(Date.now() / 1000); const from = to - days * 86400;
-        const raw = await P.predictionsWindowed({ fromSec: from, toSec: to, windows: 7, concurrency: 7, signal, onProgress });
+        // not tied to the page that started it (as the download above): a page change must not leave the next page
+        // waiting on a build that was aborted
+        const raw = await P.predictionsWindowed({ fromSec: from, toSec: to, windows: 7, concurrency: 7, onProgress });
         const norms = raw.map(P.norm); P.markTokenClaims(norms);   // as the snapshot builder does
         const snap = { builtAt: Date.now(), source: 'browser', windowDays: days, fromSec: from, agg: P.aggregate(norms), remote: false };
         P._snap = snap; P._snapAt = Date.now();
@@ -562,7 +571,8 @@
     const body = h('div', UI.loading('Loading predictions…'));
     const modal = UI.modal({ title: view.question || 'Question', body, wide: true });
     let file = null;
-    try { file = await P.snapshotFile('questions/' + id + '.json'); } catch (_) {}
+    // a file that could not be read is not one that is not written yet: said, with a Retry
+    try { file = await P.snapshotFile('questions/' + id + '.json'); } catch (e) { U.replace(body, UI.error(e, () => { modal.close(); openQuestion(c, ctx); })); return; }
     if (!file) { U.replace(body, h('div.empty', 'No prediction detail for this question in the snapshot yet (it is written by the next snapshot run).')); return; }
     const preds = file.predictions.map(P.unslim);
     const legIds = Array.from(new Set(preds.flatMap((n) => n.picks.map((k) => k.id)).filter(Boolean)));
@@ -1649,7 +1659,7 @@
     U.replace(el, loadingCard('Loading bettor history…'));
     UI.progress.start();
     let m;
-    try { m = await loadBettor(addr, ctx); } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(el, UI.error(e)); return; }
+    try { m = await loadBettor(addr, ctx); } catch (e) { UI.progress.done(); if (isAbort(e)) return; U.replace(el, UI.error(e, () => P.renderBettor(el, addr, ctx, opts))); return; }
     UI.progress.done();
     if (ctx.signal.aborted) return;
     // nothing under this address: when it is a trader's own wallet, its predictions are in its Predict wallet (the

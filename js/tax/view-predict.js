@@ -17,6 +17,9 @@
     // address itself: everything below is that wallet's
     const pw = await P.wallets.predictAddress(addr);
     const w = pw.address;
+    // the lookup failed (Robinhood Chain RPC): the address itself stands in, and finding nothing under it says nothing about
+    // its Predict wallet, so that is a failed load (the files are marked incomplete), never "no Predict record"
+    const unknown = () => Object.assign(new Error('The Predict wallet of this address could not be looked up (Robinhood Chain RPC: ' + ((pw.error && pw.error.message) || pw.error) + '), so its Meridian Predict record is not known. Try again in a moment.'), { code: 'PREDICT_WALLET' });
     const live = await P.live();
     if (live) {
       // the 'now' tiles read the newest stats row: a window of the last two days, rounded to the minute so the cache
@@ -32,6 +35,7 @@
       // (P.markTokenClaims); claims the snapshot saw through another wallet's twin, and the source-market times, come
       // from the snapshot file (PR.mergeSnapshot), so live and snapshot agree on the claim basis
       const norms = raw.map(P.norm); P.markTokenClaims(norms);
+      if (pw.error && !norms.length && !(tf && tf.predictions && tf.predictions.length)) throw unknown();
       const fileNorms = tf && Array.isArray(tf.predictions) ? tf.predictions.map(P.unslim) : [];
       PR.mergeSnapshot(norms, fileNorms);
       const truncated = !!raw.truncated;
@@ -47,7 +51,7 @@
       return { pw, live, prep, lastAll, builtAt: tf ? tf.builtAt : null };
     }
     const f = await P.snapshotFile('bettors/' + w + '.json', { signal: o.signal });
-    if (!f) return { pw, live, missing: true };
+    if (!f) { if (pw.error) throw unknown(); return { pw, live, missing: true }; }
     const prep = PR.prepare({ norms: f.predictions.map(P.unslim), trades: f.trades || [], rd: f.rd, rows: f.rows, rowsFmt: f.rowsFmt, truncated: !!f.truncated, total: f.total, newest: f.newest, addr: w, live: false, builtAt: f.builtAt });
     return { pw, live, prep, lastAll: null, builtAt: f.builtAt };
   };

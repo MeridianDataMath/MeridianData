@@ -40,7 +40,9 @@
     const res = await U.pLimit(tasks, 4);
     const ab = res.find((r) => !r.ok && T.isAbort(r.error)); if (ab) throw ab.error;
     const value = { balance, volume, hour, failed: res.filter((r) => !r.ok).length };
-    T.cache.set(key, { closed: Math.ceil(period.end / U.HOUR) * U.HOUR < now - CLOSED, value });   // the hour the end cuts is over too
+    // kept for the tab only when every read came back (the hour the end cuts over too): a failed read is read again by
+    // the next report, a currency change or Load again, instead of standing for the rest of the tab
+    T.cache.set(key, { closed: !value.failed && Math.ceil(period.end / U.HOUR) * U.HOUR < now - CLOSED, value });
     return value;
   };
 
@@ -186,7 +188,8 @@
     const positions = await A.positions(sid, { maxPages: 100, ttl: CLOSED, signal });
     const touched = LD.touched(positions, o.start, o.end);
     const from = touched.length ? Math.min(...touched.map((p) => U.num(p.createdAt))) : o.start;
-    const prev = hit && hit.value && hit.value.from === from && hit.value.to <= to ? hit.value : null;   // a running range read before: only the tail is new
+    // a running range read before: only the tail is new (not after a read that failed: then all of it again)
+    const prev = hit && hit.value && !hit.value.failed.length && hit.value.charges != null && hit.value.from === from && hit.value.to <= to ? hit.value : null;
     const failed = [];
     const fillsFrom = prev ? prev.to : from;
     const [fillsNew, transfers, chargesNew] = await Promise.all([
@@ -242,7 +245,7 @@
     if (hres.some((r) => !r.ok)) failed.push('the hourly ledger of ' + hres.filter((r) => !r.ok).length + ' day(s) with position fees');
 
     const value = { positions, touched, from, to, fills, transfers: tr, hourTransfers, posFills, charges, pre: dayRows, resFrom, pfHours, truncated, failed, loadedAt: now };
-    T.cache.set(key, { closed: endH < now - CLOSED, value });   // that hour over too: nothing more can come
+    T.cache.set(key, { closed: !failed.length && charges != null && endH < now - CLOSED, value });   // that hour over too: nothing more can come; and every read came back
     return value;
   };
 

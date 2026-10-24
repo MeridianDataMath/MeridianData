@@ -77,7 +77,7 @@
       try {
         const subs = await A.subaccountsOf(addr, ctx);
         sa = subs.find((s) => s.id === sid) || subs[0] || null;
-      } catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.dispatch())); return; }
+      } catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.reload())); return; }
       if (!sa) { U.replace(body, h('div.card', h('div.empty', 'This wallet has no Meridian perps subaccount.'))); return; }
       sid = sa.id;
       const LB = MD.router.pages.leaderboard; let lbRow = null;
@@ -94,7 +94,7 @@
 
       let data;
       try { data = await S.load(sid, { signal: ctx.signal }); }
-      catch (e) { if (isAbort(e)) return; U.replace(status, UI.error(e, () => MD.router.dispatch())); return; }
+      catch (e) { if (isAbort(e)) return; U.replace(status, UI.error(e, () => MD.router.reload())); return; }
       const { ref, episodes, depth, marks, candles } = data;
       if (!episodes.length) { U.replace(status, h('div.card', h('div.empty', 'No fills on record for this subaccount, so there is nothing to replay.'))); return; }
       const firstT = episodes[0].start;

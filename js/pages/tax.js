@@ -129,6 +129,8 @@
         if (hv) for (const x of hv.warnings()) if (!w.includes(x)) w.push('holdings: ' + x);
         if (rep.predict && rep.predict.prep) { const cov = TX.predict.coverageNote(rep.predict.prep); if (cov && cov.blocking) w.push(cov.text); }
         if (rep.predictFailed && !rep.predict) w.push('the Meridian Predict data did not load');
+        // its predictions were found under the address itself, but whether its Predict wallet has more is not known
+        if (rep.pw && rep.pw.error) w.push('the Predict wallet of this address could not be looked up: only predictions placed from the address itself are in');
         if (rep.lots && rep.lots.warnings) for (const x of rep.lots.warnings) w.push('USDe lots: ' + x);
         return Array.from(new Set(w));
       };
@@ -182,7 +184,7 @@
       const pctx = { addr, period, fname, money, pnlEl, mode: rep.predictMode, signal: ctx.signal, methodology: meth, importNotes,
         onData: (D) => { rep.predict = D; rep.pw = D && D.pw ? D.pw : null; predictLoaded(D); refresh(); },
         onDraw: (fc) => { rep.predictCtx = fc; rep.predictMode = fc.mode; refresh(); } };
-      const predictFail = (el) => (e) => { rep.predictFailed = true; predictLoaded(null); if (!isAbort(e)) U.replace(el, h('div.row', h('h2', 'Meridian Predict')), UI.error(e)); refresh(); };
+      const predictFail = (el) => (e) => { rep.predictFailed = true; predictLoaded(null); if (!isAbort(e)) U.replace(el, h('div.row', h('h2', 'Meridian Predict')), UI.error(e, () => MD.router.reload())); refresh(); };
       // converting a USD amount at its date's rate leaves out what USDe itself gained or lost in that currency between
       // receiving and spending it: said under the rate line, and computed by the lots card on request
       const fxOnly = rates ? h('div.dim.xs', { style: { marginTop: '2px' } }, `Each amount is converted at its own date's rate; a change in USDe's own value in ${ccy} between receiving and spending it is not in these figures (USDe lots, below, computes it on request).`) : null;

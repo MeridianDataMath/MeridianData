@@ -117,16 +117,24 @@
         h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody, pfBody),
         specsCard, stopCard, liqCard)));
 
-      const ref = await A.ref(ctx);
-      const ids = ref.active.map((p) => p.id);
-      let [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
+      // the markets and their prices are the page: without them it says why, with a Retry
+      let ref, ids, prices, projected, subs, points;
+      try {
+        ref = await A.ref(ctx);
+        ids = ref.active.map((p) => p.id);
+        [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+        U.replace(root, h('div.page', h('div.card', UI.error('The markets could not be read from Meridian: ' + ((e && e.message) || e), () => MD.router.reload()))));
+        return;
+      }
       const live = {}; // ticker -> ticker ws data
       const now = Date.now();
       // closures for the next 7 days; refreshRest reloads them, so a page left open keeps its Paused / closed states and
       // sees closures scheduled after it loaded
-      let gaps = [], gapsBy = {};
-      const setGaps = (list) => { gaps = list; gapsBy = U.groupBy(list, (g) => g.productId); };
-      try { setGaps(await A.gaps(ids, now, now + 7 * U.DAY, ctx)); } catch (_) {}
+      let gaps = [], gapsBy = {}, gapsErr = null;   // gapsErr: never read yet (the minute refresh tries again)
+      const setGaps = (list) => { gaps = list; gapsBy = U.groupBy(list, (g) => g.productId); gapsErr = null; };
+      try { setGaps(await A.gaps(ids, now, now + 7 * U.DAY, ctx)); } catch (e) { gapsErr = e; }
       if (ctx.signal.aborted) return;   // left while loading (the catches above take its abort for a failed read): no live feed or timers for a page that is gone
       const closureNote = (p) => {
         const t = Date.now();   // the table re-renders on every ticker, so the countdown must read the clock, not the mount time
@@ -740,7 +748,7 @@
             { key: 's', label: 'Closes', render: (g) => h('span', { class: g.startTime <= t ? 'neg' : '' }, g.startTime <= t ? 'closed now' : U.fmtWhen(g.startTime)) },
             { key: 'e', label: 'Reopens', render: (g) => U.fmtWhen(g.endTime) },
             { key: 'd', label: 'Duration', num: true, render: (g) => U.fmtDuration(g.endTime - g.startTime) },
-          ], rows: upcoming, empty: 'No closures scheduled', phone: { title: 'm', aside: 'd' },
+          ], rows: upcoming, empty: gapsErr ? 'The closures could not be read: tried again every minute' : 'No closures scheduled', phone: { title: 'm', aside: 'd' },
         }));
       }
       renderGaps();

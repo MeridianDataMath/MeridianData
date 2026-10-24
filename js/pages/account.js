@@ -143,6 +143,8 @@
   /** TP / SL as Meridian's app (AN.appTpSl): the whole-position take profit / stop loss and the partial ones counted; the
    *  site's nearest exit levels (stops and reduce-only limits, whole or partial: AN.attachStops) in the tooltip */
   const tpslCell = (r) => {
+    // the stop orders could not be read (and none were read before): "—" would say there are none
+    if (r.stopsUnknown) return h('span.dim', { title: 'The stop orders of this account could not be read: whether this position has a take profit or a stop loss is not known' }, '?');
     const near = (label, list) => (list && list.length ? `Nearest ${label}: ${exitTxt(list[0], r)}` + (list.length > 1 ? ` (+${list.length - 1} more)` : '') : `No ${label}`);
     const title = 'The site\'s nearest exit levels, from stop and reduce-only orders, whole or partial:\n' + near('take profit', r.tp) + '\n' + near('stop loss', r.sl);
     const whole = r.appTp != null || r.appSl != null;
@@ -248,7 +250,7 @@
         if (!U.isAddress(addr)) { U.replace(page, h('div.card', h('div.error', 'Invalid address. Enter a 0x wallet address (40 hex characters) or a subaccount ID.'))); return; }
         if (U.isExcluded(addr)) { U.replace(page, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }   // U.EXCLUDED
         subs = await A.subaccountsOf(addr, ctx);
-      } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.dispatch())); return; }
+      } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }
       if (!subs.length) {
         const predictLine = h('div.small', { style: { marginTop: '8px' } });
         U.replace(page, h('div.card', h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No Meridian perps subaccounts are registered for ', h('span.addr', addr), '.'), h('div.small', 'Perps accounts appear here once the wallet has deposited on ', h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), '. ', h('a', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, 'View on explorer')), predictLine)));
@@ -275,7 +277,7 @@
       const subName = U.decodeBytes32(sa.name);
       const fav = { address: addr, subaccountId: sa.id, name: subName };
       let ref;
-      try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.dispatch())); return; }
+      try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }
 
       // ---- topbar header ----
       const subSel = h('select', { onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name))));
@@ -362,18 +364,28 @@
     // ---- state + tables (base data) ----
     let base = null;
     async function loadBase(refresh) {
-      const [balances, positions, working, pending, vol] = await Promise.all([
-        A.balances(sid, cx), A.openPositions(sid, cx), A.openOrders(sid, cx).catch(() => []), A.pendingOrders(sid, cx).catch(() => []), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
+      // a failed read of the orders or the stops keeps the list last read (and says so), never an empty one: "Open orders
+      // 0" and no TP / SL on a failed refresh read as an account without any
+      const failed = [];
+      const orRead = (p, k) => p.catch((e) => { if (isAbort(e)) throw e; failed.push(k); return base && base[k + 'Read'] ? base[k + 'Read'] : null; });
+      const [balances, positions, working0, pending0, vol] = await Promise.all([
+        A.balances(sid, cx), A.openPositions(sid, cx), orRead(A.openOrders(sid, cx), 'working'), orRead(A.pendingOrders(sid, cx), 'pending'), A.totalVolume(sid, { signal: cx.signal, ttl: 60000 }).catch(() => null),
       ]);
+      const working = working0 || [], pending = pending0 || [];
+      // ordersErr: null when both lists were read now; else whether an earlier read stands in for the failed one (old), or
+      // nothing is known (unknown), and since when the lists shown are
+      const ordersErr = !failed.length ? null : { unknown: !working0 || !pending0, at: base && base.ordersAt };
+      const ordersAt = failed.length ? base && base.ordersAt : Date.now();
       const orders = working.concat(pending);
       const pids = Array.from(new Set(positions.map((p) => p.productId)));
       const prices = pids.length ? await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }) : {};
       const acct = AN.accountState({ balances, positions, ref, prices });
       AN.attachStops(acct.positions, orders); AN.appTpSl(acct.positions, orders);
+      if (!pending0) for (const p of acct.positions) p.stopsUnknown = true;
       const sig = balances.map((b) => String(b.tokenAddress).toLowerCase() + ':' + b.amount).sort().join('|');
       if (balSig != null && sig !== balSig) { seriesStale = true; trailTries = 0; }   // a close, partial close, funding settlement, fee or transfer moved a balance
       balSig = sig;
-      base = { balances, positions, orders, working, pending, acct, vol, prices };
+      base = { balances, positions, orders, working, pending, workingRead: working0, pendingRead: pending0, ordersErr, ordersAt, acct, vol, prices };
       lastLoad = Date.now(); updLbl.textContent = 'updated just now';
       renderState();
       if (refresh) { ttCounts(); if (tt === 'positions' || tt === 'orders') renderTT(); } else renderTables();
@@ -410,12 +422,14 @@
           ...kv('Margin ratio', mrTxt(a.marginRatio), a.marginRatio != null && a.marginRatio > 2 / 3 ? 'neg' : '', 'Maintenance margin ' + U.fmtUsd(a.mm) + ' ÷ equity, over every pool, as Meridian\'s app shows it on the trade page: a pool is liquidated when its own reaches 100%'
             + (cross && cross.marginRatio != null && a.pools.some((p) => p !== cross && p.marginRatio != null) ? `. The cross pool alone (the app's Trade Stats "Cross Margin Ratio"): ${mrTxt(cross.marginRatio)}` : '')),
           ...kv('Open positions', String(a.positions.length)),
-          ...kv('Open orders', String(base.working.length)),
-          ...kv('Stop orders (TP/SL)', String(base.pending.length)),
+          ...kv('Open orders', base.workingRead ? String(base.working.length) : '—', '', base.workingRead ? null : 'The open orders could not be read'),
+          ...kv('Stop orders (TP/SL)', base.pendingRead ? String(base.pending.length) : '—', '', base.pendingRead ? null : 'The stop orders could not be read'),
           h('span.sep'),
           ...kv('Volume (all time)', base.vol == null ? '—' : U.fmtUsd(base.vol)),
           ...kv('Subaccount', st.subName)),
-        pools.length ? h('div', { style: { marginTop: '6px' } }, pools) : h('div.empty.small', 'No balances'));
+        pools.length ? h('div', { style: { marginTop: '6px' } }, pools) : h('div.empty.small', 'No balances'),
+        base.ordersErr ? h('div.small', { style: { color: 'var(--amber)', marginTop: '8px' } }, base.ordersErr.unknown ? 'The orders and stops could not be read: their counts and the TP / SL of the positions are not known. ' : 'The last read of the orders and stops failed: those shown are from ' + U.fmtTime(base.ordersErr.at) + '. ',
+          h('a', { href: '#', onclick: (e) => { e.preventDefault(); loadBase(true).catch((er) => { if (!isAbort(er)) U.toast('Read failed: ' + er.message); }); } }, 'Try again')) : null);
     }
 
     // ---- tables ----
@@ -512,7 +526,7 @@
           ], rows: a.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
         }));
       } else if (tt === 'orders') {
-        U.replace(ttBody, UI.table({ cols: orderCols(ref, base.orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+        U.replace(ttBody, UI.table({ cols: orderCols(ref, base.orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(base.orders, (o) => o.createdAt, true), empty: base.ordersErr && base.ordersErr.unknown ? 'The orders and stops could not be read' : 'No open orders or stops' }));
       } else if (tt === 'allorders') {
         const sigs = {};   // filled before the first page renders
         U.replace(ttBody, cursorTable({
@@ -622,7 +636,7 @@
 
     // ---- series / chart ----
     const seriesCache = new Map();
-    let series = null, loadingRange = false;
+    let series = null, loadingRange = false, seriesErr = null;   // seriesErr: the range's history could not be read
     let balSig = null, seriesStale = false, seriesGen = 0, reloadAt = 0, trailTries = 0;
     // the archive can trail the live balance briefly (or a range comes from the 60 s request cache): such a series is
     // reloaded on a later refresh, at most once a minute and three times per balance change (an account whose archive
@@ -651,13 +665,19 @@
       const res = AN.resFor(range);
       const start = AN.seriesStart(range, sa.createdAt);   // the site's window and Meridian's
       const key = range;
+      seriesErr = null;
       if (seriesCache.has(key)) { series = seriesCache.get(key); loadingRange = false; drawChart(); return; }   // (a load still running for another range then ends without drawing)
       loadingRange = true; drawChart();
       let s;
       try {
         s = await AN.loadSeries(sid, { start, resolution: res, signal: cx.signal, ttl: 60000, charges: true, positions: positionsList() });
         seriesCache.set(key, s);
-      } catch (e) { if (isAbort(e) || key !== range) return; series = null; chartBox.appendChild(h('div.overlay', 'History unavailable: ' + e.message)); loadingRange = false; return; }
+      } catch (e) {
+        if (isAbort(e) || key !== range) return;
+        // drawn as an error with a Retry (and the tiles as "—"), which the 30 s refresh keeps: before, the refresh turned
+        // "History unavailable" back into a spinner that never ended
+        series = null; seriesErr = e; loadingRange = false; drawChart(); return;
+      }
       if (key !== range) return;   // another range was picked meanwhile: its own load draws the chart
       series = s;
       if (base && s.length && trails(s) && trailTries < 3) seriesStale = true;
@@ -665,6 +685,13 @@
     }
     function drawChart() {
       U.$$('.overlay', chartBox).forEach((o) => o.remove());
+      if (!loadingRange && !series && seriesErr) {
+        C.destroy(chartCanvas);
+        chartBox.appendChild(h('div.overlay', h('div', { style: { textAlign: 'center' } }, h('div', 'History unavailable: ' + (seriesErr.message || seriesErr)), h('button.btn.sm', { style: { marginTop: '8px' }, onclick: () => loadRange() }, 'Retry'))));
+        const rl = RANGES.find((r) => r.v === range).label;
+        U.replace(tiles, ['PnL', 'Volume', 'Funding', 'Fees', 'Max drawdown', 'Sharpe'].map((k) => UI.stat(k + ' (' + rl + ')', '—')));
+        return;
+      }
       if (loadingRange || !series) { C.destroy(chartCanvas); chartBox.appendChild(h('div.overlay', h('span.loading', h('span.spinner'), 'Loading history…'))); return; }
       const res = A.RES[AN.resFor(range)];
       const start = AN.startFor(range, sa.createdAt);
@@ -793,6 +820,9 @@
 
     const marks = {}; // ticker -> {mark, bid, ask}
     let positions = [], orders = [], fills = [];
+    // a read that failed (and nothing read before it): its list says so, with a Retry, instead of "No …"
+    const err = { live: null, fills: null, events: null, mkt: null };
+    const failNote = (what, e, retry) => UI.error(what + ' could not be read: ' + ((e && e.message) || e), retry);
     const prices = {};
     const renderPos = () => {
       const px = {};
@@ -813,12 +843,12 @@
           { key: 'fund', label: 'Funding', num: true, title: FUND_TITLE, render: fundCell },
           { key: 'pfee', label: 'Position fee', num: true, title: PFEE_TITLE, render: pfeeCell },
           { key: 'upd', label: 'Updated', render: (r) => h('span.dim', U.fmtAgo(r.p.updatedAt)) },
-        ], rows: acct.positions, empty: 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
+        ], rows: acct.positions, empty: err.live ? 'The positions could not be read' : 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
       }));
     };
-    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref, orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: 'No open orders or stops' }));
+    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref, orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: err.live ? 'The orders could not be read' : 'No open orders or stops' }));
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled, lotOf(ref, f.productId)) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
-    const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : UI.empty('No fills yet'));
+    const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : err.fills ? failNote('The fills', err.fills, loadFills) : UI.empty('No fills yet'));
     let events = [];
     const evRow = (e) => (e.kind === 'liq'
       ? h('div.it', { class: e._new ? 'flash' : '' }, h('span.t', U.fmtFeedTime(e.t)), UI.chip('Liquidated', 'red'),
@@ -826,25 +856,43 @@
       : h('div.it', { class: e._new ? 'flash' : '' }, h('span.t', U.fmtFeedTime(e.t)), UI.chip(e.typ, e.typ === 'DEPOSIT' ? 'green' : e.typ === 'WITHDRAW' ? 'red' : 'blue'),
         h('span.num', U.fmtNum(e.amt, 2) + ' ' + (e.token || '') + (e.toToken ? ' → ' + e.toToken : '')), e.eid ? h('span.xs.dim', '→ ' + U.lzChainName(e.eid)) : null, U.num(e.fee) ? h('span.xs.dim', 'fee ' + U.fmtNum(e.fee, 2)) : null, h('span.grow'),
         h('span.xs', { class: e.st === 'COMPLETED' ? 'pos' : e.st === 'REJECTED' ? 'neg' : '' }, String(e.st || '').toLowerCase()), e.tx ? h('a.xs', { href: U.explorerTx(e.tx), target: '_blank', rel: 'noopener', title: e.tx }, 'tx') : null));
-    const renderEvents = () => U.replaceLive(evBody, events.length ? events.slice(0, 20).map(evRow) : UI.empty('No transfers yet'));
+    const renderEvents = () => U.replaceLive(evBody, events.length ? events.slice(0, 20).map(evRow) : err.events ? failNote('The transfers', err.events, loadEvents) : UI.empty('No transfers yet'));
 
     async function reload() {
       try {
         const [p, o] = await Promise.all([A.openPositions(sid, cx), A.activeOrders(sid, cx)]);
-        positions = p; orders = o;
+        positions = p; orders = o; err.live = null;
         const pids = Array.from(new Set(positions.map((x) => x.productId)));
         if (pids.length) Object.assign(prices, await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }));
         renderPos(); renderOrd(); if (bookHook) bookHook();   // the book marks this account's own resting orders
-      } catch (e) { if (!isAbort(e)) console.warn(e); }
+      } catch (e) {
+        if (isAbort(e)) return;
+        console.warn(e);
+        // a refresh that fails keeps what is shown; a first read that fails says so (the socket's next event tries again)
+        if (!positions.length && !orders.length) { err.live = e; renderPos(); renderOrd(); }
+      }
     }
     // a busy account's events rarely leave a 500 ms lull, which a debounce waited for (20 s and more); a throttle reloads
     // at most every 3 s and still applies the last event
     const reloadThrottled = U.throttle(reload, 3000);
-    try { const f = await A.fillsPage(sid, null, 30, cx); fills = f.rows; } catch (_) {}
+    // the latest fills and transfers over REST (again after a reconnect: the account streams send no snapshot), merged by
+    // id with what the socket delivered meanwhile
+    async function loadFills() {
+      try { const f = await A.fillsPage(sid, null, 30, cx); const ids = new Set(f.rows.map((x) => x.id)); fills = U.sortBy(f.rows.concat(fills.filter((x) => !ids.has(x.id))), (x) => U.num(x.createdAt), true).slice(0, 100); err.fills = null; }
+      catch (e) { if (isAbort(e)) return; err.fills = e; }
+      if (!cx.signal.aborted) renderFills();
+    }
+    function loadEvents() {
+      return A.transfersPage(sid, null, 10, cx).then((r) => {
+        if (cx.signal.aborted) return;
+        const rest = r.rows.map(transferItem); const ids = new Set(rest.map((x) => x.id));
+        events = U.sortBy(rest.concat(events.filter((e) => e.kind === 'liq' || !ids.has(e.id))), (x) => U.num(x.t), true); err.events = null; renderEvents();
+      }, (e) => { if (isAbort(e) || cx.signal.aborted) return; err.events = e; renderEvents(); });
+    }
+    await loadFills();
     if (cx.signal.aborted) return;
-    renderFills();
     // the last transfers to start the feed with; the WebSocket adds the rest as they happen
-    A.transfersPage(sid, null, 10, cx).then((r) => { if (!cx.signal.aborted) { events = r.rows.map(transferItem).concat(events.filter((e) => e.kind === 'liq')); renderEvents(); } }, () => renderEvents());
+    loadEvents();
     await reload();
     if (cx.signal.aborted) return;   // the viewer left during the first loads: no subscription would ever be cleaned up
 
@@ -1022,16 +1070,16 @@
     cx.onCleanup(() => document.removeEventListener('visibilitychange', onShow));
     let unsubTrades = null, mktRows = [];
     const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
-    const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+    const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : err.mkt ? failNote('The trades', err.mkt, () => selectMarket(curMarket)) : UI.empty('No trades yet'));
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
       if (unsubTrades) unsubTrades();
       curMarket = ticker; bids.clear(); asks.clear(); lastBookT = null; mkSel.value = ticker; bookLoaded = false; centerNext = true;
       book.classList.remove('full', 'pause-hover'); U.replace(book, UI.loading('Loading order book…')); noteText.textContent = ''; again.hidden = true;
       const prod = ref.byTicker[ticker];
-      mktRows = []; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
+      mktRows = []; err.mkt = null; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
       if (prod) {
-        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, lot: prod.lotSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); renderMkt(); }).catch(() => { if (curMarket === ticker) renderMkt(); });
+        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, lot: prod.lotSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); err.mkt = null; renderMkt(); }).catch((e) => { if (curMarket === ticker && !isAbort(e)) { err.mkt = e; renderMkt(); } });
         unsubTrades = A.ws.subscribe('TradeFill', ticker, (m) => {
           const d = m.data || {};
           for (const it of d.d || []) { const sids = it.sids || []; const mine = sids[0] === sa.id ? 'this account · taker' : sids[1] === sa.id ? 'this account · maker' : null; mktRows.unshift({ id: it.id, t: d.t || m.t, tick: prod.tickSize, lot: prod.lotSize, side: it.sd, size: it.sz, price: it.px, mine, _new: true }); }
@@ -1217,10 +1265,15 @@
   async function mountRewards(el, st, cx) {
     const { addr, sa } = st;
     U.replace(el, UI.loading('Loading points…'));
-    const [summaries, total, signers, quota] = await Promise.all([A.pointsSummary(addr, cx).catch(() => []), A.pointsTotal(cx).catch(() => null), A.signers(sa.id, cx).catch(() => []), A.signerQuota(sa.id, cx).catch(() => null)]);
+    // a read that fails is said as such ("No points recorded" and "No linked signers" read as facts); a tab left meanwhile
+    // stops here (its abort is not a failed read)
+    const fails = {};
+    const or = (p, k, v) => p.catch((e) => { if (isAbort(e)) throw e; fails[k] = e; return v; });
+    const [summaries, total, signers, quota] = await Promise.all([or(A.pointsSummary(addr, cx), 'points', []), A.pointsTotal(cx).catch((e) => { if (isAbort(e)) throw e; return null; }), or(A.signers(sa.id, cx), 'signers', []), A.signerQuota(sa.id, cx).catch((e) => { if (isAbort(e)) throw e; return null; })]);
     const cards = [];
     const seasons = U.sortBy(summaries, (s) => s.season, true);
-    if (!seasons.length) {
+    if (fails.points) cards.push(h('div.card', UI.error('The points could not be read: ' + (fails.points.message || fails.points), () => st.showTab('rewards'))));
+    else if (!seasons.length) {
       cards.push(h('div.card', h('div.empty', h('div', { style: { marginBottom: '6px' } }, 'No points recorded for this address yet.'), h('div.small', 'Meridian distributes points per season and epoch; they show up here once the first epoch is settled.'))));
     }
     for (const s of seasons) {
@@ -1236,10 +1289,11 @@
           // what the most recent distribution added: the season's points now against before it (Meridian keeps both)
           lastDrop(s)),
         h('h3', { style: { margin: '16px 0 8px' } }, 'Points by epoch'), epochs, h('div.chart-note', 'Trading and referral points per epoch, as Meridian\'s points history shows them')));
-      // epoch history (probe epochs until two consecutive empties)
+      // epoch history: epochs probed from the first, up to two empty ones after the last with points (the API does not
+      // say how many epochs there are; an address that earned nothing in the first epochs still has its later ones read)
       (async () => {
         const pts = []; let misses = 0;
-        for (let e = 1; e <= 24 && misses < 2; e++) {
+        for (let e = 1; e <= 24 && !(pts.length && misses >= 2); e++) {
           let rows = [];
           try { rows = await A.points(addr, s.season, e, cx); } catch (err) { if (isAbort(err)) return; break; }
           if (!rows.length) { misses++; continue; }
@@ -1268,7 +1322,7 @@
         { key: 'linked', label: 'Linked', render: (r) => h('span.dim', blockLink(r.blockNumber, U.fmtDate(r.linkedAt || r.createdAt))) },
         { key: 'exp', label: 'Expires', render: (r) => h('span.dim', r.expiresAt ? U.fmtDate(r.expiresAt) : '—') },
         { key: 'rev', label: 'Revoked', render: (r) => (r.revokedAt || r.revokedBlockNumber ? h('span.neg', blockLink(r.revokedBlockNumber, r.revokedAt ? U.fmtDateTime(r.revokedAt) : 'block ' + r.revokedBlockNumber)) : h('span.dim', '—')) },
-      ], rows: signers, empty: 'No linked signers', phone: { title: 'name', aside: 'status' },
+      ], rows: signers, empty: fails.signers ? 'The linked signers could not be read: ' + (fails.signers.message || fails.signers) : 'No linked signers', phone: { title: 'name', aside: 'status' },
     }), quotaNote));
     U.replace(el, h('div.stack', cards));
   }

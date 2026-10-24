@@ -50,3 +50,18 @@ test('a wallet, question or slip file without a build time of its own takes the 
     assert.equal(asked.filter((u) => u.endsWith('predict-status.json')).length, 1, 'the status is read once a minute at most');
   } finally { globalThis.fetch = fetch0; }
 });
+
+test('P.snapshotFile: a file that is not there is null, one that could not be read throws (no "no activity" on a dropped connection)', async () => {
+  const fetch0 = globalThis.fetch;
+  const html = { ok: true, status: 200, headers: { get: (k) => (k === 'content-type' ? 'text/html; charset=utf-8' : null) }, json: async () => { throw new SyntaxError('Unexpected token <'); } };
+  const answer = (r) => { globalThis.fetch = async () => (r instanceof Error ? Promise.reject(r) : r); };
+  try {
+    answer(html); assert.equal(await P.snapshotFile('bettors/0xabc.json'), null, 'the site\'s own page in its place: no such file');
+    answer({ ok: false, status: 404, headers: { get: () => null } }); assert.equal(await P.snapshotFile('bettors/0xabc.json'), null, 'a 404: no such file');
+    answer(new TypeError('Failed to fetch')); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 'NETWORK' && /could not be read/.test(e.message));
+    answer({ ok: false, status: 503, headers: { get: () => null } }); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 503);
+    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => { throw new TypeError('network error'); } }); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 'NETWORK', 'a download cut off');
+    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ builtAt: 7, predictions: [] }) }); assert.deepEqual(await P.snapshotFile('x.json'), { builtAt: 7, predictions: [] });
+    const ab = Object.assign(new Error('aborted'), { name: 'AbortError' }); answer(ab); await assert.rejects(P.snapshotFile('x.json'), (e) => e.name === 'AbortError', 'an abort is passed on');
+  } finally { globalThis.fetch = fetch0; }
+});

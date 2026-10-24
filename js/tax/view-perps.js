@@ -382,7 +382,10 @@
         events = buildEvents();
         dispCard.classList.remove('no-print'); txCard.classList.remove('no-print');   // their rows are in: they print
         const n = D.inP.length, w = EX.eventWarnings({ ev, D });
-        U.replace(evLine, h('div.dim.small', `Trade detail: ${plural(ev.fills.length, 'fill')}, ${plural(ev.touched.length, 'position')} and ${ev.charges ? plural(ev.charges.length, 'hourly funding charge') : 'no funding charges (unreadable)'} read; ${plural(n, 'disposal')} in the period` + (w.length ? '' : ', each UTC day checked against the exchange\'s ledger') + '.'));
+        U.replace(evLine, h('div.dim.small', `Trade detail: ${plural(ev.fills.length, 'fill')}, ${plural(ev.touched.length, 'position')} and ${ev.charges ? plural(ev.charges.length, 'hourly funding charge') : 'no funding charges (unreadable)'} read; ${plural(n, 'disposal')} in the period` + (w.length ? '' : ', each UTC day checked against the exchange\'s ledger') + '.'),
+          // reads that failed are not kept for the tab (T.load): another try reads them again
+          ev.failed.length || !ev.charges ? h('div.small', { style: { color: 'var(--amber)', marginTop: '4px' } }, 'Not read: ' + (ev.failed.length ? ev.failed.join('; ') : 'the funding charges') + '. The files mark what this leaves out. ',
+            h('button.btn.sm', { onclick: () => { evPromise = null; asked = false; loadEvents().catch(() => {}); } }, 'Load again')) : null);
         renderAll();
         if (ctx.onDetail) ctx.onDetail(ev, D, null);   // the Holdings card: sizes and unsettled funding at the instants
         return D;

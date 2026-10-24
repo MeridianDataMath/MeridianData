@@ -124,9 +124,22 @@
   };
   /** Fetch a snapshot file by relative path (served next to the site; the deploy copies the "snapshots" branch into data/). */
   P.SNAPSHOT_BASES = ['data/'];
+  // A file that is not there is null: the site answers it with its own page (index.html, status 200) or a 404. One that
+  // could not be read (no connection, a server error, a download cut off) throws, so a page can say so and offer a Retry
+  // rather than "no activity for this address".
   P.snapshotFile = async function (rel, { signal } = {}) {
-    const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => { try { const r = await fetch(b + rel, { cache: 'no-cache', signal }); if (!r.ok) return null; return await r.json(); } catch (e) { if (e && e.name === 'AbortError') throw e; return null; } }));
+    let fail = null;
+    const failed = (why, code) => { fail = fail || Object.assign(new Error('The snapshot could not be read (' + why + ')'), { code }); return null; };
+    const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => {
+      let r;
+      try { r = await fetch(b + rel, { cache: 'no-cache', signal }); } catch (e) { if (e && e.name === 'AbortError') throw e; return failed('no connection', 'NETWORK'); }
+      if (r.status === 404) return null;
+      if (!r.ok) return failed('HTTP ' + r.status, r.status);
+      if (/text\/html/i.test((r.headers && r.headers.get && r.headers.get('content-type')) || '')) return null;   // the site's page in its place
+      try { return await r.json(); } catch (e) { if (e && e.name === 'AbortError') throw e; return e && e.name === 'SyntaxError' ? null : failed('download cut off', 'NETWORK'); }
+    }));
     const best = got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;
+    if (!best && fail) throw fail;
     // the wallet, question and slip files carry no build time of their own, so one whose content did not change is the
     // same file at every build: theirs is the snapshot's
     if (best && best.builtAt == null && /^(bettors|questions|slips)\//.test(rel)) best.builtAt = await P.snapshotAt();

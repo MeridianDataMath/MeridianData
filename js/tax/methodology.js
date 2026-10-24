@@ -28,7 +28,7 @@
       ['Disclaimer', T.DISCLAIMER],
       ['Wallet', ctx.addr || ''],
       ['Subaccount', ctx.sid ? (ctx.subName ? ctx.subName + ' · ' : '') + ctx.sid : 'none: this wallet has no Meridian perps subaccount'],
-      ['Predict wallet', pw ? pw + (ctx.pw && ctx.pw.via ? ' (the smart account the wallet owns, from which the Meridian app places predictions)' : '') : pr && pr.failed ? 'not known (the Predict data did not load)' : 'not looked up yet'],
+      ['Predict wallet', pw ? pw + (ctx.pw && ctx.pw.error ? ' (the address itself: its Predict wallet could not be looked up)' : ctx.pw && ctx.pw.via ? ' (the smart account the wallet owns, from which the Meridian app places predictions)' : '') : pr && pr.failed ? 'not known (the Predict data did not load)' : 'not looked up yet'],
       ['Report link', ctx.link || ''],
       ['Period', P.label + ': ' + P.startText + ' → ' + P.endText + ' (the end is the first instant after the period)'],
       ['Fiscal year', P.mode === 'year' ? (T.PRESETS[P.preset] || T.PRESETS.cal).label + '; the year is named as that country names it' : 'a custom range of local dates, both included (quarters are calendar quarters)'],
