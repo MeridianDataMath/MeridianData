@@ -229,17 +229,23 @@ an old one fetches the new one. The leaderboard rows carry a compact all-time Pn
 fails, the site deploys without cards and share links fall back to the site card. A card takes
 about 0.1 s of one core and there are a couple of thousand, so the step runs one process per core
 (`--jobs`) and starts no card after minute 12 of the job (`--deadline`), leaving the deploy room in
-the 15-minute limit; slips come last, the oldest first. Locally: `npm ci`, then
+the 15-minute limit; slips come last, the oldest first. The cards also get only what the rest of
+`dist/` leaves under 19,500 files (two files a card; Cloudflare takes 20,000 a version), so a busier
+exchange leaves out the last cards instead of failing every deploy at the file count. Locally: `npm ci`, then
 `node scripts/build-cards.mjs --dist <folder with data/>` (`--only <address or prediction id>`
 for one card, `--jobs 4` to use four cores).
 
 The perps build has a time budget (`--budget` seconds, 9 minutes by default: four accounts are
 built at a time and one takes two to three seconds from a PC, about half that on the Action's
 runner; an active one with fills and candles takes more, and an older one more again, since its
-funding charges are read three days at a time; the job has 15 minutes in all). The funding charges
-already read are kept between runs (`data/cache/perps-funding.json`, in GitHub's cache, never
-deployed): what is over 6 hours old does not change, so a run reads only the newer windows, one or
-two requests an account instead of up to 40 for the older ones;
+funding charges are read three days at a time; the job has 15 minutes in all). Rows still being read
+9.5 minutes after the build started stop and are carried over, so the file is written before the
+step's 10-minute stop. The funding charges and the mPerp position fees already read are kept between
+runs (`data/cache/perps-funding.json`, in GitHub's cache, never deployed): what is over 6 hours old
+does not change, so a run reads only the newer windows, one or two requests an account instead of up
+to 40 for the older funding and about 150 for a month of position fees (pruned to the accounts that
+still exist only when the run's list is not refused). Only an account's newest 400 fills are read
+for the drift (none for a market maker), and no answer is kept in memory for the whole build;
 a row that fails is built once more after a pause, and an account still not built (or not reached)
 keeps its newest row from an earlier snapshot no older than 7 days, marked `carried` with its own
 `builtAt` (`mergeRows`); the snapshot is marked partial and counts `failed`, `skipped`, `retried`,

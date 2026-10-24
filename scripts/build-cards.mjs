@@ -36,11 +36,18 @@ const deadline = opt('deadline', null) ? Number(opt('deadline')) * 1000 : Infini
 // rows in the same order (and judge slips at the same --now), so between them every card is made once
 const [shardI, shardN] = (opt('shard', '0/1').split('/').map(Number));
 const now = Number(opt('now', Date.now()));
+// Cloudflare takes 20,000 files a version: the cards (two files each, the site card one) get what the rest of dist leaves
+// under 19,500, counted once before any card (the parent passes it to its shards). A busier exchange then leaves out the
+// last cards (slips, the oldest first) instead of failing every deploy at the file count. Not counted for the repo itself
+// (no --dist): its own files are no deploy
+const FILES_MAX = 19500;
+const countFiles = (d) => { let k = 0; const walk = (p) => { for (const e of fs.readdirSync(p, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(p, e.name)); else k++; } }; try { walk(d); } catch (_) {} return k; };
+const maxCards = opt('max-cards', null) != null ? Number(opt('max-cards')) : dist === root ? Infinity : Math.max(0, Math.floor((FILES_MAX - countFiles(dist) - 1) / 2));
 
 if (jobs > 1 && !args.includes('--shard')) {
   const t0 = Date.now();
   const codes = await Promise.all(Array.from({ length: jobs }, (_, i) => new Promise((resolve) => {
-    const c = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args, '--shard', `${i}/${jobs}`, '--now', String(now)], { stdio: ['ignore', 'inherit', 'inherit'] });
+    const c = spawn(process.execPath, [fileURLToPath(import.meta.url), ...args, '--shard', `${i}/${jobs}`, '--now', String(now), '--max-cards', String(maxCards)], { stdio: ['ignore', 'inherit', 'inherit'] });
     c.on('error', (e) => { console.warn('shard', i, 'did not start:', e.message); resolve(1); });
     c.on('exit', (code) => resolve(code == null ? 1 : code));
   })));
@@ -62,11 +69,11 @@ const render = (svg) => new Resvg(svg, { fitTo: { mode: 'original' }, background
 const readJson = (p) => { try { const t = fs.readFileSync(p, 'utf8'); return t.trimStart().startsWith('{') ? JSON.parse(t) : null; } catch (_) { return null; } };
 const write = (rel, data) => { const p = path.join(dist, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, data); };
 const ver = (svg) => crypto.createHash('sha1').update(svg).digest('hex').slice(0, 10);   // the image URL changes only when the image does
-const t0 = Date.now(); let n = 0, failed = 0, bad = 0, late = 0, turn = 0;
+const t0 = Date.now(); let n = 0, failed = 0, bad = 0, late = 0, capped = 0, turn = 0;
 const card = (rel, svg) => { try { write(rel, render(svg)); n++; return rel + '?v=' + ver(svg); } catch (e) { failed++; console.warn('card failed', rel, e.message); return null; } };
 const first = shardI === 0;   // the one process that makes the site card and reports skipped rows
 /** Is the next card this process's (and is there still time for it)? Called once per card, in the same order everywhere. */
-const mine = () => { if ((turn++ % shardN) !== shardI) return false; if (Date.now() > deadline) { late++; return false; } return true; };
+const mine = () => { const i = turn++; if ((i % shardN) !== shardI) return false; if (i >= maxCards) { capped++; return false; } if (Date.now() > deadline) { late++; return false; } return true; };
 // addresses come from the API (through the snapshots) and become file paths and page URLs: anything but a plain address is
 // skipped before a path is built from it (JSON.stringify keeps a hostile value on one log line)
 const isAddr = (a) => /^0x[0-9a-f]{40}$/.test(a);
@@ -163,5 +170,5 @@ if (fs.existsSync(slipDir)) {
 } else if (first) console.warn('no slip files: no slip cards');
 
 console.log(`cards${shardN > 1 ? ` ${shardI + 1}/${shardN}` : ''}: ${n} images (${accounts} accounts, ${wallets} Predict wallets, ${slips} slips${first ? ', site' : ''}) in ${((Date.now() - t0) / 1000).toFixed(1)}s`
-  + (failed ? `, ${failed} failed` : '') + (bad && first ? `, ${bad} rows skipped (not an address)` : '') + (late ? `, ${late} left out at the deadline` : ''));
+  + (failed ? `, ${failed} failed` : '') + (bad && first ? `, ${bad} rows skipped (not an address)` : '') + (late ? `, ${late} left out at the deadline` : '') + (capped ? `, ${capped} left out at Cloudflare's file limit` : ''));
 if (failed && !n) process.exit(1);

@@ -486,7 +486,7 @@
     // for an account never charged one). All-time days before that keep the settled basis: a fee charged then and still
     // owed is booked on that day, and the all-time figure is the same either way
     const pfFrom = AN.positionFeeFrom(positions, h8.length ? h8[0].t : s30, acct.unsettledPositionFee);
-    const pfRows = pfFrom == null ? null : await A.positionFeeCharges(sid, pfFrom, so).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; });
+    const pfRows = pfFrom == null ? null : await A.positionFeeCharges(sid, pfFrom, Object.assign({ cache: ctx && ctx.positionFeeCache }, so)).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; });
     const pf = pfRows ? { charges: pfRows, owed: acct.unsettledPositionFee, from: pfFrom } : null;
     if (!charges) soft.push('funding'); if (pfFrom != null && !pfRows) soft.push('posFees');
     const net = (s, ms) => AN.netOfUnsettled(s, charges, acct.unsettledFunding, ms, pf);
@@ -516,9 +516,11 @@
     if (copyCtx) {
       // fills and the price drift after them only for accounts with a track record worth copying (the candle cache is shared)
       let decays = null;
-      if (ps.closed.length >= 3) {
+      // the newest 400 fills are all the drift measures (two pages); a market maker or one of Meridian's own accounts is never
+      // offered to copy, so its fills are not read at all
+      if (ps.closed.length >= 3 && !row.exchange && !(known && known.kind === 'maker')) {
         try {
-          const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 10, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles);
+          const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 2, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles);
           if (decays && !decays.n && fills.length && copyCtx.candles.failed && copyCtx.candles.failed()) soft.push('candles');   // nothing measured because the candles could not be read
         } catch (e) { if (e && e.name === 'AbortError') throw e; soft.push('fills'); }
         // unmeasured this time: the drift the last build measured stands in, dated (the friction part of the score is 45 %,

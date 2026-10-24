@@ -78,7 +78,9 @@
     }
   }
 
-  /** GET with optional TTL cache (ms). Identical concurrent requests share one fetch. */
+  /** GET with optional TTL cache (ms). Identical concurrent requests share one fetch. A.NO_TTL (the snapshot build): no
+   *  answer is kept, since an account's reads are each asked once and kept them all for the whole build (8 to 20 MB per
+   *  100 accounts). */
   A.get = async function (url, opts = {}) {
     const ttl = opts.ttl || 0;
     if (ttl) {
@@ -90,7 +92,7 @@
     if (cur && !(cur.signal && cur.signal.aborted)) return cur.p;
     const entry = { signal: opts.signal || null, p: null };
     const drop = () => { if (inflight.get(url) === entry) inflight.delete(url); };
-    entry.p = rawGet(url, opts.signal).then((v) => { if (ttl) cache.set(url, { exp: Date.now() + ttl, value: v }); drop(); return v; }, (e) => { drop(); throw e; });
+    entry.p = rawGet(url, opts.signal).then((v) => { if (ttl && !A.NO_TTL) cache.set(url, { exp: Date.now() + ttl, value: v }); drop(); return v; }, (e) => { drop(); throw e; });
     inflight.set(url, entry);
     return entry.p;
   };
@@ -291,19 +293,26 @@
    *  hour, six at a time (a month is about 150 requests: callers ask only from where a fee can matter, AN.positionFeeFrom).
    *  Both ends of a window are inclusive, so the 5-minute bucket two windows share comes back in both: kept once. Null
    *  when a window holds more rows than are read (10 pages, 2,000 rows: a 5-hour window has 20 charges per position);
-   *  o.end, o.onProgress as for A.fundingCharges. */
+   *  o.end, o.onProgress as for A.fundingCharges. o.cache (the snapshot build's, as for funding): what is over 6 hours old
+   *  is kept, one sum per charge time, and only the newer windows are read (every run read a month again: some 4,000
+   *  requests a build). */
   A.positionFeeCharges = async function (sid, start, o) {
     const now = Date.now(), end = o && o.end != null ? Math.min(U.num(o.end), now) : null;
     const W = 5 * U.HOUR, top = Math.ceil((end != null ? end : now) / U.HOUR) * U.HOUR;
-    const ends = []; for (let e = top; e > start; e -= W) ends.push(e);
+    const cache = end == null && o && o.cache ? o.cache : null;
+    const kept0 = cache ? cache.get(sid) : null, kept = kept0 && kept0.from <= start && kept0.until > start && Array.isArray(kept0.rows) ? kept0 : null;
+    const readFrom = kept ? kept.until : start;
+    const ends = []; for (let e = top; e > readFrom; e -= W) ends.push(e);
     // the window reaching the archive's clock sends no endTime (it rejects one past its clock); its span is then under 5 hours
     const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/position-fee', { subaccountId: sid, startTime: e - W, endTime: e >= now - 2 * 60000 ? null : e, order: 'asc' }, { maxPages: 10, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 6, o && o.onProgress);
     const bad = res.find((r) => !r.ok); if (bad) throw bad.error;
     const parts = res.map((r) => r.value);
     if (parts.some((p) => !p || p.truncated)) return null;
-    const seen = new Set(); const rows = [];
-    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end)) { seen.add(k); rows.push(c); } }
-    return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+    const seen = new Set(); const rows = kept ? kept.rows.filter((x) => x[0] >= start).map((x) => ({ time: x[0], positionFeeCharge: x[1] })) : [];
+    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end) && (!kept || U.num(c.time) >= readFrom)) { seen.add(k); rows.push(c); } }
+    rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+    if (cache) { const until = Math.floor((now - 6 * U.HOUR) / U.HOUR) * U.HOUR; const by = new Map(); for (const c of rows) { const t = U.num(c.time); if (t < until) by.set(t, (by.get(t) || 0) + U.num(c.positionFeeCharge)); } cache.set(sid, { from: kept ? kept.from : start, until, rows: Array.from(by.entries()).sort((a, b) => a[0] - b[0]) }); }
+    return rows;
   };
   /**
    * History rows for kind in {balance, unrealized-pnl, volume}, automatically chunked to the

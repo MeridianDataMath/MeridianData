@@ -1229,23 +1229,36 @@ export function publishProblem(out, prevs, now = Date.now()) {
 async function previousSnapshots() {
   const out = [];
   try { out.push(JSON.parse(fs.readFileSync(path.join(outDir, 'leaderboard.json'), 'utf8'))); } catch (_) {}
-  try {
-    const r = await fetch(A.SITE_URL + '/data/leaderboard.json', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
-    if (r.ok) out.push(await r.json()); else console.warn(`published leaderboard.json not read: HTTP ${r.status}`);
-  } catch (e) { console.warn('published leaderboard.json not read:', e.message); }
+  // tried twice: without it the accounts not built this run would be missing instead of carried
+  for (let i = 1; i <= 2; i++) {
+    try {
+      const r = await fetch(A.SITE_URL + '/data/leaderboard.json', { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30000) });
+      if (r.ok) { out.push(await r.json()); break; }
+      console.warn(`published leaderboard.json not read: HTTP ${r.status}`);
+    } catch (e) { console.warn('published leaderboard.json not read:', e.message); }
+    if (i < 2) await sleep(5000);
+  }
   return out;
 }
 async function buildPerps() {
   const started = Date.now();
   // a 429 waits what Retry-After asks, up to a minute (Meridian asks 20 to 60 s; the browsers' 10 s cap made every request of
-  // a penalty fail after two short waits, and its row with it)
-  A.RETRY_WAIT_MAX_MS = 60000;
-  const ctx = { signal: new AbortController().signal };
+  // a penalty fail after two short waits, and its row with it); no answer kept for the whole build (A.NO_TTL)
+  A.RETRY_WAIT_MAX_MS = 60000; A.NO_TTL = true;
+  // the build's own end, 9.5 minutes after this process started: rows still being read then stop (and are carried over), so
+  // the file is written before the step's 10-minute stop (the time budget only kept new accounts from starting, and a slow
+  // API ran a build past the step and the job)
+  const stop = new AbortController();
+  const endT = setTimeout(() => { console.warn('the build\'s time is up: rows still being read are carried over'); stop.abort(); }, Math.max(0, performance.timeOrigin + 9.5 * 60000 - Date.now()));
+  if (endT.unref) endT.unref();
+  const ctx = { signal: stop.signal };
   // the setup reads, each tried once more after a pause (every request already retries its own failures)
   const twice = async (what, f) => { try { return await f(); } catch (e) { console.warn(`${what} failed (${e.message}); once more in 20 s`); await sleep(20000); return f(); } };
   const ref = await twice('products', () => A.ref(ctx));
   // the left-out wallets' accounts (U.EXCLUDED) are not built at all, nor counted
-  const subs = (await twice('account list', () => A.allSubaccounts({ signal: ctx.signal, ttl: 0 }))).filter((sa) => !U.isExcluded(sa.account));
+  const all = await twice('account list', () => A.allSubaccounts({ signal: ctx.signal, ttl: 0 }));
+  if (all.truncated) console.warn(`::warning::the account list stopped at ${all.length} accounts (A.allSubaccounts reads 100 pages): raise its maxPages`);
+  const subs = all.filter((sa) => !U.isExcluded(sa.account));
   const prices = await twice('prices', () => A.marketPrices(ref.active.map((p) => p.id), ctx));
   // copy profiles (Copy trading → Leaders): today's books for slippage at each account's size, and one-minute candles for
   // the price drift after each account's fills, shared across accounts
@@ -1260,13 +1273,19 @@ async function buildPerps() {
   const livePrices = () => { if (Date.now() - pricesAt > 60000) { pricesAt = Date.now(); const was = pricesP; pricesP = A.marketPrices(ref.active.map((p) => p.id), ctx).catch(() => was); } return pricesP; };
   // one account's row: when one of its requests fails for good the others it started stop too (they ran on unawaited while
   // the next account started, adding load while the API was refusing)
-  const buildRow = async (sa) => { const c = new AbortController(); try { return await AN.buildLeaderboardRow(sa, ref, await livePrices(), Object.assign({}, ctx, { signal: c.signal })); } catch (e) { c.abort(); throw e; } };
+  const buildRow = async (sa) => {
+    const c = new AbortController(); const onStop = () => c.abort(); stop.signal.addEventListener('abort', onStop, { once: true });   // the build's end stops it too
+    try { return await AN.buildLeaderboardRow(sa, ref, await livePrices(), Object.assign({}, ctx, { signal: c.signal })); } catch (e) { c.abort(); throw e; }
+    finally { stop.signal.removeEventListener('abort', onStop); }
+  };
   // each account's funding charges as read before: what is over 6 hours old does not change, so only the newer windows
   // are read (A.fundingCharges). data/cache/perps-funding.json, which the deploy keeps between runs (actions/cache)
   const fundFile = path.join(root, 'data', 'cache', 'perps-funding.json');
   const fund = (() => { try { const j = JSON.parse(fs.readFileSync(fundFile, 'utf8')); return j && j.v === 1 && j.a ? j : null; } catch (_) { return null; } })() || { v: 1, a: {} };
   const fundAt = Object.keys(fund.a).length;
   ctx.fundingCache = { get: (sid) => fund.a[sid] || null, set: (sid, e) => { fund.a[sid] = e; } };
+  fund.pf = fund.pf && typeof fund.pf === 'object' ? fund.pf : {};   // the position fees as read before (A.positionFeeCharges), in the same file
+  ctx.positionFeeCache = { get: (sid) => fund.pf[sid] || null, set: (sid, e) => { fund.pf[sid] = e; } };
 
   // A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
   // built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
@@ -1321,15 +1340,20 @@ async function buildPerps() {
   if (ctx.copy.missing.length) out.booksMissing = ctx.copy.missing;
   // a build that would replace the published snapshot with an empty or cut-short list writes nothing: the step fails,
   // and the deploy sends the published one out again (scripts/keep-live.mjs)
-  // the funding kept for the next build, for the accounts that still exist
-  try { const live = new Set(subs.map((s) => s.id)); for (const sid of Object.keys(fund.a)) if (!live.has(sid)) delete fund.a[sid]; writeAtomic(fundFile, JSON.stringify(fund)); console.log(`  funding charges kept for ${Object.keys(fund.a).length} accounts (${fundAt} before this build)`); }
-  catch (e) { console.warn('funding cache not saved:', e.message); }
+  const refused = !built.size ? 'no account was built' : publishProblem(out, prevs);
+  // the funding and position fees kept for the next build: for the accounts that still exist, unless this run's list is
+  // refused (a cut-short list must not drop the others' entries, which the next build would then read again from scratch)
+  try {
+    if (!refused) { const live = new Set(subs.map((s) => s.id)); for (const m of [fund.a, fund.pf]) for (const sid of Object.keys(m)) if (!live.has(sid)) delete m[sid]; }
+    clearTimeout(endT); writeAtomic(fundFile, JSON.stringify(fund)); console.log(`  funding charges kept for ${Object.keys(fund.a).length} accounts (${fundAt} before this build), position fees for ${Object.keys(fund.pf).length}`);
+  } catch (e) { console.warn('funding cache not saved:', e.message); }
   // nothing built this run: no file, so keep-live sends the published one out with its own build time (written, it said
   // "built now" over rows all carried, and the pages' stale notes stayed quiet for up to a week)
   if (!built.size) { console.error(`leaderboard.json not written: no account was built this run (${failed} failed${skipped ? ', ' + skipped + ' not reached' : ''})`); process.exit(1); }
-  const refused = publishProblem(out, prevs);
   if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
-  writeAtomic(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));   // whole or not at all: a step stopped mid-write deploys no half file
+  const text = JSON.stringify(out);
+  writeAtomic(path.join(outDir, 'leaderboard.json'), text);   // whole or not at all: a step stopped mid-write deploys no half file
+  if (text.length > 20e6) console.warn(`::warning::leaderboard.json is ${(text.length / 1e6).toFixed(1)} MB: Cloudflare takes 25 MB a file`);
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
   console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built${softN ? ` (${softN} with a part read in vain)` : ''}, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows${ctx.copy.candles.failed() ? ', ' + ctx.copy.candles.failed() + ' of them unread' : ''}), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
   if (!built.size) process.exit(1);   // (not reached: a run that built nothing writes no file, above)

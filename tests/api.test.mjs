@@ -68,3 +68,28 @@ test('funding charges: with the snapshot build\'s cache, only the windows after 
     assert.equal((await A.fundingCharges('s', start - 30 * 24 * H, { cache })).length > a.length, true, 'an earlier start than kept reads everything again');
   } finally { globalThis.fetch = globalThis.fetch0; delete globalThis.fetch0; }
 });
+
+test('position fees: with the snapshot build\'s cache, only the windows after the kept ones are read, one sum per charge time', async () => {
+  const H = 3600000, now = Date.now(), start = now - 2 * 24 * H;
+  const asked = [];
+  // two positions charged every 15 minutes, 0.5 USD each; both ends of a window are inclusive (a shared bucket twice)
+  globalThis.fetch0 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = new URL(url); const from = Number(u.searchParams.get('startTime')), to = Number(u.searchParams.get('endTime')) || now; asked.push([from, to]);
+    const rows = []; for (let t = Math.ceil(from / (15 * 60000)) * 15 * 60000; t <= to; t += 15 * 60000) if (t < now) for (const p of ['p1', 'p2']) rows.push({ positionId: p, time: t, positionFeeCharge: '0.5' });
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: rows }) };
+  };
+  try {
+    const store = {}; const cache = { get: (sid) => store[sid] || null, set: (sid, e) => { store[sid] = e; } };
+    const a = await A.positionFeeCharges('s', start, { cache });
+    const windows = asked.length; asked.length = 0;
+    assert.ok(windows >= 9, 'two days of 5-hour windows'); assert.ok(store.s && store.s.until <= now - 6 * H);
+    assert.ok(store.s.rows.every((x) => x[1] === 1), 'kept: one sum per charge time (both positions)');
+    const b = await A.positionFeeCharges('s', start, { cache });
+    assert.ok(asked.length <= 2, 'the second read asks only the windows after the kept charges (' + asked.length + ')');
+    const sum = (rows) => rows.filter((r) => Number(r.time) >= start).reduce((t, r) => t + Number(r.positionFeeCharge), 0);
+    assert.equal(sum(b), sum(a), 'the same charges from the start on');
+    const c = await A.positionFeeCharges('s', start, {});
+    assert.equal(sum(c), sum(a), 'and the same as without a cache');
+  } finally { globalThis.fetch = globalThis.fetch0; delete globalThis.fetch0; }
+});
