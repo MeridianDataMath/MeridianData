@@ -138,9 +138,25 @@
     const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
     if (t) { U.replace(t, U.icon(collapsed ? 'panelOpen' : 'panelClose'), h('span.lbl', label), h('span.tip', label)); t.title = label; t.setAttribute('aria-label', label); }
   }
+  // a phone's bottom bar holds the main pages and More (13 icons in a row scrolled sideways, Predict and Data status out
+  // of sight): these sit behind More there, and the Predict pages after the Overview are in its own tabs too
+  const PHONE_MORE = new Set(['account', 'favorites', 'tax', 'status']);
+  const inMore = (n) => PHONE_MORE.has(n.name) || (n.name === 'predict' && n.path !== '/predict');
+  function openMore(btn) {
+    const close = () => { menu.remove(); btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
+    const outside = (e) => { if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+    const links = U.$$('#rail a.nav').filter((a) => a.classList.contains('ph-more')).map((a) => h('a.more-link', { href: a.getAttribute('href'), class: a.classList.contains('active') ? 'active' : null, 'aria-current': a.classList.contains('active') ? 'page' : null, onclick: () => close() }, a.querySelector('svg').cloneNode(true), h('span', a.dataset.label || '')));
+    const menu = h('nav.more-menu', { 'aria-label': 'More pages' }, links,
+      h('a.more-link', { href: A.APP_URL, target: '_blank', rel: 'noopener', onclick: () => close() }, U.svg(U.icons.meridian), h('span', 'Trade on Meridian')));
+    document.body.appendChild(menu); btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
+    const first = menu.querySelector('a'); if (first) first.focus();
+  }
   function renderRail() {
     const rail = U.$('#rail');
-    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, dataset: { name: n.name, path: n.path, prefix: n.prefix || '' } },
+    // aria-label: the link's name when the rail shows icons only (collapsed, a phone), where the label text is hidden
+    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, class: inMore(n) ? 'ph-more' : null, 'aria-label': n.label, dataset: { name: n.name, path: n.path, prefix: n.prefix || '', label: n.label } },
       U.icon(n.icon), h('span.lbl', n.label, n.badge ? h('span.chip.accent', { style: { marginLeft: '8px' } }, n.badge) : null), h('span.tip', n.label));
     // color: the icon's colour (.ic-<color>), as the sections above have theirs
     const ext = (href, icon, label, color) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener', class: color ? 'ic-' + color : null }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
@@ -154,6 +170,7 @@
       ext(ALERTS_X_URL, U.icon('radar'), '@LookonMeridian', 'orange'),
       ext('https://docs.meridian.xyz', U.icon('book'), 'Docs', 'blue'),
       navLink({ name: 'status', path: '/status', icon: 'pulse', label: 'Data status' }),   // last in the rail (user 10-16)
+      h('button.nav.more-btn', { type: 'button', 'aria-label': 'More pages', 'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: (e) => { const b = e.currentTarget; if (U.$('.more-menu')) { U.$('.more-menu').remove(); b.setAttribute('aria-expanded', 'false'); } else openMore(b); } }, U.icon('more')),
       h('button.toggle', { type: 'button', onclick: () => { const c = !U.$('.app').classList.contains('rail-collapsed'); U.storage.set(RAIL_KEY, c); applyRail(c); } }));
     applyRail(railCollapsed());
     // collapsed rail: the hover label sits just right of the row it names (fixed, so the rail's overflow cannot clip it)
@@ -169,10 +186,13 @@
       const p = a.dataset.path;
       const on = p === route.path || (a.dataset.prefix && route.path.startsWith(a.dataset.prefix)) || (route.name !== 'predict' && p !== undefined && a.dataset.name === route.name);
       a.classList.toggle('active', !!on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
+    const more = U.$('.more-menu'); if (more) more.remove();   // a page change closes the phone's More menu
+    const mb = U.$('#rail .more-btn'); if (mb) { mb.setAttribute('aria-expanded', 'false'); mb.classList.toggle('active', U.$$('#rail a.nav.ph-more.active').length > 0); }
     MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
-    const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }   // route: the Predict pages keep their tables on a phone (css .tbl-wrap.ph)
+    const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }
     if (route.name === 'account' && route.params.address) {
       U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub });
       const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();

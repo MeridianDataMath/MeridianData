@@ -20,7 +20,7 @@
     // two-line items, as the Predict feeds do: its lead (a rank) and title column with an aside on the first line, the
     // other columns as label and value under them. o.phone: false keeps the table as it is; { lead, title, aside, hide, wide }
     // names those columns by key (hide: left out on a phone; wide: a value two thirds of the line wide, for a cell that does
-    // not fit a third); without names, a leading '#' column is the lead and the next one the title. The Predict pages keep their tables (css).
+    // not fit a third); without names, a leading '#' column is the lead and the next one the title.
     let ph = null;
     if (o.phone !== false && (o.phone || cols.length >= 5)) {
       const rankFirst = cols.length > 1 && (cols[0].label === '#' || cols[0].key === 'rank');

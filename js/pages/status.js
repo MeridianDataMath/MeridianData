@@ -186,7 +186,7 @@
             routes && routes.length ? h('details', { style: { marginTop: '10px' } }, h('summary.small', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, `What each route costs, in points (${routes.length} routes)`),
               UI.table({ cols: [
                 { key: 'm', label: 'Method', render: (r) => h('span.dim', r.method) },
-                { key: 'p', label: 'Route', render: (r) => h('span.addr', r.path.replace(/\/$/, '')) },
+                { key: 'p', label: 'Route', cls: 'wrap-any', render: (r) => h('span.addr', r.path.replace(/\/$/, '')) },
                 { key: 'c', label: 'Points', num: true, title: 'A fixed cost, or a base cost plus a share of a point for each row a page returns', render: routeCost },
               ], rows: routes, phone: false })) : null,
             h('div.dim.xs', { style: { marginTop: '10px' } }, 'Meridian counts the points of every request against the address it comes from (each visitor\'s browser has its own budget) and, when the request is signed, against the account too; a request over the budget is refused until the window resets (', h('a', { href: 'https://docs.meridian.xyz/developer-guides/trading-api/system-limits', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs: System Limits'), ').'));

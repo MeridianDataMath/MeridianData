@@ -504,7 +504,7 @@
           { key: 'biggestWin', label: 'Best win', num: true, sortVal: 1, title: 'Largest net result on one decided prediction, claimed or not: payout − stake, or for a position traded on the secondary market, the bettor\'s own result with the sale', render: (r) => (r.biggestWin > 0 ? usd(r.biggestWin) : h('span.dim', '—')) },
           { key: 'cat', label: 'Top category', title: 'The category with the most predictions (a tie goes to the larger stake). Mixed: a combo with legs in more than one category.', render: (r) => r.topCat || '—' },
           { key: 'last', label: 'Last bet', sortVal: 1, title: 'When this wallet last placed a prediction', render: (r) => h('span.dim', U.agoEl(r.last)) },
-        ], rows: slice, empty: 'No bettors match', onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } }),
+        ], rows: slice, phone: { lead: 'rank', title: 'address', aside: 'pnl' }, empty: 'No bettors match', onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } }),
           UI.pager({ page: st.page, pageSize: PAGE, total, onPage: (p) => { st.page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         // "364 of 733 bettors · 3+ predictions": the count is of the filtered board, and the filters say so (a full address ignores them)
         const filt = full ? [] : [st.minN > 1 ? `${st.minN}+ predictions` : '', st.cat ? 'top category ' + st.cat : '', st.q ? 'address search' : ''].filter(Boolean);
@@ -1389,7 +1389,7 @@
           { key: 'v7', label: 'Vol 7d', num: true, sortVal: 1, title: volColTitle('7d'), render: (c) => volCell(c, '7d') },
           ...resCols(slice),
           { key: 'l', label: '', render: (c) => (webUrl(c.src) ? srcBtn(c.src) : '') },
-        ], rows: slice, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
+        ], rows: slice, phone: { title: 'q', aside: 'sw', wide: ['r'] }, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         const deadNote = deadN ? ` · ${U.fmtNum(deadN, 0)} more not listed: nothing is at stake on ${deadN === 1 ? 'it' : 'them'} any more (every open bet was cashed out to a market maker, or has a leg resolved against the bettor on Polymarket)` : '';
         U.replace(summary, (st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`) + deadNote);
         // rows that move onto the page once their state is known (the Ended tab re-sorts by stage) need their oracle and

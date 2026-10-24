@@ -672,7 +672,7 @@
         const clickable = !!(t.taker || t.takerOrder);
         return h('div.it', { class: (flash ? 'flash ' : '') + (clickable ? 'click' : ''), title: clickable ? 'Open the account that took this trade' : undefined, onclick: clickable ? () => openAccount(t, 'taker') : undefined },
           h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', { title: feeTitle(t) }, U.fmtUsd(U.num(t.size) * U.num(t.price))),
-          h('span.xs', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));
+          h('span.xs.tm', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));   // .tm: left out on a phone (css)
       };
       const renderTrades = () => U.replaceLive(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
       let resolving = false;

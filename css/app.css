@@ -66,10 +66,12 @@ table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
 ::-webkit-scrollbar-thumb:hover { background: #2e2e30; }
 
 /* the pages behind a share link (/a/<address>, /p/<address>; js/cards.js sharePage): "Opening …" for the moment before js/share.js moves on */
-body.share { display: grid; place-items: center; min-height: 100vh; overflow: auto; padding: 16px; color: var(--text-2); font-size: 15px; }
+body.share { display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; overflow: auto; padding: 16px; color: var(--text-2); font-size: 15px; }
 
 /* ---------- Layout ---------- */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; height: 100vh; }
+/* heights in the dynamic viewport (dvh) where the browser has it: on a phone 100vh counts the room the address bar takes,
+   which put the page's last lines under the bottom bar and a tall dialog's header off the screen; vh first as the fallback */
+.app { display: grid; grid-template-columns: var(--rail) 1fr; grid-template-rows: 100vh; grid-template-rows: 100dvh; height: 100vh; height: 100dvh; }
 .app.rail-collapsed { --rail: var(--rail-min); }
 .rail {
   background: var(--bg-1);
@@ -125,6 +127,7 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
   display: flex; align-items: center; gap: 10px; padding: 0 10px; color: var(--text-3); cursor: pointer; white-space: nowrap; font-size: 12.5px;
 }
 .rail .toggle:hover { background: var(--bg-4); color: var(--text-1); }
+.rail .more-btn { display: none; }   /* a phone only (the bottom bar's More) */
 .rail .toggle svg { width: 16px; height: 16px; flex: none; }
 /* collapsed: icons only, tooltips on hover */
 .app.rail-collapsed .rail { padding: 12px 0; align-items: center; }
@@ -135,7 +138,7 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
 .app.rail-collapsed .rail .toggle { width: 40px; padding: 0; justify-content: center; border-color: transparent; }
 .app:not(.rail-collapsed) .topbar .brand { display: none; }
 
-.frame { display: grid; grid-template-rows: var(--top) 1fr; height: 100vh; min-width: 0; }
+.frame { display: grid; grid-template-rows: var(--top) 1fr; height: 100vh; height: 100dvh; min-width: 0; }
 .topbar {
   display: flex; align-items: center; gap: 12px; padding: 0 20px;
   border-bottom: 1px solid var(--border-2); background: var(--bg-1);
@@ -308,10 +311,12 @@ label.lbl { display: block; font-size: 11.5px; color: var(--text-3); margin-bott
 
 /* modal (resolution details etc.) */
 .modal-bg { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.62); display: grid; place-items: center; padding: 16px; }
-.modal { background: var(--bg-2); border: 1px solid var(--border-3); border-radius: 12px; width: min(720px, 100%); max-height: min(86vh, 900px); display: flex; flex-direction: column; box-shadow: 0 24px 70px rgba(0,0,0,.55); min-width: 0; }   /* min-width 0: a wide table scrolls inside rather than widening the dialog past a phone's screen */
+.modal { background: var(--bg-2); border: 1px solid var(--border-3); border-radius: 12px; width: min(720px, 100%); max-height: min(86vh, 900px); max-height: min(86dvh, 900px); display: flex; flex-direction: column; box-shadow: 0 24px 70px rgba(0,0,0,.55); min-width: 0; }   /* min-width 0: a wide table scrolls inside rather than widening the dialog past a phone's screen */
 .modal-body:focus { outline: none; }   /* focused on open (UI.modal) so the keyboard lands in the dialog and scrolls it; no ring needed */
 .modal-head { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border-2); }
-.modal-head h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; line-height: 1.35; }
+.modal-head h2 { font-size: 15px; font-weight: 600; margin: 0; flex: 1; line-height: 1.35; min-width: 0; }
+/* the leader breakdown's notes: a readable column on a wide screen, the cell's own width on a phone */
+.wf-note { min-width: 260px; }
 .modal-body { padding: 14px 16px; overflow: auto; }
 a.defs { display: inline-flex; align-items: center; gap: 5px; color: var(--text-3); }
 a.defs:hover { color: var(--accent); text-decoration: none; }
@@ -331,6 +336,12 @@ mark.hit { background: var(--accent-dim); color: var(--text-1); border-radius: 3
 .flex-status { min-height: 18px; }
 .rules { white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; color: var(--text-2); max-height: 240px; overflow: auto; background: var(--bg-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 10px 12px; }
 .res-cell { line-height: 1.25; white-space: normal; min-width: 210px; max-width: 340px; }
+/* in a phone row a cell's own minimum widths give way to the row's grid (they pushed a 2-of-6 cell past the card) */
+@container tblph (max-width: 560px) {
+  .tbl-wrap.ph .res-cell, .tbl-wrap.ph td > div[style*="min-width"] { min-width: 0 !important; max-width: none !important; }
+  /* and a line a cell keeps on one line on a wide screen ("15 predictions · last 4d ago") wraps within the row */
+  .tbl-wrap.ph td [style*="nowrap"] { white-space: normal !important; }
+}
 .res-cell .res-info { padding: 2px; margin-top: -2px; color: var(--text-3); }
 .res-cell .res-info:hover { color: var(--text-1); }
 .res-line { display: flex; align-items: center; gap: 6px; white-space: normal; line-height: 1.25; }
@@ -374,6 +385,8 @@ table.tbl th.sorted::after { content: " ▾"; color: var(--accent); }
 table.tbl th.sorted.asc::after { content: " ▴"; }
 /* a cell of running text (an agent's messages): wraps, at least a readable width */
 table.tbl td.wrap-text { white-space: normal; min-width: 220px; overflow-wrap: anywhere; }
+/* a long identifier (an API route) that may break anywhere rather than widen its table on a phone */
+table.tbl td.wrap-any { white-space: normal; overflow-wrap: anywhere; }
 table.tbl td.num, table.tbl th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 table.tbl th.num { font-family: var(--font); }
 table.tbl tbody tr:hover { background: var(--bg-3); }
@@ -382,8 +395,8 @@ table.tbl tr.clickable { cursor: pointer; }
 table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
 /* Phone rows (UI.table, five or more columns): in a box under 560 px wide each row becomes a two-line item, as the Predict
    feeds: the lead (a rank), the title and the aside on the first line, the other columns as label and value, three to a
-   line, under them. The Predict pages keep their own tables (no container there). */
-.main:not([data-route="predict"]) .tbl-wrap.ph { container: tblph / inline-size; }
+   line, under them. Every page, the Predict ones too (their 18 wide tables scrolled sideways inside their cards). */
+.tbl-wrap.ph { container: tblph / inline-size; }
 .n2 .n-compact { display: none; }
 @container tblph (max-width: 560px) {
   .tbl-wrap.ph table.tbl, .tbl-wrap.ph table.tbl tbody { display: block; }
@@ -705,7 +718,7 @@ table.tbl tbody tr.sel { background: var(--accent-dim); }
 #banner:empty { display: none; }
 .notice { background: var(--accent-dim); border: 1px solid rgba(35,212,188,.3); color: var(--text-1); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
 
-.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-5); border: 1px solid var(--border-3); border-radius: 8px; padding: 8px 14px; font-size: 13px; z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bg-5); border: 1px solid var(--border-3); border-radius: 8px; padding: 8px 14px; font-size: 13px; z-index: 300; opacity: 0; transition: opacity .2s; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast { max-width: min(680px, calc(100vw - 32px)); text-align: center; }   /* a warning toast is a sentence or two */
 
@@ -891,9 +904,17 @@ textarea.input:focus { border-color: var(--accent); }
   .rail::-webkit-scrollbar { display: none; }
   .rail a.nav { flex: none; }
   .rail .logo, .rail .spacer, .rail .ext, .rail .tip, .rail .sec, .rail .rule, .rail .toggle, .rail a.nav .lbl, .rail a.nav .ext-ico { display: none !important; }
-  .rail a.nav { width: 40px; padding: 0; justify-content: center; }
+  .rail a.nav, .rail .more-btn { width: 40px; padding: 0; justify-content: center; }
+  /* the main pages and More: the rest sit in the More menu (a phone's 13 icons scrolled sideways) */
+  .rail a.nav.ph-more { display: none; }
+  .rail .more-btn { display: flex; flex: none; align-items: center; height: 40px; margin-left: auto; background: none; border: 0; color: var(--text-2); border-radius: 8px; cursor: pointer; }
+  .rail .more-btn.active, .rail .more-btn[aria-expanded="true"] { color: var(--text-1); background: var(--bg-4); }
+  .more-menu { position: fixed; right: 8px; bottom: calc(64px + env(safe-area-inset-bottom, 0px)); z-index: 60; min-width: 210px; padding: 6px; background: var(--bg-2); border: 1px solid var(--border-3); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 2px; }
+  .more-link { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; color: var(--text-2); text-decoration: none; font-size: 14px; }
+  .more-link svg { width: 18px; height: 18px; flex: none; }
+  .more-link.active, .more-link:hover { color: var(--text-1); background: var(--bg-4); }
   .app:not(.rail-collapsed) .topbar .brand { display: inline; }
-  .frame { height: 100vh; }
+  .frame { height: 100vh; height: 100dvh; }
   .main { padding: 12px 12px 76px; }
   .topbar { padding: 0 12px; }
   .topbar { gap: 8px; }
@@ -901,7 +922,9 @@ textarea.input:focus { border-color: var(--accent); }
   .topbar .search-mini input:focus { width: 200px; }
   .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: minmax(0, 1fr); }
   .modal-bg { padding: 8px; align-items: end; }
-  .modal { max-height: 92vh; }
+  .modal { max-height: 92vh; max-height: 92dvh; }
+  .wf-note { min-width: 0; }   /* the leader breakdown's notes and every dialog table wrap on a phone */
+  .modal table.tbl th, .modal table.tbl td { white-space: normal; }
   /* long definitions (modals) stack key over value; short figures (account state) stay on one line */
   .modal .kv { grid-template-columns: 1fr; gap: 2px 0; }
   .modal .kv .k { white-space: normal; margin-top: 6px; }
@@ -918,7 +941,9 @@ textarea.input:focus { border-color: var(--accent); }
   .feed .it .t { width: auto; white-space: nowrap; font-size: 11px; }
   .feed .it .m { width: auto; min-width: 0; }
   .feed .it .num { white-space: nowrap; }
-  .feed .it .num.dim, .feed .it > .xs { display: none; }   /* notional and the taker · maker links: the row itself opens the account */
+  .feed .it .num.dim, .feed .it > .xs.tm { display: none; }   /* notional and the taker · maker links: the row itself opens the account (a transfer's status, chain, fee and tx stay) */
+  .live .feed .it { flex-wrap: wrap; row-gap: 2px; }   /* a transfer's or liquidation's details wrap within the feed instead of scrolling it */
+  .live .feed .it > * { white-space: normal; }
   /* rows with a text column (the prediction tape's question) wrap it onto its own full-width line */
   .feed .it:has(.grow.ellipsis) { flex-wrap: wrap; row-gap: 2px; }
   .feed .it .grow.ellipsis { flex: 1 1 200px; order: 10; min-width: 0 !important; color: var(--text-2); }
