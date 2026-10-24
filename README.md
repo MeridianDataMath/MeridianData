@@ -1388,13 +1388,18 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     week. The Predict API only exposes a question's source probability as it is now, so the
     snapshot builder fetches the price at bet time from Polymarket's own CLOB price history
     (`clob.polymarket.com/prices-history`, YES-token, last sample at or before the bet, else the
-    first one up to 6 h after; 1-minute samples for windows up to 3 days, 5-minute up to 15) and
-    caches it per prediction in `data/cache/polymarket-prices.json`, so a run only looks up new
-    predictions. A leg Polymarket has no price for is asked again after 3 days; a request that
+    first one up to 6 h after, from 1-minute samples) and caches it per prediction in
+    `data/cache/polymarket-prices.json`, each price with its leg's condition id, so a run only looks
+    up new predictions. (The API has listed a combo's legs in different orders; prices kept by leg
+    position alone landed on other legs, e.g. a fair price of 0.032 instead of 0.153. Combos cached
+    that way before 2026-10-24 are priced again, 250 a build, the newest first, their old prices
+    standing until then; `P.norm` now sorts a combo's legs by condition id.) A leg Polymarket has no price for is asked again after 3 days; a request that
     failed is not cached at all and is asked again next run. The cache is written whole beside
     itself and swapped in (`writeAtomic`), so a crash never leaves half a file, and a lock beside
     it keeps a second build on the same machine from running at the same time. The CLOB refuses any window longer than 15 days (HTTP 400 "interval is too
-    long"), so a question's bets are fetched in runs of at most 13 days. Until 2026-10-01 they
+    long"), and one over 3 days gets 5-minute samples (a bet's price then depended on which other
+    bets were looked up in the same run), so a question's bets are fetched in runs of at most
+    2 days 17 h (3 days with the 6 h before and the hour after). Until 2026-10-01 they
     went in one window per question, and 549 predictions on questions bet on over more than 15
     days stayed unpriced (the page called them "without Polymarket history", which was wrong);
     the builder retries them. Combos multiply the legs, so combos with legs on the same match or
@@ -1468,7 +1473,13 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   `settledAt`), the ones settled before from `data/cache/predict-raw.json` (a settled prediction's
   own fields do not change; `mergeRaw`), and every one again once a day, in the first build from
   03:00 UTC (`fullRead`; also `--full`), which refreshes what the settled ones carry of their legs
-  (a lost combo's other legs keep resolving). The kit force-pushes a single parentless commit to the
+  (a lost combo's other legs keep resolving). Nothing is lost to an indexer that lags or resyncs:
+  a fresh copy that says open never replaces a settled one kept (a resyncing indexer shows settled
+  predictions as open for a while); when fewer predictions come out than the API counts (beyond
+  what the last complete full read lacked: one that settled while the indexer lagged by more than
+  the hour `settledAt` is read back is in neither read), the build reads everything at once; and
+  the day's full read counts as done, and the cache is kept, only when the read is complete (one
+  cut short by a resync otherwise kept every build refused until the next day). The kit force-pushes a single parentless commit to the
   snapshot's own repository, MeridianData-snapshots (`predict.json` + one slim file per wallet in
   `bettors/`, per question in `questions/` and per first two hex digits of a prediction id in
   `slips/`). Its token can write to that repository only, never the site's code, and git offers

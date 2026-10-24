@@ -13,7 +13,7 @@
       const ep = c.estimatedPrice == null ? null : Number(c.estimatedPrice);
       const yes = String(k.predictedOutcome).toUpperCase() === 'YES';
       return { id: k.conditionId, q: c.question || c.shortName || k.conditionId, short: c.shortName || c.question || '', yes, ep, fair: ep == null ? null : (yes ? ep : 1 - ep), priceAtBet: k.priceAtBet == null ? null : Number(k.priceAtBet), event: k.event || null, settled: !!c.settled, resolvedToYes: c.resolvedToYes, nonDecisive: !!c.nonDecisive, settledAt: c.settled && c.settledAt ? P.legTime(c.settledAt) : null, pub: c.isPublic == null ? null : !!c.isPublic, cat:(c.category && c.category.name) || 'Other', catSlug: (c.category && c.category.slug) || 'other', endTime: c.endTime ? c.endTime * 1000 : null, tags: c.tags || [] };
-    });
+    }).sort((a, b) => { const x = String(a.id).toLowerCase(), y = String(b.id).toLowerCase(); return x < y ? -1 : x > y ? 1 : 0; });   // one order whatever order the API lists a combo's legs in (it has varied)
     let fair = null;
     if (picks.length && picks.every((k) => k.fair != null)) { fair = 1; for (const k of picks) fair *= k.fair; }
     const odds = pool > 0 ? stake / pool : null;

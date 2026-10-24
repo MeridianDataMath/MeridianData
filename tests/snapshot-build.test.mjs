@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -342,6 +342,26 @@ test('cash read since the last build merges into what was kept: transfers once e
   assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T), []);
 });
 
+test('prices at bet by condition id: a combo the API lists in another order keeps each price on its leg', () => {
+  const n = (ids) => ({ picks: ids.map((id) => ({ id })) });
+  const now = Date.UTC(2026, 9, 24);
+  const entry = { p: [0.435, 0.71, 0.575, 0.335], ids: ['0xnz', '0xws', '0xsk', '0xal'], at: now - 1000, w: 1 };
+  // the API's order today: Ann Li first
+  assert.deepEqual(cachedPrices(n(['0xal', '0xnz', '0xsk', '0xws']), entry), [0.335, 0.435, 0.575, 0.71]);
+  assert.equal(needsPrice(n(['0xal', '0xnz', '0xsk', '0xws']), entry, now), false, 'kept by id: nothing to look up');
+  assert.equal(needsPrice(n(['0xal', '0xnz', '0xsk', '0xother']), entry, now), true, 'a leg it does not cover');
+  // an entry from before the ids were kept: a single leg stands, a combo is priced again (its order then is unknown)
+  assert.equal(needsPrice(n(['0xa']), { p: [0.5], at: 1 }, now), false);
+  assert.deepEqual(cachedPrices(n(['0xa']), { p: [0.5], at: 1 }), [0.5]);
+  assert.equal(needsPrice(n(['0xa', '0xb']), { p: [0.5, 0.4], at: 1, w: 1 }, now), true);
+  assert.deepEqual(cachedPrices(n(['0xa', '0xb']), { p: [0.5, 0.4], at: 1 }), [0.5, 0.4], 'its old prices stand until it is priced again');
+  // legs that came back without a price are asked again after 3 days; no entry at all, at once
+  assert.equal(needsPrice(n(['0xa']), { p: [null], ids: ['0xa'], at: now - 86400000, w: 1 }, now), false);
+  assert.equal(needsPrice(n(['0xa']), { p: [null], ids: ['0xa'], at: now - 4 * 86400000, w: 1 }, now), true);
+  assert.equal(needsPrice(n(['0xa']), undefined, now), true);
+  assert.ok(REPRICE_PER_RUN > 0);
+});
+
 test('incremental Predict reads: kept settled predictions under those read now; everything once a day from 03:00 UTC', () => {
   const node = (id, createdAt, settled, v) => ({ predictionId: id, createdAt: 1792000000 + createdAt, settled, v });   // seconds, as the API gives them
   const kept = { a: node('a', 100, true, 'old'), b: node('b', 200, true, 'old') };
@@ -349,6 +369,11 @@ test('incremental Predict reads: kept settled predictions under those read now; 
   const merged = mergeRaw(kept, fresh);
   assert.deepEqual(merged.map((x) => x.predictionId + ':' + x.v), ['c:new', 'b:new', 'a:old', 'd:new'], 'newest first, read ones win, each once');
   assert.deepEqual(Object.keys(settledRaw(merged)).sort(), ['a', 'b', 'd'], 'only settled ones are kept for the next build');
+  // an indexer resyncing shows a settled prediction as open for a while: that copy does not replace the settled one kept
+  const resync = mergeRaw(kept, [node('a', 100, false, 'stale')]);
+  assert.equal(resync.find((x) => x.predictionId === 'a').v, 'old'); assert.ok(settledRaw(resync).a, 'still kept for the next build');
+  // the later read last: a prediction open at the first read and settled at the second is taken as settled
+  assert.equal(mergeRaw({}, [node('e', 400, false, 'open read'), node('e', 400, true, 'since read')])[0].v, 'since read');
   const day = (h, d = 24) => Date.UTC(2026, 9, d, h, 9);
   const cache = { at: day(1), full: day(4, 23) };   // the last full read was yesterday
   assert.equal(fullRead(cache, day(2), false), false, 'before 03:00 UTC: not yet');

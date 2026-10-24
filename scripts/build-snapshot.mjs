@@ -78,6 +78,27 @@ async function getJson(url, tries = 3) {
     } catch (e) { if (i >= tries - 1) throw e; await sleep(1500 * (i + 1)); }
   }
 }
+const lc = (id) => String(id).toLowerCase();
+/** A cached price-at-bet entry's prices in the order of n's legs: by condition id (an entry from before the ids were kept:
+ *  by position, as it was stored). null when there is none. The API has returned a combo's legs in different orders, so
+ *  prices kept by position alone landed on other legs (a fair price of 0.032 instead of 0.153, a vig of +0.85) */
+export const cachedPrices = (n, c) => {
+  if (!c || !Array.isArray(c.p)) return null;
+  if (Array.isArray(c.ids) && c.ids.length === c.p.length) { const by = new Map(c.ids.map((id, i) => [lc(id), c.p[i]])); return n.picks.map((k) => { const v = by.get(lc(k.id)); return v === undefined ? null : v; }); }
+  return c.p.length === n.picks.length ? c.p : null;
+};
+/** Whether a prediction's price at bet is looked up (again): no entry, an entry that does not cover its legs, a combo kept
+ *  by leg position only, or legs that came back without a price over 3 days ago (asked again until priced) */
+export const needsPrice = (n, c, now) => {
+  if (!c || !Array.isArray(c.p) || c.p.length !== n.picks.length) return true;
+  if (Array.isArray(c.ids)) { const ids = new Set(c.ids.map(lc)); if (!n.picks.every((k) => ids.has(lc(k.id)))) return true; }
+  else if (n.picks.length > 1) return true;
+  return !(c.p.every((p) => p != null) || (c.w && now - c.at < 3 * 86400000));
+};
+/** Combos kept by leg position from before the ids were kept are priced again this many a run, the newest first (their old
+ *  prices stand until then): 250 add about two minutes to a build, which then still lands before the next deploy; all at
+ *  once would take one build an hour */
+export const REPRICE_PER_RUN = 250;
 async function attachPricesAtBet(norms) {
   const cache = Object.assign({ v: 1, tokens: {}, preds: {} }, readCache());
   cache.tokens = Object.assign(dict(), cache.tokens); cache.preds = Object.assign(dict(), cache.preds);
@@ -86,8 +107,13 @@ async function attachPricesAtBet(norms) {
   // 1. which predictions still need prices (every leg cached = done; legs that came back null are retried every 3 days until
   // priced, and at once if they were looked up before the windows were split (w: their history request spanned over 15
   // days, which the CLOB refuses))
-  const todo = norms.filter((n) => { const c = cache.preds[n.id]; return !(c && c.p.length === n.picks.length && (c.p.every((p) => p != null) || (c.w && now - c.at < 3 * 86400000))); });
-  console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up`);
+  // a single leg kept by position has only one place: it takes its id at once
+  for (const n of norms) { const c = cache.preds[n.id]; if (c && Array.isArray(c.p) && !Array.isArray(c.ids) && n.picks.length === 1 && c.p.length === 1) c.ids = [n.picks[0].id]; }
+  const need = norms.filter((n) => needsPrice(n, cache.preds[n.id], now));
+  const byPosition = (n) => { const c = cache.preds[n.id]; return !!c && Array.isArray(c.p) && !Array.isArray(c.ids) && c.p.length === n.picks.length; };
+  const legacy = need.filter(byPosition).sort((a, b) => b.t - a.t);
+  const todo = need.filter((n) => !byPosition(n)).concat(legacy.slice(0, REPRICE_PER_RUN));
+  console.log(`  predict: price-at-bet cache ${Object.keys(cache.preds).length} predictions, ${todo.length} to look up${legacy.length ? ` (${Math.min(legacy.length, REPRICE_PER_RUN)} of the ${legacy.length} combos kept by leg position priced again)` : ''}`);
   // 2. YES-token ids from Gamma for the conditions involved (closed markets need a second pass with closed=true)
   // (also the match each market belongs to, so combos with legs on the same match can be told apart; evv 2: the match
   // keys below, so a token cached with the older bare event id is looked up once more)
@@ -120,17 +146,18 @@ async function attachPricesAtBet(norms) {
     if (!tokFailed) for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, evv: 2, at: now });
   }
   for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
-  if (!todo.length) { for (const n of norms) P.applyAtBet(n, (cache.preds[n.id] || {}).p); save(); return; }
+  if (!todo.length) { for (const n of norms) P.applyAtBet(n, cachedPrices(n, cache.preds[n.id])); save(); return; }
   // 3. history requests per condition covering its new bets, then the last price at or before each bet
   const byCond = dict();
   for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
   const conds = Object.keys(byCond); let done = 0, lastLog = Date.now(), next = 0;
   const failedPred = new Set();   // a history request that failed (not one Polymarket refused): its predictions are asked again next run
   const oneCondition = async (id) => {
-    // the CLOB refuses a window longer than 15 days (HTTP 400 "interval is too long"), so one request per run of bets within
-    // 13 days (with the 6 h before and 1 h after, under 15)
+    // one request per run of bets within 2 days 17 h, so that with the 6 h before and the hour after it spans 3 days at most
+    // and gets one-minute samples (a longer one got five-minute samples: a bet's price then depended on which other bets
+    // were looked up in the same run; and the CLOB refuses any window over 15 days)
     const sorted = byCond[id].slice().sort((a, b) => a.n.t - b.n.t); const groups = [];
-    for (const l of sorted) { const g = groups[groups.length - 1]; if (g && l.n.t - g[0].n.t <= 13 * 86400000) g.push(l); else groups.push([l]); }
+    for (const l of sorted) { const g = groups[groups.length - 1]; if (g && l.n.t - g[0].n.t <= 3 * 86400000 - 7 * 3600000) g.push(l); else groups.push([l]); }
     for (const legs of groups) {
       const times = legs.map((l) => l.n.t);
       const from = Math.floor(Math.min(...times) / 1000) - 6 * 3600, to = Math.floor(Math.max(...times) / 1000) + 3600;
@@ -154,8 +181,8 @@ async function attachPricesAtBet(norms) {
   // a failed history request, or a market whose token lookup failed this run, leaves its predictions to the next run
   const unasked = (n) => failedPred.has(n.id) || n.picks.some((k) => isCond(k.id) && !cache.tokens[k.id]);
   const runOnly = new Map(todo.filter(unasked).map((n) => [n.id, n.picks.map((k) => (k.priceAtBet == null ? null : k.priceAtBet))]));   // this run's prices still count
-  for (const n of todo) if (!runOnly.has(n.id)) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), at: now, w: 1 };
-  for (const n of norms) P.applyAtBet(n, runOnly.get(n.id) || (cache.preds[n.id] || {}).p);
+  for (const n of todo) if (!runOnly.has(n.id)) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), ids: n.picks.map((k) => k.id), at: now, w: 1 };
+  for (const n of norms) P.applyAtBet(n, runOnly.get(n.id) || cachedPrices(n, cache.preds[n.id]));
   if (runOnly.size) console.warn(`  predict: ${runOnly.size} predictions not cached (a Polymarket request failed): asked again next run`);
   save();
   const got = norms.filter((n) => n.vig != null).length;
@@ -818,7 +845,9 @@ async function readCash(active, first) {
  *  newest first, each once. */
 export function mergeRaw(kept, fresh) {
   const byId = new Map(Object.entries(kept || {}));
-  for (const x of fresh || []) if (x && x.predictionId) byId.set(x.predictionId, x);
+  // a fresh copy wins, except an unsettled one over a settled kept one: an indexer resyncing shows settled predictions as
+  // open for a while, and taking that copy dropped the prediction from the next build's kept ones until the full read
+  for (const x of fresh || []) if (x && x.predictionId) { const k = byId.get(x.predictionId); if (k && k.settled && !x.settled) continue; byId.set(x.predictionId, x); }
   return Array.from(byId.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
 }
 /** The settled ones of a build's predictions, by id: the next build's `kept` */
@@ -840,7 +869,7 @@ async function buildPredict() {
   const probe = await P.predictionsCount();
   console.log(`  predict: API reachable, ${probe} predictions in total`);
   // the API also counts launch-day test predictions (no questions attached) that it files before LAUNCH_SEC; they are left out
-  let preLaunch = 0; try { preLaunch = await P.predictionsCount({ createdAt: { lte: P.LAUNCH_SEC - 1 } }); } catch (e) { console.warn('predict: pre-launch count failed', e.message); }
+  let preLaunch = 0, preLaunchOk = true; try { preLaunch = await P.predictionsCount({ createdAt: { lte: P.LAUNCH_SEC - 1 } }); } catch (e) { preLaunchOk = false; console.warn('predict: pre-launch count failed', e.message); }
   let lastLog = 0;
   const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : 0;   // testing: a page per window only
   // Only what can have changed is read (mergeRaw): the open predictions and those settled since the last build; the ones
@@ -849,16 +878,23 @@ async function buildPredict() {
   // combo's other legs keep resolving after it is settled).
   const rawFile = path.join(path.dirname(cacheFile), 'predict-raw.json');
   const rawCache = (() => { try { const j = JSON.parse(fs.readFileSync(rawFile, 'utf8')); return j && j.v === 1 && j.nodes && typeof j.nodes === 'object' ? j : null; } catch (_) { return null; } })();
-  const readStart = Date.now(), full = fullRead(rawCache, readStart, !!limit || flag('full'));
+  const readStart = Date.now(); let full = fullRead(rawCache, readStart, !!limit || flag('full'));
   const win = { toSec, concurrency: 4, maxPagesPerWindow: limit ? 1 : 600, onProgress: (n) => { if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far (${P.stats.requests} requests, ${P.stats.retries} retries)`); } } };
+  const readAll = () => P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 24 }, win));
   let raw;
-  if (full) raw = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 24 }, win));
+  if (full) raw = await readAll();
   else {
     const open = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 8, baseFilter: { settled: false } }, win));
     const since = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 2, baseFilter: { settledAt: { gte: Math.floor((rawCache.at - 3600000) / 1000) } } }, win));
-    raw = mergeRaw(rawCache.nodes, since.concat(open)); raw.truncated = open.truncated || since.truncated;
+    // the later read last: a prediction in both is taken as `since` saw it (the last copy wins in mergeRaw)
+    raw = mergeRaw(rawCache.nodes, open.concat(since)); raw.truncated = open.truncated || since.truncated;
     console.log(`  predict: ${open.length} open and ${since.length} newly settled predictions read, ${Object.keys(rawCache.nodes).length} settled ones from the last build (everything again from ${rawCache.full ? 'the next day\'s first build after 03:00 UTC' : 'the next build'})`);
   }
+  // a prediction that settled while the indexer lagged (its settledAt older than the last read − 1 h) is in neither read,
+  // nor among the kept ones (it was open then): fewer than the API counts, beyond what the last full read already lacked,
+  // reads everything now rather than publish without them until the next day's full read
+  const short = probe - preLaunch - raw.length;
+  if (!full && !limit && preLaunchOk && short > ((rawCache && rawCache.short) || 0) + 10) { console.warn(`  predict: ${short} fewer predictions than the API counts after reading only what changed: reading everything again`); raw = await readAll(); full = true; }
   // an incomplete history would publish wrong totals for everyone: better no new snapshot (the previous one stays live)
   if (raw.truncated && !limit) { console.error('predict: a time window hit its page cap, so the history is incomplete; not writing a snapshot (raise windows or maxPagesPerWindow)'); process.exit(1); }
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
@@ -1084,8 +1120,12 @@ async function buildPredict() {
   console.log(`  predict: ${slips} slips in ${Object.keys(shards).length} files`);
   if (badWallets.size) console.warn(`  predict: skipped ${badWallets.size} wallet values that are not addresses (${dropped} predictions left out, the rest trade parties without a file), e.g. ${Array.from(badWallets).slice(0, 3).map(shown).join(', ')}`);
   if (badConds.size) console.warn(`  predict: skipped ${badConds.size} question ids that are not condition ids (no question file, not in the list), e.g. ${Array.from(badConds).slice(0, 3).map(shown).join(', ')}`);
-  // the settled predictions for the next build (mergeRaw); a test run (--limit) read only a slice and keeps nothing
-  if (!limit) { try { writeAtomic(rawFile, JSON.stringify({ v: 1, at: readStart, full: full ? readStart : rawCache.full, nodes: settledRaw(raw) })); } catch (e) { console.warn('  predict: the prediction cache was not saved:', e.message); } }
+  // the settled predictions for the next build (mergeRaw). A test run (--limit) read only a slice and keeps nothing; a read
+  // the API's count calls incomplete is not kept either, and the day's full read counts as done only once one is complete
+  // (one cut short by a resync at 03:09 UTC kept every build from then refused until the next day's); short: what that
+  // complete full read lacked against the API's count, which the check above allows for
+  if (!limit && complete) { try { writeAtomic(rawFile, JSON.stringify({ v: 1, at: readStart, full: full ? readStart : rawCache.full, short: full ? (preLaunchOk ? Math.max(0, probe - preLaunch - raw.length) : 0) : (rawCache.short || 0), nodes: settledRaw(raw) })); } catch (e) { console.warn('  predict: the prediction cache was not saved:', e.message); } }
+  else if (!limit) console.warn('  predict: the prediction cache is kept as it was (this read is incomplete): the next build reads everything again');
   console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (doPredict) {
