@@ -1,6 +1,7 @@
 // The deploy's own scripts: the Predict snapshot gate (scripts/check-snapshot.mjs), the files a failed build takes from the
 // live site (scripts/keep-live.mjs, against a fake fetch) and when the health job raises the alarm
-// (scripts/deploy-health.mjs). No network.
+// (scripts/deploy-health.mjs), and the versioned addresses of the scripts and stylesheets (scripts/version-assets.mjs).
+// No network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,6 +10,7 @@ import path from 'node:path';
 import { pick, problems, excludedWallets, MAX_FILES, NAME } from '../scripts/check-snapshot.mjs';
 import { keepLeaderboard, keepFx } from '../scripts/keep-live.mjs';
 import { alarm, SNAPSHOT_MAX, TIMER_MAX } from '../scripts/deploy-health.mjs';
+import { versionPage, unversioned } from '../scripts/version-assets.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'md-deploy-'));
 const put = (dir, rel, text) => { const p = path.join(dir, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
@@ -89,4 +91,16 @@ test('the health check raises the alarm once when data goes stale, then daily, n
   assert.equal(alarm(80 * M, at(13, 29), TIMER_MAX, 2 * H + 5 * M), true);
   assert.equal(alarm(3.5 * H, at(15, 29), TIMER_MAX, 2 * H + 5 * M), false);
   assert.equal(alarm(Infinity, at(3, 29), TIMER_MAX, 2 * H + 5 * M), true, 'never dispatched: daily');
+});
+
+test('every page asks for the site\'s scripts and stylesheets by their content (?v=), or the deploy stops', () => {
+  const H = { 'js/app.js': 'aaaaaaaaaa', 'css/app.css': 'bbbbbbbbbb', 'js/share.js': 'cccccccccc' };
+  const hashOf = (p) => H[p] || null;
+  const page = '<link rel="stylesheet" href="css/app.css"><script defer src="js/app.js"></script><script src="/js/share.js?v=old"></script><a href="https://x.com/js/app.js">x</a><img src="assets/logo.svg">';
+  const out = versionPage(page, hashOf);
+  assert.equal(out, '<link rel="stylesheet" href="css/app.css?v=bbbbbbbbbb"><script defer src="js/app.js?v=aaaaaaaaaa"></script><script src="/js/share.js?v=cccccccccc"></script><a href="https://x.com/js/app.js">x</a><img src="assets/logo.svg">');
+  assert.deepEqual(unversioned(out, hashOf), []);
+  assert.equal(versionPage(out, hashOf), out, 'a second run changes nothing');
+  assert.deepEqual(unversioned(page, hashOf), ['css/app.css (want ?v=bbbbbbbbbb)', 'js/app.js (want ?v=aaaaaaaaaa)', 'js/share.js?v=old (want ?v=cccccccccc)']);
+  assert.throws(() => versionPage('<script src="js/gone.js"></script>', hashOf), /js\/gone\.js is referenced but not there/);
 });

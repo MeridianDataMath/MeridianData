@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, stalestFirst, publishProblem, completeTrades, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -340,4 +340,20 @@ test('cash read since the last build merges into what was kept: transfers once e
   const day = (d, v) => ({ timestamp: new Date(T + d * D).toISOString(), amount: wei(v) });
   assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T, false).map((x) => x[1]), [0, 0]);
   assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T), []);
+});
+
+test('incremental Predict reads: kept settled predictions under those read now; everything once a day from 03:00 UTC', () => {
+  const node = (id, createdAt, settled, v) => ({ predictionId: id, createdAt: 1792000000 + createdAt, settled, v });   // seconds, as the API gives them
+  const kept = { a: node('a', 100, true, 'old'), b: node('b', 200, true, 'old') };
+  const fresh = [node('b', 200, true, 'new'), node('c', 300, false, 'new'), node('d', 50, true, 'new')];
+  const merged = mergeRaw(kept, fresh);
+  assert.deepEqual(merged.map((x) => x.predictionId + ':' + x.v), ['c:new', 'b:new', 'a:old', 'd:new'], 'newest first, read ones win, each once');
+  assert.deepEqual(Object.keys(settledRaw(merged)).sort(), ['a', 'b', 'd'], 'only settled ones are kept for the next build');
+  const day = (h, d = 24) => Date.UTC(2026, 9, d, h, 9);
+  const cache = { at: day(1), full: day(4, 23) };   // the last full read was yesterday
+  assert.equal(fullRead(cache, day(2), false), false, 'before 03:00 UTC: not yet');
+  assert.equal(fullRead(cache, day(3), false), true, 'the first build from 03:00 UTC reads everything');
+  assert.equal(fullRead(Object.assign({}, cache, { full: day(3) }), day(3, 24) + 30 * 60000, false), false, 'once that day');
+  assert.equal(fullRead(null, day(12), false), true, 'no cache');
+  assert.equal(fullRead(cache, day(1), true), true, '--full');
 });

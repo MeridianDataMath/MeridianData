@@ -260,19 +260,26 @@
    *  71 hours, a few at a time; a row two windows share is kept once. Hour-aligned, the same windows within the hour hit
    *  the request cache. Null when a window holds more rows than are read (40 pages): netting against part of the charges
    *  would misdate every earlier bucket, so callers fall back to the settled funding. o.end bounds the windows (charges
-   *  before it only; now when left out); o.onProgress(done, total) counts the windows. */
+   *  before it only; now when left out); o.onProgress(done, total) counts the windows. o.cache (the snapshot build's:
+   *  {get(sid), set(sid, entry)}) keeps what was read: charges more than 6 hours old do not change, so only the windows
+   *  after the kept ones are read and the kept ones come back as {time, fundingCharge}. */
   A.fundingCharges = async function (sid, start, o) {
     const now = Date.now(), end = o && o.end != null ? Math.min(U.num(o.end), now) : null;
     const W = 3 * U.DAY - U.HOUR, top = Math.ceil((end != null ? end : now) / U.HOUR) * U.HOUR;
-    const ends = []; for (let e = top; e > start; e -= W) ends.push(e);
+    const cache = end == null && o && o.cache ? o.cache : null;
+    const kept0 = cache ? cache.get(sid) : null, kept = kept0 && kept0.from <= start && kept0.until > start && Array.isArray(kept0.rows) ? kept0 : null;
+    const readFrom = kept ? kept.until : start;
+    const ends = []; for (let e = top; e > readFrom; e -= W) ends.push(e);
     // a window reaching the archive's clock sends no endTime, so the archive ends it there (it rejects an endTime past that)
     const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: e - W, endTime: e >= now - 2 * 60000 ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4, o && o.onProgress);
     const bad = res.find((r) => !r.ok); if (bad) throw bad.error;   // an abort or a failed window, as a serial loop would throw
     const parts = res.map((r) => r.value);
     if (parts.some((p) => !p || p.truncated)) return null;
-    const seen = new Set(); const rows = [];
-    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end)) { seen.add(k); rows.push(c); } }
-    return rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+    const seen = new Set(); const rows = kept ? kept.rows.filter((x) => x[0] >= start).map((x) => ({ time: x[0], fundingCharge: x[1] })) : [];
+    for (const part of parts) for (const c of part) { const k = c.positionId + '|' + c.time; if (!seen.has(k) && (end == null || U.num(c.time) < end) && (!kept || U.num(c.time) >= readFrom)) { seen.add(k); rows.push(c); } }
+    rows.sort((a, b) => U.num(a.time) - U.num(b.time));
+    if (cache) { const until = Math.floor((now - 6 * U.HOUR) / U.HOUR) * U.HOUR; cache.set(sid, { from: kept ? kept.from : start, until, rows: rows.filter((c) => U.num(c.time) < until).map((c) => [U.num(c.time), U.num(c.fundingCharge)]) }); }
+    return rows;
   };
   /** mPerp position-fee charges on a subaccount's positions since `start` (archive; positionFeeCharge: + = paid; a row per
    *  position and charge, at most every 15 minutes), read as A.fundingCharges reads funding. The archive aggregates them in

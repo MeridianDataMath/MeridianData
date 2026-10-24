@@ -476,7 +476,8 @@
       AN.loadSeries(sid, Object.assign({ start: s24, resolution: 'hour1' }, so)),
       AN.loadSeries(sid, Object.assign({ start: s7, resolution: 'hour2' }, so)),
       AN.loadSeries(sid, Object.assign({ start: s30, resolution: 'hour8' }, so)),
-      A.fundingCharges(sid, sAll - U.DAY, so).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; }),   // unreadable: the rows keep the settled basis
+      // unreadable: the rows keep the settled basis; the snapshot build keeps what it read (ctx.fundingCache, A.fundingCharges)
+      A.fundingCharges(sid, sAll - U.DAY, Object.assign({ cache: ctx && ctx.fundingCache }, so)).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; }),
     ]);
     // the mPerp position fees charged, read from where they can matter to the 30-day series on (AN.positionFeeFrom: none
     // for an account never charged one). All-time days before that keep the settled basis: a fee charged then and still

@@ -43,3 +43,28 @@ test('a request that hangs is given up at the time limit (and tried again); the 
     assert.equal(calls.length, 1);
   });
 });
+
+test('funding charges: with the snapshot build\'s cache, only the windows after the kept ones are read', async () => {
+  const H = 3600000, now = Date.now(), start = now - 10 * 24 * H;
+  const asked = [];
+  const charge = (t, f) => ({ positionId: 'p', time: t, fundingCharge: String(f) });
+  // every window answers its own hour-aligned charges: one per 6 hours, 1 USD each
+  globalThis.fetch0 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = new URL(url); const from = Number(u.searchParams.get('startTime')), to = Number(u.searchParams.get('endTime')) || now; asked.push([from, to]);
+    const rows = []; for (let t = Math.ceil(from / (6 * H)) * 6 * H; t <= to; t += 6 * H) if (t < now) rows.push(charge(t, 1));
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ data: rows }) };
+  };
+  try {
+    const store = {}; const cache = { get: (sid) => store[sid] || null, set: (sid, e) => { store[sid] = e; } };
+    const a = await A.fundingCharges('s', start, { cache });
+    const windows = asked.length; asked.length = 0;
+    assert.ok(windows >= 4, 'ten days: four windows or more'); assert.ok(store.s && store.s.until <= now - 6 * H && store.s.rows.length > 30);
+    const b = await A.fundingCharges('s', start, { cache });
+    assert.equal(asked.length, 1, 'the second read asks only the window after the kept charges');
+    // (a read without the cache also returns what its first window holds before `start`; the kept ones start there)
+    const from = (rows) => rows.filter((r) => Number(r.time) >= start).map((r) => [Number(r.time), Number(r.fundingCharge)]);
+    assert.deepEqual(from(b), from(a), 'the same charges from the start on, once each');
+    assert.equal((await A.fundingCharges('s', start - 30 * 24 * H, { cache })).length > a.length, true, 'an earlier start than kept reads everything again');
+  } finally { globalThis.fetch = globalThis.fetch0; delete globalThis.fetch0; }
+});

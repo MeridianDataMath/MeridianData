@@ -68,10 +68,27 @@ jobs:
       - name: Tests
         run: node --test "tests/*.test.mjs"
 
+      # the perps build's funding charges from earlier runs (data/cache/perps-funding.json): what is over 6 hours old does
+      # not change, so the build reads only the newer windows (A.fundingCharges). Kept by GitHub's cache, never deployed
+      - name: Restore the perps cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: data/cache/perps-funding.json
+          key: perps-funding-${{ github.run_id }}
+          restore-keys: perps-funding-
+
       # a failure here does not stop the deploy: the published leaderboard.json goes out again (keep-live below)
       - name: Build perps snapshot (data/leaderboard.json)
         run: node scripts/build-snapshot.mjs --perps
         continue-on-error: true
+
+      - name: Keep the perps cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: data/cache/perps-funding.json
+          key: perps-funding-${{ github.run_id }}
 
       # The Predict snapshot, built on a home connection (the Mac mini's kit) and published to a repository of its own,
       # MeridianData-snapshots: the machine that builds it holds a token for that repository only, so nothing on it can
@@ -119,7 +136,7 @@ jobs:
           mkdir -p dist
           cp -r index.html css js vendor assets x-bot _headers _redirects dist/
           mkdir -p dist/agent && cp agent/copy-agent.mjs agent/package.json agent/package-lock.json agent/config.example.json dist/agent/
-          cp -r data dist/
+          cp -r data dist/ && rm -rf dist/data/cache   # the build caches stay out of the site
           echo "dist: $(find dist -type f | wc -l) files, $(du -sh dist | cut -f1)"
 
       # the build tools, exactly as the root package-lock.json pins them (every package with its integrity hash): the card
@@ -139,6 +156,11 @@ jobs:
       - name: Link preview cards (dist/cards, dist/a, dist/p, dist/s)
         run: node scripts/build-cards.mjs --dist dist --jobs "$(nproc)" --deadline "$((JOB_START + 720))"
         continue-on-error: true
+
+      # every page's scripts and stylesheets asked for with ?v=<hash of the file>, so _headers can let browsers keep them a
+      # year; a reference left without its version fails the run (it would be held a year after its file changed)
+      - name: Versioned scripts and stylesheets
+        run: node scripts/version-assets.mjs --dist dist
 
       # Cloudflare takes at most 20,000 files in one version of the Worker's assets: said plainly here rather than as a
       # wrangler failure halfway through the upload

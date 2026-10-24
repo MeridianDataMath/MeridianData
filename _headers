@@ -17,6 +17,14 @@
   Cache-Control: no-cache
 /index.html
   Cache-Control: no-cache
+# the site's scripts and stylesheets: every page asks for them with ?v=<hash of the file> (scripts/version-assets.mjs,
+# at deploy), so a changed file comes from a new address, and a browser keeps these a year without asking again
+/js/*
+  Cache-Control: public, max-age=31536000, immutable
+/css/*
+  Cache-Control: public, max-age=31536000, immutable
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
 # link-preview cards and the share pages behind /a/<address>, /p/<address> and /s/<prediction id> (rebuilt with every deploy; an image URL
 # carries ?v=<hash of the card> so an unfurler that cached an old one fetches the new one)
 /cards/*

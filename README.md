@@ -40,6 +40,9 @@ Predict snapshot live on the site is over two hours old or the Cloudflare timer 
 dispatching: once when it starts, then daily (`scripts/deploy-health.mjs`; also pushed to ntfy
 when a repository secret `NTFY_TOPIC` is set). A new run waits for the one in progress instead of
 cancelling it. The timer itself (`cron/`) deploys from `.github/workflows/cron.yml` when it changes.
+Every page asks for the site's scripts and stylesheets with `?v=<the file's hash>`
+(`scripts/version-assets.mjs`, after the cards; a reference left without it fails the run), so
+`_headers` lets browsers keep `js/`, `css/` and `vendor/` a year without asking again.
 
 * **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
   named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
@@ -101,7 +104,8 @@ at a paying verdict is accounted for), prediction semantics, result chips and a 
 share, position records and cost basis (`copy-engines`), the copy agent's decisions (`agent`:
 the lines between `@pure-begin` and `@pure-end` in `agent/copy-agent.mjs`, loaded on their own
 since the agent needs ethers and a key), account analytics, the copy profile and the
-copyability caps (`analytics`), formatting and routing (`util`), the bar chart's value-axis
+copyability caps (`analytics`), the API client's time limit and retries and the snapshot build's
+kept funding windows (`api`), formatting and routing (`util`), the bar chart's value-axis
 formatter (`charts`), the Tax center's time zones, periods and archive ledger (`tax-tz`,
 `tax-periods`, `tax-ledger`: also each pool's level at the period's instants, the part of a split
 day after the end left out), its exchange rates (`tax-fx`: each currency's source and
@@ -220,7 +224,10 @@ for one card, `--jobs 4` to use four cores).
 The perps build has a time budget (`--budget` seconds, 9 minutes by default: four accounts are
 built at a time and one takes two to three seconds from a PC, about half that on the Action's
 runner; an active one with fills and candles takes more, and an older one more again, since its
-funding charges are read three days at a time, one request after another; the job has 15 minutes in all);
+funding charges are read three days at a time; the job has 15 minutes in all). The funding charges
+already read are kept between runs (`data/cache/perps-funding.json`, in GitHub's cache, never
+deployed): what is over 6 hours old does not change, so a run reads only the newer windows, one or
+two requests an account instead of up to 40 for the older ones;
 a row that fails is built once more after a pause, and an account still not built (or not reached)
 keeps its newest row from an earlier snapshot no older than 7 days, marked `carried` with its own
 `builtAt` (`mergeRows`); the snapshot is marked partial and counts `failed`, `skipped`, `retried`,
@@ -1449,8 +1456,12 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   runners get 403) and answers browsers only from an allowlist of origins (Meridian's and
   Sapience's domains, localhost), which this site is not on, so a Mac mini on a home connection
   builds the snapshot every 30 minutes (at :09 and :39), from a kit kept in a private repository:
-  `scripts/build-snapshot.mjs --predict` pulls every prediction since launch, paced under the
-  API's 200 requests/minute, and the kit force-pushes a single parentless commit to the
+  `scripts/build-snapshot.mjs --predict` reads the predictions, paced under the API's 200
+  requests/minute: the open ones and those settled since the last build (`settled: false`,
+  `settledAt`), the ones settled before from `data/cache/predict-raw.json` (a settled prediction's
+  own fields do not change; `mergeRaw`), and every one again once a day, in the first build from
+  03:00 UTC (`fullRead`; also `--full`), which refreshes what the settled ones carry of their legs
+  (a lost combo's other legs keep resolving). The kit force-pushes a single parentless commit to the
   snapshot's own repository, MeridianData-snapshots (`predict.json` + one slim file per wallet in
   `bettors/`, per question in `questions/` and per first two hex digits of a prediction id in
   `slips/`). Its token can write to that repository only, never the site's code, and git offers
@@ -2065,6 +2076,7 @@ scripts/build-fx.mjs    deploy-time official exchange rates for the tax center (
 scripts/check-snapshot.mjs  the deploy's gate for the Predict snapshot: published names only, JSON, caps on files and size
 scripts/keep-live.mjs   the deploy: what a build failed to write (the leaderboard, an exchange-rate source) from the live site
 scripts/deploy-health.mjs  after the deploy: fails the run when the live Predict snapshot or the timer has stopped
+scripts/version-assets.mjs  the deploy: ?v=<hash> on every page's scripts and stylesheets (kept a year by browsers)
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage
 js/copy/alerts.js       leader alerts: followed accounts, WebSocket classification, toast / notification / ntfy

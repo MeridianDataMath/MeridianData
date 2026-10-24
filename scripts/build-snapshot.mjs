@@ -813,6 +813,19 @@ async function readCash(active, first) {
 }
 
 // ---------------------------------------------------------------- Predict
+/** A build's predictions when it reads only what can have changed: the settled ones kept from the last build (`kept`, by
+ *  id: a settled prediction's own fields do not change any more) under those read now (`fresh`, which win). Raw nodes,
+ *  newest first, each once. */
+export function mergeRaw(kept, fresh) {
+  const byId = new Map(Object.entries(kept || {}));
+  for (const x of fresh || []) if (x && x.predictionId) byId.set(x.predictionId, x);
+  return Array.from(byId.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
+}
+/** The settled ones of a build's predictions, by id: the next build's `kept` */
+export const settledRaw = (raw) => { const o = dict(); for (const x of raw || []) if (x && x.settled && x.predictionId) o[x.predictionId] = x; return o; };
+/** Whether a build reads every prediction: forced (--full, a test run), no cache, or the first build of a UTC day from
+ *  03:00 on (once a day, so what the kept ones carry of their legs is never more than a day old) */
+export const fullRead = (cache, now, force) => !!force || !cache || !cache.at || (new Date(now).getUTCHours() >= 3 && new Date(cache.full || 0).toISOString().slice(0, 10) !== new Date(now).toISOString().slice(0, 10));
 async function buildPredict() {
   const t0 = Date.now();
   const toSec = Math.floor(Date.now() / 1000);
@@ -830,10 +843,22 @@ async function buildPredict() {
   let preLaunch = 0; try { preLaunch = await P.predictionsCount({ createdAt: { lte: P.LAUNCH_SEC - 1 } }); } catch (e) { console.warn('predict: pre-launch count failed', e.message); }
   let lastLog = 0;
   const limit = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : 0;   // testing: a page per window only
-  const raw = await P.predictionsWindowed({
-    fromSec: P.LAUNCH_SEC, toSec, windows: 24, concurrency: 4, maxPagesPerWindow: limit ? 1 : 600,
-    onProgress: (n) => { if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far (${P.stats.requests} requests, ${P.stats.retries} retries)`); } },
-  });
+  // Only what can have changed is read (mergeRaw): the open predictions and those settled since the last build; the ones
+  // settled before come from data/cache/predict-raw.json. Everything is read once a day (fullRead: the first build from
+  // 03:00 UTC, --full, or without that cache), which also refreshes what the settled ones carry of their legs (a lost
+  // combo's other legs keep resolving after it is settled).
+  const rawFile = path.join(path.dirname(cacheFile), 'predict-raw.json');
+  const rawCache = (() => { try { const j = JSON.parse(fs.readFileSync(rawFile, 'utf8')); return j && j.v === 1 && j.nodes && typeof j.nodes === 'object' ? j : null; } catch (_) { return null; } })();
+  const readStart = Date.now(), full = fullRead(rawCache, readStart, !!limit || flag('full'));
+  const win = { toSec, concurrency: 4, maxPagesPerWindow: limit ? 1 : 600, onProgress: (n) => { if (Date.now() - lastLog > 10000) { lastLog = Date.now(); console.log(`  predict: ${n} predictions so far (${P.stats.requests} requests, ${P.stats.retries} retries)`); } } };
+  let raw;
+  if (full) raw = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 24 }, win));
+  else {
+    const open = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 8, baseFilter: { settled: false } }, win));
+    const since = await P.predictionsWindowed(Object.assign({ fromSec: P.LAUNCH_SEC, windows: 2, baseFilter: { settledAt: { gte: Math.floor((rawCache.at - 3600000) / 1000) } } }, win));
+    raw = mergeRaw(rawCache.nodes, since.concat(open)); raw.truncated = open.truncated || since.truncated;
+    console.log(`  predict: ${open.length} open and ${since.length} newly settled predictions read, ${Object.keys(rawCache.nodes).length} settled ones from the last build (everything again from ${rawCache.full ? 'the next day\'s first build after 03:00 UTC' : 'the next build'})`);
+  }
   // an incomplete history would publish wrong totals for everyone: better no new snapshot (the previous one stays live)
   if (raw.truncated && !limit) { console.error('predict: a time window hit its page cap, so the history is incomplete; not writing a snapshot (raise windows or maxPagesPerWindow)'); process.exit(1); }
   // a prediction whose predictor or counterparty is not an address is left out whole, so every wallet the aggregates list
@@ -1053,6 +1078,8 @@ async function buildPredict() {
   console.log(`  predict: ${slips} slips in ${Object.keys(shards).length} files`);
   if (badWallets.size) console.warn(`  predict: skipped ${badWallets.size} wallet values that are not addresses (${dropped} predictions left out, the rest trade parties without a file), e.g. ${Array.from(badWallets).slice(0, 3).map(shown).join(', ')}`);
   if (badConds.size) console.warn(`  predict: skipped ${badConds.size} question ids that are not condition ids (no question file, not in the list), e.g. ${Array.from(badConds).slice(0, 3).map(shown).join(', ')}`);
+  // the settled predictions for the next build (mergeRaw); a test run (--limit) read only a slice and keeps nothing
+  if (!limit) { try { writeAtomic(rawFile, JSON.stringify({ v: 1, at: readStart, full: full ? readStart : rawCache.full, nodes: settledRaw(raw) })); } catch (e) { console.warn('  predict: the prediction cache was not saved:', e.message); } }
   console.log(`wrote ${path.join(outDir, 'predict.json')}: ${norms.length} predictions (API says ${probe}), ${agg.bettors.length} bettors, ${agg.makers.length} makers, ${withOi.length} questions, ${trades.length} trades, ${files} wallet files, ${qfiles} question files, ${P.stats.requests} requests, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 if (doPredict) {
@@ -1154,6 +1181,12 @@ async function buildPerps() {
   console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}` + (ctx.copy.missing.length ? ` (no book read: ${ctx.copy.missing.join(', ')})` : ''));
   const prevs = await previousSnapshots();   // the rows to carry over, and the order of this build
   const order = stalestFirst(subs, prevs);
+  // each account's funding charges as read before: what is over 6 hours old does not change, so only the newer windows
+  // are read (A.fundingCharges). data/cache/perps-funding.json, which the deploy keeps between runs (actions/cache)
+  const fundFile = path.join(root, 'data', 'cache', 'perps-funding.json');
+  const fund = (() => { try { const j = JSON.parse(fs.readFileSync(fundFile, 'utf8')); return j && j.v === 1 && j.a ? j : null; } catch (_) { return null; } })() || { v: 1, a: {} };
+  const fundAt = Object.keys(fund.a).length;
+  ctx.fundingCache = { get: (sid) => fund.a[sid] || null, set: (sid, e) => { fund.a[sid] = e; } };
 
   // A time budget (--budget seconds, default 9 minutes: the Action's job has 15 and still has to deploy): four accounts are
   // built at a time and one takes two to three seconds from a PC (the Action's runner is about twice as fast), an active one
@@ -1200,6 +1233,9 @@ async function buildPerps() {
   if (ctx.copy.missing.length) out.booksMissing = ctx.copy.missing;
   // a build that would replace the published snapshot with an empty or cut-short list writes nothing: the step fails,
   // and the deploy sends the published one out again (scripts/keep-live.mjs)
+  // the funding kept for the next build, for the accounts that still exist
+  try { const live = new Set(subs.map((s) => s.id)); for (const sid of Object.keys(fund.a)) if (!live.has(sid)) delete fund.a[sid]; writeAtomic(fundFile, JSON.stringify(fund)); console.log(`  funding charges kept for ${Object.keys(fund.a).length} accounts (${fundAt} before this build)`); }
+  catch (e) { console.warn('funding cache not saved:', e.message); }
   const refused = publishProblem(out, prevs);
   if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
   fs.writeFileSync(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));
