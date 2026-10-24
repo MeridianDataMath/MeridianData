@@ -42,10 +42,11 @@
         conf,
         h('div.footer-note', 'Times in your local time zone. "Late" means the last build is older than 45 minutes, "stale" older than two hours. A stale snapshot is also flagged on the Leaderboard, Copy trading, the Predict Overview, Bettors, Questions, Market makers and Vig & edge pages, and on slip pages.'))));
 
-      // ---- perps snapshot (data/leaderboard.json, ~30 KB, already cached by the leaderboard page)
-      (async () => {
+      // ---- perps snapshot (data/leaderboard.json, already cached by the leaderboard page); its card is drawn again every
+      // minute and the file read again every five, so a page left open turns "fresh" into "late" and "stale" on time
+      const drawPerps = async (force) => {
         try {
-          const LB = MD.router.pages.leaderboard; const s = LB ? await LB.loadRemote(true) : null;
+          const LB = MD.router.pages.leaderboard; const s = !LB ? null : force || LB._remote === undefined ? await LB.loadRemote(true) : LB._remote;   // between reads: the one in memory
           if (ctx.signal.aborted) return;
           const [state, cls] = ageState(s && s.builtAt);
           U.replace(perps, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Perps snapshot'), UI.chip(state, cls)),
@@ -61,10 +62,12 @@
             ]) : h('div.empty', 'No published perps snapshot: the leaderboard is built in each visitor\'s browser instead.'),
             h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: Leaderboard, Copy trading (scores, also in the simulator), Home (top wallets), Favorites (PnL 30d), Dashboard (stop map account list).'));
         } catch (e) { if (!isAbort(e)) U.replace(perps, UI.error(e)); }
-      })();
+      };
+      drawPerps(true);
 
-      // ---- Predict snapshot (data/predict-status.json, a few hundred bytes written next to the 1 MB snapshot)
-      (async () => {
+      // ---- Predict snapshot (data/predict-status.json, a few hundred bytes written next to the 1 MB snapshot): read again
+      // every minute
+      const drawPredict = async () => {
         try {
           let s = null;
           // (the host answers unknown paths with the app's index.html, status 200: only JSON counts)
@@ -92,7 +95,11 @@
             ]) : h('div.empty', 'No Predict snapshot published yet.'),
             h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: every Predict page, the Predict tab of an account, the tax center\'s Predict ledger, and the Predict ideas on Copy trading.'));
         } catch (e) { if (!isAbort(e)) U.replace(predict, UI.error(e)); }
-      })();
+      };
+      drawPredict();
+      let ticks = 0;
+      const ageT = setInterval(() => { ticks++; drawPerps(ticks % 5 === 0); drawPredict(); }, 60000);
+      ctx.onCleanup(() => clearInterval(ageT));
 
       // ---- the exchange itself: round trip to /v1/time, clock offset, maintenance flag, WebSocket state
       (async () => {

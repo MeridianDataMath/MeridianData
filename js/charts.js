@@ -47,8 +47,18 @@
     for (; d.getTime() <= max; d.setMonth(d.getMonth() + ms)) out.push(d.getTime());
     return out;
   };
-  /** Money on an axis: whole dollars ("$500", "-$1,500", "$12.5K"); cents only where the steps are that small. */
-  C.axisUsd = (v) => U.fmtUsd(v, { compact: true, dp: Math.abs(v) < 10 && v % 1 !== 0 ? 2 : 0 });
+  /** Money on an axis: whole dollars ("$500", "-$1,500", "$12.5K"); with the axis's step (step), as many decimals as the
+   *  step needs in the unit shown, so no two ticks read the same ("$12.05K | $12.10K", not "$12.1K | $12.1K"); without
+   *  it, cents only where a value has them. */
+  C.axisUsd = (v, step) => {
+    if (!(step > 0)) return U.fmtUsd(v, { compact: true, dp: Math.abs(v) < 10 && v % 1 !== 0 ? 2 : 0 });
+    const dpFor = (div) => Math.min(3, Math.max(0, Math.ceil(-Math.log10(step / div) - 1e-9)));
+    return U.fmtUsd(v, { compact: true, dp: dpFor(1), unitDp: dpFor });
+  };
+  /** The step between an axis's ticks (Chart.js hands a tick callback the ticks), for the formatters above. */
+  const stepOf = (ticks) => (ticks && ticks.length > 1 ? Math.abs(ticks[1].value - ticks[0].value) : null);
+  /** A value-axis formatter as Chart.js calls it (value, index, ticks), handed (value, step) */
+  const axisCb = (fmt) => (v, i, ticks) => fmt(v, stepOf(ticks));
   const alignTicks = (axis) => { const t = C.timeTicks(axis.min, axis.max, 8); if (t.length >= 2) axis.ticks = t.map((value) => ({ value })); };
 
   // Chart.js keeps every chart in its registry until destroy(), and with it the canvas and whatever page that canvas
@@ -100,7 +110,7 @@
           // left up to a week of empty chart after the last point; bars get a half-bar margin at each end instead. Labels
           // take their format from the axis span, as the ticks do (a plain function: Chart.js calls it with the scale as this)
           x: { type: 'linear', min: opts.xMin, max: opts.xMax, bounds: 'data', offset: type === 'bar', afterBuildTicks: alignTicks, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, callback: function (v) { return xTick(this.max - this.min)(v); }, padding: 8 } },
-          y: { position: 'right', grid: { color: (c) => (c.tick.value === 0 && opts.zero !== false ? '#3a3a3d' : col.grid), drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 6, callback: (v) => yFmt(v), padding: 8 }, beginAtZero: opts.beginAtZero || false },
+          y: { position: 'right', grid: { color: (c) => (c.tick.value === 0 && opts.zero !== false ? '#3a3a3d' : col.grid), drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 6, callback: axisCb(yFmt), padding: 8 }, beginAtZero: opts.beginAtZero || false },
         },
         plugins: {
           legend: { display: !!opts.series, position: 'top', align: 'end', labels: { boxWidth: 8, boxHeight: 8, usePointStyle: true, pointStyle: 'circle', padding: 12 } },
@@ -147,7 +157,7 @@
       data: { labels, datasets: [{ data: values, backgroundColor: colors.map((c) => hexA(c, 0.6)), borderColor: colors, borderWidth: 1, borderRadius: 3, maxBarThickness: 26 }] },
       options: {
         responsive: true, maintainAspectRatio: false, indexAxis: opts.horizontal ? 'y' : 'x',
-        scales: { x: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? { callback: opts.axisFmt || C.axisUsd } : {} }, y: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? {} : { callback: opts.axisFmt || C.axisUsd } } },
+        scales: { x: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? { callback: axisCb(opts.axisFmt || C.axisUsd) } : {} }, y: { grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: opts.horizontal ? {} : { callback: axisCb(opts.axisFmt || C.axisUsd) } } },
         plugins: { tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, displayColors: false, callbacks: { label: (it) => (opts.fmt || U.fmtUsd)(it.raw) } } },
       },
     });
@@ -166,7 +176,7 @@
       data: { labels, datasets: series.map((s) => ({ label: s.label, data: s.values, stack: 'all', backgroundColor: hexA(s.color, 0.6), borderColor: s.color, borderWidth: 1, borderRadius: 3, maxBarThickness: 26 })) },
       options: {
         responsive: true, maintainAspectRatio: false,
-        scales: { x: { stacked: true, grid: { display: false }, border: { display: false } }, y: { stacked: true, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { callback: opts.axisFmt || C.axisUsd } } },
+        scales: { x: { stacked: true, grid: { display: false }, border: { display: false } }, y: { stacked: true, grid: { color: col.grid, drawTicks: false }, border: { display: false }, ticks: { callback: axisCb(opts.axisFmt || C.axisUsd) } } },
         plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: col.text, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } }, tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, callbacks: { label: (it) => it.dataset.label + ': ' + fmt(it.raw) } } },
       },
     });

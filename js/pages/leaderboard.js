@@ -167,7 +167,9 @@
         let cancel = false;
         try {
           const ref = await A.ref(ctx);
-          const subs = await A.allSubaccounts({ signal: ctx.signal, ttl: force ? 0 : 60000 });
+          // built and counted as the deploy builds them (the left-out wallets, U.EXCLUDED, neither built nor counted): a count
+          // that had them read "2 of 381 accounts missing"
+          const subs = (await A.allSubaccounts({ signal: ctx.signal, ttl: force ? 0 : 60000 })).filter((sa) => !U.isExcluded(sa.account));
           const ids = ref.active.map((p) => p.id);
           const prices = await A.marketPrices(ids, { signal: ctx.signal, ttl: 10000 });
           const rows = new Array(subs.length); let done = 0;

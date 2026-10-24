@@ -61,12 +61,13 @@
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Dashboard'));
       const tiles = h('div.stats');
-      const mktBody = h('div', UI.loading('Loading markets…'));
+      // the live tables hold still while the pointer is over them (U.replaceLive), so a tooltip can be read
+      const mktBody = h('div.pause-hover', UI.loading('Loading markets…'));
       const tradesBody = h('div.feed.pause-hover', UI.loading('Loading trades…'));
       const liqBody = h('div', UI.loading('Loading…'));
       const gapBody = h('div', UI.loading('Loading…'));
-      const fundBody = h('div');
-      const pfBody = h('div');   // the Funding card's mPerp position fees, under the funding table
+      const fundBody = h('div.pause-hover');
+      const pfBody = h('div.pause-hover');   // the Funding card's mPerp position fees, under the funding table
       const status = h('span.status-dot'); const statusTxt = h('span.dim.small');
       const catSel = h('span.seg-box');   // the Markets' category buttons (renderCatSel); a phone scrolls them sideways
       // stop map and liquidation map elements: both cards are closed on every visit, so the page does not scan every account
@@ -372,7 +373,10 @@
             const pending = await A.pendingOrders(sa.id, o).catch(() => { ok = false; return []; });
             if (ok) scanned++;                                 // "checked" counts only accounts whose orders were read
             let positions = [], working = [];
-            if (!k || k.openCount > 0 || pending.length) [positions, working] = await Promise.all([A.openPositions(sa.id, o).catch(() => []), A.openOrders(sa.id, o).catch(() => [])]);
+            // every account's open positions, not only those the snapshot saw holding some: a position opened since (the
+            // snapshot is half an hour old or more) is on the liquidation map too; its other orders only where there is one
+            positions = await A.openPositions(sa.id, o).catch(() => []);
+            if (positions.length || pending.length) working = await A.openOrders(sa.id, o).catch(() => []);
             if (!pending.length && !positions.length) return;
             // the balances give each position its liquidation price (its margin pool's equity against its maintenance margin)
             const balances = positions.length ? await A.balances(sa.id, o).catch(() => []) : [];
@@ -689,14 +693,21 @@
           if (changed && !ctx.signal.aborted) renderTrades();
         } finally { resolving = false; }
       };
-      (async () => {
-        // SHOW rows per market: one market can fill at most SHOW rows, so the newest SHOW of the merged list are
-        // exactly the newest SHOW trades (with fewer per market a busy market's older trades went missing)
-        const seed = await Promise.all(ref.active.map((p) => A.trades(p.id, SHOW, ctx).then((rows) => rows.map((r) => restTrade(p, r))).catch(() => [])));
-        trades = U.sortBy(seed.flat(), (t) => t.t, true);
+      // SHOW rows per market: one market can fill at most SHOW rows, so the newest SHOW of the merged list are exactly the
+      // newest SHOW trades (with fewer per market a busy market's older trades went missing). Merged by id with what the
+      // socket delivered while the reads were out (they replaced it), and read again after a reconnect: the socket sends
+      // no trades from the outage
+      const seedTrades = async () => {
+        const seed = (await Promise.all(ref.active.map((p) => A.trades(p.id, SHOW, ctx).then((rows) => rows.map((r) => restTrade(p, r))).catch(() => [])))).flat();
+        if (ctx.signal.aborted) return;
+        const ids = new Set(seed.map((t) => t.id));
+        trades = U.sortBy(seed.concat(trades.filter((t) => !ids.has(t.id))), (t) => t.t, true).slice(0, 200);
         renderTrades();
         resolveVisible();
-      })();
+      };
+      seedTrades();
+      let wsWas = A.ws.status, wsDown = false;
+      ctx.onCleanup(A.ws.onStatus((st) => { if (st === 'closed' && wsWas === 'open') wsDown = true; if (st === 'open' && wsDown) { wsDown = false; seedTrades(); } wsWas = st; }));
       for (const p of ref.active) {
         ctx.onCleanup(A.ws.subscribe('TradeFill', p.ticker, (m) => {
           for (const t of wsTrades(p, m)) trades.unshift(t);   // one at a time, as before: the last fill of a batch ends on top

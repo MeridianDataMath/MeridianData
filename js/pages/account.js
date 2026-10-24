@@ -791,7 +791,7 @@
     const { sa, ref } = st; const sid = sa.id;
     const status = h('span.status-dot');
     const statusTxt = h('span.dim.small', 'connecting');
-    const posBody = h('div.scroll-y'), ordBody = h('div.scroll-y'), fillBody = h('div.feed.pause-hover'), evBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
+    const posBody = h('div.scroll-y.pause-hover'), ordBody = h('div.scroll-y.pause-hover'), fillBody = h('div.feed.pause-hover'), evBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
     const mktTrades = h('div.feed.pause-hover', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
     const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
     const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
@@ -915,6 +915,16 @@
     cx.onCleanup(A.ws.subscribe('TokenTransfer', sid, (m) => { events = pushEvent(events, wsTransferItem(m)); renderEvents(); }));
     cx.onCleanup(A.ws.subscribe('SubaccountLiquidation', sid, (m) => { events = pushEvent(events, wsLiqItem(m)); renderEvents(); reloadThrottled(); }));
 
+    // a reconnect (the laptop slept, the network dropped, Meridian closed the socket at its time limit): the account
+    // streams send no snapshot when they are subscribed again (only L2Book does), so positions, orders, fills, transfers
+    // and the market's trades are read over REST, or what happened during the outage would never show
+    let wsWas = A.ws.status, wsDown = false;
+    cx.onCleanup(A.ws.onStatus((s) => {
+      if (s === 'closed' && wsWas === 'open') wsDown = true;
+      if (s === 'open' && wsDown) { wsDown = false; reload(); loadFills(); loadEvents(); const prod = ref.byTicker[curMarket]; if (prod) loadTrades(curMarket, prod); }
+      wsWas = s;
+    }));
+
     // order book
     const bids = new Map(), asks = new Map();
     let lastBookT = null;
@@ -935,7 +945,8 @@
       l3Err = null; l3Tried = Date.now(); if (full) { l3WantFull = false; l3FullTried = l3Tried; l3Progress = [0, 0]; }
       again.disabled = true;
       l3Busy = (async () => {
-        const subs = full ? await A.allSubaccounts({ signal: cx.signal }) : null;
+        const all = full ? await A.allSubaccounts({ signal: cx.signal }) : null;
+        const subs = all ? all.filter((s) => !U.isExcluded(s.account)) : null;   // the left-out wallets (U.EXCLUDED), as on the dashboard's maps
         const owner = full ? new Map(subs.map((s) => [s.id, s.account])) : l3.owner;
         const ids = full ? subs.map((s) => s.id) : Array.from(new Set([sid, ...l3.orders.map((o) => o.sid), ...l3.failedIds]));
         if (full) { l3Progress = [0, ids.length]; renderNote(); }
@@ -949,7 +960,7 @@
         // those of the subaccounts it did not ask
         const asked = new Set(ids);
         const kept = l3 ? l3.orders.filter((o) => failedIds.has(o.sid) || (!full && !asked.has(o.sid))) : [];
-        l3 = full ? { at: now, fullAt: now, orders: kept.concat(fresh), owner, accounts: ids.length, failedIds, truncated, listCut: !!subs.truncated }
+        l3 = full ? { at: now, fullAt: now, orders: kept.concat(fresh), owner, accounts: ids.length, failedIds, truncated, listCut: !!all.truncated }
           : Object.assign({}, l3, { at: now, orders: kept.concat(fresh), failedIds, truncated: Math.max(l3.truncated, truncated) });
       })().catch((e) => { if (!isAbort(e)) l3Err = e; }).finally(() => {
         l3Busy = null; l3Progress = null; if (cx.signal.aborted) return;
@@ -1071,6 +1082,11 @@
     let unsubTrades = null, mktRows = [];
     const mktRow = (t, flash) => h('div.it', { class: (flash ? 'flash ' : '') + (t.mine ? 'mine' : '') }, h('span.t', U.fmtFeedTime(t.t)), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(t.size) * U.num(t.price))), t.mine ? UI.chip(t.mine, 'accent') : null);
     const renderMkt = () => U.replaceLive(mktTrades, mktRows.length ? mktRows.slice(0, 80).map((t, i) => mktRow(t, t._new && i < 5)) : err.mkt ? failNote('The trades', err.mkt, () => selectMarket(curMarket)) : UI.empty('No trades yet'));
+    // the market's latest trades over REST, merged by id with what the socket delivered meanwhile (again after a reconnect)
+    function loadTrades(ticker, prod) {
+      A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, lot: prod.lotSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); err.mkt = null; renderMkt(); }).catch((e) => { if (curMarket === ticker && !isAbort(e)) { err.mkt = e; renderMkt(); } });
+    }
+    let lastResub = 0;
     function selectMarket(ticker) {
       if (unsubBook) unsubBook();
       if (unsubTrades) unsubTrades();
@@ -1079,23 +1095,29 @@
       const prod = ref.byTicker[ticker];
       mktRows = []; err.mkt = null; U.replace(mktTrades, UI.loading('Loading trades…')); mktTitle.textContent = prod ? prod.displayTicker + ' · all accounts' : '';
       if (prod) {
-        A.trades(prod.id, 40, cx).then((rows) => { if (curMarket !== ticker) return; mktRows = U.sortBy(rows.map((r) => ({ id: r.id, t: r.createdAt, tick: prod.tickSize, lot: prod.lotSize, side: r.takerSide, size: r.filled, price: r.price })).concat(mktRows.filter((x) => !rows.some((r) => r.id === x.id))), (t) => t.t, true); err.mkt = null; renderMkt(); }).catch((e) => { if (curMarket === ticker && !isAbort(e)) { err.mkt = e; renderMkt(); } });
+        loadTrades(ticker, prod);
         unsubTrades = A.ws.subscribe('TradeFill', ticker, (m) => {
           const d = m.data || {};
           for (const it of d.d || []) { const sids = it.sids || []; const mine = sids[0] === sa.id ? 'this account · taker' : sids[1] === sa.id ? 'this account · maker' : null; mktRows.unshift({ id: it.id, t: d.t || m.t, tick: prod.tickSize, lot: prod.lotSize, side: it.sd, size: it.sz, price: it.px, mine, _new: true }); }
           mktRows = mktRows.slice(0, 200); renderMkt();
         });
       }
-      unsubBook = A.ws.subscribe('L2Book', ticker, (m) => {
+      // the first message after a (re)subscribe is the whole book (up to 100 levels a side); each later one carries the
+      // levels that changed, its pt the previous message's t. One that does not chain means an update was missed: its
+      // levels go over the book kept (clearing it left only the delta's few levels, until the next reconnect), and the
+      // book is asked for again, at most every 10 s (resubscribing sends it whole)
+      const onBook = (m) => {
+        if (curMarket !== ticker) return;
         const d = m.data || {};
-        // each delta's pt is the previous message's t; one that does not chain is the full snapshot sent on (re)subscribe,
-        // e.g. after a reconnect: drop the old levels first
-        if (d.pt !== lastBookT) { bids.clear(); asks.clear(); }
+        const gap = lastBookT != null && d.pt !== lastBookT;
+        if (lastBookT == null) { bids.clear(); asks.clear(); }
         lastBookT = d.t;
         for (const [p, q] of d.a || []) { const qq = U.num(q); if (qq === 0) asks.delete(U.num(p)); else asks.set(U.num(p), qq); }
         for (const [p, q] of d.b || []) { const qq = U.num(q); if (qq === 0) bids.delete(U.num(p)); else bids.set(U.num(p), qq); }
         bookLoaded = true; renderBook();
-      });
+        if (gap && Date.now() - lastResub > 10000) { lastResub = Date.now(); lastBookT = null; if (unsubBook) unsubBook(); unsubBook = A.ws.subscribe('L2Book', ticker, onBook); }
+      };
+      unsubBook = A.ws.subscribe('L2Book', ticker, onBook);
       cx.onCleanup(() => { if (unsubBook) unsubBook(); if (unsubTrades) unsubTrades(); });
     }
     const biggest = positions.length ? U.sortBy(positions, (p) => Math.abs(U.num(p.cost)), true)[0] : null;

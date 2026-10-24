@@ -86,6 +86,7 @@
     document.addEventListener('pointerup', () => { pointerDown = false; }, true);
     document.addEventListener('pointercancel', () => { pointerDown = false; }, true);
   }
+  const canHover = () => !window.matchMedia || window.matchMedia('(hover: hover)').matches;
   U.replaceLive = (el, ...children) => {
     const sel = document.getSelection ? document.getSelection() : null;
     const selecting = sel && !sel.isCollapsed && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);
@@ -96,13 +97,14 @@
     // keyboard focus only (:focus-visible): a row clicked with the mouse, or given the focus back by a closing dialog,
     // must not freeze the tape
     const focusIn = () => { const a = document.activeElement; return a !== el && el.contains(a) && !!a.matches && a.matches(':focus-visible'); };
-    const held = selecting || (pauses && (el.matches(':hover') || focusIn())) || (pointerDown && el.matches(':hover'));
+    // (the pointer only where it can hover: a phone keeps :hover after a tap, which held a tape until the next tap elsewhere)
+    const held = selecting || (pauses && ((canHover() && el.matches(':hover')) || focusIn())) || (pointerDown && el.matches(':hover'));
     if (held) {
       el.__pending = children;
       if (!el.__catchUp) {
         el.__catchUp = true;
         // (the class is read when it runs: an element can start or stop pausing after its first held render)
-        const catchUp = () => { if (el.classList.contains('pause-hover') && (el.matches(':hover') || focusIn())) return; const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); };
+        const catchUp = () => { if (el.classList.contains('pause-hover') && ((canHover() && el.matches(':hover')) || focusIn())) return; const p = el.__pending; el.__pending = null; if (p && !(document.getSelection && !document.getSelection().isCollapsed)) U.replace(el, ...p); };
         el.addEventListener('mouseleave', () => setTimeout(catchUp));
         el.addEventListener('focusout', () => setTimeout(catchUp));   // after the focus has landed: still inside means stay
       }
@@ -184,22 +186,37 @@
   const nfCache = {};
   const fmtN = (n, dp, min) => { const k = dp + ':' + (min ?? dp); return (nfCache[k] || (nfCache[k] = nf(dp, min))).format(n); };
 
-  /** USD formatting: fmtUsd(1234.5) → "$1,234.50"; opts: {sign, compact, dp} */
+  // compact units, largest first, with their usual decimals ("$1.64T" for a market cap, not "$1,639.29B")
+  const UNITS = [[1e12, 'T', 2], [1e9, 'B', 2], [1e6, 'M', 2], [1e3, 'K', 1]];
+  /** The unit a compact figure is written in: by its size (K from 10,000: "$9,160" beside "$10.2K"), then the next one up
+   *  when it rounds to 1,000 of it ("$1.00M", not "$1,000.0K"). dpFor(div): the decimals in that unit (an axis gives
+   *  those its step needs); null: no unit. */
+  const compactUnit = (a, dpFor) => {
+    let i = a >= 1e12 ? 0 : a >= 1e9 ? 1 : a >= 1e6 ? 2 : a >= 1e4 ? 3 : -1;
+    while (i >= 0) {
+      const [div, suf, dp0] = UNITS[i], dp = dpFor ? dpFor(div) : dp0;
+      if (i > 0 && Number((a / div).toFixed(dp)) >= 1000) { i--; continue; }
+      return { div, suf, dp };
+    }
+    return null;
+  };
+  // the sign follows the figure as written: a loss that rounds to nothing reads "$0.00", not "-$0.00"
+  const signOf = (n, shown, dp, plus) => (Number(Math.abs(shown).toFixed(dp)) === 0 ? '' : n < 0 ? '-' : plus && n > 0 ? '+' : '');
+  /** USD formatting: fmtUsd(1234.5) → "$1,234.50"; opts: {sign, compact, dp, unitDp (compact: the decimals in a unit,
+   *  from its divisor)} */
   U.fmtUsd = (x, opts = {}) => {
     const n = U.num(x);
     if (opts.compact) {
       const a = Math.abs(n);
-      const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
-      if (a >= 1e12) return s + '$' + fmtN(a / 1e12, 2) + 'T';   // a market cap: "$1.64T", not "$1,639.29B"
-      if (a >= 1e9) return s + '$' + fmtN(a / 1e9, 2) + 'B';
-      if (a >= 1e6) return s + '$' + fmtN(a / 1e6, 2) + 'M';
-      if (a >= 1e4) return s + '$' + fmtN(a / 1e3, 1) + 'K';
+      const u = compactUnit(a, opts.unitDp);
+      if (u) { const v = a / u.div; return signOf(n, v, u.dp, opts.sign) + '$' + fmtN(v, u.dp) + u.suf; }
       if (a === 0 && opts.dp == null) return '$0';   // "$5,994 / $0", and an empty market's OI reads "$0", not "$0.00"
-      return s + '$' + fmtN(a, opts.dp ?? (a >= 1000 ? 0 : 2));   // a compact column reads "$9,160" beside "$10.2K", not "$9,159.76"
+      const dp = opts.dp ?? (a >= 1000 ? 0 : 2);   // a compact column reads "$9,160" beside "$10.2K", not "$9,159.76"
+      return signOf(n, a, dp, opts.sign) + '$' + fmtN(a, dp);
     }
-    const s = n < 0 ? '-' : opts.sign && n > 0 ? '+' : '';
     if (n !== 0 && Math.abs(n) < 0.01 && opts.dp == null) return '<$0.01';   // dust: "+$0.000716" helps nobody, and "+<$0.01" reads oddly; the colour still says which way
-    return s + '$' + fmtN(Math.abs(n), opts.dp ?? 2);   // one format per column: "-$0.07" next to "$37.94", not "-$0.0738"
+    const dp = opts.dp ?? 2;
+    return signOf(n, n, dp, opts.sign) + '$' + fmtN(Math.abs(n), dp);   // one format per column: "-$0.07" next to "$37.94", not "-$0.0738"
   };
   /** Price formatting with sensible decimals for the magnitude (or tickSize decimals if given) */
   U.fmtPrice = (x, tick) => {
@@ -227,12 +244,14 @@
     return s + fmtN(Math.abs(n), dp) + '%';
   };
   U.fmtCompact = (x, dp = 1) => {
-    const n = U.num(x); const a = Math.abs(n); const s = n < 0 ? '-' : '';
-    if (a >= 1e12) return s + fmtN(a / 1e12, dp) + 'T';
-    if (a >= 1e9) return s + fmtN(a / 1e9, dp) + 'B';
-    if (a >= 1e6) return s + fmtN(a / 1e6, dp) + 'M';
-    if (a >= 1e3) return s + fmtN(a / 1e3, dp) + 'K';
-    return s + fmtN(a, a >= 100 ? 0 : dp);
+    const n = U.num(x); const a = Math.abs(n);
+    let i = UNITS.findIndex(([d]) => a >= d);
+    // a figure that rounds to 1,000 of its unit is written in the next one up ("1.0M", not "1,000.0K")
+    if (i < 0 && Number(a.toFixed(a >= 100 ? 0 : dp)) >= 1000) i = UNITS.length - 1;
+    while (i > 0 && Number((a / UNITS[i][0]).toFixed(dp)) >= 1000) i--;
+    if (i < 0) { const d = a >= 100 ? 0 : dp; return signOf(n, a, d) + fmtN(a, d); }
+    const v = a / UNITS[i][0];
+    return signOf(n, v, dp) + fmtN(v, dp) + UNITS[i][1];
   };
   /** drawdown percent: '—' when none, '<0.01%' for tiny values */
   U.fmtDd = (pct) => (pct == null || !(pct > 0) ? '—' : pct < 0.01 ? '<0.01%' : U.fmtPct(pct, { dp: 2 }));
@@ -258,17 +277,23 @@
   U.fmtWhen = (ms) => { const d = new Date(U.num(ms)); return d.getFullYear() === new Date().getFullYear() ? `${MON[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : U.fmtDateTime(ms); };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   U.fmtAgo = (ms) => {
+    if (!(U.num(ms) > 0)) return '—';   // no time known (a status file that did not load): not "20750d ago"
     const s = Math.max(0, (Date.now() - U.num(ms)) / 1000);
     if (s < 60) return `${Math.floor(s)}s ago`;
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
     return `${Math.floor(s / 86400)}d ago`;
   };
+  /** An age ("5m ago") that keeps itself current: every one on the page is written again every 30 s, so a page left open
+   *  does not say "5m ago" for hours. fmt: its own wording of the time (U.fmtAgo unless given). */
+  U.agoEl = (t, fmt) => { const el = U.h('span.ago'); el.__t = t; el.__fmt = fmt || null; el.textContent = (fmt || U.fmtAgo)(t); return el; };
+  if (typeof document !== 'undefined' && typeof setInterval === 'function') setInterval(() => { for (const el of document.querySelectorAll('span.ago')) { const v = (el.__fmt || U.fmtAgo)(el.__t); if (el.textContent !== v) el.textContent = v; } }, 30000);
   U.fmtDuration = (ms) => {
     const s = Math.max(0, U.num(ms) / 1000);
-    if (s < 60) return `${Math.round(s)}s`;
-    if (s < 3600) return `${Math.round(s / 60)}m`;
-    if (s < 86400) return `${(s / 3600).toFixed(1)}h`;
+    // each unit until its figure rounds to the next one: 59.6 s reads "1m", not "60s", and 3,599 s "1.0h", not "60m"
+    if (Math.round(s) < 60) return `${Math.round(s)}s`;
+    if (Math.round(s / 60) < 60) return `${Math.round(s / 60)}m`;
+    if (Number((s / 3600).toFixed(1)) < 24) return `${(s / 3600).toFixed(1)}h`;
     return `${(s / 86400).toFixed(1)}d`;
   };
   U.fmtCountdown = (ms) => {

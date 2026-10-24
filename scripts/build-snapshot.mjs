@@ -1038,8 +1038,10 @@ async function buildPredict() {
   for (const [addr, list] of Object.entries(byWallet)) {
     list.sort((a, b) => b.t - a.t);
     const truncated = list.length > 600;
-    // a truncated file still carries every prediction on a pick configuration the wallet traded, so its ledger is whole
-    const kept = truncated ? list.slice(0, 600).concat(list.slice(600).filter((n) => n.pcTraded && (tradesOf[addr] || []).some((t) => t.pc === n.pc))) : list;
+    // a truncated file still carries every prediction on a pick configuration the wallet traded, so its ledger is whole,
+    // and every older one still open, so its page lists all its open positions (the Vault's went back months further
+    // than its newest 600)
+    const kept = truncated ? list.slice(0, 600).concat(list.slice(600).filter((n) => !n.decided || (n.pcTraded && (tradesOf[addr] || []).some((t) => t.pc === n.pc)))) : list;
     // a truncated file holds the newest 600 and older traded ones only, so what needs every prediction is written here,
     // for the role the page counts (loadBettor: the side with more predictions in the file): its curve and its stake per
     // UTC day. newest: how many of the file's predictions are the newest (the rest are the older traded ones)

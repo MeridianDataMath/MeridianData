@@ -230,7 +230,7 @@
           }));
         const copyable = scored.filter((x) => x.sc && x.sc.verdict === 'Copyable').length, nScored = scored.filter((x) => x.sc).length;
         // as the Leaderboard says it: accounts missing from the snapshot, rows carried over from an earlier build, staleness
-        U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot ${U.fmtAgo(data.builtAt)}`, LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));
+        U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot `, U.agoEl(data.builtAt), LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));
       }
       render();
       // keep the page current with the published snapshot

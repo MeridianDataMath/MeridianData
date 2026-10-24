@@ -218,3 +218,21 @@ test('favorites: a name of its own (trimmed, capped, removable) that survives re
     assert.deepEqual(U.favorites.list(), []);
   } finally { globalThis.localStorage = saved; }
 });
+
+test('money and counts: a figure that rounds to 1,000 of its unit takes the next one, and a sign follows the figure as written', () => {
+  assert.equal(U.fmtUsd(999950, { compact: true }), '$1.00M');
+  assert.equal(U.fmtUsd(999949, { compact: true }), '$999.9K');
+  assert.equal(U.fmtUsd(999994999, { compact: true }), '$999.99M');
+  assert.equal(U.fmtUsd(12345, { compact: true, sign: true }), '+$12.3K');
+  assert.equal(U.fmtUsd(-0.004, { compact: true }), '$0.00', 'a loss that rounds to nothing has no minus');
+  assert.equal(U.fmtUsd(0.003, { compact: true, sign: true }), '$0.00');
+  assert.equal(U.fmtUsd(-0.3, { dp: 0, sign: true }), '$0');
+  assert.equal(U.fmtUsd(-0.07), '-$0.07'); assert.equal(U.fmtUsd(0.004), '<$0.01');
+  assert.equal(U.fmtCompact(999950), '1.0M'); assert.equal(U.fmtCompact(999.96), '1.0K'); assert.equal(U.fmtCompact(-1234), '-1.2K'); assert.equal(U.fmtCompact(42.25), '42.3');
+  assert.equal(U.fmtDuration(59.6e3), '1m'); assert.equal(U.fmtDuration(3599e3), '1.0h'); assert.equal(U.fmtDuration(86300e3), '1.0d'); assert.equal(U.fmtDuration(30e3), '30s');
+});
+
+test('an age with no time known is "—", not "20750d ago"', () => {
+  assert.equal(U.fmtAgo(null), '—'); assert.equal(U.fmtAgo(undefined), '—'); assert.equal(U.fmtAgo(0), '—');
+  assert.equal(U.fmtAgo(Date.now() - 90000), '1m ago');
+});

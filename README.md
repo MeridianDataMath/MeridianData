@@ -668,7 +668,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
       purchases), +$743.12, all of it in the secondary-market file and read as *bought position tokens redeemed*;
       0x79cb…, a maker with 5,690 predictions, +$14,465.09 from its compact rows.
     * **Big makers**: a wallet file keeps the newest 600 predictions (and older ones on pick configurations it
-      traded); its `rows` hold one compact row for every prediction, so the period figures stay whole, and only the
+      traded, and every older one still open); its `rows` hold one compact row for every prediction, so the period figures stay whole, and only the
       per-prediction record is limited to the loaded predictions (said in an amber note and in that file, whose name
       then ends in `-INCOMPLETE`). Without rows the figures are incomplete, said on the card and in every Predict
       file.

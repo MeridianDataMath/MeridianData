@@ -239,7 +239,15 @@
       const stopAll = () => { detach(); clearTimeout(syncTimer); syncTimer = null; syncAt = 0; };
       ctx.onCleanup(stopAll);
       const markOf = (pid) => (live[pid] != null && Date.now() - (liveT[pid] || 0) < 15000 ? live[pid] : null);   // the stream's mark while it is fresh
-      const marksNow = () => { const m = {}; for (const p of ref.active) { const v = markOf(p.id) || marks[p.id]; if (v) m[p.id] = v; } return m; };
+      // the paper card's marks: the stream's while fresh, else the exchange's market price read on the card's 10 s tick
+      // (restMarks), and only then the prices loaded with the page (marksOld: those markets, said on the card)
+      const restMarks = {}; let marksOld = [];
+      const marksNow = () => {
+        const m = {}; const old = [];
+        for (const p of ref.active) { const r = restMarks[p.id]; const v = markOf(p.id) || (r && Date.now() - r.t < 120000 ? r.v : null); if (v) m[p.id] = v; else if (marks[p.id]) { m[p.id] = marks[p.id]; old.push(p.id); } }
+        marksOld = old; return m;
+      };
+      const refreshMarks = async (pids) => { const ask = pids.filter((pid) => !markOf(pid)); if (!ask.length) return; const got = await freshMarks(ask).catch(() => ({})); for (const pid of Object.keys(got)) restMarks[pid] = { v: got[pid], t: Date.now() }; };
       /** Prices to act on now: the stream's while fresh, else the exchange's market price; nothing when neither answers. */
       async function freshMarks(pids) {
         const out = {}; const ask = pids.filter((pid) => { const m = markOf(pid); if (m) out[pid] = m; return !m; });
@@ -384,7 +392,7 @@
         }, 60000);
         // a fill whose message the stream lost (a reconnect, a sleeping laptop) is found by the next look at the history
         const poll = setInterval(() => { if (paper && !document.hidden) scheduleSync(0); }, 120000);
-        const tick = setInterval(() => { if (paper && Object.keys(paper.open).length && !document.hidden) renderPaper(); }, 10000);   // unrealized follows the mark
+        const tick = setInterval(async () => { if (!paper || !Object.keys(paper.open).length || document.hidden) return; await refreshMarks(Object.values(paper.open).map((p) => p.pid)); if (paper) renderPaper(); }, 10000);   // unrealized follows the mark
         unsubs.push(() => clearInterval(tick), () => clearInterval(poll));
       }
       async function startPaper() {
@@ -412,7 +420,7 @@
         const tiles = h('div.stats',
           UI.stat('Realized', usd0(realized, { sign: true }), `${paper.closed.length} closed position${paper.closed.length === 1 ? '' : 's'}` + (openRows.some((p) => p.basis != null) ? ' · incl. partial closes, fees and funding of open ones' : ''), U.pnlClass(realized)),
           legacy ? UI.stat('Result so far', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark, incl. partial closes, fees and funding · Rebuild to split it`, U.pnlClass(unreal))
-            : UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark, before fees`, U.pnlClass(unreal)),
+            : UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · ` + (openRows.some((p) => marksOld.includes(p.pid)) ? 'some at the prices loaded with the page (no live price now)' : 'at the live mark') + ', before fees', U.pnlClass(unreal)),
           UI.stat('Delay cost', usd0(delay, { sign: true }), `${usd0(T.driftLive, { sign: true })} measured on ${T.liveFills} live fill${T.liveFills === 1 ? '' : 's'} · ${usd0(T.driftModeled, { sign: true })} modelled on ${T.caughtUp} caught up`, delay > 0 ? 'neg' : delay < 0 ? 'pos' : ''),
           UI.stat('Fees & slippage', usd0(T.fees + T.slip), `${usd0(T.fees)} fees · ${usd0(T.slip)} slippage`, 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'accrued each minute at each market\'s latest hourly rate while a tab follows', U.pnlClass(T.funding)));

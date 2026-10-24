@@ -186,55 +186,89 @@
         foot))));
       setTimeout(() => input.focus(), 50);
 
-      // ---- perps, live: markets, volume and open interest at the oracle price, accounts ----
-      const refP = A.ref({ signal: ctx.signal });
-      const pricesP = refP.then((ref) => A.marketPrices(ref.active.map((p) => p.id), { signal: ctx.signal, ttl: 30000 }));
-      pricesP.catch(() => {});   // each user of them reports its own failure
-      (async () => {
+      // ---- perps, live: markets, volume and open interest at the oracle price, accounts; read again every minute (the
+      // products and the account list from their caches), the prices each time, so a tab left open stays current ----
+      const live = () => A.ref({ signal: ctx.signal }).then(async (ref) => ({ ref, prices: await A.marketPrices(ref.active.map((p) => p.id), { signal: ctx.signal, ttl: 30000 }) }));
+      const exchange = async () => {
         try {
-          const [ref, prices, subs] = await Promise.all([refP, pricesP, A.allSubaccounts({ signal: ctx.signal }).catch(() => null)]);
+          const [{ ref, prices }, subs0] = await Promise.all([live(), A.allSubaccounts({ signal: ctx.signal, ttl: 300000 }).catch(() => null)]);
           let vol = 0, oi = 0;
           for (const p of ref.active) { const px = prices[p.id]; const o = px ? U.num(px.oraclePrice) : 0; vol += U.num(p.volume24h) * o; oi += U.num(p.openInterest) * o; }
+          const subs = subs0 ? subs0.filter((s) => !U.isExcluded(s.account)) : null;   // counted as the Leaderboard counts them (U.EXCLUDED)
           ex = { vol, oi, accounts: subs ? subs.length : null, newest: subs && subs.length ? Math.max(...subs.map((s) => s.createdAt)) : null };
           renderTiles(); setFig('dash', ref.active.length + ' markets');
         } catch (e) { if (!isAbort(e)) console.warn('home: exchange figures', e); }
-      })();
+      };
+      exchange();
 
       let sum;
       try { sum = await loadSummary(ctx); } catch (e) { if (isAbort(e)) return; sum = {}; }
       if (ctx.signal.aborted) return;
-      const lb = sum.lb, pr = sum.predict;
-      if (sum.status) { ps = sum.status; renderTiles(); }
-      if (lb) { setFig('lb', U.fmtNum(lb.accounts, 0) + ' accounts'); setFig('copy', U.fmtNum(lb.copyable, 0) + ' copyable'); }
-      if (pr && pr.week && pr.week.wagered) setFig('pred', U.fmtUsd(pr.week.wagered, { compact: true }) + ' wagered in 7 days');
+      // the summary's parts: drawn now, their ages again every minute, and again with a newer summary (read every five
+      // minutes: a tab left open for hours said "snapshot 5m ago" and never "stale")
+      const drawSummary = () => {
+        const lb = sum.lb, pr = sum.predict;
+        if (sum.status) { ps = sum.status; renderTiles(); }
+        if (lb) { setFig('lb', U.fmtNum(lb.accounts, 0) + ' accounts'); setFig('copy', U.fmtNum(lb.copyable, 0) + ' copyable'); }
+        if (pr && pr.week && pr.week.wagered) setFig('pred', U.fmtUsd(pr.week.wagered, { compact: true }) + ' wagered in 7 days');
 
-      // ---- top wallets: all-time PnL as Meridian's app shows it, traders only (js/home-summary.js) ----
-      if (!lb) U.replace(topBody, UI.empty(h('span', h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here'))));
-      else {
-        const AN = MD.analytics, LB = MD.router.pages.leaderboard;
-        // the ranking says, as the Leaderboard does, when accounts are missing from it or carried over, and when it is stale
-        U.replace(topNote, h('span', { title: 'All-time PnL as Meridian\'s app shows it (its Trade Stats): realized PnL, settled funding and trading fees, plus unrealized PnL; ROI on the deposits. Hover a wallet for the site\'s net figure' }, 'by all-time PnL', LB ? LB.coverageNote(lb) : null, UI.staleNote(lb.builtAt, 'the publishing job may be down')));
-        U.replace(topBody, UI.table({ cols: [
-          { key: 'rk', label: '#', render: (r) => UI.rank(lb.top.indexOf(r) + 1) },
-          // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are
-          { key: 'w', label: 'Wallet', render: (r) => h('a.addr', { href: U.accountUrl(r.account, r.sid), title: [r.carried ? `These figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : null, AN.sitePnlTitle(r, 'all'), r.style && r.style !== '—' ? 'Style: ' + r.style : null].filter(Boolean).join('\n') }, U.shortAddr(r.account)) },
-          { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(r.stats.all.pnl) },
-          // a big account's small percentage reads "+0.3%", not "+0%"
-          { key: 'roi', label: 'ROI', num: true, render: (r) => (r.stats.all.roi == null ? '—' : h('span', { class: U.pnlClass(r.stats.all.roi) }, U.fmtPct(r.stats.all.roi, { sign: true, dp: Math.abs(r.stats.all.roi) < 10 ? 1 : 0 }))) },
-        ], rows: lb.top, empty: 'No traders in the snapshot yet', onRow: (r) => { location.hash = U.accountUrl(r.account, r.sid).slice(1); } }));
-      }
+        // ---- top wallets: all-time PnL as Meridian's app shows it, traders only (js/home-summary.js) ----
+        if (!lb) U.replace(topBody, UI.empty(h('span', h('a', { href: '#/leaderboard' }, 'Build the leaderboard'), h('span.dim', ' to see the top accounts here'))));
+        else {
+          const AN = MD.analytics, LB = MD.router.pages.leaderboard;
+          // the ranking says, as the Leaderboard does, when accounts are missing from it or carried over, and when it is stale
+          U.replace(topNote, h('span', { title: 'All-time PnL as Meridian\'s app shows it (its Trade Stats): realized PnL, settled funding and trading fees, plus unrealized PnL; ROI on the deposits. Hover a wallet for the site\'s net figure' }, 'by all-time PnL', LB ? LB.coverageNote(lb) : null, UI.staleNote(lb.builtAt, 'the publishing job may be down')));
+          U.replace(topBody, UI.table({ cols: [
+            { key: 'rk', label: '#', render: (r) => UI.rank(lb.top.indexOf(r) + 1) },
+            // a row carried over from an earlier build (the snapshot could not rebuild it) says how old its figures are
+            { key: 'w', label: 'Wallet', render: (r) => h('a.addr', { href: U.accountUrl(r.account, r.sid), title: [r.carried ? `These figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)}): the latest snapshot could not rebuild this account` : null, AN.sitePnlTitle(r, 'all'), r.style && r.style !== '—' ? 'Style: ' + r.style : null].filter(Boolean).join('\n') }, U.shortAddr(r.account)) },
+            { key: 'p', label: 'PnL', num: true, render: (r) => U.pnlEl(r.stats.all.pnl) },
+            // a big account's small percentage reads "+0.3%", not "+0%"
+            { key: 'roi', label: 'ROI', num: true, render: (r) => (r.stats.all.roi == null ? '—' : h('span', { class: U.pnlClass(r.stats.all.roi) }, U.fmtPct(r.stats.all.roi, { sign: true, dp: Math.abs(r.stats.all.roi) < 10 ? 1 : 0 }))) },
+          ], rows: lb.top, empty: 'No traders in the snapshot yet', onRow: (r) => { location.hash = U.accountUrl(r.account, r.sid).slice(1); } }));
+        }
+
+        // ---- big Predict wins and the latest big bets (as of the Predict snapshot); a row opens the slip ----
+        const P = MD.predict;
+        // the bettor's address opens its page (.opt: a narrow card leaves it out, the slip has it)
+        const predRow = (n, at, ...cells) => h('div.it.click', { title: 'Open the slip', tabindex: 0, onclick: () => { location.hash = slipUrl(n.id); }, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) location.hash = slipUrl(n.id); } },
+          h('span.t', { title: U.fmtDateTime(at) }, U.fmtAgo(at)),
+          h('a.addr.opt', { href: bettorUrl(n.predictor), title: n.predictor, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.predictor, 4)),
+          h('span.grow.ellipsis', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n') }, n.picks[0] ? n.picks[0].q : '', n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null),
+          ...cells);
+        if (!pr) { U.replace(winsBody, UI.empty('Appears with the Predict snapshot')); U.replace(betsBody, UI.empty('Appears with the Predict snapshot')); }
+        else {
+          const age = () => [' · snapshot ' + U.fmtAgo(pr.builtAt), UI.staleNote(pr.builtAt, 'the Predict publishing job may be down')];
+          const wins = pr.wins.map(P.full);
+          U.replace(winsNote, h('span', { title: 'Net PnL = payout − stake; a bettor who sold its position tokens before the verdict counts its own result, sales included' }, 'profit over ' + usd0(P.BIG_WIN), ...age()));
+          U.replace(winsBody, wins.length ? h('div.feed', wins.map((n) => predRow(n, MD.homeSummary.winAt(n),
+            P.fromSale(n) ? UI.chip('cashed out', 'amber') : null,
+            h('span.num.fix', { class: U.pnlClass(P.bigPnl(n)) }, usd0(P.bigPnl(n), { sign: true }))))) : UI.empty(pr.hasWins ? 'No win over ' + usd0(P.BIG_WIN) + ' yet' : 'Big wins arrive with the next snapshot'));
+          const bets = pr.bets.map(P.full);
+          U.replace(betsNote, h('span', 'stakes of ' + usd0(P.BIG_BET) + ' or more', ...age()));
+          U.replace(betsBody, bets.length ? h('div.feed', bets.map((n) => predRow(n, n.t,
+            n.picks[0] && n.picks[0].yes != null ? UI.chip(n.picks[0].yes ? 'YES' : 'NO', n.picks[0].yes ? 'green' : 'red') : null,
+            h('span.num.fix', usd0(n.stake)),
+            h('span.num.dim.fix.opt', { title: 'Pays this many times the stake if it wins' }, mult(n.multiple))))) : UI.empty(pr.fullBets ? 'No bet of ' + usd0(P.BIG_BET) + ' or more yet' : 'No bet of ' + usd0(P.BIG_BET) + ' or more among the latest 25'));
+        }
+
+        U.replace(foot, h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), ' · ', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data updated ', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—'));
+      };
+      drawSummary();
 
       // ---- biggest open positions, live: the positions of the biggest books in the last snapshot, the largest first ----
+      let posAt = 0;   // when the table was last read: a refresh that fails keeps it, and says since when
       async function positions() {
-        const books = (lb && lb.books) || [];
+        const lb = sum.lb, books = (lb && lb.books) || [];
         if (!books.length) { U.replace(posBody, UI.empty(lb ? 'No open positions in the last snapshot' : 'Appears with the leaderboard snapshot')); return; }
         try {
-          const [ref, prices] = await Promise.all([refP, pricesP]);
+          const { ref, prices } = await live();   // the prices of now, not of the page's first minute
           const o = { signal: ctx.signal, ttl: 30000 };
           const per = await Promise.all(books.map((b) => Promise.all([A.openPositions(b.sid, o), A.balances(b.sid, o)])
             .then(([pos, bal]) => (pos.length ? MD.analytics.accountState({ balances: bal, positions: pos, ref, prices }).positions.map((r) => ({ b, r })) : []))
             .catch((e) => { if (isAbort(e)) throw e; return []; })));
           const rows = U.sortBy(per.flat(), (x) => x.r.notional, true).slice(0, ROWS);
+          posAt = Date.now();
           U.replace(posNote, `live · the ${books.length} biggest books in the last snapshot`);
           U.replace(posBody, UI.table({ cols: [
             { key: 'w', label: 'Wallet', render: (x) => h('a.addr', { href: U.accountUrl(x.b.account, x.b.sid) }, U.shortAddr(x.b.account)) },
@@ -244,36 +278,21 @@
             { key: 'u', label: 'uPnL', num: true, title: 'Unrealized PnL, as Meridian\'s app shows it: (oracle price − entry price) × size', render: (x) => U.pnlEl(x.r.upnl, { compact: true }) },
             { key: 'liq', label: 'To liq.', num: true, title: 'How far the price can move against the position before its margin pool is liquidated (in a cross pool, the other positions move it too)', render: (x) => (x.r.distPct == null ? '—' : h('span', { class: x.r.distPct < 5 ? 'neg' : '' }, U.fmtPct(x.r.distPct, { dp: 1 }))) },
           ], rows, empty: 'None of them has a position open right now', phone: { title: 'm', aside: 'u' }, onRow: (x) => { location.hash = U.accountUrl(x.b.account, x.b.sid).slice(1); } }));
-        } catch (e) { if (!isAbort(e)) U.replace(posBody, UI.error(e)); }
+        } catch (e) {
+          if (isAbort(e)) return;
+          if (posAt) U.replace(posNote, 'live · as of ' + U.fmtHM(posAt) + ' (the last refresh failed)');
+          else U.replace(posBody, UI.error(e, positions));
+        }
       }
       positions();
-      const posT = setInterval(positions, 60000); ctx.onCleanup(() => clearInterval(posT));
-
-      // ---- big Predict wins and the latest big bets (as of the Predict snapshot); a row opens the slip ----
-      const P = MD.predict;
-      // the bettor's address opens its page (.opt: a narrow card leaves it out, the slip has it)
-      const predRow = (n, at, ...cells) => h('div.it.click', { title: 'Open the slip', tabindex: 0, onclick: () => { location.hash = slipUrl(n.id); }, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) location.hash = slipUrl(n.id); } },
-        h('span.t', { title: U.fmtDateTime(at) }, U.fmtAgo(at)),
-        h('a.addr.opt', { href: bettorUrl(n.predictor), title: n.predictor, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.predictor, 4)),
-        h('span.grow.ellipsis', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n') }, n.picks[0] ? n.picks[0].q : '', n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null),
-        ...cells);
-      if (!pr) { U.replace(winsBody, UI.empty('Appears with the Predict snapshot')); U.replace(betsBody, UI.empty('Appears with the Predict snapshot')); }
-      else {
-        const age = () => [' · snapshot ' + U.fmtAgo(pr.builtAt), UI.staleNote(pr.builtAt, 'the Predict publishing job may be down')];
-        const wins = pr.wins.map(P.full);
-        U.replace(winsNote, h('span', { title: 'Net PnL = payout − stake; a bettor who sold its position tokens before the verdict counts its own result, sales included' }, 'profit over ' + usd0(P.BIG_WIN), ...age()));
-        U.replace(winsBody, wins.length ? h('div.feed', wins.map((n) => predRow(n, MD.homeSummary.winAt(n),
-          P.fromSale(n) ? UI.chip('cashed out', 'amber') : null,
-          h('span.num.fix', { class: U.pnlClass(P.bigPnl(n)) }, usd0(P.bigPnl(n), { sign: true }))))) : UI.empty(pr.hasWins ? 'No win over ' + usd0(P.BIG_WIN) + ' yet' : 'Big wins arrive with the next snapshot'));
-        const bets = pr.bets.map(P.full);
-        U.replace(betsNote, h('span', 'stakes of ' + usd0(P.BIG_BET) + ' or more', ...age()));
-        U.replace(betsBody, bets.length ? h('div.feed', bets.map((n) => predRow(n, n.t,
-          n.picks[0] && n.picks[0].yes != null ? UI.chip(n.picks[0].yes ? 'YES' : 'NO', n.picks[0].yes ? 'green' : 'red') : null,
-          h('span.num.fix', usd0(n.stake)),
-          h('span.num.dim.fix.opt', { title: 'Pays this many times the stake if it wins' }, mult(n.multiple))))) : UI.empty(pr.fullBets ? 'No bet of ' + usd0(P.BIG_BET) + ' or more yet' : 'No bet of ' + usd0(P.BIG_BET) + ' or more among the latest 25'));
-      }
-
-      U.replace(foot, h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), ' · ', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data updated ', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—'));
+      const posT = setInterval(() => { positions(); exchange(); }, 60000); ctx.onCleanup(() => clearInterval(posT));
+      const sumT = setInterval(async () => {
+        let next; try { next = await loadSummary(ctx); } catch (e) { return; }
+        if (!ctx.signal.aborted && next && JSON.stringify(next) !== JSON.stringify(sum)) sum = next;
+        if (!ctx.signal.aborted) { drawSummary(); positions(); }
+      }, 5 * 60000);
+      const ageT = setInterval(drawSummary, 60000);
+      ctx.onCleanup(() => { clearInterval(sumT); clearInterval(ageT); });
     },
   };
 })();

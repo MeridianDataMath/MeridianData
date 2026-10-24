@@ -124,7 +124,9 @@
     })().finally(() => { P._loading = null; bytesListeners = []; });
     return P._loading;
   };
-  const snapNote = (s) => (s.remote ? `snapshot ${U.fmtAgo(s.builtAt)} · all predictions since launch` : `built in this browser ${U.fmtAgo(s.builtAt)} · predictions placed in the last ${s.windowDays} days only`);
+  // the snapshot's age and reach under a page's title: the age keeps itself current (U.agoEl) and the stale mark appears
+  // on time, for a page left open
+  const snapNoteEl = (s) => (s.remote ? h('span', 'snapshot ', U.agoEl(s.builtAt), ' · all predictions since launch', UI.staleNote(s.builtAt)) : h('span', 'built in this browser ', U.agoEl(s.builtAt), ' · predictions placed in the last ' + s.windowDays + ' days only'));
   const offlineNote = 'live queries are not available from this domain (the Predict API does not accept browser requests from it), so this shows the published snapshot';
   const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
   async function withSnapshot(body, ctx, render) {
@@ -307,7 +309,7 @@
         { key: 'a', label: 'Market maker', render: (r) => h('span', bettorLink(r.address, 6), MAKER_NAMES[r.address] ? [' ', makerName(r.address)] : null) },
         { key: 'n', label: 'Taken', num: true, render: (r) => U.fmtNum(r.n, 0) },
         M.share, M.committed, M.open, M.pnl, M.winRate, M.vig,
-        { key: 'f', label: 'Last taken', title: 'When this maker last took the other side of a prediction', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
+        { key: 'f', label: 'Last taken', title: 'When this maker last took the other side of a prediction', render: (r) => h('span.dim', U.agoEl(r.last)) },
       ], rows: MK.makers.slice(0, 5), onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } });
       // secondary market: closed by default (few people need it); opening it loads the trades, and the choice is remembered
       const secBody = h('div', UI.loading('Loading secondary market…'));
@@ -319,8 +321,7 @@
         h('span.chev', U.icon('chevR')), h('h2', 'Secondary market'), h('span.dim.small', (secTotal ? U.fmtNum(secTotal, 0) + ' trades · ' : '') + 'positions sold before resolution'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(secCard, [secHead, secBody]);
       // the snapshot's age, kept current while the page stays open (everything here is from this one snapshot)
-      const snapEl = h('span.dim.small', snapNote(snap));
-      const tAgo = setInterval(() => { snapEl.textContent = snapNote(snap); }, 30000); ctx.onCleanup(() => clearInterval(tAgo));
+      const snapEl = h('span.dim.small', snapNoteEl(snap));
       U.replace(body,
         // Sapience: its own app repository is "a Next.js client for the Sapience prediction market on the Robinhood (Meridian)
         // deployment"; Kalshi: Meridian's API links 87 questions to kalshi.com, the first bet on one placed 13 Oct (checked 10-20)
@@ -492,12 +493,12 @@
           { key: 'avgVig', label: 'Avg vig paid', num: true, sortVal: 1, title: 'Locked odds minus Polymarket\'s price (its order-book midpoint) at the moment of the bet, averaged over this bettor\'s singles and its combos with every leg on a different match', render: (r) => h('span', { title: r.vigN != null ? `Average of ${r.vigN} of ${r.n} predictions: those with a Polymarket price at bet time for every leg; combos with legs on the same match or asset left out` : null }, vigCell(r.avgVig)) },
           { key: 'biggestWin', label: 'Best win', num: true, sortVal: 1, title: 'Largest net result on one decided prediction, claimed or not: payout − stake, or for a position traded on the secondary market, the bettor\'s own result with the sale', render: (r) => (r.biggestWin > 0 ? usd(r.biggestWin) : h('span.dim', '—')) },
           { key: 'cat', label: 'Top category', title: 'The category with the most predictions (a tie goes to the larger stake). Mixed: a combo with legs in more than one category.', render: (r) => r.topCat || '—' },
-          { key: 'last', label: 'Last bet', sortVal: 1, title: 'When this wallet last placed a prediction', render: (r) => h('span.dim', U.fmtAgo(r.last)) },
+          { key: 'last', label: 'Last bet', sortVal: 1, title: 'When this wallet last placed a prediction', render: (r) => h('span.dim', U.agoEl(r.last)) },
         ], rows: slice, empty: 'No bettors match', onRow: (r) => { location.hash = bettorUrl(r.address).slice(1); } }),
           UI.pager({ page: st.page, pageSize: PAGE, total, onPage: (p) => { st.page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         // "364 of 733 bettors · 3+ predictions": the count is of the filtered board, and the filters say so (a full address ignores them)
         const filt = full ? [] : [st.minN > 1 ? `${st.minN}+ predictions` : '', st.cat ? 'top category ' + st.cat : '', st.q ? 'address search' : ''].filter(Boolean);
-        U.replace(summary, `${U.fmtNum(total, 0)} of ${U.fmtNum(all.length, 0)} bettors` + (filt.length ? ' · ' + filt.join(' · ') : '') + ' · ' + snapNote(snap));
+        U.replace(summary, `${U.fmtNum(total, 0)} of ${U.fmtNum(all.length, 0)} bettors` + (filt.length ? ' · ' + filt.join(' · ') : '') + ' · ', snapNoteEl(snap));
       }
       U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts every decided prediction, claimed or not: a win earns the maker\'s collateral, a loss costs the stake' + (snap.agg.secondary ? ', and a position sold on the secondary market counts at its sale' : '; secondary-market sales are not counted in this view') + '. Open positions still held are excluded. For a wallet that only bets, this is the PnL in Meridian\'s own account stats.'));
       // (checked 2026-10-20 on all 764 bettors: Meridian's account stats give the same PnL, predictions and won / lost for
@@ -864,7 +865,8 @@
   /** The pick's chance now, { p, live }: 1 or 0 once its question is settled on Meridian (a 50/50 is a loss) or resolved
    *  on Polymarket; else the order book's midpoint as Meridian's app shows it (midNow, while fresh), else Polymarket's
    *  last price once loaded and open; else (live false) the snapshot's estimate (k.ep, Meridian's estimatedPrice, which
-   *  freezes once a game starts). */
+   *  freezes once a game starts). none: Polymarket has no market for the question (a Kalshi one, R.get's m null): the
+   *  estimate is all there will be, not something waiting for Polymarket to load. */
   const pickNow = (k) => {
     if (k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false)) return { p: !k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0, live: true };
     const m = k.id ? R.get(k.id).m : null;
@@ -872,16 +874,18 @@
     const mid = midNow(k.id);
     const live = mid != null || !!(m && m.prices && m.prices.length && Number.isFinite(m.prices[0]) && !m.closed);
     const yes = mid != null ? mid : live ? m.prices[0] : k.ep;
-    return { p: yes == null ? null : k.yes ? yes : 1 - yes, live };
+    return { p: yes == null ? null : k.yes ? yes : 1 - yes, live, none: !live && !!k.id && m === null };
   };
   const pickProb = (k) => pickNow(k).p;
   /** Whether pickProb has the leg's result or Polymarket's live price, not the snapshot's estimate. */
   const pickLive = (k) => pickNow(k).live;
+  /** No Polymarket market for the leg (pickNow none): its chance is Meridian's own estimate, for good */
+  const pickNone = (k) => !!pickNow(k).none;
   /** A position's chance from its legs' stored estimates, a settled leg counting as won or lost; null while a leg has none. */
   const legNow = (k) => (k.settled ? (!k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0) : k.ep == null ? null : k.yes ? k.ep : 1 - k.ep);
   const winProb = (picks) => (picks.length && picks.every((k) => legNow(k) != null) ? picks.reduce((p, k) => p * legNow(k), 1) : null);
   // live false: Polymarket has not answered (yet), so the chance is Meridian's estimate from the snapshot (pickNow)
-  const gauge = (p, live) => h('span.gauge-wrap', { title: live ? 'Polymarket now: the chance of this pick (its order book\'s midpoint, as Meridian\'s app shows it, once loaded)' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
+  const gauge = (p, live, none) => h('span.gauge-wrap', { title: none ? 'Meridian\'s estimate: Polymarket has no market for this question (a Kalshi one)' : live ? 'Polymarket now: the chance of this pick (its order book\'s midpoint, as Meridian\'s app shows it, once loaded)' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
   const slipHowTo = () => h('div.slip-note', 'Copying opens this slip on Meridian Predict. Press ', h('b', 'Add To Slip'), ' there: its picks join whatever is already in your Meridian slip (clear that first to place exactly this one). Choose your amount and place it; Meridian\'s market makers quote fresh odds, so yours can differ from the ones locked here.');
   const slipBrand = () => h('span.slip-brand', 'Meridian', h('span', 'DataHub'));
 
@@ -966,7 +970,10 @@
       // Polymarket answers, Meridian's estimates from the snapshot, and the labels say so
       const probs = n.decided ? [] : n.picks.map(pickProb);
       const fairNow = probs.length && probs.every((p) => p != null) ? probs.reduce((a, p) => a * p, 1) : null;
-      const allLive = n.picks.filter((k) => !k.settled).every(pickLive);
+      const openPicks = n.picks.filter((k) => !k.settled);
+      const allLive = openPicks.every(pickLive);
+      // the legs not live are ones Polymarket has no market for (Kalshi): Meridian's estimate, not a snapshot waiting on Polymarket
+      const noneOnly = !allLive && openPicks.every((k) => pickLive(k) || pickNone(k));
       const decidedAt = decidedTime(n);
       const cell = (k, v, title) => h('div', { title: title || null }, h('div.k', k), h('div.v', v));
       const leg = (k) => {
@@ -977,7 +984,7 @@
         return h('div.slip-leg',
           h('div.side', sideChip(k.yes)),
           h('div.q', h('div', k.q), meta ? h('div.meta', meta) : null),
-          h('div.end', p != null ? gauge(p, pickLive(k)) : null, o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null));
+          h('div.end', p != null ? gauge(p, pickLive(k), pickNone(k)) : null, o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null));
       };
       const btnShare = (primary) => h('button.btn', { type: 'button', class: primary ? 'primary slip-copy' : 'slip-share', dataset: { focusKey: 'slip:share' }, title: 'A link that shows this slip\'s card in Discord, X, Telegram…, and the card as an image', onclick: () => shareSlip(n) }, U.icon('share'), primary ? 'Share this slip' : 'Share');
       U.replace(wrap, h('div.slip', { class: 'is-' + (n.decided ? (n.won ? 'won' : n.nd ? 'void' : 'lost') : 'open') },
@@ -991,7 +998,7 @@
           cell('Multiplier', mult(n.multiple), 'Payout ÷ stake'),
           cell('Odds', oddsPct(n.odds, 0), 'Locked odds: stake ÷ payout, the price of one USDe of payout'),
           n.decided ? cell('Settled', decidedAt ? U.fmtDate(decidedAt).replace(', ' + new Date().getFullYear(), '') : '—', decidedAt ? U.fmtDateTime(decidedAt) : null)
-            : fairNow != null ? cell(allLive ? 'Polymarket now' : 'Estimate (snapshot)', oddsPct(fairNow, 0), (allLive ? 'The legs\' Polymarket prices now' : 'Meridian\'s estimated prices from the snapshot (Polymarket has not loaded)') + ', multiplied (as if independent), against the ' + oddsPct(n.odds) + ' locked')
+            : fairNow != null ? cell(allLive ? 'Polymarket now' : noneOnly ? 'Estimate' : 'Estimate (snapshot)', oddsPct(fairNow, 0), (allLive ? 'The legs\' Polymarket prices now' : noneOnly ? 'Polymarket\'s prices where it has the market, Meridian\'s estimate for a leg it has not (a Kalshi one)' : 'Meridian\'s estimated prices from the snapshot (Polymarket has not loaded)') + ', multiplied (as if independent), against the ' + oddsPct(n.odds) + ' locked')
               : cell('Placed', U.fmtAgo(n.t))),
         h('div.slip-legs-head', h('span', n.legs > 1 ? `${n.legs} legs` : '1 leg'), h('span.grow'), n.legs > 1 ? h('span', 'every leg must win') : null),
         h('div.slip-legs', n.picks.map(leg)),
@@ -1004,7 +1011,7 @@
           h('button.btn.sm.ghost', { type: 'button', dataset: { focusKey: 'slip:details' }, title: 'Stake, odds, both sides, every leg and its resolution', onclick: () => openPrediction(n, ctx) }, U.icon('info'), 'Details'),
           n.predictor ? h('a.btn.sm.ghost', { href: bettorUrl(n.predictor), title: 'Every prediction of this bettor, its PnL and open positions' }, U.icon('account'), 'Bettor ' + U.shortAddr(n.predictor, 4)) : null,
           open ? null : h('a.btn.sm.ghost', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Meridian\'s page for this prediction' }, U.icon('external'), 'View on Meridian')),
-        h('div.slip-note', { style: { textAlign: 'center' } }, 'Placed ' + U.fmtDateTime(n.t) + (builtAt ? ' · as of the snapshot built ' + U.fmtAgo(builtAt) : ''), builtAt ? UI.staleNote(builtAt) : null, n.decided ? '' : allLive ? ' · the chances are Polymarket\'s, live.' : ' · Polymarket has not loaded: the chances are Meridian\'s snapshot estimates.')));
+        h('div.slip-note', { style: { textAlign: 'center' } }, 'Placed ' + U.fmtDateTime(n.t), builtAt ? [' · as of the snapshot built ', U.agoEl(builtAt)] : null, builtAt ? UI.staleNote(builtAt) : null, n.decided ? '' : allLive ? ' · the chances are Polymarket\'s, live.' : noneOnly ? ' · a leg Polymarket has no market for (a Kalshi one) is at Meridian\'s estimate.' : ' · Polymarket has not loaded: the chances are Meridian\'s snapshot estimates.')));
     };
     render();
     // Polymarket for the legs still open: their chances now, and where each one stands; the minute's redraw waits while
@@ -1086,7 +1093,7 @@
       const appRec = Array.from(bettors.values()).some(ideaApp);   // the file has the app's records (P.ideas)
       let rows = ideas.filter(ideaOpen);
       const openCount = new Map(); for (const n of rows) openCount.set(n.predictor, (openCount.get(n.predictor) || 0) + 1);
-      U.replace(summary, `${rows.length} open slip${rows.length === 1 ? '' : 's'} · ${bettors.size} winning bettor${bettors.size === 1 ? '' : 's'} · snapshot ${U.fmtAgo(file.builtAt)}`, UI.staleNote(file.builtAt, 'the Predict publishing job may be down'));
+      U.replace(summary, `${rows.length} open slip${rows.length === 1 ? '' : 's'} · ${bettors.size} winning bettor${bettors.size === 1 ? '' : 's'} · snapshot `, U.agoEl(file.builtAt), UI.staleNote(file.builtAt, 'the Predict publishing job may be down'));
       U.replace(foot, footText(file));
       if (st.view === 'bettors') {
         U.replace(body, UI.table({ cols: [
@@ -1097,7 +1104,7 @@
           { key: 'z', label: 'By luck', num: true, title: 'How rarely a record this good comes about by luck alone, if every bet had exactly the chance its odds priced', render: (b) => luckText(b.luck) },
           { key: 'w', label: 'Wagered', num: true, render: (b) => usd(b.wagered, { compact: true }) },
           { key: 'o', label: 'Open slips', num: true, title: 'Its open predictions this page still offers to copy, on games that have not finished', render: (b) => { const k = openCount.get(b.address) || 0; return k ? h('b', String(k)) : h('span.dim', '0'); } },
-          { key: 'l', label: 'Last bet', render: (b) => h('span.dim', U.fmtAgo(b.last)) },
+          { key: 'l', label: 'Last bet', render: (b) => h('span.dim', U.agoEl(b.last)) },
         ], rows: Array.from(bettors.values()), empty: 'No bettor meets the bar yet', onRow: (b) => { location.hash = bettorUrl(b.address).slice(1); } }));
         return;
       }
@@ -1162,7 +1169,11 @@
       if (isCurrent()) rerender();
     })();
   }
-  const resTicker = (ctx, fn) => { const t = setInterval(fn, 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
+  // every 30 s (countdowns, prices); fn gets the tick's number, so every fourth (two minutes) can read the resolutions again
+  const resTicker = (ctx, fn) => { let n = 0; const t = setInterval(() => fn(++n), 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
+  /** The resolutions of the rows on screen read again (R.load keeps what is still fresh): a "proposed" row turns into
+   *  "resolved" or "settled" on a page left open */
+  const reResolve = (ids, ctx, redraw) => { if (ids.length) R.load(ids, { signal: ctx.signal }).then(() => { if (!ctx.signal.aborted) redraw(); }).catch(() => {}); };
   /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
   const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, noresult: 4, resolved: 5, paused: 6, postponed: 7, unknown: 8, trading: 9, settled: 10 };
   const byStage = (rows) => U.sortBy(rows, (c) => { const st = R.state(qView(c), qId(c)); return (st.code === 'resolved' && st.stuck ? -1 : (STAGE_RANK[st.code] || 0)) * 1e13 + (st.stuck ? (st.at || 0) : (qView(c).end || 0)); });
@@ -1223,7 +1234,7 @@
       trackResolution(rows, ctx, renderRows, () => my === reqId);
     }
     // the countdowns, and the midpoints of the rows on screen (asked again once a minute is up)
-    resTicker(ctx, () => { if (loading) return; renderRows(); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(); }).catch(() => {}); });
+    resTicker(ctx, (n) => { if (loading) return; renderRows(); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(); }).catch(() => {}); if (n % 4 === 0) reResolve(rows.map(qId), ctx, () => { if (!loading) renderRows(); }); });
     function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
@@ -1262,7 +1273,7 @@
           { key: 'v', label: 'Volume ' + tab.win, num: true, title: `The mirrored markets' volume over the last ${tab.win}, low-odds trading left out, as Meridian's app shows it on this list: a group's questions added up (those it lists, between 1 and 99 %), a match's open questions together`, render: (r) => P.fmtVol(r.v) },
           { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes ever placed through Meridian on the question, or on the group\'s or the match\'s questions: a prediction once, however many of its legs are in it', render: (r) => { const sw = hot.stakes ? r.mw || 0 : oursOf(r).reduce((s, q) => s + (q.sw || 0), 0); return sw ? usd(sw, { compact: true }) : h('span.dim', '—'); } },   // (a snapshot without mw: the listed questions' stakes added up)
         ], rows, empty: 'No list in this snapshot', onRow: (r) => { const qs = oursOf(r); if (qs.length === 1) openQuestion(qs[0], ctx); } }),
-        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ' + U.fmtAgo(hot.at || snap.builtAt) + ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with one question this site lists opens it; the arrow opens Meridian\'s page.'));
+        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ', U.agoEl(hot.at || snap.builtAt), ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with one question this site lists opens it; the arrow opens Meridian\'s page.'));
     };
     const card = h('div.card.tight.collapsible');
     const set = (open) => { card.classList.toggle('open', open); body.style.display = open ? '' : 'none'; head.setAttribute('aria-expanded', String(open)); if (open && !body.firstChild) draw(); };
@@ -1315,7 +1326,7 @@
         if (!stuck.length) { U.clear(backlog); return; }
         // predictions, not questions: a combo touching several stuck questions is one payout
         const preds = new Map(); let oldest = 0;
-        for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won' || R.cashedOut(p)) continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
+        for (const q of stuck) for (const p of q.op || []) { const ps = R.predictionState(p.k); if (ps.code !== 'won' || R.cashedOut(p) || !(ps.at > 0)) continue; const d = Math.floor((Date.now() - ps.at) / 86400000); if (d < R.STUCK_DAYS) continue; preds.set(p.id, p.s || 0); if (d > oldest) oldest = d; }
         const waiting = Array.from(preds.values()).reduce((a, x) => a + x, 0);
         // why: Meridian learns a result only when a relay transaction on Polygon sends it over LayerZero; the settlement
         // bot sends one for every listed question and skips unlisted ones (isPublic false)
@@ -1367,7 +1378,7 @@
       U.replace(body, controls, backlog, h('div.card.tight', wrap), hotCard(snap, all, ctx), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
       render();
       // (shown: the rows on screen, whose midpoints are asked again once a minute is up)
-      resTicker(ctx, () => { loadEnded(); refreshEndedLabel(); render(true); loadMids(shown.map(qId), ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) render(true); }).catch(() => {}); });
+      resTicker(ctx, (n) => { loadEnded(); refreshEndedLabel(); render(true); loadMids(shown.map(qId), ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) render(true); }).catch(() => {}); if (n % 4 === 0) reResolve(shown.map(qId), ctx, () => render(true)); });
     });
   }
 
@@ -1401,7 +1412,7 @@
           + (Math.abs(early) >= 1 ? `, plus ${usd(early, { sign: true })} booked on predictions not decided yet (a token sale counts when it is made, and a wallet that holds both sides of a pick books the sure payout when it has both; tokens still held count at the verdict)` : '') + '.');
       })();
       U.replace(body,
-        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds (', h('a', { href: 'https://docs.meridian.xyz/trading/predictions/placing-a-prediction', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), '). The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+        h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Who takes the other side'), h('p.muted', { style: { margin: 0, maxWidth: '860px' } }, 'Every Meridian prediction is an RFQ auction: the bettor broadcasts a stake, market makers compete to take the other side, and the winning quote locks the odds (', h('a', { href: 'https://docs.meridian.xyz/trading/predictions/placing-a-prediction', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs'), '). The counterparty address is public on every prediction, so this page shows exactly who is making the market, how much they commit, and how it has gone for them.'), h('div.dim.small', { style: { marginTop: '8px' } }, snapNoteEl(snap))),
         h('div.stats', UI.stat('Market makers', String(MK.makers.length), MK.oneOff.length ? `+ ${MK.oneOff.length} one-off counterpart${MK.oneOff.length === 1 ? 'y' : 'ies'}` : null),
           UI.stat('Maker collateral', usd(T.cpCommitted, { compact: true }), snap.remote ? 'committed since launch' : `on predictions placed in the last ${snap.windowDays} days`),
           UI.stat('Maker PnL', usd(makerPnl, { sign: true }), 'decided predictions, claimed or not' + (a.secondary && Math.abs(a.secondary.toMakers) >= 1 ? ' · incl. ' + usd(a.secondary.toMakers, { sign: true, compact: true }) + ' from secondary-market trades' : ''), U.pnlClass(makerPnl)),
@@ -1511,7 +1522,7 @@
       U.replace(body,
         h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'What the auction costs'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'Meridian Predict prices each bet with a short request-for-quote auction: the request goes to every market maker and the quote with the best odds is taken. A win pays the stake plus the maker\'s collateral and Meridian charges no trading fee, so the odds a bet locks, stake ÷ (stake + maker collateral), are its whole price (Meridian\'s docs: ', doc('/placing-a-prediction', 'the auction'), ', ', doc('/odds-and-payouts', 'odds and payouts'), ', ', doc('/fees-and-collateral', 'fees'), '). The fair price is what the mirrored Polymarket market showed at the moment the bet was placed, taken from Polymarket\'s own price history, its order-book midpoint in 1- or 5-minute samples (the last one at or before the bet; for a market with no sample before it, the first one in the 6 hours after). The difference is the vig: how much worse than the source the bettor\'s price was. Positive = the bettor paid more than Polymarket\'s price: the maker\'s margin over that price.'), h('p.muted.small', { style: { margin: 0 } }, 'For combos the fair price is the product of the legs\' prices at bet time, which assumes the legs are independent. Legs on the same match (a game\'s main market and its More Markets, Exact Score or player-prop markets) or on one asset at one date and several strikes are correlated, so for those the product is not the fair price: it understates it when the legs go together (a team to win and to cover, two strikes above the same price) and overstates it for a range (above one strike but not above a higher one), and the gap mixes the maker\'s margin with its pricing of that correlation. Combos with legs on one match or asset are shown separately and kept out of the headline figures' + (cov ? `. Included: ${U.fmtNum(cov.clean != null ? cov.clean : cov.withAtBet, 0)} of ${U.fmtNum(cov.total, 0)} predictions` + ((parts) => (parts.length ? ' (' + parts.join(', ') + ')' : ''))([cov.total > cov.withAtBet ? `${U.fmtNum(cov.total - cov.withAtBet, 0)} without a Polymarket price at bet time, such as bets on the Kalshi markets Meridian has also listed since 13 Oct` : null, cov.sameEvent ? `${U.fmtNum(cov.sameEvent, 0)} combos with legs on one match or asset left out` : null].filter(Boolean)) : '') + '.'),
           h('p.muted.small', { style: { margin: '6px 0 0' } }, 'One cost the vig cannot show: a leg that resolves 50/50 (a cancelled or tied match) counts as a loss on Meridian (', doc('/resolution-and-settlement', 'resolution'), '), while on Polymarket each side\'s share then pays 50¢. Where a market can end that way, Polymarket\'s price overstates the bettor\'s chances on Meridian by half the chance of such an end.'),
-          h('div.dim.small', { style: { marginTop: '8px' } }, snapNote(snap))),
+          h('div.dim.small', { style: { marginTop: '8px' } }, snapNoteEl(snap))),
         bettorNote(v.realized),
         h('div.stats', UI.stat('Avg vig', pp(v.overall.avg), 'odds vs source price at bet time'), UI.stat('Stake-weighted', pp(v.weighted), 'big bets count more'), UI.stat('Median', pp(v.overall.median)), UI.stat('Above fair', v.overall.share == null ? '—' : U.fmtPct(v.overall.share * 100, { dp: 0 }), 'of predictions'), UI.stat('Singles', pp(v.singles.avg), U.fmtNum(v.singles.n, 0) + ' predictions'), UI.stat('Combos · different matches', pp(v.combosOnly.avg), U.fmtNum(v.combosOnly.n, 0) + ' predictions'), v.combosSameEvent && v.combosSameEvent.n ? UI.stat('Combos · legs on one match or asset', pp(v.combosSameEvent.avg), U.fmtNum(v.combosSameEvent.n, 0) + ' predictions · includes correlation pricing, not in the headline') : null),
         h('div.card', h('h3', { style: { marginBottom: '10px' } }, 'Average vig per week'), h('div.chart-box.sm', cv)),
@@ -1698,8 +1709,11 @@
     const older = !m.live && m.truncated ? Math.max(0, F.open - (F.openIsPos ? posRows.length : m.posRows.length)) : 0;
     const openNote = [posRows.length >= F.open ? String(posRows.length) : `${posRows.length} of ${U.fmtNum(F.open, 0)} open`, soldOut ? `${U.fmtNum(soldOut, 0)} sold on the secondary market` : null, matched > 0 ? `${U.fmtNum(matched, 0)} closed by buying the other side back` : null, older ? `${U.fmtNum(older, 0)} older ones not loaded` : null, m.live && m.posCapped ? `the newest ${P.PAGE} positions` : null].filter(Boolean).join(' · ');
     // a truncated file holds its newest predictions and the older ones on positions it traded (loadBettor: older)
-    const nOlder = m.older ? mine.filter((n) => m.older.has(n.id)).length : 0, nNewest = mine.length - nOlder;
-    const loaded = 'newest ' + U.fmtNum(nNewest, 0) + (nOlder ? ` and ${U.fmtNum(nOlder, 0)} older ones on positions it traded on the secondary market` : '');
+    // a truncated file keeps the newest predictions, then the older ones still open and those on positions the wallet
+    // traded on the secondary market (an older file: the traded ones only)
+    const olderOf = m.older ? mine.filter((n) => m.older.has(n.id)) : [];
+    const nOlder = olderOf.length, nNewest = mine.length - nOlder, nOlderOpen = olderOf.filter((n) => !n.decided).length;
+    const loaded = 'newest ' + U.fmtNum(nNewest, 0) + (nOlderOpen ? `, ${U.fmtNum(nOlderOpen, 0)} older open ones` : '') + (nOlder - nOlderOpen ? ` and ${U.fmtNum(nOlder - nOlderOpen, 0)} older ones on positions it traded on the secondary market` : '');
     // a row's dialog: this wallet's own ledger entry where it is the bettor (what it still held, its result with the sale)
     const openRow = (n) => { const bp = L.byPrediction[n.id]; openPrediction(n, ctx, bp && n.predictor === addr ? { here: addr, traded: true, held: bp.held, ledgerPnl: bp.pnl } : { here: addr, traded: !!bp }); };
     // what the site leaves out of a wallet's figures, said on each figure it changes (the app counts them): its
@@ -1832,7 +1846,7 @@
       { key: 's', label: 'Stake', num: true, render: (r) => cents(r.stake) },
       { key: 'o', label: 'Locked odds', num: true, render: (r) => oddsPct(r.odds) },
       { key: 'f', label: 'Chance now', num: true, title: 'This position\'s chance to win now: its legs multiplied, taken as independent. A leg Meridian has settled counts as won or lost, an open one at Polymarket\'s price; until Polymarket has loaded, Meridian\'s estimate' + (m.live ? '' : ' from the snapshot') + ' (marked), which stops moving once a game starts',
-        render: (r) => { const f = fairNow(r); if (f == null) return h('span.dim', '—'); const live = r.picks.every(pickLive); return h(live ? 'span' : 'span.dim', pct(f, 1), live ? null : h('span.xs', m.live ? ' (estimate)' : ' (snapshot)')); } },
+        render: (r) => { const f = fairNow(r); if (f == null) return h('span.dim', '—'); const live = r.picks.every(pickLive); const none = !live && r.picks.every((k) => pickLive(k) || pickNone(k)); return h(live ? 'span' : 'span.dim', pct(f, 1), live ? null : h('span.xs', none || m.live ? ' (estimate)' : ' (snapshot)')); } },
       { key: 'p', label: 'Pays', num: true, render: (r) => h('span', cents(r.payout), h('span.dim.xs', ' (' + mult(r.stake ? r.payout / r.stake : null) + ')')) },
       { key: 'e', label: 'Resolution', title: 'Where each leg is in the Polymarket / UMA resolution pipeline', render: legCell },
     ], rows, empty: lost.length ? 'Nothing still in play' : soldOut ? 'No open position still held: sold on the secondary market' : 'No open positions', onRow: byId.size ? (r) => { const n = r.id && byId.get(r.id); if (n) openRow(n); } : null }), lost.length ? h('div.footer-note', { style: { textAlign: 'left', padding: '10px 14px' } }, `${lost.length} position${lost.length > 1 ? 's' : ''} (${usd(U.sum(lost, (r) => r.stake))} staked) with a leg already resolved against this bettor (settled on Meridian, or resolved on Polymarket) only await the prediction's settlement on Meridian.`) : null); };
@@ -1844,7 +1858,7 @@
     // (then the open legs' order-book midpoints, for the chance now as Meridian's app shows it, asked again each minute)
     const openLegIds = Array.from(new Set(legIds));
     if (allIds.length) (async () => { try { await R.load(allIds, { signal: ctx.signal, deep: false }); if (ctx.signal.aborted) return; renderOpen(); if (mine.some((n) => !n.decided && pendingVerdict(n))) renderHist(); if (await loadMids(openLegIds, ctx.signal) && !ctx.signal.aborted) renderOpen(); if (legIds.length) { await R.load(legIds, { signal: ctx.signal, deep: true }); if (!ctx.signal.aborted) renderOpen(); } } catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); } })();
-    resTicker(ctx, () => { renderOpen(); if (openLegIds.length) loadMids(openLegIds, ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) renderOpen(); }).catch(() => {}); });
+    resTicker(ctx, (n) => { renderOpen(); if (openLegIds.length) loadMids(openLegIds, ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) renderOpen(); }).catch(() => {}); if (n % 4 === 0) reResolve(openLegIds, ctx, renderOpen); });
     let hpage = 1; const histWrap = h('div');
     // the history's search (user 10-21: "trump" lists every bet with a leg about Trump): the predictions with every word
     // of it in a leg's question, category or tags, their own category or a wallet's address, case and accents ignored
@@ -1931,6 +1945,7 @@
       return Array.from(g.values()).map((r) => Object.assign(r, { winRate: r.decided ? (r.won / r.decided) * 100 : null, avgOdds: r.oddsN ? r.oddsSum / r.oddsN : null }));
     };
     const catRows = breakdown((n) => n.cat).sort((a, b) => b.wagered - a.wagered), legRows = breakdown((n) => n.legs).sort((a, b) => a.k - b.k);
+    const partNote = () => (m.truncated ? h('span.small', { style: { color: 'var(--amber)' }, title: `This wallet has more predictions than are loaded here: these rows add up the ${loaded}, not all of them, so they do not add up to the figures above (which cover every prediction)` }, `the ${U.fmtNum(mine.length, 0)} loaded only`) : null);
     const sideLabel = isMaker ? (marketMaker ? 'Maker ' : 'Counterparty ') : '';   // a one-off counterparty is no market maker (headline)
     const winCol = { key: 'wr', label: sideLabel ? sideLabel + 'win rate' : 'Win rate', num: true, title: BREAKDOWN_WIN_TITLE, render: (r) => (r.winRate == null ? '—' : U.fmtPct(r.winRate, { dp: 0 })) };
     const pnlCol = { key: 'p', label: sideLabel + 'PnL', num: true, render: (r) => (r.booked ? pnlEl(r.pnl) : h('span.dim', '—')) };
@@ -1984,7 +1999,7 @@
       };
     })() : null;
     U.replace(el, h('div.stack',
-      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip(marketMaker ? 'market maker' : 'one-off counterparty', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? `${nPred(agg.n)} · the tables show the ${loaded}; the figures below cover all of them, from the snapshot built ${U.fmtAgo(agg.at)}` : m.live ? `${nPred(mine.length)} · figures from Meridian's own account history` : `${nPred(mine.length)} · snapshot ${U.fmtAgo(m.builtAt)} · ${offlineNote}`, exclText ? [' · ', exclEl()] : null), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
+      h('div.row.wrap', !mine.length && L.trades.length ? UI.chip('secondary-market trader', 'blue') : isMaker ? UI.chip(marketMaker ? 'market maker' : 'one-off counterparty', 'blue') : UI.chip('bettor', 'accent'), ownerEl, h('span.dim.small', F.fromSnap ? [`${nPred(agg.n)} · the tables show the ${loaded}; the figures below cover all of them, from the snapshot built `, U.agoEl(agg.at), UI.staleNote(agg.at)] : m.live ? `${nPred(mine.length)} · figures from Meridian's own account history` : [`${nPred(mine.length)} · snapshot `, U.agoEl(m.builtAt), UI.staleNote(m.builtAt), ` · ${offlineNote}`], exclText ? [' · ', exclEl()] : null), h('span.grow'), h('button.btn.sm', { title: 'This wallet\'s PnL card, to download, copy or post', onclick: openFlex }, U.icon('trophy'), 'Equity curve flex'), h('a.btn.sm.ghost', { href: P.APP_URL, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Predict app')),
       tiles,
       // offline, a truncated file's curve and daily volume are the snapshot's, from every prediction; say what is shown when they are not
       h('div.grid.cols-2', h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', 'Cumulative PnL'), h('span.grow'), pnlNote ? h('span.dim.xs', pnlNote) : null), noCurve ? h('div.empty.small', 'This wallet has more predictions than its file holds; its curve comes with the next snapshot') : h('div.chart-box.sm', cPnl)), h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: volTitle }, 'Stakes per day (UTC)'), h('span.grow'), h('span.dim.xs', { title: volTitle }, (volNote ? volNote + ' · ' : '') + 'excl. token trades')), h('div.chart-box.sm', cVol))),
@@ -1992,7 +2007,8 @@
       UI.card('Prediction history', histWrap, [histNote, histSearch]),
       L.trades.length ? UI.card('Secondary market', secWrap, h('span.dim.small', `${L.trades.length} trade${L.trades.length > 1 ? 's' : ''} · positions sold or bought before the verdict · ${usd(L.pnl, { sign: true })} from traded positions`)) : null,
       cashCard ? cashCard.el : null,
-      h('div.grid.cols-2', UI.card('By category', catTbl), UI.card('Singles vs combos', comboTbl))));
+      // a wallet with more predictions than are loaded: these rows add up what is loaded, which is not the figures above
+      h('div.grid.cols-2', UI.card('By category', catTbl, partNote()), UI.card('Singles vs combos', comboTbl, partNote()))));
     if (cashCard) cashCard.draw();
     const col = C.colors();
     const endPnl = pnlPts.length ? pnlPts[pnlPts.length - 1].y : 0;
