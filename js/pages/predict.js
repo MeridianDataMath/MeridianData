@@ -847,7 +847,9 @@
     try { const r = await fetch(P.SNAPSHOT_BASES[0] + 'slips/' + id.slice(2, 4) + '.json', { cache: 'no-cache', signal }); if (r.ok) f = await r.json(); } catch (e) { if (isAbort(e)) throw e; }
     if (!f || !f.slips || typeof f.slips !== 'object') return mem || { n: null, builtAt: null, unavailable: true };
     const rec = Object.prototype.hasOwnProperty.call(f.slips, id) ? f.slips[id] : null;
-    return rec ? { n: P.full(rec), builtAt: f.builtAt } : mem || { n: null, builtAt: f.builtAt };
+    // slip files carry no build time of their own: theirs is the snapshot's (predict-status.json, P.snapshotAt)
+    const builtAt = f.builtAt || await P.snapshotAt();
+    return rec ? { n: P.full(rec), builtAt } : mem || { n: null, builtAt };
   }
   /** The pick's chance now, { p, live }: 1 or 0 once its question is settled on Meridian (a 50/50 is a loss) or resolved
    *  on Polymarket; else the order book's midpoint as Meridian's app shows it (midNow, while fresh), else Polymarket's
