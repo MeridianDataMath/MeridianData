@@ -18,7 +18,7 @@ test('every js/tax module loads in Node without a DOM, in the order index.html l
   const pure = TAX.filter((f) => !/^view-/.test(f));
   assert.deepEqual(pure.filter((f) => !ORDER.includes(f)), [], 'a new js/tax module is missing from the load order above');
   const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  const tags = [...html.matchAll(/<script defer src="js\/tax\/([^"]+)"><\/script>/g)].map((m) => m[1]);
+  const tags = [...html.matchAll(/<script defer src="\/?js\/tax\/([^"]+)"><\/script>/g)].map((m) => m[1]);   // (root-relative since nested paths)
   assert.deepEqual(tags.filter((f) => ORDER.includes(f)), ORDER.filter((f) => TAX.includes(f)), 'index.html loads the tax modules in this order');
   assert.ok(html.indexOf('js/tax/core.js') < html.indexOf('js/pages/tax.js'), 'before the page');
   for (const k of ['tz', 'periods', 'ledger', 'load', 'ui']) assert.equal(typeof MD.tax[k], 'object', 'MD.tax.' + k);

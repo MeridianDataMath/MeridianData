@@ -208,7 +208,9 @@ last 7 days, the wins of the last 30 days and every big win (net PnL over $500, 
 where it sold its tokens). The Share button on a slip opens a dialog
 that draws the same card in the browser (download, copy or share the image, post on X, copy the
 link). A wallet or slip without a page yet, or an address in mixed case, falls through to
-`index.html`, whose first script sends `/a/…`, `/p/…` and `/s/…` paths on to the hash route.
+`index.html`, whose first script sends `/a/…`, `/p/…` and `/s/…` paths on to the hash route, and any other
+path to the page of that name (`/predict/questions` → `#/predict/questions`; one that does not exist shows the
+not-found page).
 `cards/site.png` is the card of the
 home page and of every other link. Rendering is deterministic and each image URL carries
 `?v=<hash of the card>`, so an unchanged card is not uploaded again and an unfurler that cached

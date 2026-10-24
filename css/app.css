@@ -257,13 +257,14 @@ button.card-head.toggle-head { width: 100%; background: transparent; border: 0; 
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border-2); overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
-.tabs button { flex: none; }
-.tabs button {
+/* a tab is a button, or a link where it is a page of its own (the Predict pages: open in a new tab, copy the link) */
+.tabs button, .tabs a { flex: none; }
+.tabs button, .tabs a {
   background: transparent; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  padding: 10px 14px; cursor: pointer; color: var(--text-2); font-size: 13.5px;
+  padding: 10px 14px; cursor: pointer; color: var(--text-2); font-size: 13.5px; text-decoration: none;
 }
-.tabs button:hover { color: var(--text-1); }
-.tabs button.on { color: var(--text-1); border-bottom-color: var(--accent); }
+.tabs button:hover, .tabs a:hover { color: var(--text-1); }
+.tabs button.on, .tabs a.on { color: var(--text-1); border-bottom-color: var(--accent); }
 /* a live tab's count (the account's open positions, its orders) and a thin divider between groups of tabs */
 .tabs .tab-n { margin-left: 6px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tabs .tab-n:empty { display: none; }
@@ -454,6 +455,9 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .hero h1 span { color: var(--accent); }
 .hero .sub { color: var(--text-2); margin-top: -10px; margin-bottom: 22px; text-align: center; }
 .hero form { width: min(640px, 100%); position: relative; }
+/* a search looking an address up (seconds, for a wallet with no perps account): dimmed, the cursor busy */
+.hero form.busy, .search-mini.busy { opacity: .6; cursor: progress; }
+.hero form.busy *, .search-mini.busy * { cursor: progress; }
 .hero form input {
   width: 100%; background: rgba(14,14,15,.85); border: 1px solid rgba(35,212,188,.45); border-radius: 12px;
   padding: 14px 44px 14px 16px; font-size: 15px; outline: none; box-shadow: 0 0 0 4px rgba(35,212,188,.08);
@@ -949,7 +953,7 @@ textarea.input:focus { border-color: var(--accent); }
   .stats > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   /* tab bars: tighter so the five account tabs fit a phone; a soft fade on the right when they still overflow */
   .tabs { position: relative; }
-  .tabs button { padding: 10px 8px; font-size: 13px; }
+  .tabs button, .tabs a { padding: 10px 8px; font-size: 13px; }
   .tabs { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
   .tabs.fits { -webkit-mask-image: none; mask-image: none; }
 }

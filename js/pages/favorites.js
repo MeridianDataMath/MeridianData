@@ -9,7 +9,11 @@
       const off = U.on('favorites', () => render(false));
       ctx.onCleanup(off);
 
+      // each account's figures as last read: a rename, a removal or a reorder redraws from them at once, and only an account
+      // not read yet (or Refresh) is read; gen: a later render wins, so a slow earlier one cannot bring back a removed row
+      const last = new Map(); let gen = 0, lbBy = {};
       async function render(force) {
+        const my = ++gen;
         const favs = U.favorites.list();
         if (!favs.length) {
           U.replace(body, h('div.card', h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No favorites yet. Open an account and press the star to keep it here.'),
@@ -17,17 +21,20 @@
             h('div.xs.dim', { style: { marginTop: '12px' } }, 'Favorites are stored in this browser only.'))));
           return;
         }
-        U.replace(body, h('div.card.tight', UI.loading('Loading favorite accounts…')));
+        const need = force ? favs : favs.filter((f) => !last.has(f.subaccountId));
+        if (!need.length) { draw(favs); return; }
+        if (!body.querySelector('table')) U.replace(body, h('div.card.tight', UI.loading('Loading favorite accounts…')));
         const LB = MD.router.pages.leaderboard;
         if (LB) await LB.loadRemote();
+        if (my !== gen || ctx.signal.aborted) return;
         const lb = LB && LB.cache();
-        const lbBy = {}; if (lb && lb.rows) for (const r of lb.rows) lbBy[r.sid] = r;
+        lbBy = {}; if (lb && lb.rows) for (const r of lb.rows) lbBy[r.sid] = r;
         let ref, prices = {};
         try {
           ref = await A.ref({ signal: ctx.signal });
           prices = await A.marketPrices(ref.active.map((p) => p.id), { signal: ctx.signal, ttl: 10000 });
-        } catch (e) { if (e.name === 'AbortError') return; U.replace(body, UI.error(e, () => render(true))); return; }
-        const results = await U.pLimit(favs.map((f) => async () => {
+        } catch (e) { if (e.name === 'AbortError' || my !== gen) return; U.replace(body, UI.error(e, () => render(true))); return; }
+        const results = await U.pLimit(need.map((f) => async () => {
           if (force) { A.clearCache(A.BASE + '/v1/subaccount/balance?subaccountId=' + f.subaccountId); }
           const [balances, positions, vol] = await Promise.all([
             A.balances(f.subaccountId, { signal: ctx.signal, ttl: force ? 0 : 30000 }),
@@ -37,8 +44,14 @@
           const st = AN.accountState({ balances, positions, ref, prices });
           return { f, st, vol, lb: lbBy[f.subaccountId] };
         }), 4);
-        if (ctx.signal.aborted) return;
-        const rows = results.map((r, i) => (r.ok ? r.value : { f: favs[i], error: r.error }));
+        if (ctx.signal.aborted || my !== gen) return;
+        results.forEach((r, i) => last.set(need[i].subaccountId, r.ok ? r.value : { f: need[i], error: r.error }));
+        draw(U.favorites.list());
+      }
+      function draw(favs) {
+        // the favorite as it is now (its name), with the figures last read for it
+        const rows = favs.filter((f) => last.has(f.subaccountId)).map((f) => Object.assign({}, last.get(f.subaccountId), { f, lb: lbBy[f.subaccountId] }));
+        if (!rows.length) return;
         const tbl = UI.table({
           cols: [
             // the name the user gave the wallet (the home page's favorites, or the pencil here), then its address

@@ -293,15 +293,19 @@ test('a slip\'s share page lives at /s/<prediction id> and opens the slip page',
   assert.throws(() => K.sharePage({ kind: 's', id: ID.toUpperCase().replace('0X', '0x') + '"', title: 't', description: 'd', image: 'i', target: '/' }));
 });
 
-test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash routes', () => {
+test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash routes, and any other path to its page', () => {
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const code = /<script>([\s\S]*?)<\/script>/.exec(index)[1];
-  const go = (pathname) => { let to = null; new Function('location', code)({ pathname, replace: (u) => { to = u; } }); return to; };
+  const go = (pathname, search = '') => { let to = null; new Function('location', code)({ pathname, search, replace: (u) => { to = u; } }); return to; };
   assert.equal(go('/a/' + A1.toUpperCase().replace('0X', '0x')), '/#/account?address=' + A1);
   assert.equal(go('/p/' + A1), '/#/predict/bettor?address=' + A1);
   assert.equal(go('/s/' + ID), '/#/predict/p/' + ID);
   assert.equal(go('/predict/p/' + ID + '/'), '/#/predict/p/' + ID);
-  assert.equal(go('/s/0x12'), null); assert.equal(go('/'), null);
+  assert.equal(go('/'), null); assert.equal(go('/index.html'), null);
+  // a nested path loaded index.html with its relative js/ and css/ resolving under it: a blank page; now it is the page
+  // of that name (the router's not-found page for one that does not exist)
+  assert.equal(go('/predict/questions'), '/#/predict/questions'); assert.equal(go('/leaderboard/'), '/#/leaderboard');
+  assert.equal(go('/leaderboard', '?interval=7d'), '/#/leaderboard?interval=7d'); assert.equal(go('/s/0x12'), '/#/s/0x12');
 });
 
 test('the site card counts accounts and Predict activity', () => {

@@ -27,9 +27,13 @@
 
   MD.router.pages.home = {
     async mount(root, route, ctx) {
-      const err = h('div.err');
+      const err = h('div.err', { role: 'status', 'aria-live': 'polite' });   // read out when a search finds nothing
       const input = h('input', { type: 'text', placeholder: window.innerWidth <= 480 ? 'Wallet address or subaccount ID' : 'Search by wallet address or subaccount ID', autocomplete: 'off', spellcheck: false });
-      const search = async (v) => { err.textContent = ''; const r = await MD.search(v); if (r && r.error) err.textContent = r.error; };
+      let busy = false;
+      const search = async (v) => {
+        if (busy) return; busy = true; err.textContent = ''; form.classList.add('busy'); form.setAttribute('aria-busy', 'true');
+        try { const r = await MD.search(v); if (r && r.error) err.textContent = r.error; } finally { busy = false; form.classList.remove('busy'); form.removeAttribute('aria-busy'); }
+      };
       const form = h('form', { onsubmit: (e) => { e.preventDefault(); search(input.value); } }, input, h('button', { type: 'submit', title: 'Search' }, U.icon('search')));
 
       // shortcuts under the search: your favorites (the first FAV_MAX, in your order, under the names you gave them), then
@@ -184,7 +188,8 @@
         h('div.grid.cols-2', card('trophyFill', 'gold', 'Top wallets', topNote, '#/leaderboard', 'Leaderboard', topBody), card('activity', 'cyan', 'Biggest open positions', posNote, '#/dashboard', 'Dashboard', posBody)),
         h('div.grid.cols-2', card('target', 'green', 'Big Predict wins', winsNote, '#/predict', 'Predict', winsBody), card('ticket', 'pink', 'Latest big bets', betsNote, '#/predict', 'Predict', betsBody)),
         foot))));
-      setTimeout(() => input.focus(), 50);
+      // the search box takes the focus where there is a keyboard: on a phone it opened the on-screen keyboard over the page
+      if (window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches) setTimeout(() => input.focus(), 50);
 
       // ---- perps, live: markets, volume and open interest at the oracle price, accounts; read again every minute (the
       // products and the account list from their caches), the prices each time, so a tab left open stays current ----

@@ -8,6 +8,9 @@
   const INTERVALS = [{ v: '24h', label: '24h' }, { v: '7d', label: '7d' }, { v: '30d', label: '30d' }, { v: 'all', label: 'All' }];
   const STYLES = ['Scalper', 'Intraday', 'Swing', 'Long-term'];
   const PAGE = 25;
+  // the columns a link may sort by, and the direction that puts the best first (the medals go with that order only:
+  // sorted the other way, the biggest loss took gold)
+  const BEST = { pnl: 'desc', equity: 'desc', volume: 'desc', roi: 'desc', positions: 'desc', winRate: 'desc', sharpe: 'desc', ddPct: 'asc', account: null, style: null };
   let building = null;
 
   const P = (MD.router.pages.leaderboard = {
@@ -56,7 +59,16 @@
       if (P._remote === undefined) U.replace(root, h('div.page', h('div.card', UI.loading('Loading the leaderboard…'))));
       await P.loadRemote();
       if (ctx.signal.aborted) return;
-      const state = { interval: route.params.interval || '30d', sort: { key: 'pnl', desc: true }, page: 1, q: '', favOnly: false, style: '', min: {}, max: {} };
+      // the view is kept in the link (silently), so Back from an account returns to the same page, order and search, and
+      // the scroll position the router restores lands on the same rows; a hand-edited value that is not one falls back
+      const pr = route.params;
+      const sortP = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
+      const state = {
+        interval: INTERVALS.some((x) => x.v === pr.interval) ? pr.interval : '30d',
+        sort: sortP && sortP[1] in BEST ? { key: sortP[1], desc: !sortP[2] } : { key: 'pnl', desc: true },
+        page: Math.max(1, Math.floor(U.num(pr.page)) || 1), q: String(pr.q || '').trim().toLowerCase(), favOnly: pr.fav === '1', style: STYLES.includes(pr.style) ? pr.style : '', min: {}, max: {},
+      };
+      const saveState = () => MD.router.setParams({ interval: state.interval, page: state.page > 1 ? state.page : null, sort: state.sort.key === 'pnl' && state.sort.desc ? null : state.sort.key + (state.sort.desc ? '' : ':asc'), q: state.q || null, fav: state.favOnly ? '1' : null, style: state.style || null }, { silent: true });
       const tableWrap = h('div');
       const progress = h('div');
       const filters = h('div');
@@ -118,13 +130,14 @@
         const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
         const iv = state.interval;
         const s = (r) => r.stats && r.stats[iv];
-        const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: k !== 'account' && k !== 'style' }; state.page = 1; renderTable(); };
+        const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: k !== 'account' && k !== 'style' && BEST[k] !== 'asc' }; state.page = 1; renderTable(); };
+        const podium = !!BEST[state.sort.key] && BEST[state.sort.key] === (state.sort.desc ? 'desc' : 'asc');
         const tbl = UI.table({
           sort: state.sort, onSort,
           // a phone: rank, account and PnL on the first line; equity, volume, ROI, win rate, drawdown and style under them
           phone: { lead: 'rank', title: 'account', aside: 'pnl', hide: ['positions', 'sharpe'] },
           cols: [
-            { key: 'rank', label: '#', render: (r) => UI.rank(rankOf.get(r.sid)) },
+            { key: 'rank', label: '#', render: (r) => UI.rank(rankOf.get(r.sid), podium) },
             { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), AN.known(r) ? h('span.chip.amber', { title: AN.known(r).title }, AN.known(r).label) : r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => UI.money2(r.equity) },
             // PnL, volume and ROI as Meridian's Trade Stats (row basis 'app'); the site's net figures in a cell's tooltip
@@ -141,6 +154,7 @@
           onRow: (r) => { location.hash = U.accountUrl(r.account, r.sid).slice(1); },
         });
         U.replace(tableWrap, tbl, UI.pager({ page: state.page, pageSize: PAGE, total, onPage: (p) => { state.page = p; renderTable(); tableWrap.scrollIntoView({ block: 'start' }); } }));
+        saveState();
         shownBuiltAt = data.builtAt;
         renderSummary(data);
       }
@@ -195,7 +209,10 @@
       }
       renderTable();
       const c = P.cache();
-      if (!c || Date.now() - c.builtAt > 30 * 60000) build(false);
+      // a browser build only without a snapshot, or one so old the publishing job looks down (UI.STALE_MS): each one is
+      // thousands of requests from the visitor's own rate limit, and one past 30 minutes is simply the next one not out yet
+      // (Update builds one on request)
+      if (!c || Date.now() - c.builtAt > UI.STALE_MS) build(false);
     },
   });
 

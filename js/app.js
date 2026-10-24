@@ -39,25 +39,41 @@
     add(v) { v = String(v || '').trim(); if (U.isAddress(v)) v = v.toLowerCase(); if (!v) return; U.storage.set(RECENT_KEY, [v].concat(this.list().filter((x) => x.toLowerCase() !== v.toLowerCase())).slice(0, RECENT_MAX)); },
     clear() { U.storage.set(RECENT_KEY, []); },
   };
-  MD.search = async (raw) => { const r = await find(raw); if (r && r.ok) MD.recent.add(raw); return r; };
-  async function find(raw) {
+  /** What a search box was given, as the site can open it: a pasted link (this site's share or page links, Meridian's
+   *  app) gives the slip id or the address in it; an id or address without its 0x gets one. */
+  MD.searchTerm = (raw) => {
     const v = String(raw || '').trim();
+    const slip = /0x[0-9a-fA-F]{64}(?![0-9a-fA-F])/.exec(v), addr = /0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/.exec(v);
+    if (slip) return { slip: slip[0].toLowerCase() };
+    if (/^[0-9a-fA-F]{64}$/.test(v)) return { slip: '0x' + v.toLowerCase() };
+    if (addr) return { v: addr[0] };
+    if (/^[0-9a-fA-F]{40}$/.test(v)) return { v: '0x' + v };
+    const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(v);
+    return { v: uuid && !U.isUuid(v) && /^https?:|[#?&=]/.test(v) ? uuid[0] : v };
+  };
+  // the page it opens is opened only if the reader is still where the search started (a lookup can take seconds)
+  MD.search = async (raw) => { const at = location.hash; const r = await find(raw, () => location.hash === at); if (r && r.ok) MD.recent.add(raw); return r; };
+  async function find(raw, still = () => true) {
+    const t = MD.searchTerm(raw);
+    if (t.slip) { if (still()) MD.router.navigate('/predict/p/' + t.slip); return { ok: true }; }
+    const v = t.v;
+    const go = (path, params) => { if (still()) MD.router.navigate(path, params); return { ok: true }; };
     if (!v) return { error: 'Enter a wallet address or subaccount ID' };
     if (U.isAddress(v)) {
       let subs;
       try { subs = await A.subaccountsOf(v); } catch (e) { return { error: 'Lookup failed: ' + e.message }; }
-      if (subs.length) { MD.router.navigate('/account', { address: v.toLowerCase(), sub: subs[0].id }); return { ok: true }; }
+      if (subs.length) return go('/account', { address: v.toLowerCase(), sub: subs[0].id });
       // no perps account: a Predict wallet (the smart account the Meridian app places predictions from) opens its
       // owner's Predict tab when the owner trades perps, else its bettor page; an owner without perps its Predict wallet
       const W = MD.predict.wallets;
       const r = await W.predictAddress(v);
       if (r.error) {
         // the wallet lookup failed: the address may still have predictions of its own
-        if (await W.hasActivity(v).catch(() => false)) { MD.router.navigate('/predict/bettor', { address: v.toLowerCase() }); return { ok: true }; }
+        if (await W.hasActivity(v).catch(() => false)) return go('/predict/bettor', { address: v.toLowerCase() });
         return { error: 'No perps account for this address, and its Predict wallet could not be looked up (Robinhood Chain RPC): try again' };
       }
-      if (r.owner && r.owner !== v.toLowerCase()) { const os = await A.subaccountsOf(r.owner).catch(() => []); if (os.length) { MD.router.navigate('/account', { address: r.owner, sub: os[0].id, tab: 'predict' }); return { ok: true }; } }
-      if (r.active !== false) { MD.router.navigate('/predict/bettor', { address: r.address }); return { ok: true }; }
+      if (r.owner && r.owner !== v.toLowerCase()) { const os = await A.subaccountsOf(r.owner).catch(() => []); if (os.length) return go('/account', { address: r.owner, sub: os[0].id, tab: 'predict' }); }
+      if (r.active !== false) return go('/predict/bettor', { address: r.address });
       // a linked signer (the Meridian app's trading session key, or an API key) signs for an account without being one;
       // Meridian's record of it does not say whose it is
       const sg = await A.signerByAddress(v).catch(() => null);
@@ -65,10 +81,10 @@
       return { error: 'No Meridian perps account or Predict activity found for this address' };
     }
     if (U.isUuid(v)) {
-      try { const sa = await A.subaccount(v); MD.router.navigate('/account', { address: sa.account, sub: sa.id }); return { ok: true }; }
+      try { const sa = await A.subaccount(v); return go('/account', { address: sa.account, sub: sa.id }); }
       catch (e) { return { error: e.status === 404 ? 'Subaccount not found' : 'Lookup failed: ' + e.message }; }
     }
-    return { error: 'Enter a 0x wallet address (40 hex chars) or a subaccount UUID' };
+    return { error: 'Enter a 0x wallet address (40 hex chars), a subaccount UUID, a slip id or a link to one of them' };
   }
 
   /** "How is this number calculated?" — one modal, linked from the leaderboard, copy trading, the Performance tab and the tax center. */
@@ -144,7 +160,11 @@
     if (!rail.__tips) { rail.__tips = true; rail.addEventListener('mouseover', (e) => { const row = e.target.closest('a.nav, .toggle'); const tip = row && row.querySelector('.tip'); if (!tip) return; const r = row.getBoundingClientRect(); tip.style.top = (r.top + r.height / 2) + 'px'; tip.style.left = (r.right + 10) + 'px'; }); }
   }
 
+  // Meridian's maintenance notice: one element kept across pages (the router empties #main on every page change, which
+  // took the notice with it before the check had answered), put back at the top of each page
+  let banner = null;
   function onRoute(route) {
+    const mainEl = U.$('#main'); if (banner && mainEl && banner.parentNode !== mainEl) mainEl.insertBefore(banner, mainEl.firstChild);
     U.$$('#rail a.nav').forEach((a) => {
       const p = a.dataset.path;
       const on = p === route.path || (a.dataset.prefix && route.path.startsWith(a.dataset.prefix)) || (route.name !== 'predict' && p !== undefined && a.dataset.name === route.name);
@@ -164,7 +184,13 @@
   function boot() {
     renderRail();
     const input = U.$('#mini-search input');
-    U.$('#mini-search').addEventListener('submit', async (e) => { e.preventDefault(); const r = await MD.search(input.value); if (r.error) U.toast(r.error); else input.value = ''; });
+    const mini = U.$('#mini-search');
+    mini.addEventListener('submit', async (e) => {
+      e.preventDefault(); if (mini.classList.contains('busy')) return;
+      mini.classList.add('busy'); mini.setAttribute('aria-busy', 'true'); input.readOnly = true;
+      let r; try { r = await MD.search(input.value); } finally { mini.classList.remove('busy'); mini.removeAttribute('aria-busy'); input.readOnly = false; }
+      if (r.error) U.toast(r.error, Math.max(3000, r.error.length * 55)); else input.value = '';
+    });
     // "/" focuses the search box (desktop shortcut)
     document.addEventListener('keydown', (e) => {
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -172,10 +198,13 @@
       const mini = U.$('#mini-search'); const target = mini && mini.style.display !== 'none' ? input : U.$('.hero form input');
       if (target) { e.preventDefault(); target.focus(); target.select(); }
     });
+    banner = U.$('#banner');
     MD.router.start(U.$('#main'), onRoute);
     // leader alerts follow their accounts on every page, from whichever tab of this browser owns the job
     if (MD.alerts && MD.alerts.state().leaders.length) MD.alerts.start();
-    A.maintenance().then((m) => { if (m && m.isEnabled) { const b = U.$('#banner'); if (b) { b.style.display = ''; U.replace(b, h('div.notice', 'Meridian is currently in maintenance mode; data may be stale.')); } } }).catch(() => {});
+    // read at start and every five minutes, so a maintenance that starts or ends while the site is open shows or goes
+    const maint = () => A.maintenance().then((m) => { if (!banner || !m || typeof m.isEnabled !== 'boolean') return; if (m.isEnabled) U.replace(banner, h('div.notice', { role: 'status' }, 'Meridian is currently in maintenance mode; data may be stale.')); else U.clear(banner); }).catch(() => {});
+    maint(); setInterval(maint, 5 * 60000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

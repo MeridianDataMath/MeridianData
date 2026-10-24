@@ -5,7 +5,8 @@
   // a caller's value that lands in h()'s second argument goes through U.kid: an object from an API would be read as attributes
 
   /**
-   * table({cols:[{key,label,num,render(row),sortVal(row),title}], rows, empty, sort:{key,desc}, onSort(key), onRow(row), rowClass(row)})
+   * table({cols:[{key,label,num,render(row),sortVal(row),title}], rows, empty, sort:{key,desc}, onSort(key), onRow(row), canRow(row)
+   * (which rows onRow takes: the others look and act as plain rows), rowClass(row)})
    */
   UI.table = function (o) {
     const cols = o.cols;
@@ -38,7 +39,8 @@
     }
     return h('div.tbl-wrap', { class: ph ? 'ph' : null }, h('table.tbl', thead, tbody));
     function rowEl(r) {
-      const tr = h('tr', { class: [(o.onRow ? 'clickable' : ''), o.rowClass ? o.rowClass(r) : ''].join(' ').trim() });
+      const opens = !!o.onRow && (!o.canRow || o.canRow(r));
+      const tr = h('tr', { class: [(opens ? 'clickable' : ''), o.rowClass ? o.rowClass(r) : ''].join(' ').trim() });
       for (const c of cols) {
         const role = phRole(c);
         const td = h('td', { class: ((c.num ? 'num ' : '') + (c.cls || '') + role).trim() || null });
@@ -47,7 +49,7 @@
         U.append(td, [v == null ? '—' : v]);
         tr.appendChild(td);
       }
-      if (o.onRow) {
+      if (opens) {
         tr.addEventListener('click', (e) => { if (e.target.closest('a,button,.copy')) return; o.onRow(r); });
         tr.tabIndex = 0;   // reachable with Tab, opened with Enter
         tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === tr) { e.preventDefault(); o.onRow(r); } });

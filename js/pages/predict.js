@@ -153,7 +153,10 @@
 
   // ---------- section header (sub-nav across the Predict pages) ----------
   const SUB = [['/predict', 'Overview'], ['/predict/bettors', 'Bettors'], ['/predict/questions', 'Questions'], ['/predict/makers', 'Market makers'], ['/predict/vig', 'Vig & edge']];
-  const subnav = (path) => h('div.tabs', SUB.map(([p, l]) => h('button', { class: p === path || (p === '/predict/bettors' && path === '/predict/bettor') ? 'on' : '', onclick: () => { location.hash = p; } }, l)));
+  // links, not buttons: each is a page (open it in a new tab, copy its link), and the one shown is marked for screen readers
+  /** A question's page on Meridian's app (its condition id), as the Hot list opens it */
+  const questionAppUrl = (id) => P.appPageUrl('/' + encodeURIComponent(String(id || '')));
+  const subnav = (path) => h('nav.tabs', { 'aria-label': 'Predict pages' }, SUB.map(([p, l]) => { const on = p === path || (p === '/predict/bettors' && path === '/predict/bettor'); return h('a', { href: '#' + p, class: on ? 'on' : '', 'aria-current': on ? 'page' : null }, l); }));
 
   MD.router.pages.predict = {
     async mount(root, route, ctx) {
@@ -442,14 +445,21 @@
     MD.setTopbar(h('span.title', 'Predict · Bettors'));
     await withSnapshot(body, ctx, (snap) => {
       const all = snap.agg.bettors;
-      const st = { q: '', minN: 3, sort: { key: 'pnl', desc: true }, page: 1, cat: '' };
+      // the view is kept in the link (silently): Back from a bettor returns to the same page, order and filters, and the
+      // scroll position the router restores lands on the same rows; a hand-edited value that is not one falls back
+      const pr = route.params, sp = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
+      const KEYS = ['address', 'n', 'wagered', 'pnl', 'mrank', 'roi', 'winRate', 'avgOdds', 'combos', 'avgVig', 'biggestWin', 'last'];
+      const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 3, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
+      const save = () => MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
+      // the medals go with a best-first order only (sorted the other way, the biggest loss took gold)
+      const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc', mrank: 'asc' };
       const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
       const wrap = h('div');
       const summary = h('span.dim.small');
       const controls = h('div.card', h('div.row.wrap',
-        h('input.input', { placeholder: 'Search address', style: { maxWidth: '260px' }, oninput: (e) => { st.q = e.target.value.trim().toLowerCase(); st.page = 1; render(); } }),
+        h('input.input', { placeholder: 'Search address', 'aria-label': 'Search bettors by address', value: st.q, style: { maxWidth: '260px' }, oninput: (e) => { st.q = e.target.value.trim().toLowerCase(); st.page = 1; render(); } }),
         h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
-        h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c }, c))),
+        h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c, selected: c === st.cat }, c))),
         h('span.grow'), summary));
       // Meridian's own PnL ranking (snap.pnlRank, its API's leaderboard): [rank, PnL] all time and over the last 30 days,
       // the window its app ranks its top traders by (an older snapshot: 7 days)
@@ -476,7 +486,7 @@
         const slice = rows.slice((st.page - 1) * PAGE, st.page * PAGE);
         const onSort = (k) => { if (st.sort.key === k) st.sort.desc = !st.sort.desc; else st.sort = { key: k, desc: k !== 'address' }; st.page = 1; render(); };
         U.replace(wrap, UI.table({ sort: st.sort, onSort, cols: [
-          { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? UI.rank(i) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
+          { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? UI.rank(i, BEST[st.sort.key] === (st.sort.desc ? 'desc' : 'asc')) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
           { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
           // open: Meridian's Open Positions where the snapshot counts them (one per pick configuration and side with tokens
           // still held), else (an older snapshot) the undecided predictions
@@ -499,6 +509,7 @@
         // "364 of 733 bettors · 3+ predictions": the count is of the filtered board, and the filters say so (a full address ignores them)
         const filt = full ? [] : [st.minN > 1 ? `${st.minN}+ predictions` : '', st.cat ? 'top category ' + st.cat : '', st.q ? 'address search' : ''].filter(Boolean);
         U.replace(summary, `${U.fmtNum(total, 0)} of ${U.fmtNum(all.length, 0)} bettors` + (filt.length ? ' · ' + filt.join(' · ') : '') + ' · ', snapNoteEl(snap));
+        save();
       }
       U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', 'Net PnL counts every decided prediction, claimed or not: a win earns the maker\'s collateral, a loss costs the stake' + (snap.agg.secondary ? ', and a position sold on the secondary market counts at its sale' : '; secondary-market sales are not counted in this view') + '. Open positions still held are excluded. For a wallet that only bets, this is the PnL in Meridian\'s own account stats.'));
       // (checked 2026-10-20 on all 764 bettors: Meridian's account stats give the same PnL, predictions and won / lost for
@@ -599,7 +610,8 @@
     const vAll = P.questionVolume(c).all;
     const volEl = vAll ? h('span.small', { title: 'All-time volume on the mirrored Polymarket market, as the question\'s page in Meridian\'s app shows it' }, P.fmtVol(vAll) + ' Vol') : null;
     const render = () => { const st = R.state(view, id); U.replace(body,
-      h('div.row.wrap', { style: { gap: '8px', marginBottom: st.sub ? '2px' : '10px' } }, R.chip(view, id), h('span.small', st.main || ''), h('span.grow'), volEl, h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`)),
+      h('div.row.wrap', { style: { gap: '8px', marginBottom: st.sub ? '2px' : '10px' } }, R.chip(view, id), h('span.small', st.main || ''), h('span.grow'), volEl, h('span.dim.small', `${file.total} prediction${file.total > 1 ? 's' : ''} on this question${file.total > preds.length ? ' · newest ' + preds.length + ' shown' : ''}`),
+        h('a.btn.sm.ghost', { href: questionAppUrl(id), target: '_blank', rel: 'noopener', title: 'This question on Meridian Predict' }, U.icon('external'), 'Meridian Predict')),
       st.sub ? h('div.xs.dim', { style: { marginBottom: '10px' } }, st.sub) : null,
       h('div.card.tight', UI.table({ cols: [
         { key: 'b', label: 'Bettor', render: (n) => bettorLink(n.predictor) },
@@ -808,7 +820,7 @@
           { key: 'p', label: 'Polymarket at bet', num: true, title: 'The source market\'s probability for this pick when the bet was placed', render: (k) => pct(k.fairAtBet, 1) },
           { key: 'r', label: 'Result', title: 'Meridian\'s result once it has settled the question, before that the source market\'s', render: (k) => { const o = legOutcome(k, n); return h('div.row', { style: { gap: '4px', flexWrap: 'nowrap' } },
             o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : h('span.dim', '—'),
-            k.id ? h('button.btn.sm.icon.ghost', { title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: P.APP_URL }); } }, U.icon('info')) : null); } },
+            k.id ? h('button.btn.sm.icon.ghost', { title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: questionAppUrl(k.id) }); } }, U.icon('info')) : null); } },
         ], rows: n.picks, empty: 'No legs' })),
         n.partial ? h('div.xs.dim', { style: { marginTop: '8px' } }, `Loading the other ${n.legs > 1 ? 'legs' : 'details'} from the snapshot…`) : n.firstLegOnly ? h('div.xs.dim', { style: { marginTop: '8px' } }, `Only the first of its ${n.legs} legs is in this snapshot.`) : null,
         h('div.footer-note', { style: { textAlign: 'left' } }, 'Odds = stake ÷ payout, and the payout is the stake plus the market maker\'s collateral. A combo pays only if every leg resolves in the bettor\'s favour; a leg that resolves 50/50 counts as a loss on Meridian.'));
@@ -1153,7 +1165,7 @@
 
   let resLoading = 0;   // > 0 while Polymarket / oracle data for the visible rows is on its way (header shows a spinner)
   const resCols = (rows) => [
-    { key: 'r', label: h('span', 'Resolution', resLoading ? h('span.spinner.sm', { title: 'loading Polymarket and oracle data' }) : null), title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: P.APP_URL }) },
+    { key: 'r', label: h('span', 'Resolution', resLoading ? h('span.spinner.sm', { title: 'loading Polymarket and oracle data' }) : null), title: 'When and how this question resolves — from Polymarket and the UMA oracle', render: (c) => R.cell(qView(c), qId(c), { appUrl: questionAppUrl(qId(c)) }) },
     { key: 's', label: 'Status', render: (c) => R.chip(qView(c), qId(c)) },
   ];
   /** Pull Polymarket + oracle data for the rows on screen, re-rendering as each layer arrives; keeps countdowns fresh. */
@@ -1183,7 +1195,7 @@
    *  `all=1` switches to the server-side explorer over every question on the exchange. */
   async function mountQuestions(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Questions'));
-    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST', col: { key: route.params.col || 'sw', desc: route.params.dir !== 'asc' } };
+    const st = { search: route.params.q || '', cat: route.params.cat || '', status: route.params.status || 'open', sort: route.params.sort || 'OPEN_INTEREST', col: { key: route.params.col || 'sw', desc: route.params.dir !== 'asc' }, tag: route.params.tag || '', page: Math.max(1, Math.floor(U.num(route.params.page)) || 1) };
     // The default view never waits for the API probe (a refused CORS preflight can take a second); only `all=1` needs it.
     const liveP = P.live();
     if (route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, liveP);
@@ -1261,6 +1273,11 @@
     const appOf = (r) => P.appPageUrl(r.k === 'm' ? '/event/' + encodeURIComponent(r.ev || r.id) : '/' + encodeURIComponent(r.id));
     const what = (r) => (r.k === 'g' ? ` · a group of ${r.n} question${r.n === 1 ? '' : 's'}` : r.k === 'm' ? ' · a match' + (r.lg ? ' · ' + String(r.lg).toUpperCase() : '') + (r.t ? ' · ' + U.fmtWhen(r.t) : '') : '');
     const body = h('div', { style: { display: 'none' } });
+    // a group's or a match's row with several questions this site lists: a short list to pick one from
+    const pickQuestion = (r, qs) => {
+      const m = UI.modal({ title: r.q || 'Questions', body: h('div.stack', { style: { gap: '6px' } }, h('div.small.dim', qs.length + ' of its questions have Meridian bets:'),
+        qs.map((q) => h('button.btn.sm.ghost', { type: 'button', style: { justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }, onclick: () => { m.close(); openQuestion(q, ctx); } }, qView(q).question || q.q))) });
+    };
     const draw = () => {
       const rows = hot[win] || [], tab = tabs.find((x) => x.v === win) || tabs[0];
       U.replace(body, h('div', { style: { padding: '8px 12px 0' } }, UI.seg(tabs.map((x) => ({ v: x.v, label: x.label + ' (' + x.win.toUpperCase() + ')', title: x.title })), win, (v) => { win = v; draw(); }, 'sm')),
@@ -1272,8 +1289,8 @@
           { key: 'c', label: 'Category', render: (r) => r.cat || '—' },
           { key: 'v', label: 'Volume ' + tab.win, num: true, title: `The mirrored markets' volume over the last ${tab.win}, low-odds trading left out, as Meridian's app shows it on this list: a group's questions added up (those it lists, between 1 and 99 %), a match's open questions together`, render: (r) => P.fmtVol(r.v) },
           { key: 'm', label: 'On Meridian', num: true, title: 'Bettor stakes ever placed through Meridian on the question, or on the group\'s or the match\'s questions: a prediction once, however many of its legs are in it', render: (r) => { const sw = hot.stakes ? r.mw || 0 : oursOf(r).reduce((s, q) => s + (q.sw || 0), 0); return sw ? usd(sw, { compact: true }) : h('span.dim', '—'); } },   // (a snapshot without mw: the listed questions' stakes added up)
-        ], rows, empty: 'No list in this snapshot', onRow: (r) => { const qs = oursOf(r); if (qs.length === 1) openQuestion(qs[0], ctx); } }),
-        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ', U.agoEl(hot.at || snap.builtAt), ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with one question this site lists opens it; the arrow opens Meridian\'s page.'));
+        ], rows, empty: 'No list in this snapshot', canRow: (r) => oursOf(r).length > 0, onRow: (r) => { const qs = oursOf(r); if (qs.length === 1) openQuestion(qs[0], ctx); else if (qs.length > 1) pickQuestion(r, qs); } }),
+        h('div.xs.dim', { style: { padding: '6px 14px' } }, 'As of the snapshot ', U.agoEl(hot.at || snap.builtAt), ', the first page of the list. Any market on the exchange can be on these lists; most have no Meridian bets yet. A row with questions this site lists opens them (a group or a match with several: a list to pick from); one without any has nothing to open here, and the arrow opens Meridian\'s page.'));
     };
     const card = h('div.card.tight.collapsible');
     const set = (open) => { card.classList.toggle('open', open); body.style.display = open ? '' : 'none'; head.setAttribute('aria-expanded', String(open)); if (open && !body.firstChild) draw(); };
@@ -1288,7 +1305,7 @@
       let live = false;
       const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
-      let page = 1; const wrap = h('div'); const summary = h('span.dim.small');
+      let page = st.page; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (not settled: open bets or escrow not yet claimed)
       // on the Open and Ended tabs: an unsettled question whose open predictions have all lost on Polymarket (a leg
@@ -1344,7 +1361,11 @@
         R.load(ids, { signal: ctx.signal, deep: false }).then(() => { if (ctx.signal.aborted) return; refreshEndedLabel(); render(true); renderBacklog(); }).catch(() => {});
       };
       loadEnded();
+      // the tab, search, category, tag, column and page in the link (silently), so Back from a question's bettor returns to
+      // this same view
+      const save = () => MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, tag: st.tag || null, col: st.col.key === 'sw' ? null : st.col.key, dir: st.col.desc ? null : 'asc', page: page > 1 ? page : null }, { silent: true });
       function render(keepTracking) {
+        save();
         let rows = all.slice(); const t = Date.now();
         if (st.search) { const s = st.search.toLowerCase(); rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(s)); }   // a linked ?q= keeps its case
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
@@ -1827,7 +1848,7 @@
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: !!k.nonDecisive, question: k.q });
     const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id
-      ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: P.APP_URL }); } }, R.line(legView(k), k.id))
+      ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: questionAppUrl(k.id) }); } }, R.line(legView(k), k.id))
       : h('div.res-line', h('span.dim.small', k.endTime ? (k.endTime > Date.now() ? 'in ' + U.fmtCountdown(k.endTime - Date.now()) : 'pending') : '—')))));
     const openWrap = h('div');
     // a row opens its prediction where it is among the loaded predictions (a live position names it too)
