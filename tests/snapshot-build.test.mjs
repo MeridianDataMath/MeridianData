@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { prevDrift, needsRebuild, mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -297,6 +297,23 @@ test('cashPlan: wallets never read first, then active since their last read, the
   assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 12), 5]]), Date.UTC(2026, 9, 8));
   assert.equal(cashFrom(Date.UTC(2026, 9, 10), [[Date.UTC(2026, 9, 3), 5]]), Date.UTC(2026, 9, 1));
   assert.equal(cashFrom(null, []), MD.predict.EXCHANGE_START_SEC * 1000);
+});
+
+test('a row read only in part: the drift measured before stands in, and only what nothing stands in for is built again', () => {
+  const T = Date.UTC(2026, 9, 24, 20);
+  const prevs = [
+    { builtAt: T - 3600000, rows: [{ sid: 'a', copy: { drift1: 1.5, drift5: 2.5, driftN: 120 } }, { sid: 'b', copy: { drift1: null, drift5: null, driftN: 0 } }] },
+    { builtAt: T - 1800000, rows: [{ sid: 'a', copy: { drift1: 1.1, drift5: 2.1, driftN: 130 } }, { sid: 'c', carried: true, builtAt: T - 86400000, copy: { drift1: 3, drift5: 4, driftN: 50 } }] },
+    null,
+  ];
+  const m = prevDrift(prevs);
+  assert.deepEqual(m.get('a'), { drift1: 1.1, drift5: 2.1, n: 130, at: T - 1800000 }, 'the newest measurement');
+  assert.equal(m.has('b'), false, 'nothing measured: nothing to stand in');
+  assert.equal(m.get('c').at, T - 86400000, 'a carried row: when it was built');
+  assert.equal(needsRebuild({ soft: ['volume'] }), true);
+  assert.equal(needsRebuild({ soft: ['fills'], driftAt: T }), false, 'the earlier drift stands in');
+  assert.equal(needsRebuild({ soft: ['candles'] }), true, 'nothing stands in');
+  assert.equal(needsRebuild({}), false); assert.equal(needsRebuild(null), false);
 });
 
 test('the perps build goes stalest first, and never replaces the published list with an empty or cut-short one', () => {

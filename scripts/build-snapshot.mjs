@@ -1184,6 +1184,19 @@ export function mergeRows(subs, built, prevs, now = Date.now()) {
 /** The build order: an account without a row in the earlier snapshots first, then by the age of its newest row, oldest
  *  first (the account list's order among equals). When the time budget runs out, the accounts left are then the ones
  *  built most recently, never the same ones every run (the list is newest first, and the oldest accounts went last). */
+/** Per account, the fill drift its newest earlier row had measured (with when): it stands in where a build's fills or
+ *  candles cannot be read (AN.buildLeaderboardRow) */
+export function prevDrift(prevs) {
+  const m = new Map();
+  for (const s of prevs || []) for (const r of (s && Array.isArray(s.rows) ? s.rows : [])) {
+    const c = r && r.copy; if (!c || !(c.driftN > 0) || typeof r.sid !== 'string') continue;
+    const at = r.driftAt || (r.carried && r.builtAt) || s.builtAt || 0;
+    if (!m.has(r.sid) || at > m.get(r.sid).at) m.set(r.sid, { drift1: c.drift1, drift5: c.drift5, n: c.driftN, at });
+  }
+  return m;
+}
+/** A row worth building once more: a part read in vain that nothing earlier stands in for */
+export const needsRebuild = (r) => !!(r && r.soft && r.soft.some((k) => (k === 'fills' || k === 'candles' ? !r.driftAt : true)));
 export function stalestFirst(subs, prevs) {
   const at = new Map();
   for (const s of prevs || []) {
@@ -1227,6 +1240,7 @@ async function buildPerps() {
   console.log(`markets=${ref.active.length} accounts=${subs.length} books=${Object.keys(ctx.copy.depth).length}` + (ctx.copy.missing.length ? ` (no book read: ${ctx.copy.missing.join(', ')})` : ''));
   const prevs = await previousSnapshots();   // the rows to carry over, and the order of this build
   const order = stalestFirst(subs, prevs);
+  ctx.prevDrift = prevDrift(prevs);   // the fill drift each account last had measured: it stands in where this build's cannot be
   // each account's funding charges as read before: what is over 6 hours old does not change, so only the newer windows
   // are read (A.fundingCharges). data/cache/perps-funding.json, which the deploy keeps between runs (actions/cache)
   const fundFile = path.join(root, 'data', 'cache', 'perps-funding.json');
@@ -1269,25 +1283,36 @@ async function buildPerps() {
     const last = await U.pLimit(left.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 1);
     last.forEach((r, j) => { const sa = subs[left[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else { lastErr.set(left[j], why(r)); console.warn(`row failed a third time ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); } });
   }
+  // rows built with a part read in vain (row.soft: volume, funding, position fees; fills or candles without an earlier
+  // drift to stand in) are built once more while the budget lasts, and the fuller row kept
+  const softIx = subs.map((sa, i) => i).filter((i) => needsRebuild(built.get(subs[i].id)));
+  if (softIx.length && Date.now() - started + 10000 < budgetMs) {
+    const again = await U.pLimit(softIx.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 2);
+    again.forEach((r, j) => { const id = subs[softIx[j]].id; if (r.ok && r.value && (r.value.soft || []).length < (built.get(id).soft || []).length) built.set(id, r.value); });
+  }
   const failedIx = failedAt.filter((i) => !built.has(subs[i].id)), failed = failedIx.length;
   const failReasons = {}; for (const i of failedIx) { const w = lastErr.get(i) || 'error'; failReasons[w] = (failReasons[w] || 0) + 1; }
 
   const merged = mergeRows(subs, built, built.size < subs.length ? prevs : []);
   const { carried, missing } = merged, rows = merged.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED)
   // partial: not every account was built by this run (carried: rows from an earlier snapshot; missing: accounts without a row)
-  const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, failReasons, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
+  const softN = rows.filter((r) => r && !r.carried && r.soft).length;   // built with a part read in vain (row.soft)
+  const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, soft: softN, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, failReasons, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
   if (ctx.copy.missing.length) out.booksMissing = ctx.copy.missing;
   // a build that would replace the published snapshot with an empty or cut-short list writes nothing: the step fails,
   // and the deploy sends the published one out again (scripts/keep-live.mjs)
   // the funding kept for the next build, for the accounts that still exist
   try { const live = new Set(subs.map((s) => s.id)); for (const sid of Object.keys(fund.a)) if (!live.has(sid)) delete fund.a[sid]; writeAtomic(fundFile, JSON.stringify(fund)); console.log(`  funding charges kept for ${Object.keys(fund.a).length} accounts (${fundAt} before this build)`); }
   catch (e) { console.warn('funding cache not saved:', e.message); }
+  // nothing built this run: no file, so keep-live sends the published one out with its own build time (written, it said
+  // "built now" over rows all carried, and the pages' stale notes stayed quiet for up to a week)
+  if (!built.size) { console.error(`leaderboard.json not written: no account was built this run (${failed} failed${skipped ? ', ' + skipped + ' not reached' : ''})`); process.exit(1); }
   const refused = publishProblem(out, prevs);
   if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
   writeAtomic(path.join(outDir, 'leaderboard.json'), JSON.stringify(out));   // whole or not at all: a step stopped mid-write deploys no half file
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
-  console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows${ctx.copy.candles.failed() ? ', ' + ctx.copy.candles.failed() + ' of them unread' : ''}), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
-  if (!built.size) process.exit(1);   // nothing built this run: the step fails (the file still carries the earlier rows)
+  console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built${softN ? ` (${softN} with a part read in vain)` : ''}, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows${ctx.copy.candles.failed() ? ', ' + ctx.copy.candles.failed() + ' of them unread' : ''}), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  if (!built.size) process.exit(1);   // (not reached: a run that built nothing writes no file, above)
 }
 if (doPerps) {
   // a failure before any row is written leaves no file: the deploy then sends the published one out again (keep-live)

@@ -457,12 +457,15 @@
     // account that traded inactive and blank its row
     const [balances, positionsOpen, vol] = await Promise.all([A.balances(sid, o), A.openPositions(sid, o), A.totalVolume(sid, o).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; })]);
     const acct = AN.accountState({ balances, positions: positionsOpen, ref, prices });
+    // the parts read in vain, on the row (row.soft): a figure that falls back (all-time volume from the daily buckets, the
+    // settled basis for funding and position fees, no fill drift) is not a fully built row, and the build reads it again
+    const soft = []; if (vol == null) soft.push('volume');
     const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
     // for the share cards, which have no MD.analytics: one of Meridian's own accounts, and the label of a named wallet
     if (AN.exchangeAccount({ sid, account: sa.account })) row.exchange = true;
     const known = AN.known({ account: sa.account }); if (known) row.role = known.label;
     if (acct.balance === 0 && !positionsOpen.length && vol === 0) {
-      row.inactive = true;
+      row.inactive = true;   // (vol === 0: read, so never soft)
       for (const iv of Object.keys(AN.INTERVALS)) row.stats[iv] = { pnl: 0, volume: 0, roi: null, sharpe: null, ddPct: null, fees: 0, posFees: 0, funding: 0, sitePnl: 0, siteVolume: 0, siteRoi: null };
       return row;
     }
@@ -485,6 +488,7 @@
     const pfFrom = AN.positionFeeFrom(positions, h8.length ? h8[0].t : s30, acct.unsettledPositionFee);
     const pfRows = pfFrom == null ? null : await A.positionFeeCharges(sid, pfFrom, so).catch((e) => { if (e && e.name === 'AbortError') throw e; return null; });
     const pf = pfRows ? { charges: pfRows, owed: acct.unsettledPositionFee, from: pfFrom } : null;
+    if (!charges) soft.push('funding'); if (pfFrom != null && !pfRows) soft.push('posFees');
     const net = (s, ms) => AN.netOfUnsettled(s, charges, acct.unsettledFunding, ms, pf);
     const dailyN = net(daily, U.DAY);
     const ps = AN.positionStats(positions, ref);
@@ -513,11 +517,17 @@
       // fills and the price drift after them only for accounts with a track record worth copying (the candle cache is shared)
       let decays = null;
       if (ps.closed.length >= 3) {
-        try { const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 10, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles); }
-        catch (e) { if (e && e.name === 'AbortError') throw e; }
+        try {
+          const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 10, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles);
+          if (decays && !decays.n && fills.length && copyCtx.candles.failed && copyCtx.candles.failed()) soft.push('candles');   // nothing measured because the candles could not be read
+        } catch (e) { if (e && e.name === 'AbortError') throw e; soft.push('fills'); }
+        // unmeasured this time: the drift the last build measured stands in, dated (the friction part of the score is 45 %,
+        // and dropping it moved a leader from Copy with care to Copyable)
+        if ((soft.includes('fills') || soft.includes('candles')) && ctx && ctx.prevDrift && ctx.prevDrift.get(sid)) { const pd = ctx.prevDrift.get(sid); decays = { drift1: pd.drift1, drift5: pd.drift5, n: pd.n }; row.driftAt = pd.at; }
       }
       row.copy = AN.buildCopyProfile({ positions, daily: dailyN, equity: acct.equity, createdAt: sa.createdAt, ref, depth: copyCtx.depth, decays });
     }
+    if (soft.length) row.soft = soft;
     return row;
   };
 

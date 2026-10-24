@@ -35,10 +35,16 @@ perps snapshot (`data/leaderboard.json`), adds the Predict snapshot from the Mer
 repository, reads the Tax center's official exchange rates and the USDe/USD price (`data/fx/`, see
 the Tax center below), assembles `dist/` and deploys it. A builder that fails does not stop the
 deploy: its file from the live site goes out again (`scripts/keep-live.mjs`: the leaderboard, each
-exchange-rate source). A health job after the deploy fails the run, which GitHub mails, when the
-Predict snapshot live on the site is over two hours old or the Cloudflare timer has stopped
-dispatching: once when it starts, then daily (`scripts/deploy-health.mjs`; also pushed to ntfy
-when a repository secret `NTFY_TOPIC` is set). A new run waits for the one in progress instead of
+exchange-rate source; a leaderboard file cut short counts as none, and a run that built no account
+writes none, so the published file goes out with its own build time). A health job after the
+deploy fails the run, which GitHub mails, when the Predict snapshot live on the site is over two
+hours old (or its status file gives no build time; when this run's deploy failed, the alarm says
+the deploys may be what stopped), when the perps leaderboard live (its summary in `home.json`) is
+over two hours old or most of its rows have been carried from earlier builds for that long, or
+when the Cloudflare timer has stopped dispatching (on every scheduled run while it lasts: GitHub
+drops most of them); otherwise once when it starts, then daily (`scripts/deploy-health.mjs`;
+also pushed to ntfy when a repository secret `NTFY_TOPIC` is set). Every scheduled run keeps the
+schedule on (`keepalive`). The perps build stops after 10 minutes whatever it waits on. A new run waits for the one in progress instead of
 cancelling it. The timer itself (`cron/`) deploys from `.github/workflows/cron.yml` when it changes.
 Every page asks for the site's scripts and stylesheets with `?v=<the file's hash>`
 (`scripts/version-assets.mjs`, after the cards; a reference left without it fails the run), so
@@ -2117,7 +2123,7 @@ scripts/build-fx.mjs    deploy-time official exchange rates for the tax center (
                         DefiLlama's USDe/USD price (the USDe lots' market valuation)
 scripts/check-snapshot.mjs  the deploy's gate for the Predict snapshot: published names only, JSON, caps on files and size
 scripts/keep-live.mjs   the deploy: what a build failed to write (the leaderboard, an exchange-rate source) from the live site
-scripts/deploy-health.mjs  after the deploy: fails the run when the live Predict snapshot or the timer has stopped
+scripts/deploy-health.mjs  after the deploy: fails the run when the live Predict snapshot, the leaderboard or the timer has stopped
 scripts/version-assets.mjs  the deploy: ?v=<hash> on every page's scripts and stylesheets (kept a year by browsers)
 js/copy/sim.js          copy simulator engine: fills → position episodes → a copier's replay
 js/copy/paper.js        paper copy: a virtual account mirroring a leader live, kept in localStorage

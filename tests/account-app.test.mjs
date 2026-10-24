@@ -204,6 +204,11 @@ test('leaderboard row: Meridian\'s PnL, and the site\'s with a fee charged two d
     near(assert, old.stats['24h'].sitePnl, -30, 1e-6); near(assert, old.stats.all.sitePnl, row.stats.all.sitePnl, 1e-6, 'all time unchanged');
     near(assert, old.stats['7d'].posFees, 0, 1e-6, 'settled: none');
     for (const iv of ['24h', '7d', '30d', 'all']) near(assert, old.stats[iv].pnl, row.stats[iv].pnl, 1e-9, iv + ': Meridian\'s figure does not read the fees');
+    // a part read in vain is marked on the row (the build reads it again); a fully read row carries no mark
+    assert.equal(row.soft, undefined); assert.equal(JSON.stringify(old.soft), '["posFees"]');
+    A.totalVolume = async () => { throw new Error('HTTP 503'); };
+    const noVol = await AN.buildLeaderboardRow(sa, ref, prices, {});
+    assert.equal(noVol.volumeAll, null); assert.equal(JSON.stringify(noVol.soft), '["volume","posFees"]');
   } finally { Object.assign(A, saved); }
 });
 

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pick, problems, excludedWallets, MAX_FILES, NAME } from '../scripts/check-snapshot.mjs';
 import { keepLeaderboard, keepFx } from '../scripts/keep-live.mjs';
-import { alarm, SNAPSHOT_MAX, TIMER_MAX } from '../scripts/deploy-health.mjs';
+import { alarm, SNAPSHOT_MAX, TIMER_MAX, LB_MAX, leaderboardProblem, timerAlarm } from '../scripts/deploy-health.mjs';
 import { versionPage, unversioned } from '../scripts/version-assets.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'md-deploy-'));
@@ -30,15 +30,18 @@ test('the snapshot gate takes only published names, never a link, and drops a le
 
 test('the snapshot gate refuses what is not JSON, too big, too many, or without Predict data', () => {
   const ok = { name: 'predict.json', size: 50, text: JSON.stringify({ agg: {}, predictions: 3 }) };
-  assert.deepEqual(problems([ok, { name: 'predict-status.json', size: 2, text: '{}' }]), []);
-  assert.match(problems([ok, { name: 'slips/00.json', size: 3, text: '{"x' }]).join(), /slips\/00\.json is not JSON/);
-  assert.match(problems([ok, { name: 'questions/x.json', size: 26e6, text: '{}' }]).join(), /over 25 MB/);
+  const st = { name: 'predict-status.json', size: 20, text: '{"builtAt":1792800000000}' };
+  assert.deepEqual(problems([ok, st]), []);
+  assert.match(problems([ok, { name: 'predict-status.json', size: 2, text: '{}' }]).join(), /no predict-status\.json with a build time/);
+  assert.match(problems([ok]).join(), /no predict-status\.json with a build time/, 'the status file is required');
+  assert.match(problems([ok, st, { name: 'slips/00.json', size: 3, text: '{"x' }]).join(), /slips\/00\.json is not JSON/);
+  assert.match(problems([ok, st, { name: 'questions/x.json', size: 26e6, text: '{}' }]).join(), /over 25 MB/);
   assert.match(problems([{ name: 'predict.json', size: 9, text: JSON.stringify({ error: 'Error: boom\n at x', builtAt: 1 }) }]).join(), /holds no Predict data \(its build failed: Error: boom\)/);
   assert.match(problems([{ name: 'predict-status.json', size: 2, text: '{}' }]).join(), /no predict\.json/);
   // a predict.json whose questions are in a file of their own comes with that file
   const split = { name: 'predict.json', size: 40, text: JSON.stringify({ agg: { bettors: [] }, predictions: 5, questionsFile: 'predict-questions.json' }) };
-  assert.match(problems([split]).join(), /names predict-questions\.json, which the snapshot lacks/);
-  assert.deepEqual(problems([split, { name: 'predict-questions.json', size: 25, text: '{"questionsWithOi":[]}' }]), []);
+  assert.match(problems([split, st]).join(), /names predict-questions\.json, which the snapshot lacks/);
+  assert.deepEqual(problems([split, st, { name: 'predict-questions.json', size: 25, text: '{"questionsWithOi":[]}' }]), []);
   const many = Array.from({ length: MAX_FILES + 1 }, (_, i) => ({ name: `bettors/${i}.json`, size: 2, text: '{}' }));
   assert.match(problems([ok].concat(many)).join(), new RegExp(`${MAX_FILES + 2} files, more than`));
   assert.match(problems([ok, { name: 'bettors/a.json', size: 140e6, text: '{}' }, { name: 'bettors/b.json', size: 20e6, text: '{}' }]).join(), /MB in all, more than/);
@@ -99,6 +102,21 @@ test('the health check raises the alarm once when data goes stale, then daily, n
   assert.equal(alarm(80 * M, at(13, 29), TIMER_MAX, 2 * H + 5 * M), true);
   assert.equal(alarm(3.5 * H, at(15, 29), TIMER_MAX, 2 * H + 5 * M), false);
   assert.equal(alarm(Infinity, at(3, 29), TIMER_MAX, 2 * H + 5 * M), true, 'never dispatched: daily');
+  // the timer: every scheduled run while it is silent (GitHub drops most of them); a push run once, then daily
+  assert.equal(timerAlarm(5 * H, at(15, 29), 'schedule'), true); assert.equal(timerAlarm(60 * M, at(15, 29), 'schedule'), false);
+  assert.equal(timerAlarm(80 * M, at(15, 2), 'push'), true); assert.equal(timerAlarm(5 * H, at(15, 2), 'push'), false);
+  assert.equal(timerAlarm(2 * M, at(15, 16), 'workflow_dispatch'), false, 'a run the timer dispatched');
+});
+
+test('the leaderboard on the site goes stale: its file not rebuilt, or most of its rows carried, for two hours', () => {
+  const H = 3600000, now = Date.UTC(2026, 9, 24, 20, 14);
+  assert.equal(leaderboardProblem({ builtAt: now - H, cov: { rows: 380, carried: 2, oldest: now - 3 * H } }, now), null, 'a few rows carried: fine');
+  const old = leaderboardProblem({ builtAt: now - 3 * H, cov: { rows: 380, carried: 0 } }, now);
+  assert.match(old.what, /3\.0 h old: the perps build has failed on every run/); assert.equal(old.age, 3 * H);
+  const carried = leaderboardProblem({ builtAt: now - 10 * 60000, cov: { rows: 380, carried: 300, oldest: now - LB_MAX - 60000 } }, now);
+  assert.match(carried.what, /300 of the leaderboard's 380 rows are carried/);
+  assert.equal(leaderboardProblem({ builtAt: now - 10 * 60000, cov: { rows: 380, carried: 300, oldest: now - H } }, now), null, 'carried, but not yet for two hours');
+  assert.equal(leaderboardProblem(null, now), null); assert.equal(leaderboardProblem({}, now), null);
 });
 
 test('every page asks for the site\'s scripts and stylesheets by their content (?v=), or the deploy stops', () => {

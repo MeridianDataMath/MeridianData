@@ -16,8 +16,8 @@ on:
   push:
     branches: [main]
   schedule:
-    # the backup to the Cloudflare timer (cron/, :14 and :44): every two hours at :29, between the timer's runs, the odd
-    # hours so 03:29 UTC carries the keepalive below
+    # the backup to the Cloudflare timer (cron/, :14 and :44): every two hours at :29, between the timer's runs; each one
+    # also keeps the schedule on (keepalive below)
     - cron: '29 1-23/2 * * *'
   workflow_dispatch:
 
@@ -203,11 +203,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: node scripts/deploy-health.mjs --event "${{ github.event_name }}"
+        run: node scripts/deploy-health.mjs --event "${{ github.event_name }}" --deploy "${{ needs.deploy.result }}"
 
   # GitHub turns a public repository's schedule off after 60 days without a commit. With the Predict snapshot published to
-  # its own repository, weeks can pass without one here, so once a day a scheduled run enables this workflow again, as
-  # the keepalive actions do. Its token may only manage this repository's workflows.
+  # its own repository, weeks can pass without one here, so every scheduled run enables this workflow again, as the
+  # keepalive actions do (only the 03:29 one did, and GitHub drops most scheduled runs: none ran for three days). Its token
+  # may only manage this repository's workflows.
   keepalive:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -219,5 +220,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          [ "$(date -u +%H)" = "03" ] || { echo "only in the 03:00 UTC hour"; exit 0; }
           gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/enable" && echo "schedule kept on" || echo "::warning::could not re-enable the workflow"
