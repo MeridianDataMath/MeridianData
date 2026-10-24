@@ -67,6 +67,7 @@
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Copy trading · Copy agent'));
       const st = load(); const save = () => U.storage.set(KEY, st); save();   // a token made just now must be the one next time too
+      const agentNow = { S: null };   // the running agent's last status (read in step 4), for step 3's differences from it
       // the agent's local port: every request carries the token, /status included
       const agentUrl = (p) => `http://127.0.0.1:${U.num(st.port) || 8790}/${p}`; const agentHdr = () => ({ 'x-agent-token': st.token || '' });
       const agentSigner = async () => { try { const r = await fetch(agentUrl('status'), { headers: agentHdr(), signal: AbortSignal.timeout(2000) }); if (!r.ok) return { refused: r.status }; return { signer: (await r.json()).signer }; } catch (_) { return null; } };
@@ -104,19 +105,48 @@
         const { rpc, parse } = await rpcTypes();
         const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' });
         if (owner && from.toLowerCase() !== owner.toLowerCase()) throw new Error(`The wallet is on ${U.shortAddr(from, 4)}, not the owner ${U.shortAddr(owner, 4)}`);
+        // MetaMask and others refuse typed data whose chainId is not the wallet's active chain: switch to Robinhood Chain
+        // first (an urgent Revoke failed until the user switched by hand)
+        const want = '0x' + Number(rpc.domain.chainId).toString(16);
+        const cur = await window.ethereum.request({ method: 'eth_chainId' }).catch(() => null);
+        if (cur && String(cur).toLowerCase() !== want) {
+          try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] }); }
+          catch (e) { throw new Error(e && e.code === 4902 ? `Add Robinhood Chain (chain id ${Number(rpc.domain.chainId)}, RPC ${MD.predict.wallets.RPC}) to the wallet, then try again` : 'Switch the wallet to Robinhood Chain (chain id ' + Number(rpc.domain.chainId) + ') and try again' + (e && e.message ? ': ' + e.message : '')); }
+        }
         const typed = { types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }], [primary]: parse(rpc.signatureTypes[primary]) }, primaryType: primary, domain: { name: rpc.domain.name, version: rpc.domain.version, chainId: Number(rpc.domain.chainId), verifyingContract: rpc.domain.verifyingContract }, message };
         return window.ethereum.request({ method: 'eth_signTypedData_v4', params: [from, JSON.stringify(typed)] });
       };
       const listSigners = async () => {
         const sid = st.cfg.subaccountId; if (!U.isUuid(sid)) { U.replace(signersOut); return; }
         try {
-          const rows = await A.page(A.BASE, '/v1/linked-signer', { subaccountId: sid }, { maxPages: 2 });
+          const [rows, quota] = await Promise.all([A.page(A.BASE, '/v1/linked-signer', { subaccountId: sid }, { maxPages: 2 }), A.signerQuota(sid).catch(() => null)]);
+          // a signer can be refreshed (its expiry extended, signed by the owner wallet) from this many hours before it expires
+          const refreshH = quota && U.num(quota.linkedSignerRefreshHoursBeforeExpiry) > 0 ? U.num(quota.linkedSignerRefreshHoursBeforeExpiry) : null;
+          const expMs = (r) => (r.expiresAt ? (U.num(r.expiresAt) < 1e12 ? U.num(r.expiresAt) * 1000 : U.num(r.expiresAt)) : null);
+          const refresh = async (r) => {
+            if (!confirm(`Refresh the signer ${U.shortAddr(r.signer, 4)}? Your wallet signs the refresh and the exchange extends its expiry; the agent keeps running with the same key.`)) return;
+            try {
+              const sa = await A.subaccount(sid);
+              const msg = { sender: sa.account, signer: r.signer, nonce: String(Date.now()) + '000000', signedAt: Math.floor(Date.now() / 1000) };
+              const signature = await walletSign('RefreshLinkedSigner', msg, sa.account);
+              const x = await fetch(A.BASE + '/v1/linked-signer/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: Object.assign({}, msg, { subaccount: sa.name, subaccountId: sid }), signature }) });
+              const j = await x.json().catch(() => ({}));
+              if (!x.ok) throw new Error(Array.isArray(j.message) ? j.message.join('; ') : j.message || ('HTTP ' + x.status));
+              U.toast('Refresh submitted' + (j.status ? ' (status ' + String(j.status).toLowerCase() + ')' : '')); listSigners();
+            } catch (e) { U.toast('Refresh failed: ' + (e.message || e)); }
+          };
+          const refreshBtn = (r) => {
+            if (r.status !== 'ACTIVE' || !refreshH || !expMs(r)) return null;
+            const from = expMs(r) - refreshH * 3600000;
+            return Date.now() >= from ? h('button.btn.sm.ghost', { title: 'Extend this signer\'s expiry (your wallet signs it): no new key, no restart', onclick: () => refresh(r) }, 'Refresh')
+              : h('span.dim.xs', { title: `The exchange allows a refresh from ${refreshH} hours before the expiry` }, 'refresh from ' + U.fmtDate(from));
+          };
           U.replace(signersOut, h('div.small.dim', { style: { marginBottom: '4px' } }, 'Signers linked to this subaccount'), rows.length ? UI.table({ cols: [
             { key: 'a', label: 'Signer', render: (r) => h('span.mono', U.shortAddr(r.signer || r.address || '', 6)) },
             { key: 'n', label: 'Name', render: (r) => r.name || h('span.dim', '—') },
             { key: 's', label: 'Status', render: (r) => UI.chip(String(r.status || '').toLowerCase(), r.status === 'ACTIVE' ? 'green' : r.status === 'PENDING' ? 'amber' : '') },
             { key: 'e', label: 'Expires', render: (r) => (r.expiresAt ? U.fmtDate(U.num(r.expiresAt) < 1e12 ? U.num(r.expiresAt) * 1000 : U.num(r.expiresAt)) : h('span.dim', '—')) },
-            { key: 'x', label: '', render: (r) => (r.status === 'ACTIVE' || r.status === 'PENDING' ? h('button.btn.sm.ghost', { onclick: async () => {
+            { key: 'x', label: '', render: (r) => (r.status === 'ACTIVE' || r.status === 'PENDING' ? h('span.row', { style: { gap: '4px' } }, refreshBtn(r), h('button.btn.sm.ghost', { onclick: async () => {
               // the list holds the exchange's own browser sessions too: say which kind of signer this is
               const conf = r.category === 'API' && r.name === 'MeridianDataHub copy agent'
                 ? `Revoke the copy agent's signer ${U.shortAddr(r.signer, 4)}? Orders signed with this key are refused once the exchange processes the revocation.`
@@ -132,7 +162,7 @@
                 if (!x.ok) throw new Error(Array.isArray(j.message) ? j.message.join('; ') : j.message || ('HTTP ' + x.status));
                 U.toast(`Revoke submitted (status ${String(j.status || 'PENDING_REVOKE').toLowerCase()})`); listSigners();
               } catch (e) { U.toast('Revoke failed: ' + (e.message || e)); }
-            } }, 'Revoke') : null) },
+            } }, 'Revoke')) : null) },
           ], rows }) : h('div.small.dim', 'none yet'));
         } catch (e) { if (!isAbort(e)) U.replace(signersOut, h('div.small.neg', 'Could not list signers: ' + e.message)); }
       };
@@ -192,26 +222,46 @@
         c.leaders.length ? null : h('div.dim.small', { style: { marginTop: '4px' } }, 'No leader yet: follow some with the bell on the Leaders page, they appear here to add.'));
       renderLeaders();
       const addrIn = h('input.input.sm', { placeholder: 'or a wallet address (0x…) to add', style: { width: '320px' }, spellcheck: false });
-      const addBtn = h('button.btn.sm', { onclick: async () => { const v = addrIn.value.trim().toLowerCase(); if (!U.isAddress(v)) { U.toast('Enter a 0x address'); return; } try { const subs = await A.subaccountsOf(v); if (!subs.length) { U.toast('No Meridian subaccount for that address'); return; } for (const s of subs) if (!c.leaders.some((x) => x.sid === s.id)) c.leaders.push({ sid: s.id, address: v, name: '' }); addrIn.value = ''; save(); renderLeaders(); renderJson(); } catch (e) { U.toast(e.message); } } }, 'Add');
+      const addBtn = h('button.btn.sm', { onclick: async () => { const v = addrIn.value.trim().toLowerCase(); if (!U.isAddress(v)) { U.toast('Enter a 0x address'); return; } if (U.isExcluded(v)) { U.toast('This account is not shown on this site.'); return; } try { const subs = await A.subaccountsOf(v); if (!subs.length) { U.toast('No Meridian subaccount for that address'); return; } for (const s of subs) if (!c.leaders.some((x) => x.sid === s.id)) c.leaders.push({ sid: s.id, address: v, name: '' }); addrIn.value = ''; save(); renderLeaders(); renderJson(); } catch (e) { U.toast(e.message); } } }, 'Add');
       const jsonOut = h('pre.code', { style: { maxHeight: '260px', overflow: 'auto' } });
       // a hard limit left empty (or at 0) is written as its default, never as "no limit" (the agent would refuse a 0 there)
       const D = DEF().cfg; const orDef = (v, d) => (U.num(v) > 0 ? U.num(v) : d);
       const buildCfg = () => ({ owner: c.owner, subaccountId: c.subaccountId, keyFile: 'signer.key', leaders: c.leaders.map((l) => ({ sid: l.sid, address: l.address, name: '' })), sizing: { mode: c.sizing.mode, size: U.num(c.sizing.size), ratio: U.num(c.sizing.ratio) }, execution: { type: 'IOC', slippageBps: U.num(c.execution.slippageBps), closeSlippageBps: Math.min(1000, orDef(c.execution.closeSlippageBps, D.execution.closeSlippageBps)), groupMs: U.num(c.execution.groupMs) || 1200, maxFillAgeMs: orDef(c.execution.maxFillAgeMs, D.execution.maxFillAgeMs), onLeaderFlat: c.execution.onLeaderFlat, onLeaderLiquidation: c.execution.onLeaderLiquidation }, risk: { maxOrderUsd: orDef(c.risk.maxOrderUsd, D.risk.maxOrderUsd), maxPositionUsd: orDef(c.risk.maxPositionUsd, D.risk.maxPositionUsd), maxNotionalPerMarket: U.num(c.risk.maxNotionalPerMarket), maxOpenPositions: U.num(c.risk.maxOpenPositions), maxLeverage: U.num(c.risk.maxLeverage), maxPriceDeviationPct: Math.min(50, orDef(c.risk.maxPriceDeviationPct, D.risk.maxPriceDeviationPct)), dailyLossStop: U.num(c.risk.dailyLossStop), drawdownStopPct: U.num(c.risk.drawdownStopPct), minOrderUsd: U.num(c.risk.minOrderUsd), markets: { deny: (c.risk.markets.deny || []).filter(Boolean) }, onTrip: c.risk.onTrip }, status: { port: U.num(st.port) || 8790, token: st.token }, ntfy: { server: c.ntfy.server || 'https://ntfy.sh', topic: c.ntfy.topic || '' } });
-      const renderJson = () => { jsonOut.textContent = JSON.stringify(buildCfg(), null, 2); };
+      // what the running agent uses that this page's settings would change (its status carries its risk limits and leaders)
+      const cfgDiff = h('span.small', { style: { color: 'var(--amber)' } });
+      const RISK_KEYS = [['maxOrderUsd', 'max per order'], ['maxPositionUsd', 'max per position'], ['maxNotionalPerMarket', 'max per market'], ['maxOpenPositions', 'open positions'], ['maxLeverage', 'max leverage'], ['dailyLossStop', 'daily loss stop'], ['drawdownStopPct', 'drawdown stop'], ['minOrderUsd', 'min order']];
+      const renderDiff = () => {
+        const S = agentNow.S; if (!S || !S.risk) { U.clear(cfgDiff); return; }
+        const cfg = buildCfg(), out = [];
+        for (const [k, label] of RISK_KEYS) if (S.risk[k] != null && cfg.risk && cfg.risk[k] != null && U.num(S.risk[k]) !== U.num(cfg.risk[k])) out.push(label);
+        const a = new Set((S.leaders || []).map((l) => l.sid)), b = new Set(cfg.leaders.map((l) => l.sid));
+        if (a.size !== b.size || [...b].some((x) => !a.has(x))) out.push('leaders');
+        U.replace(cfgDiff, out.length ? 'The running agent still has other ' + out.join(', ') + ': download config.json and restart it' : '');
+      };
+      const renderJson = () => { jsonOut.textContent = JSON.stringify(buildCfg(), null, 2); renderDiff(); };
       const denyIn = h('input.input.sm', { value: (c.risk.markets.deny || []).join(', '), placeholder: 'e.g. HYPE-USD, XAG-USD', style: { width: '260px' }, oninput: (e) => { c.risk.markets.deny = e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean); save(); renderJson(); } });
       const tokenHint = h('span.xs');
       const tokenCheck = () => U.replace(tokenHint, st.token.length < 16 ? h('span.neg', '16 characters or more: the agent refuses a shorter one') : null);
       const tokenIn = h('input.input.sm', { value: st.token, spellcheck: false, style: { width: '260px', fontFamily: 'var(--mono)' }, oninput: (e) => { st.token = e.target.value.trim(); save(); renderJson(); tokenCheck(); } });
       const tokenNew = h('button.btn.sm.ghost', { title: 'Make a new random token (then download config.json again and restart the agent)', onclick: () => { st.token = newToken(); tokenIn.value = st.token; save(); renderJson(); tokenCheck(); U.toast('New token: download config.json again and restart the agent'); } }, 'New');
       const ageIn = h('input.input.sm', { type: 'number', min: 1, step: 1, value: U.num(c.execution.maxFillAgeMs) / 1000 || 15, style: { width: '70px' }, oninput: (e) => { c.execution.maxFillAgeMs = Math.round(U.num(e.target.value) * 1000); save(); renderJson(); } });
-      const useWallet = h('button.btn.sm', { onclick: async () => { try { if (!window.ethereum) throw new Error('no wallet in this browser'); const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' }); c.owner = from.toLowerCase(); const subs = await A.subaccountsOf(c.owner); if (subs.length) c.subaccountId = subs[0].id; save(); renderJson(); U.toast(subs.length ? 'Owner and subaccount filled from the wallet' : 'Owner filled; no Meridian subaccount found for it'); ownerIn.value = c.owner; subIn.value = c.subaccountId; listSigners(); } catch (e) { U.toast(e.message || String(e)); } } }, 'Use my wallet');
+      const useWallet = h('button.btn.sm', { onclick: async () => { try { if (!window.ethereum) throw new Error('no wallet in this browser'); const [from] = await window.ethereum.request({ method: 'eth_requestAccounts' }); c.owner = from.toLowerCase(); const subs = await A.subaccountsOf(c.owner); if (subs.length === 1) c.subaccountId = subs[0].id; save(); renderJson(); renderSubPick(subs); U.toast(!subs.length ? 'Owner filled; no Meridian subaccount found for it' : subs.length === 1 ? 'Owner and subaccount filled from the wallet' : 'Owner filled: pick the subaccount the agent trades from'); ownerIn.value = c.owner; subIn.value = c.subaccountId; listSigners(); } catch (e) { U.toast(e.message || String(e)); } } }, 'Use my wallet');
       const ownerIn = inp(c, 'owner', { placeholder: '0x… your wallet', style: { width: '380px' }, spellcheck: false });
-      const subIn = inp(c, 'subaccountId', { placeholder: 'subaccount ID ("Use my wallet" fills in your first)', style: { width: '320px' }, spellcheck: false, onchange: () => listSigners() });
+      const subIn = inp(c, 'subaccountId', { placeholder: 'subaccount ID (one of its own is best)', style: { width: '320px' }, spellcheck: false, onchange: () => listSigners() });
+      // a wallet with several subaccounts: each by its id and creation day, oldest first, to pick the agent's
+      const subPick = h('span');
+      const renderSubPick = (subs) => {
+        if (!subs || subs.length < 2) { U.clear(subPick); return; }
+        const list = U.sortBy(subs, (x) => U.num(x.createdAt));
+        U.replace(subPick, h('select.input.sm', { style: { width: 'auto' }, 'aria-label': 'Subaccount the agent trades from', onchange: (e) => { c.subaccountId = e.target.value; subIn.value = c.subaccountId; save(); renderJson(); listSigners(); } },
+          h('option', { value: '', disabled: true, selected: !list.some((x) => x.id === c.subaccountId) }, 'Pick a subaccount (' + list.length + ')'),
+          list.map((x, i) => h('option', { value: x.id, selected: x.id === c.subaccountId }, `#${i + 1} · ${x.id.slice(0, 8)}… · since ${U.fmtDate(x.createdAt)}`))));
+      };
       const dl = h('button.btn.primary.sm', { onclick: () => { const cfg = buildCfg(); const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = h('a', { href: url, download: 'config.json' }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); U.toast('config.json downloaded: put it next to copy-agent.mjs'); } }, 'Download config.json');
       const step3 = UI.card('3 · Configure', h('div', { style: { padding: '12px 16px' } },
         h('div.grid.cols-2',
           h('div',
-            fld('Your account', h('div.row.wrap', { style: { gap: '6px' } }, ownerIn, subIn, useWallet)),
+            fld('Your account', h('div.row.wrap', { style: { gap: '6px' } }, ownerIn, subIn, subPick, useWallet), 'Best on a subaccount of its own: Close all and the close-everything stop close every position in it, and the position, leverage and loss limits count hand trades there too.'),
             fld('Leaders to copy', h('div', leadersWrap, h('div.row', { style: { gap: '6px', marginTop: '6px' } }, addrIn, addBtn))),
             fld('Sizing', h('div.row.wrap', { style: { gap: '6px' } }, sel(c.sizing, 'mode', [['fixed', 'Fixed $ per position (the leader\'s opening order)'], ['perfill', 'Fixed $ per leader order (per batch of its fills)'], ['ratio', '% of the leader\'s quantity']]), inp(c.sizing, 'size', { type: 'number', min: 10, step: 10, style: { width: '110px' } }), h('span.dim.small', 'USD ·'), inp(c.sizing, 'ratio', { type: 'number', min: 0.1, step: 1, style: { width: '80px' } }), h('span.dim.small', '% (ratio mode)')), 'fixed: the leader\'s opening order becomes this size, counted on the quantity the leader ordered, so an order cancelled after a partial fill gives a proportionally smaller copy (the simulator counts only what filled); per order: this size for each batch of a leader order\'s fills that arrive within 1.2 s of each other, while the simulator\'s "$ per fill" sizes every entry fill (an order that fills against four resting orders is four fills there, one batch here); ratio: that % of the leader\'s quantity, as in the simulator. Adds follow in proportion only up to the USD max per market below (a leader who opens small and scales in would otherwise make a position any multiple of the size); left at 0, the agent uses five times the size'),
             fld('Execution', h('div.row.wrap', { style: { gap: '6px' } }, h('span.dim.small', 'Limit IOC at mark ±'), inp(c.execution, 'slippageBps', { type: 'number', min: 1, step: 1, style: { width: '80px' } }), h('span.dim.small', 'bps · closes widen up to ±'), inp(c.execution, 'closeSlippageBps', { type: 'number', min: 10, max: 1000, step: 10, style: { width: '80px' } }), h('span.dim.small', 'bps'), sel(c.execution, 'onLeaderFlat', [['close', 'Leader flat without a fill → close'], ['hold', 'Leader flat without a fill → hold']]), sel(c.execution, 'onLeaderLiquidation', [['close', 'Leader liquidated → close'], ['hold', 'Leader liquidated → hold']]), h('span.row', { style: { gap: '4px' } }, ageIn, h('span.dim.small', 's max age of a leader fill'))), 'A leader liquidation follows its own setting, whatever the flat setting says (a held copy of a liquidated position is no longer followed in that market). An IOC order fills up to the cap and cancels the rest: an unfilled opening or add is logged and not chased, an unfilled reduction is added to the next reduction of that market. A close tries your cap first and widens in steps up to the close cap (2% = 200 bps by default): in a book the market makers have left, a market order would fill at whatever is there, so what does not fill inside the close cap stays open and is tried again. A leader fill that reaches the agent later than the max age (a reconnect, a long queue) is listed as missed on the dashboard, not copied')),
@@ -230,7 +280,7 @@
             fld('Markets not to copy', denyIn),
             fld('Dashboard', h('div.row.wrap', { style: { gap: '6px' } }, h('span.dim.small', 'port'), inp(st, 'port', { type: 'number', min: 1024, step: 1, style: { width: '80px' } }), h('span.dim.small', 'token'), tokenIn, tokenNew, tokenHint), 'made at random here and written into config.json: the agent answers on 127.0.0.1 only, and only with this token, which guards the dashboard, pause / resume and close all. If you run the agent with a config of your own and an empty token, it makes one in control.token next to the script: paste that here'),
             fld('Phone push (ntfy)', h('div.row.wrap', { style: { gap: '6px' } }, ntfyTopic, h('button.btn.sm', { title: 'Fill in a long random topic nobody can guess; subscribe to the same name in the ntfy app', onclick: () => { ntfyTopic.value = MD.alerts.newTopic(); ntfyTopic.dispatchEvent(new Event('input')); } }, 'Generate'), ntfyServer, ntfyWarn), 'rejected orders, risk stops and leader liquidations; the topic is the only secret (anyone who knows it reads these), and the server must be https:// (plain http only on localhost)'))),
-        h('div.row', { style: { gap: '8px', margin: '8px 0' } }, dl, h('span.dim.small', 'or copy the JSON into config.json next to the script')),
+        h('div.row.wrap', { style: { gap: '8px', margin: '8px 0' } }, dl, h('span.dim.small', 'or copy the JSON into config.json next to the script · the agent reads it when it starts: after a change here, download it again and restart the agent'), cfgDiff),
         jsonOut));
       renderJson(); tokenCheck();
 
@@ -256,6 +306,7 @@
           if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; okAt = Date.now(); }
         } catch (e) { if (ctx.signal.aborted) return; last = null; lastErr = e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? 'no answer within 4 s' : e.message; refused = null; }
         ageTxt.textContent = 'polls the agent every 3 s' + (last ? ' · updated ' + U.fmtTime(okAt) : okAt ? ' · last answer ' + U.fmtAgo(okAt) : '');
+        agentNow.S = last; renderDiff();
         renderDash();
         // the copy account's position records (funding, liquidations) for the history, refreshed every minute
         if (last && last.subaccountId && !last.dry && Date.now() - ownPosAt > 60000) { ownPosAt = Date.now(); try { ownPositions = await A.positions(last.subaccountId, { maxPages: 3, signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; } }
@@ -324,7 +375,8 @@
         if (!last) {
           const where = '127.0.0.1:' + (U.num(st.port) || 8790);
           if (refused) { U.replace(dash, h('div.empty', h('div', { style: { color: 'var(--amber)' } }, refused === 401 ? `The agent on ${where} refused this page's token. Put the token it runs with into the token field in step 3: status.token in its config.json, or control.token next to the script if it made one.` : `The agent on ${where} refused this page: it answers the site and the local dev server only.`))); return; }
-          U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No agent answering on ' + where + (lastErr ? ' (' + lastErr + ')' : '')), code('node copy-agent.mjs run --dry'), h('div.dim.small', { style: { marginTop: '8px' } }, 'The dashboard connects to the agent on your own machine; nothing about it leaves your browser.')));
+          U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'No agent answering on ' + where + (lastErr ? ' (' + lastErr + ')' : '')), code('node copy-agent.mjs run --dry'), h('div.dim.small', { style: { marginTop: '8px' } }, 'The dashboard connects to the agent on your own machine; nothing about it leaves your browser.'),
+            h('div.dim.small', { style: { marginTop: '4px' } }, 'Running, and still no answer? The browser may keep this site from reaching your own machine: Chrome asks for permission to look for devices on your local network (allow it for this site), and Brave blocks it unless its Shields are lowered for the site.')));
           return;
         }
         const S = last; const ref = MD._agentRef;
@@ -368,7 +420,7 @@
             // Meridian's account leverage divides by the balance; the agent's cap divides by equity (stricter while losing)
             UI.stat(h('span', { title: 'As Meridian\'s Trade Account Leverage: the open positions at the mark ÷ the balance (every margin pool), not ÷ equity. The agent\'s max leverage counts on equity instead, so its figure is the higher of the two whenever the positions\' uPnL, less the funding and position fees charged on them and not yet settled, is negative.' }, 'Leverage'), lev.balance != null ? U.fmtNum(lev.balance, 2) + '×' : '—',
               `${usd0(S.notional || 0)} in positions ÷ balance, as Meridian shows it · ${lev.equity != null ? U.fmtNum(lev.equity, 2) + '×' : '—'} on equity` + (S.risk && S.risk.maxLeverage ? `, the agent's max ${S.risk.maxLeverage}×` : '')),
-            UI.stat('Signer expires', S.signerExpiresAt ? U.fmtDate(U.num(S.signerExpiresAt)) : (S.dry ? 'dry run' : '—'), 'the agent cannot extend its signer (the exchange currently sets 90 days from linking): before then make a new key (node copy-agent.mjs keygen --force), link it in step 2 and restart the agent')),
+            UI.stat('Signer expires', S.signerExpiresAt ? U.fmtDate(U.num(S.signerExpiresAt)) : (S.dry ? 'dry run' : '—'), 'the exchange currently sets 90 days from linking; from 14 days before the expiry, Refresh it in step 2 (your wallet signs: same key, no restart), or make a new key (node copy-agent.mjs keygen --force), link it and restart the agent')),
           h('div.grid.cols-2', { style: { marginTop: '12px' } },
             UI.card('My positions', UI.table({ cols: [
               { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
@@ -391,7 +443,7 @@
             { key: 'l', label: 'Leader', render: (r) => r.leader },
             { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
             { key: 'k', label: 'Leader\'s order', render: (r) => h('span', U.sideEl(r.q > 0, true), h('span.dim.small', ` ${r.kind} ${U.fmtQty(Math.abs(r.q))}`)) },
-            { key: 'w', label: 'Why', render: (r) => h('span.dim.small', r.why) },
+            { key: 'w', label: 'Why', cls: 'wrap-text', render: (r) => h('span.dim.small', r.why) },
           ], rows: S.missed.slice(0, 20) }), h('span.dim.small', 'leader openings and adds that came too late, at a price too far from the mark, or only showed on a re-read after a gap in the socket: never chased')) : null,
           UI.card('Orders', UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
@@ -401,12 +453,12 @@
             { key: 'q', label: 'Size', num: true, render: (r) => (r.close ? 'close' : U.fmtQty(r.qty)) },
             { key: 'ty', label: 'Type', render: (r) => h('span.dim.small', r.type + (r.px ? ' @ ' + U.fmtPrice(r.px) : '') + (r.reduceOnly ? ' · reduce-only' : '')) },
             { key: 'st', label: 'Status', title: 'filled / partial / unfilled are read back from the exchange after the order, not assumed', render: (r) => h('span', UI.chip(r.status, r.status === 'filled' || r.status === 'dry' ? 'green' : r.status === 'rejected' || r.status === 'unfilled' ? 'red' : 'amber'), r.filled != null && r.status !== 'dry' ? h('span.dim.xs', ' ' + U.fmtQty(r.filled) + ' of ' + (r.close ? U.fmtQty(Math.abs(r.before || 0)) : U.fmtQty(r.qty))) : null, r.reason ? h('span.neg.xs', ' ' + r.reason) : null, r.error ? h('span.neg.xs', ' ' + r.error) : null) },
-            { key: 'w', label: 'Why', render: (r) => h('span.dim.small', r.why) },
+            { key: 'w', label: 'Why', cls: 'wrap-text', render: (r) => h('span.dim.small', r.why) },
           ], rows: (S.orders || []).slice(0, 30), empty: 'No order yet' }), h('span.dim.small', ((S.orders || []).length > 30 ? `latest 30 of ${S.orders.length}` : 'newest first') + ' · every order is in the agent\'s daily log files')),
           UI.card('Events', UI.table({ cols: [
             { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
             { key: 'k', label: '', render: (r) => UI.chip(r.kind, r.kind === 'error' || r.kind === 'trip' ? 'red' : r.kind === 'skip' || r.kind === 'warn' ? 'amber' : r.kind === 'order' ? 'green' : '') },
-            { key: 'm', label: 'What', render: (r) => h('span.small', r.msg) },
+            { key: 'm', label: 'What', cls: 'wrap-text', render: (r) => h('span.small', r.msg) },
           ], rows: (S.events || []).slice(0, 30), empty: 'Nothing yet' })));
       };
       const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run --dry    # first: every order goes to the margin check, nothing is placed\nnode copy-agent.mjs run          # then live: real orders'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Through npm: npm run dry, or npm start -- --dry (the "--" hands the flag to the agent; without it npm keeps the flag for itself). The agent stops at any argument it does not know, so node copy-agent.mjs run --dyr (or npm start -- --dyr) exits without starting. A misspelt flag typed before the "--" (npm start --dyr) stays with npm and the agent starts live, so npm run dry is the safest way to start a dry run. Either way, its first line says DRY RUN or LIVE. Keep it running (a terminal, a scheduled task, a service). It writes its logs to a logs folder next to the script and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));

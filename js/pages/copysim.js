@@ -71,6 +71,7 @@
       const body = h('div.stack');
       U.replace(root, h('div.page', h('div.stack', h('div.row.wrap', { style: { gap: '8px' } }, h('a.btn.sm.ghost', { href: '#/copytrade' }, '← Leaders'), h('span.dim.small', 'Copy simulator · nothing here places orders')), body)));
       if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.empty', 'Pick a leader on the ', h('a', { href: '#/copytrade' }, 'Leaders'), ' page and press Simulate.'))); return; }
+      if (U.isExcluded(addr)) { U.replace(body, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }   // U.EXCLUDED
 
       // ---- resolve the leader
       let sa = null;
@@ -125,7 +126,9 @@
       // the form's size, maximum, ratio and slippage, read when they are used, so an edited field counts (Run and Start following)
       function readInputs() {
         st.since = sinceIn.value || st.since; st.size = Math.max(10, U.num(sizeIn.value) || AN.COPY_SIZE); st.ratio = Math.max(0.1, U.num(ratioIn.value) || 10);
-        st.maxPos = U.num(maxIn.value) >= st.size ? U.num(maxIn.value) : null; maxIn.value = st.maxPos || '';
+        // a maximum below the size is a cap like any other (each position stops there), said rather than silently replaced
+        const mx = U.num(maxIn.value); st.maxPos = mx > 0 ? mx : null; maxIn.value = st.maxPos || '';
+        if (st.maxPos && st.mode !== 'ratio' && st.maxPos < st.size) U.toast(`The maximum (${usd0(st.maxPos)}) is below the size (${usd0(st.size)}): every position is capped at ${usd0(st.maxPos)}`, 4000);
         st.slip = slipIn.value === '' ? 'auto' : Math.max(0, U.num(slipIn.value));
       }
       async function run() {
@@ -165,7 +168,7 @@
           UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '') + (T.capped ? ` · ${T.capped} capped at ${usd0(maxPos)}` : '')),
           UI.stat('Costs', usd0(T.fees + T.drift + T.slip + T.posFee), `${usd0(T.fees)} fees · ${usd0(T.drift, { sign: true })} drift · ${usd0(T.slip)} slippage` + (T.posFee ? ` · ${usd0(T.posFee)} position fees` : ''), 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'the leader\'s, scaled to your size', U.pnlClass(T.funding)),
-          UI.stat('Max drawdown', usd0(T.maxDd), avgEntry ? `${U.fmtNum(T.maxDd / avgEntry, 1)}× an average position · on the copier's cumulative result` : 'on the copier\'s cumulative result', T.maxDd > 0 ? 'neg' : ''),
+          UI.stat(h('span', { title: 'The deepest fall of the copier\'s cumulative result, each position booked when it closes: a position that went deep into a loss and recovered before closing shows no drawdown here, so the real one, open positions marked to the market, can be larger' }, 'Max drawdown (realized)'), usd0(T.maxDd), (avgEntry ? `${U.fmtNum(T.maxDd / avgEntry, 1)}× an average position · ` : '') + 'by position close, open dips not counted', T.maxDd > 0 ? 'neg' : ''),
           UI.stat('If instant', usd0(R0.copierNet, { sign: true }), 'the same copy with zero delay: what latency costs is the gap', U.pnlClass(R0.copierNet)));
         const canvas = h('canvas');
         const col = C.colors();
@@ -210,7 +213,8 @@
           h('div.it', h('div.t', 'Liquidations and open positions'), h('div.d', 'A position the leader was liquidated out of is closed at the leader\'s exit price; whether you would have been liquidated depends on your own margin. Positions still open are marked at the current oracle price.')),
           h('div.it', h('div.t', 'Books'), h('div.d', slipNote)),
           h('div.it', h('div.t', 'Not modelled'), h('div.d', 'Your own market impact on top of the leader\'s, rejected or partially filled orders, and the leader trading in more than one subaccount.')),
-          (data.truncated || T.partial || T.noFunding || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
+          (data.truncated || T.partial || T.noFunding || T.unmarked || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
+            (T.unmarked ? `${T.unmarked} open position${T.unmarked > 1 ? 's were' : ' was'} left out: the market prices to value ${T.unmarked > 1 ? 'them' : 'it'} could not be read (reload the page to read them again). ` : '') +
             (data.truncated ? `The exchange returned the newest ${U.fmtNum(data.fills.length, 0)} fills (back to ${U.fmtDateTime(data.oldestFill)}); older positions are not replayed. ` : '') +
             (T.partial ? `${T.partial} position${T.partial > 1 ? 's' : ''} whose opening lies before that window ${T.partial > 1 ? 'were' : 'was'} left out. ` : '') +
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
@@ -255,13 +259,21 @@
         return out;
       }
       /** An order's size for a fixed-size copy: what filled once it is done, else what was asked (a working order, not cached). */
+      /** The orders' sizes for these fills (orderQty each, four at a time): {orderId: size}; the first failure throws */
+      async function orderQtys(fills) {
+        const ids = Array.from(new Set(fills.map((f) => f.orderId).filter((x) => x != null)));
+        const res = await U.pLimit(ids.map((id) => () => orderQty(id)), 4);
+        const bad = res.find((r) => !r.ok); if (bad) throw bad.error;
+        const out = {}; res.forEach((r, i) => { out[ids[i]] = r.value; }); return out;
+      }
       async function orderQty(id) {
         try { const o = await A.order(id, { signal: ctx.signal, ttl: 0 }); if (!o) return null; const done = /^(FILLED|CANCELED|CANCELLED|EXPIRED|REJECTED)$/i.test(String(o.status || '')); return (done ? U.num(o.filled) : U.num(o.quantity)) || null; }
         catch (e) { if (isAbort(e)) throw e; return null; }
       }
       // another tab of this page may be following too: the newer copy of the same account wins (paper.rev counts writes)
       const sameAcct = (a, b) => a && b && a.startedAt === b.startedAt;
-      const savePaper = (acct = paper) => { if (!acct || paper !== acct) return false; const cur = PP.load(sid); if (sameAcct(cur, acct) && (cur.rev || 0) > (acct.rev || 0)) { paper = cur; return false; } PP.save(acct); return true; };
+      const savePaper = (acct = paper) => { if (!acct || paper !== acct) return false; const cur = PP.load(sid); if (sameAcct(cur, acct) && (cur.rev || 0) > (acct.rev || 0)) { paper = cur; return false; } if (!PP.save(acct) && !saveWarned) { saveWarned = true; U.toast('This browser would not store the paper account (its storage for the site is full or blocked): it is kept for this tab only', 6000); } return true; };
+      let saveWarned = false;
       const onStorage = (e) => { if (e.key !== PP.key(sid)) return; const cur = PP.load(sid); if (!cur) { stopAll(); paper = null; renderPaper(); return; } if (!paper || !sameAcct(cur, paper) || (cur.rev || 0) > (paper.rev || 0)) { paper = cur; if (!unsubs.length) attach(); renderPaper(); } };
       window.addEventListener('storage', onStorage); ctx.onCleanup(() => window.removeEventListener('storage', onStorage));
       /** Apply the leader's fills from the history that are due (their delay has passed), then line the copy up with the
@@ -291,7 +303,7 @@
         for (const f of fills) { if (acct.seen[f.id]) continue; (U.num(f.createdAt) + delayMs <= now + 500 ? due : later).push(f); }
         // order sizes only for markets the copy follows (P.apply discards the rest without using them)
         const follows = (f) => !acct.settings.markets || acct.settings.markets.includes(f.productId);
-        const oq = {}; if (acct.settings.mode === 'fixed') for (const f of due) if (follows(f) && oq[f.orderId] == null) oq[f.orderId] = await orderQty(f.orderId);
+        const oq = acct.settings.mode === 'fixed' ? await orderQtys(due.filter(follows)) : {};
         const priceAt = S.priceAtFactory(AN.candleCache({ signal: ctx.signal }), ref);   // a fresh cache: one read earlier may end before these fills
         if (paper !== acct) { syncAgain = true; return 0; }
         const rows = await PP.applyFills(acct, due, ref, async (f) => {
@@ -350,7 +362,7 @@
           if (round >= 24) throw new Error('the leader has too many fills since then to rebuild here');
           after = U.num(part[part.length - 1].createdAt) - 1;   // a millisecond of overlap: the ids keep each fill once
         }
-        const oq = {}; if (fresh.settings.mode === 'fixed') for (const f of fills) if (oq[f.orderId] == null && U.num(f.createdAt) >= t0) oq[f.orderId] = await orderQty(f.orderId);
+        const oq = fresh.settings.mode === 'fixed' ? await orderQtys(fills.filter((f) => U.num(f.createdAt) >= t0)) : {};
         const priceAt = S.priceAtFactory(AN.candleCache({ signal: ctx.signal }), ref);
         await PP.applyFills(fresh, fills, ref, async (f) => ({ px: await priceAt(f.productId, U.num(f.createdAt), U.num(f.price), fresh.settings.delay), live: false, at: U.num(f.createdAt) + fresh.settings.delay * 1000 }), oq);
         const skip = new Set(fills.filter((f) => U.num(f.createdAt) > snapAt - 2000).map((f) => f.productId));
@@ -468,9 +480,11 @@
           h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account shows what following would have done from the moment it started, by this page\'s rules; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.')));
       }
       // the exchange's clock and the stream first, then the catch-up: a fill during the catch-up is announced, not lost
-      if (paper) { renderPaper(); try { await syncClock(); attach(); const n = await sync(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } renderPaper(); }
-      else renderPaper();
-      await run();
+      // the replay's results do not wait for it (the catch-up reads every leader order since the last visit)
+      renderPaper();
+      const runP = run();
+      if (paper) { try { await syncClock(); attach(); const n = await sync(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } renderPaper(); }
+      await runP;
     },
   };
 })();

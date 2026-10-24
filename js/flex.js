@@ -62,7 +62,7 @@
     const periodSeg = o.periods && o.periods.length > 1 ? h('span', MD.ui.seg(o.periods, period, (v) => { period = v; render(); }, 'sm')) : null;
     const hideBox = MD.ui.checkbox('Hide dollar amounts', hide, (v) => { hide = v; U.storage.set('md.flex.hide', v); render(); });
     const fname = () => `meridian-${String(o.address).slice(0, 8)}-${period}${hide ? '-pct' : ''}.png`;
-    const btnDl = h('button.btn.primary', { onclick: async () => { if (!svg) return; try { btnDl.disabled = true; saveBlob(await (pngP || FX.png(svg)), fname()); U.toast('Saved ' + fname()); } catch (e) { U.toast(e.message || 'Download failed'); } finally { btnDl.disabled = false; } } }, U.icon('download'), 'Download PNG');
+    const btnDl = h('button.btn.primary', { onclick: async () => { if (!svg) return; try { btnDl.disabled = true; saveBlob(await (pngP || FX.png(svg)), fname()); U.toast('Saved ' + fname()); } catch (e) { U.toast(e.message || 'Download failed'); } finally { btnDl.disabled = !svg; } } }, U.icon('download'), 'Download PNG');
     const canCopy = !!(navigator.clipboard && window.ClipboardItem);
     const btnCopy = canCopy ? h('button.btn', { onclick: async () => {
       if (!svg) return;
@@ -89,7 +89,11 @@
       const url = hide || !o.shareUrl ? MD.api.SITE_URL : o.shareUrl;
       window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url), '_blank', 'noopener');
     } }, U.icon('external'), 'Post on X');
-    const btnLink = o.shareUrl ? h('button.btn.ghost', { onclick: () => { U.copyText(o.shareUrl); U.toast('Share link copied · it shows the all-time card'); } }, U.icon('copy'), 'Copy share link') : null;
+    // the link's card is the published one, with dollar amounts: said when they are hidden here
+    const btnLink = o.shareUrl ? h('button.btn.ghost', { onclick: () => { U.copyText(o.shareUrl); U.toast(hide ? 'Share link copied · its card is the all-time one and shows dollar amounts (hidden only in this image)' : 'Share link copied · it shows the all-time card', hide ? 5000 : undefined); } }, U.icon('copy'), 'Copy share link') : null;
+    // the image's buttons work on the card on screen only: while another period loads, or after it failed, they are off
+    // (they saved the previous period's image under the new period's name, and Post on X did nothing)
+    const ready = (on) => { for (const b of [btnDl, btnCopy, btnShare, btnX]) if (b) b.disabled = !on; if (btnLink) btnLink.title = hide ? 'The link shows the published all-time card, with dollar amounts' : ''; };
     const body = h('div.flex-modal',
       h('div.row.wrap', { style: { gap: '10px', marginBottom: '12px' } }, periodSeg, hideBox, h('span.grow'), status),
       frame,
@@ -99,13 +103,14 @@
     const show = (s) => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = URL.createObjectURL(new Blob([s], { type: 'image/svg+xml' })); img.src = previewUrl; };
     async function render() {
       const my = ++seq;
+      svg = null; pngP = null; pngBlob = null; ready(false);
       try {
         let inp = inputs.get(period);
         if (!inp) { setBusy('Loading ' + ((o.periods.find((p) => p.v === period) || {}).label || '').toLowerCase() + '…'); inp = await o.build(period); inputs.set(period, inp); }
         const css = await FX.fonts();
         if (my !== seq) return;
         svg = K.flexSvg(Object.assign({}, inp, { hideAmounts: hide, fontCss: css }));
-        show(svg); setBusy(null);
+        show(svg); setBusy(null); ready(true);
         pngBlob = null; const p = (pngP = FX.png(svg)); p.then((b) => { if (pngP === p) pngBlob = b; }).catch(() => {});
       } catch (e) { if (my !== seq) return; setBusy(null); U.replace(status, h('span.neg.small', e.message || 'Could not build the card')); }
     }

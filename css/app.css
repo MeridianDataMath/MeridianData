@@ -372,6 +372,8 @@ table.tbl th.sortable:hover { color: var(--text-1); }
 table.tbl th.sorted { color: var(--text-1); }
 table.tbl th.sorted::after { content: " ▾"; color: var(--accent); }
 table.tbl th.sorted.asc::after { content: " ▴"; }
+/* a cell of running text (an agent's messages): wraps, at least a readable width */
+table.tbl td.wrap-text { white-space: normal; min-width: 220px; overflow-wrap: anywhere; }
 table.tbl td.num, table.tbl th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 table.tbl th.num { font-family: var(--font); }
 table.tbl tbody tr:hover { background: var(--bg-3); }

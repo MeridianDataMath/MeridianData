@@ -23,6 +23,9 @@
 
   AL.state = () => (st || (st = Object.assign(DEF(), U.storage.get(KEY, null) || {})));
   AL.save = () => { U.storage.set(KEY, st); U.emit('alerts'); };
+  /** Whether this page can show a browser notification: Android's browsers have the API but refuse one made by a page
+   *  (new Notification throws: they need a service worker), and a browser seen refusing one is remembered */
+  AL.pageNotifications = () => typeof window !== 'undefined' && 'Notification' in window && !/Android/i.test((typeof navigator !== 'undefined' && navigator.userAgent) || '') && !AL.state().notifyBroken;
   AL.isFollowed = (sid) => AL.state().leaders.some((l) => l.sid === sid);
   AL.follow = (l) => { const s = AL.state(); if (s.leaders.some((x) => x.sid === l.sid)) return true; if (s.leaders.length >= AL.MAX_LEADERS) { U.toast(`Up to ${AL.MAX_LEADERS} leaders can be followed`); return false; } s.leaders.unshift({ sid: l.sid, address: String(l.address || '').toLowerCase(), name: l.name || '', addedAt: Date.now() }); AL.save(); AL.start(); AL.sync(); return true; };
   AL.unfollow = (sid) => { const s = AL.state(); s.leaders = s.leaders.filter((l) => l.sid !== sid); AL.save(); AL.sync(); };
@@ -68,15 +71,20 @@
   AL.sync = async () => {
     const s = AL.state();
     const want = owner ? new Set(s.leaders.map((l) => l.sid)) : new Set();
-    for (const [sid, un] of subs) if (!want.has(sid)) { if (un) un(); else pendingUn.add(sid); subs.delete(sid); delete pos[sid]; }
+    // an unfollow bumps the leader's generation: a subscription still being set up sees it is no longer wanted
+    for (const [sid, un] of subs) if (!want.has(sid)) { if (un) un(); gens.set(sid, (gens.get(sid) || 0) + 1); subs.delete(sid); delete pos[sid]; }
     for (const sid of want) if (!subs.has(sid)) subscribeLeader(sid);
   };
 
-  const pendingUn = new Set();   // unfollowed while its subscription was still being set up
+  // each subscription of a leader has a generation: one unfollowed (or unfollowed and followed again) while it was being
+  // set up finds a newer generation when its reads come back and undoes only itself (a late cleanup deleted the newer
+  // subscription's claim, which then unsubscribed itself: followed, and no alert ever came)
+  const gens = new Map();
   async function subscribeLeader(sid) {
     if (subs.has(sid)) return;
+    const gen = (gens.get(sid) || 0) + 1; gens.set(sid, gen);
     subs.set(sid, null);           // claimed: a second call during the awaits below must not subscribe twice
-    let ref; try { ref = await A.ref(); } catch (_) { subs.delete(sid); return; }
+    let ref; try { ref = await A.ref(); } catch (_) { if (gens.get(sid) === gen) subs.delete(sid); return; }
     // the leader's open positions now, so the first fill can be told apart from an add
     pos[sid] = {}; posAt[sid] = {};
     try { await readPositions(sid); } catch (_) {}
@@ -90,11 +98,12 @@
       // sz is the position size at liquidation, signed (negative for a short): the side, and a size that is never negative
       for (const it of items) { const prod = it.s ? ref.byTicker[it.s] : null; const sz = U.num(it.sz); emit({ sid, kind: 'liq', ticker: prod ? prod.displayTicker : (typeof it.s === 'string' ? it.s : ''), pid: prod ? prod.id : null, side: sz < 0 ? 'SHORT' : sz > 0 ? 'LONG' : undefined, qty: Math.abs(sz), px: U.num(it.px), t: U.num(d.t) || Date.now(), notional: Math.abs(sz) * U.num(it.px) }); if (prod) pos[sid][prod.id] = 0; }
     });
-    const un = () => { unFill(); unLiq(); };
-    if (pendingUn.has(sid) || !subs.has(sid)) { pendingUn.delete(sid); un(); subs.delete(sid); return; }   // unfollowed meanwhile
+    // resync positions now and then, in case a fill was missed while the socket reconnected; stopped with the rest
+    let t = null;
+    const un = () => { unFill(); unLiq(); clearInterval(t); };
+    if (gens.get(sid) !== gen || subs.get(sid) !== null) { un(); return; }   // unfollowed (or followed again) meanwhile: not this one
     subs.set(sid, un);
-    // resync positions now and then, in case a fill was missed while the socket reconnected
-    const t = setInterval(async () => { if (!subs.has(sid)) { clearInterval(t); return; } try { await readPositions(sid); } catch (_) {} }, 10 * 60000);
+    t = setInterval(async () => { try { await readPositions(sid); } catch (_) {} }, 10 * 60000);
   }
 
   /** Fills of one order arrive in pieces; gather them for a moment and classify the whole order once. */
@@ -132,8 +141,9 @@
     AL.save();
     const url = location.origin + location.pathname + U.accountUrl(l.address, l.sid);
     U.toast(a.msg);
-    if (s.browser && 'Notification' in window && Notification.permission === 'granted') {
-      try { const n = new Notification(a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], { body: a.msg, tag: a.id }); n.onclick = () => { window.focus(); location.hash = U.accountUrl(l.address, l.sid).slice(1); n.close(); }; } catch (_) {}
+    if (s.browser && AL.pageNotifications() && Notification.permission === 'granted') {
+      try { const n = new Notification(a.kind === 'liq' ? 'Leader liquidated' : 'Leader ' + VERB[a.kind].split(' ')[0], { body: a.msg, tag: a.id }); n.onclick = () => { window.focus(); location.hash = U.accountUrl(l.address, l.sid).slice(1); n.close(); }; }
+      catch (_) { s.notifyBroken = true; AL.save(); U.emit('alerts'); }   // a browser that refuses a page's notification: the card then says so
     }
     if (s.ntfy && s.ntfy.topic) AL.push(a, url).then(() => { if (s.ntfy.lastError) { s.ntfy.lastError = null; AL.save(); } }).catch((e) => { s.ntfy.lastError = { t: Date.now(), msg: e.message }; AL.save(); });
   }

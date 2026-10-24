@@ -1907,9 +1907,11 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   their clientOrderId, which finds an order whose submission got no answer; `signedAt` must sit inside the exchange's clock tolerance, so the offset to
   `/v1/time` is measured and applied (this PC was 3 s off); a signer's `expiresAt` is in
   milliseconds and a revoked signer fails every order with `SignerRevoked`, on which the agent
-  pauses. The agent cannot extend its signer (the exchange currently sets 90 days from
-  linking): before then a new key is made (`keygen --force`), linked on the page and the agent
-  restarted. Safety rules: one serial queue for every decision and order (two leader orders arriving
+  pauses. The agent cannot extend its signer itself (the exchange currently sets 90 days from
+  linking): from 336 hours before the expiry the page's signer list offers Refresh (`RefreshLinkedSigner`, signed by
+  the owner wallet, posted to `/v1/linked-signer/refresh`: same key, no restart), or a new key is made (`keygen
+  --force`), linked on the page and the agent restarted. Link, Revoke and Refresh first switch the wallet to
+  Robinhood Chain (wallets refuse typed data for another chain). Safety rules: one serial queue for every decision and order (two leader orders arriving
   together cannot both size against the same stale position); adds scale to what is actually
   held after partial fills; state (`state.json`: what is followed from whom, stops, the order
   log) survives restarts, and on start open positions that a followed leader also holds are

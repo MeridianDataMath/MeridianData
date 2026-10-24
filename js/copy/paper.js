@@ -11,8 +11,15 @@
   P.V = 3;
   P.key = (sid) => 'md.paper.' + sid;
   P.load = (sid) => U.storage.get(P.key(sid), null);
-  /** Write the account; rev counts writes, so a tab holding an older copy can tell another tab has moved on. */
-  P.save = (st) => { st.rev = (st.rev || 0) + 1; return U.storage.set(P.key(st.sid), st); };
+  /** Write the account; rev counts writes, so a tab holding an older copy can tell another tab has moved on. The fills
+   *  seen are kept by their time, and only back to a minute before the newest applied (fillT): each sync reads from just
+   *  before it, so older ones never come again (kept forever, they filled the browser's storage and the saves failed).
+   *  Returns false when the browser would not store it. */
+  P.save = (st) => {
+    const cut = (st.fillT || 0) - 60000;
+    if (cut > 0 && st.seen) for (const id of Object.keys(st.seen)) if (!(st.seen[id] >= cut)) delete st.seen[id];
+    st.rev = (st.rev || 0) + 1; return U.storage.set(P.key(st.sid), st);
+  };
   P.clear = (sid) => U.storage.del(P.key(sid));
 
   /** The leader's open positions as productId → signed quantity (+ long, − short), from A.openPositions rows. */
@@ -60,13 +67,13 @@
   P.apply = (st, fill, exec) => {
     if (st.settings.markets && !st.settings.markets.includes(fill.pid)) {
       // a market the copy does not follow: the fill is marked seen and the leader's position there tracked as not ours
-      if (fill.id) { if (st.seen[fill.id]) return null; st.seen[fill.id] = 1; }
+      if (fill.id) { if (st.seen[fill.id]) return null; st.seen[fill.id] = fill.t || Date.now(); }
       const pre = st.pre || (st.pre = {}); pre[fill.pid] = (pre[fill.pid] || 0) + (fill.side === 'BUY' ? 1 : -1) * Math.abs(fill.qty); if (Math.abs(pre[fill.pid]) < EPS) delete pre[fill.pid];
       st.lastSeen = Math.max(st.lastSeen, fill.t); if (fill.t) st.fillT = Math.max(st.fillT || 0, fill.t);
       return [];
     }
     if (fill.id && st.seen[fill.id]) return null;
-    if (fill.id) st.seen[fill.id] = 1;
+    if (fill.id) st.seen[fill.id] = fill.t || Date.now();
     const s = st.settings; const pre = st.pre || (st.pre = {});
     const dir = fill.side === 'BUY' ? 1 : -1;
     const out = [];

@@ -157,7 +157,7 @@ test('paper copy: a fill in a market left out is marked seen and tracked as the 
   const st = PP.start('sid', '0x', { mode: 'fixed', size: 2000, ratio: 0.1, delay: 0, slipBps: 0, feeRate: {}, markets: ['a'] }, {});
   const f = (id, pid, side, qty, t) => ({ id, t, pid, ticker: pid.toUpperCase(), side, qty, px: 100, orderQty: qty });
   assert.deepEqual(PP.apply(st, f('x1', 'b', 'BUY', 2, 5000), { px: 100, live: true, at: 5000 }), []);
-  assert.equal(st.seen.x1, 1); assert.equal(st.fillT, 5000); near(assert, st.pre.b, 2, 1e-12);
+  assert.equal(st.seen.x1, 5000, 'kept by its time'); assert.equal(st.fillT, 5000); near(assert, st.pre.b, 2, 1e-12);
   assert.deepEqual(Object.keys(st.open), []); assert.equal(st.log.length, 0);
   assert.equal(PP.apply(st, f('x1', 'b', 'BUY', 2, 5000), { px: 100, live: true, at: 5000 }), null, 'once');
   PP.apply(st, f('x2', 'b', 'SELL', 2, 6000), { px: 100, live: true, at: 6000 });
@@ -279,4 +279,12 @@ test('agent fills: the agent\'s own long after a phantom close survives, and a c
   const mixed = S.agentFills([rec('a', 'BUY', {}, [fl('f1', 1000, 1, 100)]), rec('c', 'SELL', { reduceOnly: true, close: true }, [fl('f2', 2000, 3, 110)])]);
   near(assert, mixed[1].filled, 1, 1e-12); near(assert, mixed[1].feeUsd, 3 * 110 * 0.0003 / 3, 1e-12, 'the fee in proportion');
   assert.equal(S.episodes(mixed, [])[0].qty, 0);
+});
+
+test('paper copy: the fills seen are kept back to a minute before the newest applied, no further (they filled the storage)', () => {
+  const PP = MD.paper;
+  const st = { sid: 'prune-test', fillT: 10 * 60000, rev: 0, seen: { old: 1000, legacy: 1, recent: 10 * 60000 - 30000, newest: 10 * 60000 } };
+  PP.save(st);
+  assert.deepEqual(Object.keys(st.seen).sort(), ['newest', 'recent']);
+  PP.clear('prune-test');
 });

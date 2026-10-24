@@ -13,20 +13,30 @@
   const bps = (v, opts) => (v == null ? h('span.dim', '—') : h('span', { class: 'num ' + (opts && opts.cost ? (v > 0 ? 'neg' : '') : U.pnlClass(v)) }, (opts && opts.sign && v > 0 ? '+' : '') + U.fmtNum(v, 1) + ' bps'));
 
   /** Follow / unfollow for alerts. */
-  MD.bellBtn = (l, cls) => { const on = AL.isFollowed(l.sid); const bb = h('button.star-btn.bell', { class: (on ? 'on ' : '') + (cls || ''), title: on ? 'Alerts on · click to stop following' : 'Alert me when this account trades', onclick: (e) => { e.preventDefault(); e.stopPropagation(); AL.toggle(l); } }, U.icon(on ? 'bellFill' : 'bell')); return bb; };
+  // the button shows what a click did (in the leader dialog and the simulator nothing else redraws it, so a second click
+  // quietly unfollowed), says so in a toast, and its state is announced (aria-pressed)
+  MD.bellBtn = (l, cls) => {
+    const bb = h('button.star-btn.bell', { class: cls || '' });
+    const paint = () => { const on = AL.isFollowed(l.sid); bb.classList.toggle('on', on); bb.title = on ? 'Alerts on · click to stop following' : 'Alert me when this account trades'; bb.setAttribute('aria-label', on ? 'Stop alerts for ' + U.shortAddr(l.address, 4) : 'Alert me when ' + U.shortAddr(l.address, 4) + ' trades'); bb.setAttribute('aria-pressed', String(on)); U.replace(bb, U.icon(on ? 'bellFill' : 'bell')); };
+    bb.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const was = AL.isFollowed(l.sid); AL.toggle(l); const on = AL.isFollowed(l.sid); paint(); if (on !== was) U.toast(on ? 'Alerts on for ' + U.shortAddr(l.address, 4) : 'Alerts off for ' + U.shortAddr(l.address, 4)); });
+    paint();
+    return bb;
+  };
 
   /** The alerts card: who is followed, what to be told about, how, and what happened. */
   function alertsCard(ctx) {
-    const card = h('div.card');
+    const card = h('div.card#leader-alerts');
     const render = () => {
       const ae = document.activeElement; if (ae && card.contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName) && ae.type !== 'checkbox') return;   // an alert arriving must not clobber a field being typed in
-      const s = AL.state(); const has = 'Notification' in window; const perm = has ? Notification.permission : 'unsupported';
+      // Android's browsers have the Notification API but cannot show one from a page (only a service worker, which the site
+      // has not): said rather than "allowed" over notifications that never appear (AL.pageNotifications)
+      const s = AL.state(); const has = AL.pageNotifications(); const perm = has ? Notification.permission : 'unsupported';
       const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
       const ev = (k, label) => UI.checkbox(label, !!s.events[k], (v) => { s.events[k] = v; AL.save(); });
       const events = h('div.row.wrap', { style: { gap: '4px 14px' } }, ev('open', 'opens'), ev('add', 'adds'), ev('reduce', 'reduces'), ev('close', 'closes'), ev('reverse', 'reverses'), ev('liq', 'is liquidated'));
       const minIn = h('input.input.sm', { type: 'number', min: 0, step: 100, value: s.minNotional || '', placeholder: '0', style: { width: '100px' }, onchange: (e) => { s.minNotional = Math.max(0, U.num(e.target.value)); AL.save(); } });
       const browserRow = h('div.row.wrap', { style: { gap: '8px' } }, UI.checkbox('Browser notification', !!s.browser, (v) => { s.browser = v; AL.save(); }),
-        perm === 'granted' ? h('span.chip.green', 'allowed') : perm === 'denied' ? h('span.chip.red', { title: 'Blocked for this site in the browser settings' }, 'blocked') : perm === 'unsupported' ? h('span.chip', 'not supported here') : h('button.btn.sm', { onclick: async () => { const r = await AL.askPermission(); U.toast(r === 'granted' ? 'Notifications allowed' : 'Notifications not allowed'); render(); } }, 'Allow notifications'));
+        perm === 'granted' ? h('span.chip.green', 'allowed') : perm === 'denied' ? h('span.chip.red', { title: 'Blocked for this site in the browser settings' }, 'blocked') : perm === 'unsupported' ? h('span.chip', { title: 'This browser shows notifications only to an installed app or a service worker: the ntfy push below reaches the phone instead' }, 'not available here · use ntfy') : h('button.btn.sm', { onclick: async () => { const r = await AL.askPermission(); U.toast(r === 'granted' ? 'Notifications allowed' : 'Notifications not allowed'); render(); } }, 'Allow notifications'));
       // the topic is the only secret (anyone who knows it reads the alerts and can post to it): offer one nobody can guess
       const topicWarn = h('span.small.neg');
       const showTopicWarn = () => { const w = AL.topicWarning(s.ntfy.topic); U.replace(topicWarn, w ? w + ': anyone who guesses it reads your alerts. Generate one instead.' : ''); };
@@ -67,9 +77,13 @@
   }
 
   /** The score as a pill: number + verdict; "—" with the reason when there is none. */
+  const SMALL_SAMPLE = 10;
   function scorePill(sc, c) {
     if (!sc) return h('span.dim.small', { title: `Fewer than ${AN.COPY.minClosed} closed positions: nothing to score yet` }, c ? `${c.closed} closed · too few` : 'no profile');
-    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict));
+    // a score that rests on few closed positions says so beside it (the verdict stays: results first, as ranked); fewer
+    // than SMALL_SAMPLE is a sample where luck can carry it
+    const few = c && c.closed < SMALL_SAMPLE ? h('span.xs', { style: { color: 'var(--amber)' }, title: `Scored on ${c.closed} closed positions only: a small sample, where one lucky or unlucky trade moves the score a lot` }, c.closed + ' closed') : null;
+    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict), few);
   }
 
   /** The "Copier keeps" cell: the share of the leader's result per position left after a copier's costs (AN.copyKeep),
@@ -91,7 +105,7 @@
     if (K.kept <= 0) {
       const pnl = r && r.stats && r.stats.all ? U.num(r.stats.all.pnl) : 0, up = r ? U.num(r.upnl) : 0;
       if (pnl > 0 && up >= pnl / 2) return cell('caution', 'unrealized profit', `${usd0(up)} of its ${usd0(pnl)} all-time PnL is the unrealized result of its open positions, which this leaves out until they close. ${title}`, usd0(up) + ' in open positions');
-      if (K.drift > K.fees + K.slip) return cell('caution', 'too fast to copy', `The price moves ${pc(K.drift / 2).replace('+', '')} against a copier in the minute after its fills, in and out: more than it makes a trade. ${title}`);
+      if (K.drift >= K.lead) return cell('caution', 'too fast to copy', `The price moves ${pc(K.drift / 2).replace('+', '')} against a copier in the minute after its fills, in and out: more than it makes a trade. ${title}`);
       return cell('caution', 'edge too thin', `Its closed trades make less than a copier's costs, so nothing would be left. ${title}`);
     }
     return cell('num ' + (K.kept >= 80 ? 'pos' : K.kept >= 40 ? '' : 'neg'), U.fmtPct(K.kept, { dp: 0 }), title);
@@ -160,7 +174,10 @@
       const LB = MD.router.pages.leaderboard;
       const tableWrap = h('div');
       const summary = h('span.dim.small');
-      const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: { key: 'score', desc: true } };
+      // 25 leaders a page, as the Leaderboard: every row at once was some 9,000 elements, about 40,000 px of a phone before
+      // the alerts card; the page is kept in the link, so Back returns to it
+      const PAGE = 25;
+      const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: { key: 'score', desc: true }, page: Math.max(1, Math.floor(U.num(route.params.page)) || 1) };
       // Predict: open slips from winning bettors (js/pages/predict.js), under the perps leaders
       const ideas = MD.predict && MD.predict.ideasCard ? MD.predict.ideasCard(ctx) : null;
       const hero = h('div.card.ct-hero',
@@ -169,8 +186,9 @@
         h('p', 'Nothing on this page places orders. Copying itself is done by the copy agent, a program you run on your own machine with a Meridian linked signer (a key that can trade and never withdraw); this site is its control room.'),
         h('p', `Predict is copied by hand, one slip at a time: further down are open slips of bettors at least ${U.fmtUsd(MD.predict && MD.predict.IDEAS ? MD.predict.IDEAS.minPnl : 500, { dp: 0 })} in profit, the biggest winners first; each opens on Meridian Predict, where Add To Slip adds its picks to your slip.`),
         h('div.row.wrap', { style: { gap: '8px', marginTop: '4px' } }, h('a.btn.primary.sm', { href: '#/copytrade/agent' }, 'Set up the copy agent'), h('span.dim.small', 'simulate and paper-copy a leader first'), h('span.grow'),
+          h('button.btn.sm', { type: 'button', onclick: () => { const a = U.$('#leader-alerts'); if (a) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); } }, U.icon('bell'), 'Leader alerts'),
           ideas ? h('button.btn.sm', { type: 'button', onclick: () => ideas.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, U.icon('target'), 'Predict ideas') : null));
-      const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
+      const filterSeg = UI.seg([{ v: 'all', label: 'All traders' }, { v: 'scored', label: 'Scored' }, { v: 'copyable', label: 'Copyable' }], state.filter, (v) => { state.filter = v; state.page = 1; MD.router.setParams({ show: v === 'scored' ? null : v }, { silent: true }); render(); }, 'sm');
       const winSeg = UI.seg(WINDOWS, state.win, (v) => { state.win = v; MD.router.setParams({ window: v === 'all' ? null : v }, { silent: true }); render(); }, 'sm');
       winSeg.title = 'The window of the PnL and ROI columns (the score reads all-time figures)';
       const leaders = h('div.card.tight', h('div.card-head', h('h2', 'Leaders by copyability'), summary, h('span.grow'), winSeg, filterSeg, MD.defsLink()), tableWrap);
@@ -201,7 +219,10 @@
         const val = (x, k) => { const s = x.r.stats.all, c = x.c || {}; switch (k) { case 'score': return x.sc ? x.sc.total : null; case 'edge': { const K = AN.copyKeep(x.c); return !K ? null : K.kept == null ? -1 : K.kept; } case 'pnl': return win(x) ? win(x).pnl : null; case 'roi': return win(x) ? win(x).roi : null; case 'winRate': return x.r.winRate; case 'closed': return c.closed != null ? c.closed : x.r.closedCount; case 'hold': return c.holdMed; case 'size': return c.notMed; case 'dd': return s.ddPct; case 'last': return c.lastAt; default: return null; } };
         rows = U.sortBy(rows, (x) => val(x, state.sort.key), state.sort.desc);
         if (state.sort.key === 'score') rows = rows.slice().sort((a, b) => { const d = (b.sc ? b.sc.total : -1) - (a.sc ? a.sc.total : -1); return (state.sort.desc ? d : -d) || (b.r.stats.all.pnl - a.r.stats.all.pnl); });
-        const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; render(); };
+        const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; state.page = 1; render(); };
+        const pages = Math.max(1, Math.ceil(rows.length / PAGE)); if (state.page > pages) state.page = pages;
+        const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
+        MD.router.setParams({ page: state.page > 1 ? state.page : null }, { silent: true });
         const noProfiles = !traders.some((r) => r.copy);
         U.replace(tableWrap,
           noProfiles ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } }, data.remote ? 'This snapshot predates copyability; the next one (within 30 minutes) will carry the profiles.' : 'A leaderboard built in the browser has no copy profiles; scores need the published snapshot.') : null,
@@ -225,9 +246,10 @@
               { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],
             phone: { lead: 'rank', title: 'w', wide: ['score', 'go'] },   // a phone: the score badge and the buttons two thirds of their line
-            rows, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',
+            rows: slice, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },
-          }));
+          }),
+          rows.length > PAGE ? UI.pager({ page: state.page, pageSize: PAGE, total: rows.length, onPage: (p) => { state.page = p; render(); tableWrap.scrollIntoView({ block: 'start' }); } }) : null);
         const copyable = scored.filter((x) => x.sc && x.sc.verdict === 'Copyable').length, nScored = scored.filter((x) => x.sc).length;
         // as the Leaderboard says it: accounts missing from the snapshot, rows carried over from an earlier build, staleness
         U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot `, U.agoEl(data.builtAt), LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));

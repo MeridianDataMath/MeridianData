@@ -220,13 +220,13 @@
    * cumulative net.
    */
   S.replay = async function ({ episodes, settings, marks, since = 0, ref }) {
-    const rows = []; let partial = 0, noFunding = 0;
+    const rows = []; let partial = 0, noFunding = 0, unmarked = 0;
     for (const e of episodes) {
       if (e.start < since) continue;
       if (settings.markets && settings.markets.size && !settings.markets.has(e.pid)) continue;
       if (e.partial) { partial++; continue; }
       const mark = e.qty ? marks && marks[e.pid] : null;
-      if (e.qty && !mark) continue;   // open with no price to mark it: leave out rather than guess
+      if (e.qty && !mark) { unmarked++; continue; }   // open with no price to mark it: left out rather than guessed, and counted (Data limits)
       if (!e.pos) noFunding++;
       const L = S.leaderResult(e, mark); const Cp = await S.replayEpisode(e, settings, mark);
       const prod = ref && ref.byId[e.pid];
@@ -238,7 +238,7 @@
     // basis, the copier's; leaderScaled: that net scaled to the copier's size position by position, which the share kept
     // and the leader's curve are measured against (dollars at two sizes would only show the size ratio, and the app's
     // figure, without position fees, would count those as copying costs)
-    const T = { leaderApp: 0, leaderNet: 0, leaderScaled: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding };
+    const T = { leaderApp: 0, leaderNet: 0, leaderScaled: 0, leaderGross: 0, leaderFees: 0, copierNet: 0, copierGross: 0, fees: 0, drift: 0, slip: 0, funding: 0, posFee: 0, n: rows.length, wins: 0, open: 0, liq: 0, capped: 0, notional: 0, partial, noFunding, unmarked };
     let cum = 0, cumL = 0, peak = 0, dd = 0; const curve = [], curveL = [];
     for (const r of rows) {
       const lAtC = r.L.entryNotional ? r.L.net * (r.C.entryNotional / r.L.entryNotional) : 0;   // the leader's result at the copier's size
