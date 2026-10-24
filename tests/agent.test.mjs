@@ -11,7 +11,7 @@ import { root, near, load } from './_load.mjs';
 const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
-const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty, closeSteps, fillSide, retryAfterMs, orderOutcome, rebaseStops })', { Math, Number, String, parseFloat, Infinity, Date });
+const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty, closeSteps, closeRef, STALE_MARK_MS, fillSide, retryAfterMs, orderOutcome, rebaseStops })', { Math, Number, String, parseFloat, Infinity, Date });
 // the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util), with the
 // simulator's engine they build on (MD.copysim: episodes, the exchange's records, each position's result)
 const MD = load(['js/util.js', 'js/copy/sim.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
@@ -225,10 +225,31 @@ test('a damaged state file is never taken for a fresh start', () => {
   assert.equal(ok.error, undefined); assert.equal(ok.state.tripped.why.slice(0, 11), 'today\'s los'); assert.equal(ok.state.equityDayStart, 10150);
   assert.deepEqual(plain(A.parseState('{}')), { state: {} });
   // cut short by a crash or a full disk, or garbled
-  for (const text of ['', '{"tripped":{"t":1,"wh', '[]', 'null', '{"books":[]}', '{"orders":{}}', '{"tripped":true}', '{"equityDayStart":"x"}', '{"dayKey":"yesterday"}', '{"closing":[]}', '{"closing":"x"}', '{"flowsLast":5}']) assert.ok(A.parseState(text).error, JSON.stringify(text));
+  for (const text of ['', '{"tripped":{"t":1,"wh', '[]', 'null', '{"books":[]}', '{"orders":{}}', '{"tripped":true}', '{"equityDayStart":"x"}', '{"dayKey":"yesterday"}', '{"closing":[]}', '{"closing":"x"}', '{"flowsLast":5}', '{"leaderPos":[]}', '{"leaderPosAt":"x"}']) assert.ok(A.parseState(text).error, JSON.stringify(text));
   // a pending close and the last transfer amounts survive a restart
   const kept = plain(A.parseState('{"closing":{"btc":{"why":"leader closed","tries":2,"left":0.01}},"flowsLast":{"day":-50,"peak":-200,"dayKey":"2026-10-24"}}'));
   assert.equal(kept.state.closing.btc.tries, 2); assert.equal(kept.state.flowsLast.peak, -200);
+  // the leaders' sizes the last run knew: what a leader did while the agent was down is mirrored at start
+  const lp = plain(A.parseState('{"leaderPos":{"L1":{"btc":0.5}},"leaderPosAt":{"L1":{"btc":1792800000000}}}'));
+  assert.equal(lp.state.leaderPos.L1.btc, 0.5); assert.equal(lp.state.leaderPosAt.L1.btc, 1792800000000);
+});
+
+test('a close prices off the book only where the mark has frozen and the book lies beyond the cap, never far out', () => {
+  const now = 1_800_000_000_000, frozen = now - A.STALE_MARK_MS - 1;
+  const r = (o) => plain(A.closeRef(Object.assign({ mark: 100, markSince: frozen, capBps: 15, now }, o)));
+  // a live mark (moved within the last 5 minutes) is always the reference
+  assert.deepEqual(r({ side: 1, bid: 97, markSince: now - 60000 }), { px: 100, from: 'mark', gapPct: null, blocked: false });
+  // frozen, and the long's sell at the mark − 15 bps still reaches the bid: the mark stays
+  assert.equal(r({ side: 1, bid: 99.9 }).from, 'mark');
+  // frozen, the bids 3 % under it (SPY over a weekend): the bid, so the reduce-only sell can fill
+  const sell = r({ side: 1, bid: 97 }); assert.equal(sell.from, 'book'); assert.equal(sell.px, 97); assert.ok(Math.abs(sell.gapPct + 3) < 1e-9);
+  // a short's close buys against the asks
+  const buy = r({ side: 0, ask: 104, capBps: 200 }); assert.equal(buy.from, 'book'); assert.equal(buy.px, 104);
+  assert.equal(r({ side: 0, ask: 101.5, capBps: 200 }).from, 'mark', 'the mark + 200 bps reaches an ask 1.5 % up');
+  // a book further than 10 % from the mark (stub quotes) is never followed: blocked, priced off the mark
+  const far = r({ side: 1, bid: 85 }); assert.equal(far.from, 'mark'); assert.equal(far.px, 100); assert.equal(far.blocked, true);
+  // no book or no mark: the mark
+  assert.equal(r({ side: 1, bid: 0 }).from, 'mark'); assert.equal(r({ side: 1, bid: 97, markSince: 0 }).from, 'mark');
 });
 
 test('a rejection about the time is retried once; the control port answers to its own name only', () => {

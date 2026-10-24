@@ -165,6 +165,23 @@ const closeSteps = (slipBps, capBps) => {
   for (const b of [num(slipBps) > 0 ? num(slipBps) : 15, 50, 100, cap]) { const v = Math.min(cap, b); if (!out.length || v > out[out.length - 1]) out.push(v); }
   return out;
 };
+/**
+ * The price a close's limit is set from: the mark, unless the mark has not moved for STALE_MARK_MS (an mPerp keeps the
+ * last oracle price while its underlying market is shut, and its book trades on) and the book's best price on the side
+ * the close hits lies beyond the cap from it: then that price, when it is within STALE_CLOSE_MAX_PCT of the mark (a stub
+ * quote further out is never followed: blocked). side 0 buy (a short's close, against the asks), 1 sell (a long's, the
+ * bids). → { px, from: 'mark' | 'book', gapPct, blocked }
+ */
+const STALE_MARK_MS = 5 * 60000, STALE_CLOSE_MAX_PCT = 10;
+const closeRef = ({ side, mark, markSince, bid, ask, capBps, now }) => {
+  const book = side === 0 ? num(ask) : num(bid);
+  if (!(mark > 0) || !(book > 0) || !(markSince > 0) || now - markSince < STALE_MARK_MS) return { px: mark, from: 'mark', gapPct: null, blocked: false };
+  const gapPct = (book / mark - 1) * 100;
+  const reaches = side === 0 ? mark * (1 + capBps / 1e4) >= book : mark * (1 - capBps / 1e4) <= book;
+  if (reaches) return { px: mark, from: 'mark', gapPct, blocked: false };
+  if (Math.abs(gapPct) > STALE_CLOSE_MAX_PCT) return { px: mark, from: 'mark', gapPct, blocked: true };
+  return { px: book, from: 'book', gapPct, blocked: false };
+};
 /** A fill's side from the stream: 1 buy, −1 sell, null when it says neither (that fill is left to the next re-read: a
  *  side guessed wrong would copy the opposite trade) */
 const fillSide = (sd) => { const s = String(sd == null ? '' : sd).trim().toUpperCase(); return s === '0' || s === 'BUY' ? 1 : s === '1' || s === 'SELL' ? -1 : null; };
@@ -226,7 +243,7 @@ const parseState = (text) => {
   for (const k of ['books', 'marketOwner', 'carry']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
   if (s.orders != null && !Array.isArray(s.orders)) return { error: 'orders is garbled' };
   if (s.tripped != null && (typeof s.tripped !== 'object' || typeof s.tripped.why !== 'string')) return { error: 'tripped is garbled' };
-  for (const k of ['closing', 'flowsLast']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
+  for (const k of ['closing', 'flowsLast', 'leaderPos', 'leaderPosAt']) if (s[k] != null && (typeof s[k] !== 'object' || Array.isArray(s[k]))) return { error: k + ' is garbled' };
   for (const k of ['equityDayStart', 'equityPeak', 'savedAt', 'dayBaseAt', 'peakSince']) if (s[k] != null && !Number.isFinite(s[k])) return { error: k + ' is garbled' };
   if (s.equityNet != null && typeof s.equityNet !== 'boolean') return { error: 'equityNet is garbled' };
   if (s.dayKey != null && !/^\d{4}-\d{2}-\d{2}$/.test(s.dayKey)) return { error: 'dayKey is garbled' };
@@ -439,6 +456,8 @@ async function run() {
   // persisted state: what we follow from whom, so a restart does not orphan positions. A damaged state.json starts with
   // the risk stop set (see loadState): only an explicit resume clears it
   const { saved, damaged } = loadState();
+  // the leaders' sizes the last run knew: what a leader did while the agent was down is mirrored at start (resync)
+  const savedLeaderPos = saved.leaderPos && typeof saved.leaderPos === 'object' ? saved.leaderPos : {};
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: damaged ? { t: Date.now(), why: `${damaged}${saved.tripped ? '; the stop it had: ' + saved.tripped.why : ''}: check the positions and resume` } : saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
     books: saved.books || {}, marketOwner: saved.marketOwner || {}, own: {}, mark: {}, equity: null, balance: 0, notional: 0, upnl: 0, unsettled: 0, ownAt: 0, equityDayStart: saved.equityDayStart || null, dayKey: saved.dayKey || null, dayBaseAt: saved.dayBaseAt || null, ...restorePeak(saved, serverNow()), flowsDay: 0, flowsSinceStart: 0, orders: (saved.orders || []).slice(0, 1000), events: [], errors: 0, lastError: null, ws: 'closed', reconnects: 0, leaderPos: {}, leaderPosAt: {}, resyncAt: {}, carry: saved.carry || {}, leaderSeeded: {}, signerExpiresAt: signer ? num(signer.expiresAt) : null, clockOffset: offset, orphans: [], missed: [], closing: saved.closing || {}, flowsLast: saved.flowsLast || null, asking: null };
   let persistErr = null, onDiskGood = !damaged;   // a damaged file must not become the backup
@@ -447,7 +466,7 @@ async function run() {
   let grossBasis = !saved.equityNet && (S.equityDayStart != null || S.equityPeak != null);
   const persist = () => {
     try {
-      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, closing: S.closing, flowsLast: S.flowsLast, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
+      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, closing: S.closing, flowsLast: S.flowsLast, leaderPos: S.leaderPos, leaderPosAt: S.leaderPosAt, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
       // written whole beside it and swapped in: a crash or a full disk mid-write leaves the last good file, never half of one
       if (onDiskGood && fs.existsSync(statePath)) fs.copyFileSync(statePath, statePath + '.bak');
       fs.renameSync(statePath + '.tmp', statePath); persistErr = null; onDiskGood = true;
@@ -567,7 +586,11 @@ async function run() {
     if (!reduceOnly && !close) { const lim = roomFor(prod); if (q * mark > lim * (1 + 1e-9) + 1e-9) { note('skip', `${prod.displayTicker}: ${(q * mark).toFixed(2)} USD at the mark is over the ${Math.max(0, lim).toFixed(2)} USD the limits leave; not sent`, { leader }); return null; } }
     carry(qty - q, null);   // the lot-size rounding remainder, kept quietly
     const type = dust ? 'MARKET' : 'LIMIT'; const ro = !!(reduceOnly || close); const bps = (close && capBps) || ex.slippageBps || 15;
-    const px = dust ? 0 : roundTick(mark * (1 + (side === 0 ? 1 : -1) * (bps / 1e4)), prod.tickSize, side === 0);
+    // a close prices off the book where the mark has frozen and the book has moved beyond the cap (closeRef)
+    const tk = tick[prod.id]; const fresh = !!tk && Date.now() - tk.at < 15000;
+    const cr = close && !dust ? closeRef({ side, mark, markSince: fresh ? tk.since : 0, bid: fresh ? tk.bid : 0, ask: fresh ? tk.ask : 0, capBps: bps, now: Date.now() }) : { px: mark, from: 'mark', gapPct: null, blocked: false };
+    if (cr.from === 'book') why = `${why} · priced off the book, ${cr.gapPct.toFixed(2)}% from a mark that has not moved for ${Math.round((Date.now() - tk.since) / 60000)} min`;
+    const px = dust ? 0 : roundTick(cr.px * (1 + (side === 0 ? 1 : -1) * (bps / 1e4)), prod.tickSize, side === 0);
     // signed afresh for every attempt: a retry after the clock is measured again needs a new nonce and signedAt
     const signed = async () => {
       const n = nonce(); const signedAt = Math.floor(serverNow() / 1000); const cid = randomUUID();
@@ -579,7 +602,7 @@ async function run() {
     };
     const submit = (o) => (DRY ? api('/v1/order/dry-run', { method: 'POST', body: { data: Object.assign({}, o.data, { sender: sa.account }) } }) : api('/v1/order', { method: 'POST', body: { data: o.data, signature: o.signature } }));
     let ord = await signed();
-    const rec = { t: Date.now(), leader, leaderSid: leaderSid || null, leaderPx: leaderPx || null, leaderT: leaderT || null, kind: kind || (close ? 'close' : reduceOnly ? 'reduce' : 'open'), cid: ord.data.clientOrderId, pid: prod.id, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, dust: dust || undefined, reduceOnly: ro, type, px: px || null, capBps: dust ? undefined : bps, mark, why, status: 'sent', before, fills: [], resync: !!resync };
+    const rec = { t: Date.now(), leader, leaderSid: leaderSid || null, leaderPx: leaderPx || null, leaderT: leaderT || null, kind: kind || (close ? 'close' : reduceOnly ? 'reduce' : 'open'), cid: ord.data.clientOrderId, pid: prod.id, ticker: prod.displayTicker, side: side === 0 ? 'BUY' : 'SELL', qty: q, close, dust: dust || undefined, reduceOnly: ro, type, px: px || null, capBps: dust ? undefined : bps, mark, why, status: 'sent', before, fills: [], resync: !!resync, ref: cr.from === 'book' ? 'book' : undefined, gapPct: cr.gapPct != null ? Math.round(cr.gapPct * 100) / 100 : undefined, blocked: cr.blocked || undefined };
     S.orders.unshift(rec); if (S.orders.length > 1000) S.orders.length = 1000;
     // the exchange refused the order's time: the clock is measured again and the order signed afresh and sent once more
     const send = async () => {
@@ -660,7 +683,8 @@ async function run() {
     const p = S.closing[pid] || (S.closing[pid] = { why, since: Date.now(), tries: 0, leader: (args && args.leader) || null });
     p.tries++; p.left = left; p.next = Date.now() + Math.min(300000, 30000 * Math.pow(2, p.tries - 1));
     p.last = last ? last.status + (last.reason ? ' · ' + last.reason : last.error ? ' · ' + last.error : '') : 'not sent: no mark price';
-    const msg = `${prod.displayTicker}: ${Math.abs(left)} still open after reduce-only IOCs up to ${closeCaps[closeCaps.length - 1]} bps from the mark (${p.last}); tried again from ${new Date(p.next).toLocaleTimeString()}`;
+    const far = last && last.blocked ? `; the book is ${Math.abs(last.gapPct).toFixed(1)}% from a mark that has not moved for a while (its market is likely closed), further than a close is ever priced: close it by hand if it must go now` : '';
+    const msg = `${prod.displayTicker}: ${Math.abs(left)} still open after reduce-only IOCs up to ${closeCaps[closeCaps.length - 1]} bps from ${last && last.ref === 'book' ? 'the book' : 'the mark'} (${p.last})${far}; tried again from ${new Date(p.next).toLocaleTimeString()}`;
     note('warn', msg); if (p.tries === 1) push('Copy agent could not close', msg);
     persist(); return last;
   }
@@ -717,7 +741,7 @@ async function run() {
     const [openR, recentR] = await Promise.all([api('/v1/position', { params: { subaccountId: l.sid, open: true, limit: 100 } }), api('/v1/position', { params: { subaccountId: l.sid, limit: 50 } })]);
     return leaderRead(openR.data, recentR.data);
   };
-  const seedLeader = async (l) => { try { const r = await readLeader(l); S.leaderPos[l.sid] = r.pos; S.leaderPosAt[l.sid] = r.at; S.leaderSeeded[l.sid] = true; } catch (e) { S.leaderSeeded[l.sid] = false; note('warn', `could not read ${who(l)}'s positions: ${e.message}; not copying its openings until it can be read`); } S.books[l.sid] = S.books[l.sid] || {}; };
+  const seedLeader = async (l) => { try { const r = await readLeader(l); S.leaderPos[l.sid] = r.pos; S.leaderPosAt[l.sid] = r.at; S.leaderSeeded[l.sid] = true; } catch (e) { S.leaderSeeded[l.sid] = false; S.leaderPos[l.sid] = Object.assign({}, savedLeaderPos[l.sid] || {}); note('warn', `could not read ${who(l)}'s positions: ${e.message}; not copying its openings until it can be read (its next order makes the agent read them first)`); } S.books[l.sid] = S.books[l.sid] || {}; };
   for (const l of cfg.leaders) await seedLeader(l);
   await refreshOwn();
 
@@ -759,6 +783,9 @@ async function run() {
     const name = who(l);
     // a fill without a usable size cannot be placed in the leader's position at all: the next re-read of it will
     if (!Number.isFinite(g.q) || !(Math.abs(g.q) > 0)) { note('warn', `${name} ${prod.displayTicker}: a fill without a usable size (${g.q}); left to the next re-read of the leader's positions`); return; }
+    // a leader whose positions could not be read yet: this fill would be sized against nothing (a reduction taken for an
+    // opening), so they are read now and compared with the sizes last known, which mirrors what the order did
+    if (!S.leaderSeeded[l.sid]) { note('leader', `${name} ${prod.displayTicker}: its positions are not read yet; reading them instead of guessing from this fill`); await resync(l, 'a fill before its positions could be read'); return; }
     const lp = S.leaderPos[l.sid] || (S.leaderPos[l.sid] = {}); const at = (S.leaderPosAt[l.sid] || {})[prod.id] || 0;
     // fills at or before the last read of the leader's positions are already inside that size: classify from it, do not add
     const qIn = (g.parts || []).reduce((a, p) => a + (p.t > 0 && p.t <= at ? p.q : 0), 0);
@@ -787,7 +814,9 @@ async function run() {
     if (kind === 'reverse' && followed && ownQty) await closeMarket(prod.id, `${name} reversed`, name, ctxL);
     const ownNow = S.own[prod.id] ? S.own[prod.id].size : 0;
     // open, add, or the new leg of a reversal
-    if (kind === 'add' && !followed && ownNow) { note('skip', `${prod.displayTicker} add: we hold a position here that is not a copy of ${name}`); return; }
+    // a position here that is not this leader's copy (an orphan, a copy held after a liquidation, one of the owner's own) is
+    // left alone: an opening, an add or a reversal's new leg would trade into it
+    if (!followed && ownNow) { note('skip', `${prod.displayTicker} ${kind}: we hold a position here that is not a copy of ${name}; left alone`); return; }
     // only on news that is fresh and priced near the market (the closes and reductions above need neither: they only
     // shrink a position, and a re-read would make them anyway)
     const mark = markOf(prod.id); const age = serverNow() - (g.t || serverNow());
@@ -813,10 +842,11 @@ async function run() {
     persist();
   }
 
-  /** Compare a leader's positions with what we last knew and mirror what the socket may have missed. */
-  async function resync(l, why) {
+  /** Compare a leader's positions with what we last knew (prior: at start, the sizes the last run saved) and mirror what
+   *  the socket may have missed. */
+  async function resync(l, why, prior) {
     let read; try { read = await readLeader(l); } catch (e) { note('warn', `resync ${who(l)}: ${e.message}`); return; }
-    const after = read.pos; const before = S.leaderPos[l.sid] || {}; const known = S.leaderSeeded[l.sid]; S.leaderPos[l.sid] = after; S.leaderPosAt[l.sid] = read.at; S.leaderSeeded[l.sid] = true;
+    const after = read.pos; const before = prior || S.leaderPos[l.sid] || {}; const known = S.leaderSeeded[l.sid] || !!prior; S.leaderPos[l.sid] = after; S.leaderPosAt[l.sid] = read.at; S.leaderSeeded[l.sid] = true;
     // openings and adds the read shows but no fill brought (a gap in the socket): listed for the dashboard, never chased
     // (not on the first read that works: what a leader held before that is no news)
     if (known) for (const pid of Object.keys(after)) {
@@ -863,18 +893,19 @@ async function run() {
     if (sizing.mode === 'fixed' && g.oid && !/^sim-/.test(g.oid)) { try { const o = await api('/v1/order/' + g.oid); g.orderQty = num(o.quantity); if (!(g.orderQty > 0)) g.orderQtyErr = 'it gives no quantity'; } catch (e) { g.orderQtyErr = e.message; } }
     try { await onLeaderOrder(g.l, g.prod, g); } catch (e) { S.errors++; S.lastError = { t: Date.now(), msg: e.message }; note('error', e.message); }
   });
-  let sock = null, retry = 0;
+  let sock = null, retry = 0, sockAt = 0, sockOpenAt = 0;
   const connect = () => {
-    S.ws = 'connecting'; sock = new WebSocket(WS_URL);
+    S.ws = 'connecting'; sock = new WebSocket(WS_URL); sockAt = Date.now();
     sock.onopen = () => {
-      S.ws = 'open'; retry = 0;
+      S.ws = 'open'; retry = 0; sockOpenAt = Date.now();
       for (const l of cfg.leaders) for (const type of ['OrderFill', 'PositionUpdate', 'SubaccountLiquidation']) sock.send(JSON.stringify({ event: 'subscribe', data: { type, subaccountId: l.sid } }));
       sock.send(JSON.stringify({ event: 'subscribe', data: { type: 'OrderFill', subaccountId: SID } }));
       // every market's Ticker: live marks, and a message a second, so the exchange never drops the socket as idle (it does
       // after about a minute of silence, and a leader fill in the gap never arrives)
       for (const p of products) if (p.status === 'ACTIVE') sock.send(JSON.stringify({ event: 'subscribe', data: { type: 'Ticker', symbol: p.ticker } }));
       if (S.wsDownAt) { S.reconnects++; note('warn', `socket back after ${((Date.now() - S.wsDownAt) / 1000).toFixed(1)} s: a leader fill in that gap never arrives, so the leaders are read again (closes and reductions are mirrored, openings listed as missed)`); S.wsDownAt = null; }
-      if (S.lastMsg) for (const l of cfg.leaders) serial(() => resync(l, 'reconnect'));
+      // on every open, the first one too: a leader fill between the start's read and this subscription never arrives
+      for (const l of cfg.leaders) serial(() => resync(l, S.lastMsg ? 'reconnect' : 'socket open'));
     };
     sock.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch (_) { return; } S.lastMsg = Date.now(); route(m); };
     sock.onclose = () => { S.ws = 'closed'; S.wsDownAt = S.wsDownAt || Date.now(); setTimeout(connect, Math.min(15000, 500 * Math.pow(2, retry++))); };
@@ -882,7 +913,8 @@ async function run() {
   };
   const route = (m) => {
     if (!m || !m.e) return; const d = m.data || {};
-    if (m.e === 'Ticker') { const p = byTicker[d.s]; const px = num(d.markPx); if (p && px > 0) tick[p.id] = { px, at: Date.now() }; return; }
+    // since: when the mark last moved (an mPerp's freezes while its underlying market is shut); bid / ask: the book's best
+    if (m.e === 'Ticker') { const p = byTicker[d.s]; const px = num(d.markPx); if (p && px > 0) { const was = tick[p.id]; tick[p.id] = { px, at: Date.now(), since: was && was.px === px ? was.since : Date.now(), bid: num(d.bidPx), ask: num(d.askPx) }; } return; }
     const items = Array.isArray(d.d) ? d.d : [d];
     for (const it of items) {
       const sid = it.sid || d.sid; const l = cfg.leaders.find((x) => x.sid === sid);
@@ -898,8 +930,30 @@ async function run() {
       else if (m.e === 'PositionUpdate') { clearTimeout(puTimer[l.sid]); puTimer[l.sid] = setTimeout(() => { delete puTimer[l.sid]; serial(() => resync(l, 'position update')); }, 4000); }   // after the fills of the same order have been handled
     }
   };
+  // what each leader did while the agent was down, against the sizes the last run saved: a reduction is mirrored, a close
+  // or a reversal closes ours now (not at the five-minute re-read), an opening is listed as missed
+  for (const l of cfg.leaders) {
+    if (savedLeaderPos[l.sid]) { serial(() => resync(l, 'while the agent was down', savedLeaderPos[l.sid])); continue; }
+    // a state.json from an agent that did not save the leaders' sizes: a leader that traded a followed market since the
+    // last save may now hold less than the copy follows, by an amount nobody knows; said once, not guessed
+    for (const [pid, sid] of Object.entries(S.marketOwner)) {
+      if (sid !== l.sid || !byId[pid] || !(S.leaderPos[l.sid] || {})[pid] || !(((S.leaderPosAt[l.sid] || {})[pid] || 0) > (saved.savedAt || Infinity))) continue;
+      const msg = `${who(l)} traded ${byId[pid].displayTicker} while the agent was down, and the size it had before is unknown (state.json from an older agent): the copy may no longer be its share; check it`;
+      note('warn', msg); push('Copy agent: check a copy', msg);
+    }
+  }
   connect();
-  setInterval(() => { if (sock && sock.readyState === 1 && Date.now() - (S.lastMsg || S.startedAt) > 120000) { try { sock.close(); } catch (_) {} } }, 30000);   // a silent socket is a dead socket
+  // a silent socket is a dead socket. close() waits for the other end's answer, which a stalled gateway never sends (the
+  // socket then sits in CLOSING and onclose never runs): one that has not closed 10 s later is dropped and replaced, and so
+  // is one still connecting after 30 s
+  const replaceSocket = (why) => { const old = sock; if (old) { old.onopen = old.onmessage = old.onclose = old.onerror = null; try { old.close(); } catch (_) {} } S.ws = 'closed'; S.wsDownAt = S.wsDownAt || Math.max(S.lastMsg || 0, sockOpenAt) || Date.now(); note('warn', `socket ${why}: connecting again`); connect(); };   // down since its last message
+  setInterval(() => {
+    if (!sock) return;
+    const quiet = Date.now() - Math.max(S.lastMsg || 0, sockOpenAt, S.startedAt) > 120000;
+    if (sock.readyState === 1 && quiet) { const was = sock; try { was.close(); } catch (_) {} setTimeout(() => { if (sock === was && was.readyState !== 3) replaceSocket('did not close'); }, 10000); }
+    else if (sock.readyState === 2 && quiet) replaceSocket('stuck closing');
+    else if (sock.readyState === 0 && Date.now() - sockAt > 30000) replaceSocket('still connecting after 30 s');
+  }, 30000);
   setInterval(() => serial(() => refreshOwn().then(retryCloses).catch((e) => note('warn', 'own account: ' + e.message))), 30000);
   setInterval(() => serial(() => checkSigner().catch((e) => note('warn', 'signer check: ' + e.message))), 3600000);
   setInterval(() => { for (const l of cfg.leaders) serial(() => resync(l, 'periodic')); }, 5 * 60000);
@@ -959,7 +1013,7 @@ async function run() {
       if (url.pathname === '/pause') { S.paused = true; note('control', 'paused from the site'); persist(); }
       else if (url.pathname === '/resume' || url.pathname === '/close-all') {
         const a = url.pathname === '/resume' ? confirmHere('resume (clear the pause and any risk stop)', () => serial(resume))
-          : confirmHere('close every open position', () => serial(() => { note('control', 'close all from the site'); return closeAll('closed from the site'); }));
+          : confirmHere('close every open position and pause copying', () => serial(() => { S.paused = true; S.pausedBy = 'close-all'; note('control', 'close all from the site: copying is paused until it is resumed there (a leader adding to a position just closed would open it again)'); persist(); return closeAll('closed from the site'); }));
         res.writeHead(a.code, cors); return res.end(JSON.stringify(a.body));
       }
       else if (url.pathname === '/resync') { note('control', 'resync from the site'); for (const l of cfg.leaders) await serial(() => resync(l, 'manual')); await serial(() => refreshOwn().catch(() => {})); }

@@ -1832,7 +1832,11 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   sent (an `execution.type` other than IOC stops the agent), since in a book the market makers
   have left one fills at whatever is there. A close is a reduce-only IOC for what is held: at
   the slippage cap, then wider in steps (50, 100 bps) up to `execution.closeSlippageBps` (200 by
-  default, at most 1000), each at the current mark. What the widest leaves stays pending
+  default, at most 1000), each at the current mark. Where the mark has not moved for 5 minutes (an
+  mPerp keeps the last oracle price while its underlying market is shut, and its book trades on)
+  and the book's best price on the close's side lies beyond the cap, the close is priced off that
+  price instead, when it is within 10% of the mark; a book further out is never followed, and the
+  pending close's push says to close it by hand. What the widest leaves stays pending
   (`closing` in `state.json`): tried again from the refresh timer, 30 s doubling to 5 min,
   pushed once, with nothing else traded in that market meanwhile. Only dust below the market's
   minimum quantity (about $10) goes as the exchange's close order (quantity 0 + reduceOnly +
@@ -1855,7 +1859,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   answered in that browser: recent browsers ask before a site reaches the visitor's own computer)
   and slows to one read every 30 s while none answers; resume and close all from the page wait for `yes` typed in the agent's
   terminal, since the token sits in the site's browser storage (`status.siteControls`
-  `direct` skips that, for an agent run without a terminal). The dashboard shows equity, day
+  `direct` skips that, for an agent run without a terminal). Close all also pauses copying until it
+  is resumed: a leader adding to a position just closed would otherwise open it afresh. The dashboard shows equity, day
   and peak change, leverage, own positions against the leaders', closes still pending, the
   latest 30 orders with their status and fill (the daily log files in `logs/`
   keep every one), the event log. `run --dry` sends every order
@@ -1890,7 +1895,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `2d2ccd874a02515bfde696a3cba94062644441bcdaceddfdb3eadc93d8749d1b` (`tests/agent.test.mjs` fails when this line is
+    `d2faf2315619eb99a6f6537253658ab138e7ea8a27fad46586aa896fe9951d33` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
@@ -1924,13 +1929,19 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   Revoke and Refresh first switch the wallet to Robinhood Chain (wallets refuse typed data for another
   chain). Safety rules: one serial queue for every decision and order (two leader orders arriving
   together cannot both size against the same stale position); adds scale to what is actually
-  held after partial fills; state (`state.json`: what is followed from whom, stops, the order
-  log) survives restarts, and on start open positions that a followed leader also holds are
-  adopted while the rest are flagged as orphans (left alone, or closed with `onOrphan`); the
-  leaders are re-read on every `PositionUpdate` hint (debounced per leader, so one leader's
-  hint never cancels another's re-read) and liquidation hint, on reconnect and every five
-  minutes, and a close, a reduction or a side change missed over a disconnect is mirrored (an
-  opening is not chased); a re-read and the socket never count a fill twice: a position
+  held after partial fills; state (`state.json`: what is followed from whom, the leaders' sizes,
+  stops, the order log) survives restarts. On start each leader's positions are compared with the
+  sizes the last run saved, so a reduction made while the agent was down is mirrored and a close
+  or a side change closes ours at once (a state file from an older agent, without those sizes,
+  gets a warning for each followed market its leader traded since); open positions that a
+  followed leader also holds are adopted, and the rest are flagged as orphans (left alone by
+  every later opening, add or reversal there too, or closed with `onOrphan`); a leader whose
+  positions could not be read is read before its next order is acted on. The leaders are
+  re-read on every `PositionUpdate` hint (debounced per leader, so one leader's hint never
+  cancels another's re-read) and liquidation hint, on every socket open (the first one too)
+  and every five minutes (a socket silent for two minutes is closed, and one whose close never
+  completes, as behind a stalled gateway, is replaced 10 s later), and a close, a reduction or
+  a side change missed over a disconnect is mirrored (an opening is not chased); a re-read and the socket never count a fill twice: a position
   record's `updatedAt` is the time of its last fill, so a grouped fill dated at or before the
   record last read is already inside that size and only classifies the order, and a re-read
   leaves markets alone whose fills are still being grouped (a resync landing mid-order used to
