@@ -1923,18 +1923,25 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `f6de8c234105dc28c5a297c803b72a128728298c3138ab3e15c8b07f8f14215d` (`tests/agent.test.mjs` fails when this line is
+    `6f9730d21cc4c07a2838e89e5f2ea3242c5ec079d3d11e0bb66c9f05fbd75180` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
     on no answer, a 5xx or a 429 (after its Retry-After, at most 30 s). An order is sent once:
     one whose submission got no answer or a 5xx is looked up by its clientOrderId among the
     account's newest orders before anything is concluded. Found, it is read back as usual; not
-    found, it counts as placed only if the position moved (`unconfirmed`), else as rejected. A
-    final order's own `filled` counts over a positions read that lags behind it.
-  - **Signer.** It is checked at start and hourly. Revoked, expired or refused (401 / 403), it
-    pauses the agent with one push; one expiring within three days is pushed daily. A key file
-    ethers cannot read is reported without its content.
+    found, it counts as placed only if the position moved (`unconfirmed`), else as rejected, and
+    it is looked up again 30 s, 2 and 5 minutes later: one that went in late is owned as the copy
+    it was meant to be. A final order's own `filled` counts over a positions read that lags behind it.
+  - **Signer.** It is checked at start and hourly. Revoked, expired (past its `expiresAt` even
+    while it still reads ACTIVE) or refused (401 / 403, or an order rejected for the signer or its
+    expiry), it pauses the agent with one push; one expiring within three days is pushed daily. A
+    key file ethers cannot read is reported without its content.
+  - **Pushes.** Each gets 10 s and a refusal is logged; a rejected order (read back or refused at
+    once) is pushed once per market every 10 minutes, so a burst cannot use up ntfy's limit before
+    a stop's push.
+  - **Markets.** Read again hourly: one listed after the start is copied from then on, and a fill
+    in a market not known yet is listed as missed.
   - **Leader fills.** A fill whose side reads neither 0 / BUY nor 1 / SELL is not used; the
     leader's positions are read again instead. In fixed sizing, an opening whose leader order
     cannot be read is listed as missed rather than sized on its first piece.

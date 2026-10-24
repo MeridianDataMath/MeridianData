@@ -478,7 +478,15 @@ async function run() {
     } catch (e) { if (persistErr !== e.message) { persistErr = e.message; note('error', `state.json could not be saved (${e.message}): a restart now would lose what changed since`); push('Copy agent cannot save its state', e.message); } }
   };
   const note = (kind, msg, extra) => { const e = Object.assign({ t: Date.now(), kind, msg }, extra || {}); S.events.unshift(e); if (S.events.length > 300) S.events.length = 300; log(kind, msg, extra || ''); };
-  const push = async (title, msg) => { if (!(cfg.ntfy && cfg.ntfy.topic)) return; try { await fetch(((cfg.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')) + '/' + encodeURIComponent(cfg.ntfy.topic), { method: 'POST', body: msg, headers: { Title: title, Tags: 'robot', Priority: '4' } }); } catch (_) {} };
+  // a push gets 10 s and a refusal is logged; with a key (a market), one of a kind per key every 10 minutes: a burst of
+  // rejections could reach ntfy's limit, and the "stopped" or "paused" push after it was refused without a trace
+  const pushedAt = {};
+  const push = async (title, msg, key) => {
+    if (!(cfg.ntfy && cfg.ntfy.topic)) return;
+    if (key != null) { const k = title + '|' + key; if (Date.now() - (pushedAt[k] || 0) < 600000) return; pushedAt[k] = Date.now(); }
+    try { const r = await fetch(((cfg.ntfy.server || 'https://ntfy.sh').replace(/\/+$/, '')) + '/' + encodeURIComponent(cfg.ntfy.topic), { method: 'POST', body: msg, headers: { Title: title, Tags: 'robot', Priority: '4' }, signal: AbortSignal.timeout(10000) }); if (!r.ok) log('warn', `push "${title}" refused by ntfy: HTTP ${r.status}`); }
+    catch (e) { log('warn', `push "${title}" not sent: ${e.message}`); }
+  };
   const who = (l) => (l.name && l.name !== 'primary' ? l.name : l.address.slice(0, 6) + '…' + l.address.slice(-4));
   if (damaged) { note('trip', S.tripped.why); push('Copy agent started with its risk stop set', damaged); }
   if (ctl.created) note('start', `config status.token is empty: generated one (${ctl.token.slice(0, 4)}…) and saved it in ${ctl.from}; paste it into the Copy agent page's token field`);
@@ -650,14 +658,15 @@ async function run() {
         if (final && Math.abs(rec.after - expected) >= Math.max(1e-12, num(prod.lotSize) / 2)) { note('warn', `${prod.displayTicker}: the positions read ${rec.after} while the order reports ${rec.filled} filled; the order's figure counts until a read catches up`); patchOwn(prod.id, expected, px || mark); rec.after = expected; }
         const { got, status } = orderOutcome({ orderStatus: rec.orderStatus, filled: rec.filled, final, before, after: rec.after, want: dust ? Math.abs(before) : q, lot: prod.lotSize });
         // an order that got no answer and is not on the exchange went in only if the position moved
-        if (r) rec.status = status; else if (got > 1e-12) rec.status = 'unconfirmed'; else { rec.status = 'rejected'; rec.error = `${rec.lost} (not on the exchange afterwards, and the position did not change)`; S.errors++; S.lastError = { t: Date.now(), msg: rec.error }; push('Copy agent order lost', `${prod.displayTicker} ${rec.side}: ${rec.error}`); }
+        if (r) rec.status = status; else if (got > 1e-12) rec.status = 'unconfirmed'; else { rec.status = 'rejected'; rec.error = `${rec.lost} (not on the exchange afterwards, and the position did not change)`; S.errors++; S.lastError = { t: Date.now(), msg: rec.error }; push('Copy agent order lost', `${prod.displayTicker} ${rec.side}: ${rec.error}; looked up again for 5 minutes`); lateLook(rec, prod, leaderSid, side); }
         note(rec.status === 'filled' ? 'order' : 'warn', `${rec.side} ${close ? 'close ' + (dust ? 'dust' : q) : q} ${prod.displayTicker} ${type}${px ? ' @ ' + px : ''} · ${why} · ${rec.status}${rec.filled != null ? ' ' + rec.filled : ''}${rec.reason ? ' · ' + rec.reason : ''}${rec.error ? ' · ' + rec.error : ''}`, { id: rec.id });
-        if (rec.reason === 'SignerRevoked' || rec.code === 'SignerRevoked') signerLost('the signer was revoked');
+        if (/signer|expired/i.test(String(rec.reason || '') + ' ' + String(rec.code || ''))) signerLost(`the exchange refused the signer (${rec.reason || rec.code})`);
+        else if (r && rec.status === 'rejected') push('Copy agent order rejected', `${prod.displayTicker} ${rec.side}: ${rec.reason || 'rejected by the exchange'}`, prod.displayTicker);
         if (!close && got < q - 1e-12) carry(q - got, rec.status === 'rejected' ? 'was rejected' : 'did not fill inside the slippage cap');   // an opening is never chased; a reduction is owed
       }
     } catch (e) {
       rec.status = 'rejected'; rec.error = e.message; S.errors++; S.lastError = { t: Date.now(), msg: e.message };
-      note('error', `${prod.displayTicker} ${rec.side} rejected: ${e.message}`, { why }); push('Copy agent order rejected', `${prod.displayTicker} ${rec.side}: ${e.message}`);
+      note('error', `${prod.displayTicker} ${rec.side} rejected: ${e.message}`, { why }); push('Copy agent order rejected', `${prod.displayTicker} ${rec.side}: ${e.message}`, prod.displayTicker);
       if (/signer|unauthori[sz]ed|forbidden/i.test(e.message) || e.status === 401 || e.status === 403) signerLost(`the exchange refused the signer (${e.message})`);
       if (!close) carry(q, 'was rejected');
     }
@@ -665,6 +674,26 @@ async function run() {
     persist();
     return rec;
   }
+  /** An order that got no answer and was not found at once may still go in (the engine took one 12 s later): it is looked
+   *  up again 30 s, 2 and 5 minutes on, and one that filled is owned as the copy it was meant to be (it was left unmanaged,
+   *  so the leader's close left it open) */
+  const lateLook = (rec, prod, leaderSid, side) => {
+    [30000, 120000, 300000].forEach((ms, i, all) => setTimeout(() => serial(async () => {
+      if (rec.lateFound) return;
+      let o = null; try { o = ((await api('/v1/order', { params: { subaccountId: SID, limit: 50 } })).data || []).find((x) => x.clientOrderId === rec.cid); } catch (_) { return; }
+      if (!o) { if (i === all.length - 1) note('order', `${prod.displayTicker} ${rec.side}: still not on the exchange after 5 minutes: lost`); return; }
+      rec.lateFound = true; rec.id = o.id; rec.orderStatus = o.status; rec.filled = num(o.filled);
+      if (!(rec.filled > 0)) { note('order', `${prod.displayTicker} ${rec.side}: on the exchange after all, unfilled (${o.status})`); persist(); return; }
+      rec.status = 'late'; await refreshOwn().catch(() => {});
+      const own = S.own[prod.id];
+      if (!rec.reduceOnly && leaderSid && own && Math.sign(own.size) === (side === 0 ? 1 : -1) && !S.marketOwner[prod.id]) {
+        S.marketOwner[prod.id] = leaderSid; const lp = (S.leaderPos[leaderSid] || {})[prod.id]; const b = S.books[leaderSid] || (S.books[leaderSid] = {});
+        if (!b[prod.id]) b[prod.id] = { k: lp ? Math.abs(own.size / lp) : null, openedAt: Date.now(), late: true };
+      }
+      const msg = `${prod.displayTicker} ${rec.side} ${rec.filled}: the order reported lost went in late; ${S.marketOwner[prod.id] && S.marketOwner[prod.id] === leaderSid ? 'the position is followed as its copy' : 'check the position'}`;
+      note('warn', msg); push('Copy agent order filled late', msg); persist();
+    }), ms));
+  };
   /** Any sign that the exchange no longer takes this signer (revoked, expired, refused): new and larger positions stop
    *  (paused) and the owner hears of it once */
   const signerLost = (why) => { if (S.paused && S.pausedBy === 'signer') return; S.paused = true; S.pausedBy = 'signer'; note('error', `${why}: paused; make a new key (node copy-agent.mjs keygen --force), link it on the site, restart the agent and resume`); push('Copy agent paused', why); persist(); };
@@ -762,6 +791,8 @@ async function run() {
     let sg = null; try { sg = await api('/v1/linked-signer/address/' + w.address); } catch (e) { if (e.status !== 404) { note('warn', 'signer check: ' + e.message); return; } }
     if (!sg || sg.status !== 'ACTIVE') return signerLost(`the signer is ${sg ? sg.status : 'no longer linked'}`);
     S.signerExpiresAt = num(sg.expiresAt) || null;
+    // past its expiry a signer may still read ACTIVE while its orders fail: that is a lost signer too
+    if (S.signerExpiresAt && S.signerExpiresAt <= serverNow()) return signerLost(`the signer expired ${new Date(S.signerExpiresAt).toISOString()}`);
     if (S.signerExpiresAt && S.signerExpiresAt < Date.now() + 3 * 86400000 && Date.now() - (S.expiryWarnedAt || 0) > 86400000) { S.expiryWarnedAt = Date.now(); const msg = `the linked signer expires ${new Date(S.signerExpiresAt).toLocaleString()}: before then make a new key (node copy-agent.mjs keygen --force), link it on the site and restart the agent`; note('warn', msg); push('Copy agent signer expiring', msg); }
   };
   await checkSigner();
@@ -929,7 +960,9 @@ async function run() {
       if (m.e === 'OrderFill' && sid === SID) { attachFill({ id: it.id, orderId: it.oid, t: num(it.t || d.t) || Date.now(), px: num(it.px), qty: num(it.sz), fee: num(it.fee), maker: !!it.m }); serial(() => refreshOwn().catch(() => {})); continue; }
       if (!l) continue;
       if (m.e === 'OrderFill') {
-        const prod = byTicker[it.s]; if (!prod) continue; if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); }
+        const prod = byTicker[it.s];
+        if (!prod) { if (!unknownMkt.has(it.s)) { unknownMkt.add(it.s); missed({ leader: who(l), sid: l.sid, pid: null, ticker: String(it.s), kind: 'fill', q: null, px: null, t: null, why: 'a market listed after the agent started (markets are read again hourly)' }); } continue; }
+        if (it.id) { if (seen.has(it.id)) continue; seen.add(it.id); if (seen.size > 5000) seen.delete(seen.values().next().value); }
         const sd = fillSide(it.sd);
         if (sd == null) { note('warn', `${who(l)} ${prod.displayTicker}: a fill whose side reads neither buy nor sell (${JSON.stringify(it.sd)}); the leader's positions are read again instead`); serial(() => resync(l, 'a fill without a side')); continue; }
         onFill(l, prod, { q: sd * num(it.sz), px: num(it.px), oid: it.oid || it.id, t: num(it.t || d.t) || serverNow() });
@@ -950,6 +983,18 @@ async function run() {
       note('warn', msg); push('Copy agent: check a copy', msg);
     }
   }
+  // markets listed after the start: read again every hour, their marks subscribed (a leader's fill in a newer market was
+  // dropped without a word); a fill in one not known yet is listed as missed, once a market
+  const unknownMkt = new Set();
+  setInterval(() => serial(async () => {
+    let fresh; try { fresh = (await api('/v1/product?limit=200')).data || []; } catch (e) { note('warn', 'markets not read again: ' + e.message); return; }
+    const added = fresh.filter((p) => !byId[p.id]);
+    for (const p of fresh) { byId[p.id] = p; byTicker[p.ticker] = p; const i = products.findIndex((x) => x.id === p.id); if (i < 0) products.push(p); else products[i] = p; }
+    if (!added.length) return;
+    unknownMkt.clear();
+    if (sock && sock.readyState === 1) for (const p of added) if (p.status === 'ACTIVE') sock.send(JSON.stringify({ event: 'subscribe', data: { type: 'Ticker', symbol: p.ticker } }));
+    note('start', `${added.length} market${added.length > 1 ? 's' : ''} listed since the start (${added.map((p) => p.displayTicker).join(', ')}): copied from now on`);
+  }), 3600000);
   connect();
   // a silent socket is a dead socket. close() waits for the other end's answer, which a stalled gateway never sends (the
   // socket then sits in CLOSING and onclose never runs): one that has not closed 10 s later is dropped and replaced, and so

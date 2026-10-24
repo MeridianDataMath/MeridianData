@@ -858,7 +858,7 @@ export function mergeRaw(kept, fresh) {
   // a fresh copy wins, except an unsettled one over a settled kept one: an indexer resyncing shows settled predictions as
   // open for a while, and taking that copy dropped the prediction from the next build's kept ones until the full read
   for (const x of fresh || []) if (x && x.predictionId) { const k = byId.get(x.predictionId); if (k && k.settled && !x.settled) continue; byId.set(x.predictionId, x); }
-  return Array.from(byId.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt));
+  return Array.from(byId.values()).sort((x, y) => P.sec(y.createdAt) - P.sec(x.createdAt) || (x.predictionId < y.predictionId ? -1 : x.predictionId > y.predictionId ? 1 : 0));   // same second: by id
 }
 /** The settled ones of a build's predictions, by id: the next build's `kept` */
 export const settledRaw = (raw) => { const o = dict(); for (const x of raw || []) if (x && x.settled && x.predictionId) o[x.predictionId] = x; return o; };
@@ -1013,7 +1013,7 @@ async function buildPredict() {
   }
   // the fee for sending a question's result from Polygon (anyone can): the Questions page quotes it
   let relayFee = null;
-  try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; }
+  try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; else if (withOi.length) lost('relay-fee', new Error('no answer from the Polygon RPC'), 'relay fee quote failed'); }
   catch (e) { lost('relay-fee', e, 'relay fee quote failed'); }
   // Meridian's own lists beside the predictions (readCompetitions and the rest); each failure leaves its part out
   let competitions = null, pnlRank = null, matches = null, hot = null, tags = null;
@@ -1050,7 +1050,7 @@ async function buildPredict() {
   for (const n of qNorms) for (const k of n.picks) if (isCond(k.id)) (byQ[k.id] || (byQ[k.id] = [])).push(n);
   let qfiles = 0;
   for (const q of withOi) {
-    const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t);
+    const list = (byQ[q.id] || []).sort((a, b) => b.t - a.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     // a bettor who traded its position tokens carries what it still held and its own result (h, lp), as the slips do
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
@@ -1085,7 +1085,7 @@ async function buildPredict() {
   } catch (e) { lost('cash', e, 'wallet cash failed, the files go out without it'); }
   let files = 0;
   for (const [addr, list] of Object.entries(byWallet)) {
-    list.sort((a, b) => b.t - a.t);
+    list.sort((a, b) => b.t - a.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));   // same second: by id, so an unchanged file stays the same file
     const truncated = list.length > 600;
     // a truncated file still carries every prediction on a pick configuration the wallet traded, so its ledger is whole,
     // and every older one still open, so its page lists all its open positions (the Vault's went back months further
@@ -1140,16 +1140,19 @@ async function buildPredict() {
 }
 if (doPredict) {
   // one Predict build at a time on this machine: two would read and write the same caches. A lock file beside the price
-  // cache; one over an hour old is a crashed run's and is taken over
+  // cache, holding its build's process id: one whose process is gone (a build killed, a power cut) is taken over at once
+  // (it kept every build of the next hour from running), one over an hour old too
   const lock = cacheFile + '.lock';
   try { fs.mkdirSync(path.dirname(lock), { recursive: true }); fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); }
   catch (e) {
     if (e.code !== 'EEXIST') throw e;
-    const age = Date.now() - fs.statSync(lock).mtimeMs;
-    if (age < 3600000) { console.error(`predict: another build holds ${lock} (${Math.round(age / 60000)} min old); not building`); process.exit(1); }
+    const age = Date.now() - fs.statSync(lock).mtimeMs; let alive = false;
+    try { const pid = Number(fs.readFileSync(lock, 'utf8')); if (pid > 0 && pid !== process.pid) { process.kill(pid, 0); alive = true; } } catch (_) {}
+    if (alive && age < 3600000) { console.error(`predict: another build holds ${lock} (${Math.round(age / 60000)} min old); not building`); process.exit(1); }
     fs.writeFileSync(lock, String(process.pid));
   }
   process.on('exit', () => { try { if (fs.readFileSync(lock, 'utf8') === String(process.pid)) fs.unlinkSync(lock); } catch (_) {} });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(sig === 'SIGINT' ? 130 : 143));   // through 'exit', which removes the lock
   try { await buildPredict(); }
   catch (e) {
     // No agg → the site falls back; the error is published so it can be read without Action logs.
