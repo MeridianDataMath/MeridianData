@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const MAX_FILES = 8000, MAX_BYTES = 150e6, MAX_FILE = 25e6;
 /** The names the snapshot machine publishes, relative with forward slashes */
-export const NAME = /^(predict\.json|predict-status\.json|predict-ideas\.json|bettors\/0x[0-9a-f]{40}\.json|questions\/0x[0-9a-fA-F]{64}\.json|slips\/[0-9a-f]{2}\.json)$/;
+export const NAME = /^(predict\.json|predict-status\.json|predict-ideas\.json|predict-questions\.json|bettors\/0x[0-9a-f]{40}\.json|questions\/0x[0-9a-fA-F]{64}\.json|slips\/[0-9a-f]{2}\.json)$/;
 
 /** The files to take from a snapshot checkout: regular files (a link is not one) with a published name, one level of
  *  folders deep, a left-out wallet's own file dropped. → relative names, sorted */

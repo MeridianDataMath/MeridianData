@@ -47,7 +47,6 @@
       </main>
     </div>
   </div>
-  <script defer src="vendor/chart.umd.js"></script>
   <script defer src="js/util.js"></script>
   <script defer src="js/api.js"></script>
   <script defer src="js/analytics.js"></script>
@@ -57,12 +56,9 @@
   <script defer src="js/predict/api.js"></script>
   <script defer src="js/predict/wallets.js"></script>
   <script defer src="js/predict/analytics.js"></script>
-  <script defer src="js/predict/resolution.js"></script>
   <script defer src="js/home-summary.js"></script>
   <script defer src="js/cards.js"></script>
   <script defer src="js/flex.js"></script>
-  <script defer src="js/copy/sim.js"></script>
-  <script defer src="js/copy/paper.js"></script>
   <script defer src="js/copy/alerts.js"></script>
   <script defer src="js/pages/home.js"></script>
   <script defer src="js/pages/account.js"></script>
@@ -70,31 +66,14 @@
   <script defer src="js/pages/leaderboard.js"></script>
   <script defer src="js/pages/dashboard.js"></script>
   <script defer src="js/tax/core.js"></script>
-  <script defer src="js/tax/tz.js"></script>
-  <script defer src="js/tax/periods.js"></script>
-  <script defer src="js/tax/fx.js"></script>
-  <script defer src="js/tax/ledger.js"></script>
-  <script defer src="js/tax/load.js"></script>
-  <script defer src="js/tax/fills.js"></script>
-  <script defer src="js/tax/funding.js"></script>
-  <script defer src="js/tax/predict.js"></script>
-  <script defer src="js/tax/lots.js"></script>
-  <script defer src="js/tax/holdings.js"></script>
-  <script defer src="js/tax/summary.js"></script>
-  <script defer src="js/tax/methodology.js"></script>
-  <script defer src="js/tax/zip.js"></script>
-  <script defer src="js/tax/exports.js"></script>
-  <script defer src="js/tax/ui.js"></script>
-  <script defer src="js/tax/view-perps.js"></script>
-  <script defer src="js/tax/view-predict.js"></script>
-  <script defer src="js/tax/view-lots.js"></script>
-  <script defer src="js/tax/view-holdings.js"></script>
-  <script defer src="js/pages/tax.js"></script>
-  <script defer src="js/pages/copysim.js"></script>
-  <script defer src="js/pages/copyagent.js"></script>
   <script defer src="js/pages/copytrade.js"></script>
-  <script defer src="js/pages/predict.js"></script>
   <script defer src="js/pages/status.js"></script>
   <script defer src="js/app.js"></script>
+  <!-- loaded on first need (MD.need in js/router.js): Chart.js with the first chart, the Predict pages, the copy simulator
+       and agent, the Tax center. A template's scripts are not fetched; the deploy versions their addresses like the rest -->
+  <template id="lazy-charts"><script src="vendor/chart.umd.js"></script></template>
+  <template id="lazy-predict"><script src="js/predict/resolution.js"></script><script src="js/pages/predict.js"></script></template>
+  <template id="lazy-copytools"><script src="js/copy/sim.js"></script><script src="js/copy/paper.js"></script><script src="js/pages/copysim.js"></script><script src="js/pages/copyagent.js"></script></template>
+  <template id="lazy-tax"><script src="js/tax/tz.js"></script><script src="js/tax/periods.js"></script><script src="js/tax/fx.js"></script><script src="js/tax/ledger.js"></script><script src="js/tax/load.js"></script><script src="js/tax/fills.js"></script><script src="js/tax/funding.js"></script><script src="js/tax/predict.js"></script><script src="js/tax/lots.js"></script><script src="js/tax/holdings.js"></script><script src="js/tax/summary.js"></script><script src="js/tax/methodology.js"></script><script src="js/tax/zip.js"></script><script src="js/tax/exports.js"></script><script src="js/tax/ui.js"></script><script src="js/tax/view-perps.js"></script><script src="js/tax/view-predict.js"></script><script src="js/tax/view-lots.js"></script><script src="js/tax/view-holdings.js"></script><script src="js/pages/tax.js"></script></template>
 </body>
 </html>

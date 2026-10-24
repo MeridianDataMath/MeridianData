@@ -1009,8 +1009,11 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, matches, hot, tags, questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, questionsWithOi: withOi, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries, health: { complete, failed: Array.from(new Set(failed)) } };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, questionsFile: 'predict-questions.json', questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries, health: { complete, failed: Array.from(new Set(failed)) } };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
+  // the questions with money on them, the matches they belong to, Meridian's Hot lists and tags: more than half of what
+  // predict.json held, and only the Questions page and a prediction's leg links read them (P.loadQuestions)
+  fs.writeFileSync(path.join(outDir, 'predict-questions.json'), JSON.stringify({ builtAt: out.builtAt, questionsWithOi: withOi, matches, hot, tags }));
   // the Copy trading page's ideas: winning bettors and their slips the site still offers to copy (a few KB, read on its own)
   const ideas = P.ideas(norms, agg);
   fs.writeFileSync(path.join(outDir, 'predict-ideas.json'), JSON.stringify(Object.assign({ builtAt: out.builtAt, criteria: P.IDEAS }, ideas)));
@@ -1064,7 +1067,8 @@ async function buildPredict() {
     // its prediction opened from the maker's page shows the bettor's side as it stood
     // its deposits and withdrawals (the newest 200) and daily cash as last read (cash.at), when read yet
     const cs = cash[addr];
-    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, total: list.length, truncated, newest: Math.min(list.length, 600), curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
+    const aggRow = truncated ? (mk ? agg.makers : agg.bettors).find((r) => r.address === addr) : null;
+    fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, total: list.length, truncated, newest: Math.min(list.length, 600), aggRow: aggRow ? { role: mk ? 'maker' : 'bettor', row: aggRow } : undefined, curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
       cash: cs ? { at: cs.at, xf: cs.xf.slice(0, 200), xfN: cs.xf.length, xfMore: cs.more || undefined, bh: cs.bh } : undefined }));
     files++;
   }

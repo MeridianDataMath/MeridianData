@@ -56,12 +56,22 @@ test('P.snapshotFile: a file that is not there is null, one that could not be re
   const html = { ok: true, status: 200, headers: { get: (k) => (k === 'content-type' ? 'text/html; charset=utf-8' : null) }, json: async () => { throw new SyntaxError('Unexpected token <'); } };
   const answer = (r) => { globalThis.fetch = async () => (r instanceof Error ? Promise.reject(r) : r); };
   try {
-    answer(html); assert.equal(await P.snapshotFile('bettors/0xabc.json'), null, 'the site\'s own page in its place: no such file');
-    answer({ ok: false, status: 404, headers: { get: () => null } }); assert.equal(await P.snapshotFile('bettors/0xabc.json'), null, 'a 404: no such file');
-    answer(new TypeError('Failed to fetch')); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 'NETWORK' && /could not be read/.test(e.message));
-    answer({ ok: false, status: 503, headers: { get: () => null } }); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 503);
-    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => { throw new TypeError('network error'); } }); await assert.rejects(P.snapshotFile('bettors/0xabc.json'), (e) => e.code === 'NETWORK', 'a download cut off');
-    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ builtAt: 7, predictions: [] }) }); assert.deepEqual(await P.snapshotFile('x.json'), { builtAt: 7, predictions: [] });
-    const ab = Object.assign(new Error('aborted'), { name: 'AbortError' }); answer(ab); await assert.rejects(P.snapshotFile('x.json'), (e) => e.name === 'AbortError', 'an abort is passed on');
+    answer(html); assert.equal(await P.snapshotFile('bettors/0xabc0.json'), null, 'the site\'s own page in its place: no such file');
+    answer({ ok: false, status: 404, headers: { get: () => null } }); assert.equal(await P.snapshotFile('bettors/0xabc1.json'), null, 'a 404: no such file');
+    answer(new TypeError('Failed to fetch')); await assert.rejects(P.snapshotFile('bettors/0xabc2.json'), (e) => e.code === 'NETWORK' && /could not be read/.test(e.message));
+    answer({ ok: false, status: 503, headers: { get: () => null } }); await assert.rejects(P.snapshotFile('bettors/0xabc3.json'), (e) => e.code === 503);
+    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => { throw new TypeError('network error'); } }); await assert.rejects(P.snapshotFile('bettors/0xabc4.json'), (e) => e.code === 'NETWORK', 'a download cut off');
+    answer({ ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ builtAt: 7, predictions: [] }) }); assert.deepEqual(await P.snapshotFile('x1.json'), { builtAt: 7, predictions: [] });
+    const ab = Object.assign(new Error('aborted'), { name: 'AbortError' }); answer(ab); const ac = new AbortController(); ac.abort(); await assert.rejects(P.snapshotFile('x2.json', { signal: ac.signal }), (e) => e.name === 'AbortError', 'the caller abort ends its wait');
+  } finally { globalThis.fetch = fetch0; }
+});
+
+test('P.snapshotFile: one read of a file for a minute, shared by every caller (a wallet file went out two or three times)', async () => {
+  const fetch0 = globalThis.fetch; let n = 0;
+  globalThis.fetch = async () => { n++; return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ builtAt: 9, predictions: [] }) }; };
+  try {
+    const [a, b] = await Promise.all([P.snapshotFile('shared.json'), P.snapshotFile('shared.json')]);
+    await P.snapshotFile('shared.json');
+    assert.equal(n, 1); assert.equal(a, b);
   } finally { globalThis.fetch = fetch0; }
 });

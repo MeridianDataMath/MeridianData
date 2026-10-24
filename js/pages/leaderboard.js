@@ -164,13 +164,13 @@
       }
       // keep the page current: re-check the published snapshot every minute, tick the age label every 30 s
       let shownBuiltAt = 0;
-      const tick = setInterval(async () => {
+      const tickStop = U.every(30000, async () => {   // (not while the tab is hidden)
         if (ctx.signal.aborted) return;
         await P.loadRemote();
         const c = P.cache();
         if (c && c.builtAt !== shownBuiltAt && !building) renderTable(); else renderSummary(c);
-      }, 30000);
-      ctx.onCleanup(() => clearInterval(tick));
+      });
+      ctx.onCleanup(tickStop);
 
       async function build(force) {
         if (building) return;

@@ -126,6 +126,19 @@
   };
   // the snapshot's age and reach under a page's title: the age keeps itself current (U.agoEl) and the stale mark appears
   // on time, for a page left open
+  /** The snapshot's questions (questionsWithOi, matches, Hot lists, tags): a snapshot from a builder that writes them on
+   *  their own (questionsFile) has them read and joined to it here, the first time a page needs them; an older one holds
+   *  them already. A failed read leaves them out (the pages say so where they list them). */
+  let questionsP = null;
+  P.loadQuestions = async (snap) => {
+    const s = snap || P._snap;
+    if (!s || s.questionsWithOi || !s.questionsFile) return s;
+    if (!questionsP || questionsP.for !== s) {
+      const p = (async () => { const r = await fetch(P.SNAPSHOT_BASES[0] + s.questionsFile, { cache: 'no-cache' }); if (!r.ok) throw new Error('The questions could not be read (HTTP ' + r.status + ')'); const j = await r.json(); return j; })();
+      questionsP = Object.assign(p.then((j) => { for (const k of ['questionsWithOi', 'matches', 'hot', 'tags']) if (j[k] !== undefined) s[k] = j[k]; return s; }, (e) => { questionsP = null; throw e; }), { for: s });
+    }
+    return questionsP;
+  };
   const snapNoteEl = (s) => (s.remote ? h('span', 'snapshot ', U.agoEl(s.builtAt), ' · all predictions since launch', UI.staleNote(s.builtAt)) : h('span', 'built in this browser ', U.agoEl(s.builtAt), ' · predictions placed in the last ' + s.windowDays + ' days only'));
   const offlineNote = 'live queries are not available from this domain (the Predict API does not accept browser requests from it), so this shows the published snapshot';
   const loadingCard = (progress) => h('div.card', h('div.empty', h('span.loading', h('span.spinner'), progress)));
@@ -400,16 +413,18 @@
           let norms;
           if (live) norms = (await P.tape(25, { signal: ctx.signal })).map(P.norm).filter((n) => !P.excluded(n));
           else {
-            const s = await P.loadSnapshot({ force: true });
+            // the build time from predict-status.json (a few hundred bytes), not the whole snapshot: it re-downloaded and parsed
+            // 2 MB every minute; a newer one is offered, and loaded only when taken
+            const at = await P.snapshotAt();
             // a newer snapshot: everything here is from the one the page was built with, so offer the new one instead of mixing them
-            if (s.builtAt > snap.builtAt) { clearInterval(tT); U.replace(tapeNote, h('a', { href: '#/predict', title: 'Everything on this page is from the snapshot built ' + U.fmtDateTime(snap.builtAt), onclick: (e) => { e.preventDefault(); MD.router.reload(); } }, 'newer snapshot published · show it')); }
+            if (at && at > snap.builtAt) { tT(); U.replace(tapeNote, h('a', { href: '#/predict', title: 'Everything on this page is from the snapshot built ' + U.fmtDateTime(snap.builtAt), onclick: (e) => { e.preventDefault(); MD.router.reload(); } }, 'newer snapshot published · show it')); }
             return;
           }
           const known = new Set(tapeRows.map((r) => r.id)); const fresh = new Set(norms.filter((n) => !known.has(n.id)).map((n) => n.id)); tapeRows = norms; renderTape(fresh);
         } catch (e) { if (!isAbort(e)) console.warn('tape', e); }
       };
       if (live) pollTape();
-      tT = setInterval(pollTape, live ? 20000 : 60000); ctx.onCleanup(() => clearInterval(tT));
+      tT = U.every(live ? 20000 : 60000, pollTape); ctx.onCleanup(() => tT());   // (not while the tab is hidden)
 
       // secondary market (loaded the first time the card is opened)
       async function loadSec() {
@@ -731,6 +746,7 @@
     const modal = UI.modal({ title: n.legs > 1 ? `${n.legs}-leg combo` : first || 'Prediction', body, wide: true });
     const open = () => !ctx.signal.aborted && document.body.contains(body);
     const legView = (k) => { const q = snapQuestion(k.id); return q ? qView(q) : { end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: !!k.nonDecisive, question: k.q }; };
+    if (P._snap && !P._snap.questionsWithOi && P._snap.questionsFile) P.loadQuestions().then(() => { if (open()) render(); }).catch(() => {});
     const render = () => {
       const payout = cents(n.pool), stake = cents(n.stake);
       // the bettor's position tokens: the share it still held at the verdict and its own result, the sale included (from
@@ -1036,8 +1052,7 @@
     // a decided slip without the snapshot's settlement time: its legs' Polymarket resolutions date it (decidedTime), once
     const done = n.decided && !P.legVerdictAt(n) && !n.decidedAt ? Array.from(new Set(n.picks.filter((k) => k.id && k.settled).map((k) => k.id))) : [];
     if (done.length) R.load(done, { signal: ctx.signal, deep: false }).then(() => { if (!ctx.signal.aborted && !kbdInside()) render(); }).catch(() => {});
-    const t = setInterval(() => { if (!ctx.signal.aborted && ids.length) refresh(); }, 60000);
-    ctx.onCleanup(() => clearInterval(t));
+    ctx.onCleanup(U.every(60000, () => { if (!ctx.signal.aborted && ids.length) refresh(); }));
   }
 
   /** No id: paste a Meridian link or an id (a link's id first; a bare id only as the whole input). */
@@ -1157,9 +1172,9 @@
       render(); refreshMarkets();
     };
     load();
-    const t1 = setInterval(() => { if (ctx.signal.aborted || !file) return; if (!quiet()) render(); refreshMarkets(); }, 60000);   // countdowns, listed ends, chances
-    const t2 = setInterval(() => { if (!ctx.signal.aborted) load(); }, 5 * 60000);                                                     // a new snapshot
-    ctx.onCleanup(() => { clearInterval(t1); clearInterval(t2); });
+    const t1 = U.every(60000, () => { if (ctx.signal.aborted || !file) return; if (!quiet()) render(); refreshMarkets(); });   // countdowns, listed ends, chances
+    const t2 = U.every(5 * 60000, () => { if (!ctx.signal.aborted) load(); });                                                     // a new snapshot
+    ctx.onCleanup(() => { t1(); t2(); });
     return card;
   };
 
@@ -1182,7 +1197,7 @@
     })();
   }
   // every 30 s (countdowns, prices); fn gets the tick's number, so every fourth (two minutes) can read the resolutions again
-  const resTicker = (ctx, fn) => { let n = 0; const t = setInterval(() => fn(++n), 30000); ctx.signal.addEventListener('abort', () => clearInterval(t)); };
+  const resTicker = (ctx, fn) => { let n = 0; const stop = U.every(30000, () => fn(++n)); ctx.signal.addEventListener('abort', stop); };
   /** The resolutions of the rows on screen read again (R.load keeps what is still fresh): a "proposed" row turns into
    *  "resolved" or "settled" on a page left open */
   const reResolve = (ids, ctx, redraw) => { if (ids.length) R.load(ids, { signal: ctx.signal }).then(() => { if (!ctx.signal.aborted) redraw(); }).catch(() => {}); };
@@ -1301,7 +1316,8 @@
     return card;
   }
   async function mountQuestionsWithBets(body, route, ctx, st, liveP) {
-    await withSnapshot(body, ctx, (snap) => {
+    await withSnapshot(body, ctx, async (snap) => {
+      await P.loadQuestions(snap);
       let live = false;
       const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -1629,7 +1645,7 @@
       claim: Array.isArray(f.claim) ? P.claimRows(f.claim) : null, selfNorms: self, selfN: self.length, selfVol: U.sum(self, (n) => n.stake + n.cp), pre: P.preLaunchOf(addr),
       curve: Array.isArray(f.curve) && f.curve.length >= 2 ? f.curve : null, daily: Array.isArray(f.daily) ? f.daily : null,
       older: f.truncated ? new Set(f.predictions.slice(nHead).map((p) => p.id)) : null, windowFrom: f.truncated && nHead ? f.predictions[nHead - 1].t : null,
-      cash: f.cash || null };   // its deposits, withdrawals and daily cash as the snapshot last read them (a file from before has none)
+      cash: f.cash || null, aggRow: f.aggRow || null };   // its deposits, withdrawals and daily cash as the snapshot last read them (a file from before has none); its aggregate row (a truncated file: the figures over every prediction)
   }
   P.loadBettor = loadBettor;
   /** A wallet's role, token ledger and headline figures, exactly as its bettor page shows them, from loadBettor's model;
@@ -1656,7 +1672,7 @@
     // all loaded (up to 300 live, 600 in a snapshot file). A larger account (every market maker, heavy bettors) would
     // count only the unclaimed ones inside that window, so its figures come from the published snapshot's aggregate for
     // this wallet instead, which covers every prediction as of its build.
-    const agg = m.truncated ? await (async () => { try { const snap = await P.loadSnapshot({ signal }); if (!snap || !snap.remote || !snap.agg) return null; const row = (isMaker ? snap.agg.makers : snap.agg.bettors).find((r) => r.address === addr); return row ? Object.assign({ at: snap.builtAt }, row) : null; } catch (e) { return null; } })() : null;
+    const agg = m.truncated ? m.aggRow && m.aggRow.role === (isMaker ? 'maker' : 'bettor') ? Object.assign({ at: m.builtAt }, m.aggRow.row) : await (async () => { try { const snap = await P.loadSnapshot({ signal }); if (!snap || !snap.remote || !snap.agg) return null; const row = (isMaker ? snap.agg.makers : snap.agg.bettors).find((r) => r.address === addr); return row ? Object.assign({ at: snap.builtAt }, row) : null; } catch (e) { return null; } })() : null;
     // Checked against the exchange: its account history books PnL at the verdict (its cumulative PnL equals the sum of
     // every decided prediction's result, claimed or not), while its won / lost counts move only when a prediction is
     // claimed. So live, the PnL is the exchange's as it stands, and so is the record, which is the app's (its Positions

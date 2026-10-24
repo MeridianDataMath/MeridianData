@@ -9,13 +9,19 @@
   };
   C.colors = () => ({ accent: css('--accent') || '#23d4bc', green: css('--green') || '#34d487', red: css('--red') || '#ef454a', blue: css('--accent-2') || '#6895ff', amber: css('--amber') || '#f5b64a', text: css('--text-3') || '#6b6b72', grid: '#1c1c1e' });
 
-  if (window.Chart) {
+  // Chart.js (200 KB) is loaded the first time a chart is drawn (MD.need('charts')), not with every first visit; a draw
+  // asked for before it is in runs once it is, on the same canvas
+  let ready = false;
+  const setup = () => {
+    if (ready || !window.Chart) return; ready = true;
     Chart.defaults.font.family = css('--font') || 'Geist, sans-serif';
     Chart.defaults.font.size = 11;
     Chart.defaults.color = '#6b6b72';
     Chart.defaults.animation = false;
     Chart.defaults.plugins.legend.display = false;
-  }
+  };
+  setup();
+  const later = (fn, args) => { if (MD.need) MD.need('charts').then(() => { setup(); if (window.Chart) fn.apply(null, args); }).catch(() => {}); return null; };
 
   const xTick = (range) => (v) => {
     if (range <= 2 * U.DAY) return U.fmtHM(v);
@@ -81,7 +87,7 @@
    * titleFmt (the tooltip's title from x; a local date and time unless given, U.fmtDayUTC for per-UTC-day buckets)}
    */
   C.timeSeries = function (canvas, opts) {
-    if (!window.Chart) return null;
+    if (!window.Chart) return later(C.timeSeries, [canvas, opts]);
     const col = C.colors();
     const pts = opts.points || [];
     const color = opts.color || col.accent;
@@ -133,7 +139,8 @@
   };
 
   C.sparkline = function (canvas, values, opts = {}) {
-    if (!window.Chart || !values || values.length < 2) return null;
+    if (!values || values.length < 2) return null;
+    if (!window.Chart) return later(C.sparkline, [canvas, values, opts]);
     C.destroy(canvas);
     const col = C.colors();
     const up = values[values.length - 1] >= values[0];
@@ -148,7 +155,7 @@
 
   /** Bars, green when ≥ 0. opts: {horizontal, fmt (tooltip), axisFmt (value-axis ticks; C.axisUsd unless given)} */
   C.bars = function (canvas, labels, values, opts = {}) {
-    if (!window.Chart) return null;
+    if (!window.Chart) return later(C.bars, [canvas, labels, values, opts]);
     C.destroy(canvas);
     const col = C.colors();
     const colors = values.map((v) => (v >= 0 ? col.green : col.red));
@@ -167,7 +174,7 @@
   /** Bars stacked per label from several series [{label, values, color}], with a legend (e.g. trading and referral points
    *  per epoch). opts: {fmt (tooltip values; U.fmtNum at 0 dp unless given), axisFmt (value-axis ticks)} */
   C.stackedBars = function (canvas, labels, series, opts = {}) {
-    if (!window.Chart) return null;
+    if (!window.Chart) return later(C.stackedBars, [canvas, labels, series, opts]);
     C.destroy(canvas);
     const col = C.colors();
     const fmt = opts.fmt || ((v) => U.fmtNum(v, 0));
@@ -185,7 +192,7 @@
 
   /** Two series side by side per label (e.g. implied vs realized probability per odds bucket), in percent. */
   C.pairedBars = function (canvas, labels, a, b, opts = {}) {
-    if (!window.Chart) return null;
+    if (!window.Chart) return later(C.pairedBars, [canvas, labels, a, b, opts]);
     C.destroy(canvas);
     const col = C.colors();
     const fmt = opts.fmt || ((v) => U.fmtPct(v, { dp: 1 }));

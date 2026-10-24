@@ -303,7 +303,7 @@
         try {
           const r = await fetch(agentUrl('status'), { signal: timed(4000), headers: agentHdr() });
           // it answered but will not show itself: the token (or this page's origin) is not one it accepts
-          if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; okAt = Date.now(); }
+          if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; okAt = Date.now(); U.storage.set('md.agent.seen', true); }   // (next visits connect by themselves)
         } catch (e) { if (ctx.signal.aborted) return; last = null; lastErr = e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? 'no answer within 4 s' : e.message; refused = null; }
         ageTxt.textContent = 'polls the agent every 3 s' + (last ? ' · updated ' + U.fmtTime(okAt) : okAt ? ' · last answer ' + U.fmtAgo(okAt) : '');
         agentNow.S = last; renderDiff();
@@ -469,8 +469,22 @@
       try { MD._agentRef = await A.ref(ctx); } catch (_) {}
       listSigners();
       // each read 3 s after the last one ended: reads never overlap, however slow the agent is to answer
-      const loop = async () => { await poll(); if (!ctx.signal.aborted) timer = setTimeout(loop, 3000); };
-      loop();
+      // while no agent answers, the reads slow down (to one every 30 s) instead of failing every 3 s
+      let fails = 0;
+      const loop = async () => { await poll(); if (ctx.signal.aborted) return; fails = last || refused ? 0 : fails + 1; timer = setTimeout(loop, fails ? Math.min(30000, 3000 * Math.pow(2, fails - 1)) : 3000); };
+      // the page reads 127.0.0.1 only for a visitor who runs an agent: once one has answered in this browser, or on the
+      // button (a site reading the visitor's own computer is something recent browsers ask permission for, and every
+      // visitor of this page was asked)
+      const SEEN_KEY = 'md.agent.seen';
+      let started = false;
+      const connect = () => { if (started) return; started = true; ageTxt.textContent = 'polls the agent every 3 s'; loop(); };
+      if (U.storage.get(SEEN_KEY, false)) connect();
+      else {
+        ageTxt.textContent = 'not connected';
+        U.replace(dash, h('div.empty', h('div', { style: { marginBottom: '8px' } }, 'The dashboard reads the agent on this computer (127.0.0.1) once you ask it to: your browser may ask you to allow this site to reach your own computer.'),
+          h('button.btn.sm.primary', { type: 'button', onclick: connect }, 'Connect to my agent')));
+        U.replace(histWrap, h('div.empty', 'Appears once the dashboard is connected to a running agent.'));
+      }
     },
   };
 })();

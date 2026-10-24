@@ -73,6 +73,7 @@
           // (the host answers unknown paths with the app's index.html, status 200: only JSON counts)
           try { const r = await fetch('data/predict-status.json', { cache: 'no-cache', signal: ctx.signal }); if (r.ok && /json/i.test(r.headers.get('content-type') || '')) s = await r.json(); } catch (e) { if (isAbort(e)) return; }
           // a publish from before the status file existed: read the snapshot's own header (the 1 MB the Predict pages load anyway)
+          if (!s) await MD.need('predict').catch(() => {});   // (P.loadSnapshot is in the Predict pages' scripts)
           if (!s && MD.predict && MD.predict.loadSnapshot) {
             U.replace(predict, UI.loading('No status file yet: reading the Predict snapshot itself…'));
             try { const p = await MD.predict.loadSnapshot({ signal: ctx.signal }); const cov = p && p.agg && p.agg.vig ? p.agg.vig.coverage : null; if (p && p.remote) s = { builtAt: p.builtAt, source: p.source, predictions: p.predictions, apiTotal: p.apiTotal, preLaunch: p.preLaunch, bettors: p.agg && p.agg.bettors.length, makers: p.agg && MD.predict.splitMakers(p.agg.makers).makers.length, questions: p.questionsWithOi && p.questionsWithOi.length, recentFrom: p.recentFrom, selfMatched: p.agg && p.agg.totals.selfMatched, vigCoverage: cov ? cov.withAtBet : null, vigTotal: cov ? cov.total : null, vigClean: cov ? cov.clean : null, vigSameEvent: cov ? cov.sameEvent : null, requests: p.requests, retries: p.retries, durationMs: p.durationMs }; } catch (e) { if (isAbort(e)) return; }
@@ -98,8 +99,7 @@
       };
       drawPredict();
       let ticks = 0;
-      const ageT = setInterval(() => { ticks++; drawPerps(ticks % 5 === 0); drawPredict(); }, 60000);
-      ctx.onCleanup(() => clearInterval(ageT));
+      ctx.onCleanup(U.every(60000, () => { ticks++; drawPerps(ticks % 5 === 0); drawPredict(); }));
 
       // ---- the exchange itself: round trip to /v1/time, clock offset, maintenance flag, WebSocket state
       (async () => {

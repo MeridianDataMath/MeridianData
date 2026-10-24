@@ -25,7 +25,7 @@ test('the snapshot gate takes only published names, never a link, and drops a le
   let linked = false; try { fs.symlinkSync(path.join(d, 'predict.json'), path.join(d, 'predict-ideas.json')); linked = true; } catch (_) {}   // Windows may refuse links without rights
   assert.deepEqual(pick(d, ex), ['bettors/' + W(1) + '.json', 'predict-status.json', 'predict.json', 'questions/0x' + 'a'.repeat(64) + '.json', 'slips/0f.json']);
   if (linked) assert.ok(!pick(d, ex).includes('predict-ideas.json'), 'a link is not copied');
-  assert.ok(NAME.test('predict-ideas.json'));
+  assert.ok(NAME.test('predict-ideas.json')); assert.ok(NAME.test('predict-questions.json'), 'the questions, written apart from predict.json');
 });
 
 test('the snapshot gate refuses what is not JSON, too big, too many, or without Predict data', () => {

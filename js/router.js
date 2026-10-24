@@ -3,6 +3,25 @@
   const MD = window.MD; const U = MD.util;
   const R = (MD.router = { current: null, pages: {}, ctx: null });
 
+  /** A group of scripts kept out of the first load (index.html holds them as <template id="lazy-<name>">, in order: a
+   *  template's scripts are not fetched, and the deploy versions their addresses like the rest), loaded on first need;
+   *  resolves once every one has run. A failed load can be tried again. Without its template (a test page) it is taken
+   *  as loaded. */
+  const groups = {};
+  MD.need = (name) => groups[name] || (groups[name] = new Promise((resolve, reject) => {
+    const tpl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('lazy-' + name) : null;
+    const srcs = tpl && tpl.content ? Array.from(tpl.content.querySelectorAll('script')).map((s) => s.getAttribute('src')) : [];
+    let left = srcs.length; if (!left) { resolve(); return; }
+    for (const src of srcs) {
+      const s = document.createElement('script'); s.src = src; s.async = false;   // they run in the order given
+      s.onload = () => { if (--left === 0) resolve(); };
+      s.onerror = () => { delete groups[name]; reject(new Error('Part of the site did not load (' + src + '): check the connection and try again')); };
+      document.head.appendChild(s);
+    }
+  }));
+  /** route name → the script group its page is in (the Tax center, the Predict pages), loaded before it mounts */
+  R.LAZY = { tax: 'tax', predict: 'predict' };
+
   R.parse = function (hash) {
     const h = (hash || location.hash || '#/').replace(/^#/, '');
     const [pathPart, query] = h.split('?');
@@ -56,7 +75,6 @@
     // runs at once: the page's own cleanup has already been and gone
     const ctx = { abort, signal: abort.signal, cleanup: [], route, onCleanup(fn) { if (this.done) { try { fn(); } catch (_) {} } else this.cleanup.push(fn); } };
     R.ctx = ctx; R.current = route;
-    const page = R.pages[route.name] || R.pages.notfound;
     R.root.scrollTop = 0;
     // Chart.js keeps every chart, and through it its canvas and the page around it, until destroy()
     if (window.MD.charts && window.MD.charts.destroyAll) window.MD.charts.destroyAll();
@@ -69,6 +87,17 @@
     const progress = window.MD.ui && window.MD.ui.progress;   // the thin line under the topbar, for every page change
     if (progress) progress.restart();
     if (fromHistory) restoreScroll(curHash, ctx);
+    // a page in a group not loaded yet: its scripts first (a failed load says so, with a Retry)
+    const lazy = R.LAZY[route.name];
+    if (lazy && !R.pages[route.name]) {
+      const UI = window.MD.ui;
+      U.replace(host, U.h('div.page', UI ? UI.loading('Loading…') : 'Loading…'));
+      try { await MD.need(lazy); }
+      catch (e) { if (R.ctx === ctx) { U.replace(host, U.h('div.page', UI ? UI.error(e, () => R.reload()) : U.h('div.error', e.message))); if (progress) progress.done(); } return; }
+      if (R.ctx !== ctx) return;
+      U.clear(host);
+    }
+    const page = R.pages[route.name] || R.pages.notfound;
     try { await page.mount(host, route, ctx); }
     catch (e) {
       if (R.ctx !== ctx || (e && e.name === 'AbortError')) return;   // a page already left: its failure is nobody's business

@@ -17,6 +17,7 @@
       // an unknown path answers with index.html (the site's not-found handling), so only JSON counts
       if (r.ok && /json/.test(r.headers.get('content-type') || '')) { const j = await r.json(); if (j && (j.lb || j.predict)) return j; }
     } catch (e) { if (isAbort(e)) throw e; }
+    await MD.need('predict');   // P.loadSnapshot is in the Predict pages' scripts
     const LB = MD.router.pages.leaderboard, P = MD.predict;
     const [lb, snap, status] = await Promise.all([
       LB ? LB.loadRemote().then(() => LB.cache()).catch(() => null) : null,
@@ -290,14 +291,14 @@
         }
       }
       positions();
-      const posT = setInterval(() => { positions(); exchange(); }, 60000); ctx.onCleanup(() => clearInterval(posT));
-      const sumT = setInterval(async () => {
+      // the minute's reads, the summary's and the ages: none while the tab is hidden (U.every), at once when it shows again
+      ctx.onCleanup(U.every(60000, () => { positions(); exchange(); }));
+      const sumStop = U.every(5 * 60000, async () => {
         let next; try { next = await loadSummary(ctx); } catch (e) { return; }
         if (!ctx.signal.aborted && next && JSON.stringify(next) !== JSON.stringify(sum)) sum = next;
         if (!ctx.signal.aborted) { drawSummary(); positions(); }
-      }, 5 * 60000);
-      const ageT = setInterval(drawSummary, 60000);
-      ctx.onCleanup(() => { clearInterval(sumT); clearInterval(ageT); });
+      });
+      ctx.onCleanup(sumStop); ctx.onCleanup(U.every(60000, drawSummary));
     },
   };
 })();

@@ -168,8 +168,15 @@
 
   MD.router.pages.copytrade = {
     async mount(root, route, ctx) {
-      if (route.path === '/copytrade/sim') return MD.copysimPage.mount(root, route, ctx);
-      if (route.path === '/copytrade/agent') return MD.copyagentPage.mount(root, route, ctx);
+      // the simulator and the copy agent are their own script group (MD.need), loaded the first time either opens
+      if (route.path === '/copytrade/sim' || route.path === '/copytrade/agent') {
+        if (!MD.copysimPage || !MD.copyagentPage) {
+          U.replace(root, h('div.page', UI.loading('Loading…')));
+          try { await MD.need('copytools'); } catch (e) { U.replace(root, h('div.page', UI.error(e, () => MD.router.reload()))); return; }
+          if (ctx.signal.aborted) return;
+        }
+        return route.path === '/copytrade/sim' ? MD.copysimPage.mount(root, route, ctx) : MD.copyagentPage.mount(root, route, ctx);
+      }
       MD.setTopbar(h('span.title', 'Copy trading'));
       const LB = MD.router.pages.leaderboard;
       const tableWrap = h('div');
@@ -179,7 +186,9 @@
       const PAGE = 25;
       const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: { key: 'score', desc: true }, page: Math.max(1, Math.floor(U.num(route.params.page)) || 1) };
       // Predict: open slips from winning bettors (js/pages/predict.js), under the perps leaders
-      const ideas = MD.predict && MD.predict.ideasCard ? MD.predict.ideasCard(ctx) : null;
+      // (the Predict pages' scripts load for it: MD.need('predict'))
+      const ideas = h('div');
+      MD.need('predict').then(() => { if (!ctx.signal.aborted && MD.predict.ideasCard) { const c = MD.predict.ideasCard(ctx); if (c) U.replace(ideas, c); } }).catch(() => {});
       const hero = h('div.card.ct-hero',
         h('h1', 'Copy trading on Meridian'),
         h('p', `Leaders are ranked the way the large exchanges rank their lead traders: by what they made first (all-time PnL and ROI), then by the risk they took (drawdown, liquidations, steady weeks), then by how much of it a follower would keep, entering a minute later at taker fees against today's order books with a position the size of the leader's median one but no more than $2,000. Copyable: a score of ${AN.COPY.copyableAt} or more and at least ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })} made all-time. Every wallet with at least ${AN.COPY.minClosed} closed positions is scored, and the numbers behind each score are one click away.`),
@@ -256,8 +265,7 @@
       }
       render();
       // keep the page current with the published snapshot
-      const tick = setInterval(async () => { if (ctx.signal.aborted) return; const d = await LB.loadRemote(); if (d && data && d.builtAt !== data.builtAt) { data = d; render(); } }, 60000);
-      ctx.onCleanup(() => clearInterval(tick));
+      ctx.onCleanup(U.every(60000, async () => { if (ctx.signal.aborted) return; const d = await LB.loadRemote(); if (d && data && d.builtAt !== data.builtAt) { data = d; render(); } }));   // (not while hidden)
     },
   };
 })();

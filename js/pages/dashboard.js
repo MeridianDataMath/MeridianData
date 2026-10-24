@@ -343,7 +343,7 @@
         try { const t = Date.now(); setGaps(await A.gaps(ids, t, t + 7 * U.DAY, ctx)); renderGaps(); renderMarketsThrottled(); } catch (_) {}
         loadPf();   // the next position fee changes every charge; the last weekend's figure only after a new weekend
       };
-      const restT = setInterval(refreshRest, 60000); ctx.onCleanup(() => clearInterval(restT));
+      ctx.onCleanup(U.every(60000, refreshRest));   // (not while the tab is hidden: U.every)
 
       // ---- the scan both maps share: TP / SL / entry stop levels and liquidation prices of every account, per market ----
       // What a level does to the market when the price reaches it (flow): closing a long (its TP, SL or liquidation) sells,
@@ -593,14 +593,14 @@
       }
       // scans only while the stop map or the liquidation map is open: at once on opening one (unless the last scan is under
       // 2 minutes old), then every 2 minutes; closing both stops the rescans and keeps what was found
-      let smT = null;
+      let smT = null;   // the rescans' stop (U.every: none while the tab is hidden, one when it shows again)
       scanOpen = () => {
-        clearInterval(smT); smT = null;
+        if (smT) smT(); smT = null;
         if (!stopCard.classList.contains('open') && !liqCard.classList.contains('open')) return;
         if (!sm || Date.now() - sm.at >= 120000) scanStops();
-        smT = setInterval(scanStops, 120000);
+        smT = U.every(120000, scanStops);
       };
-      ctx.onCleanup(() => clearInterval(smT));
+      ctx.onCleanup(() => { if (smT) smT(); });
       scanOpen();   // one opened while the page was still loading
 
       // ---- market specs (the card under Funding): every market's limits and settings from its product data, by category
@@ -746,7 +746,7 @@
         } catch (e) { if (e.name !== 'AbortError') U.replace(liqBody, UI.error(e)); }
       }
       loadLiq();
-      const liqT = setInterval(loadLiq, 30000); ctx.onCleanup(() => clearInterval(liqT));
+      ctx.onCleanup(U.every(30000, loadLiq));
 
       // ---- closures ----
       // a function so the minute refresh can redraw it: "closed now" is read against the clock at each render

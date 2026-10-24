@@ -127,12 +127,31 @@
   // A file that is not there is null: the site answers it with its own page (index.html, status 200) or a 404. One that
   // could not be read (no connection, a server error, a download cut off) throws, so a page can say so and offer a Retry
   // rather than "no activity for this address".
+  // One read of a file for a minute, shared by every caller: the wallet lookup, the bettor page, the account's Predict tab
+  // and the tax card each read a wallet's file, which went out twice or three times. The shared read is tied to no one
+  // caller (one leaving must not fail the others); a caller's own abort still ends its wait. A failed read is not kept.
+  const fileMemo = new Map();
   P.snapshotFile = async function (rel, { signal } = {}) {
+    let hit = fileMemo.get(rel);
+    if (!hit || Date.now() - hit.at > 60000) {
+      const p = readSnapshotFile(rel);
+      hit = { at: Date.now(), p }; fileMemo.set(rel, hit);
+      p.catch(() => { if (fileMemo.get(rel) === hit) fileMemo.delete(rel); });
+    }
+    const abortErr = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+    if (signal && signal.aborted) throw abortErr();
+    const best = signal ? await Promise.race([hit.p, new Promise((_, reject) => signal.addEventListener('abort', () => reject(abortErr()), { once: true }))]) : await hit.p;
+    // the wallet, question and slip files carry no build time of their own, so one whose content did not change is the
+    // same file at every build: theirs is the snapshot's
+    if (best && best.builtAt == null && /^(bettors|questions|slips)\//.test(rel)) best.builtAt = await P.snapshotAt();
+    return best;
+  };
+  async function readSnapshotFile(rel) {
     let fail = null;
     const failed = (why, code) => { fail = fail || Object.assign(new Error('The snapshot could not be read (' + why + ')'), { code }); return null; };
     const got = await Promise.all(P.SNAPSHOT_BASES.map(async (b) => {
       let r;
-      try { r = await fetch(b + rel, { cache: 'no-cache', signal }); } catch (e) { if (e && e.name === 'AbortError') throw e; return failed('no connection', 'NETWORK'); }
+      try { r = await fetch(b + rel, { cache: 'no-cache' }); } catch (e) { if (e && e.name === 'AbortError') throw e; return failed('no connection', 'NETWORK'); }
       if (r.status === 404) return null;
       if (!r.ok) return failed('HTTP ' + r.status, r.status);
       if (/text\/html/i.test((r.headers && r.headers.get && r.headers.get('content-type')) || '')) return null;   // the site's page in its place
@@ -140,11 +159,8 @@
     }));
     const best = got.filter(Boolean).sort((a, b) => (b.builtAt || 0) - (a.builtAt || 0))[0] || null;
     if (!best && fail) throw fail;
-    // the wallet, question and slip files carry no build time of their own, so one whose content did not change is the
-    // same file at every build: theirs is the snapshot's
-    if (best && best.builtAt == null && /^(bettors|questions|slips)\//.test(rel)) best.builtAt = await P.snapshotAt();
     return best;
-  };
+  }
   /** The published snapshot's build time, from predict-status.json (a few hundred bytes, read at most once a minute) */
   let statusAt = null;
   P.snapshotAt = function () {

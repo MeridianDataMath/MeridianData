@@ -1494,6 +1494,13 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **No build time in the wallet, question and slip files:** the page takes the snapshot's
     (`predict-status.json`, `P.snapshotAt`), so a file whose content did not change is the same
     file at every build, and neither the push nor the deploy carries it again.
+  - **The questions apart:** `predict-questions.json` holds the questions with money on them, their
+    matches, Meridian's Hot lists and tags (more than half of what `predict.json` held); only the
+    Questions page and a prediction's leg links read it (`P.loadQuestions`, which also takes a
+    `predict.json` that still holds them). A truncated wallet file carries its own aggregate row
+    (`aggRow`), so a big wallet's page no longer reads `predict.json` for it. The site reads a
+    snapshot file once a minute at most, shared by every caller (`P.snapshotFile`), and the Predict
+    Overview watches `predict-status.json` for a newer build instead of re-reading `predict.json`.
   - **Safe file names:** addresses and condition ids from the API become file names only when they
     are well-formed hex.
   - **Tax center fields** (additive; page code from before them ignores them, and the page reads
@@ -1843,7 +1850,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   re-reads the account first, and a stop that would trip again at once counts afresh from then
   (today's loss from that equity, the drawdown peak at it). A local status
   port (127.0.0.1 only, origin-checked, token-guarded for pause / resume / close all) feeds
-  the page's dashboard; resume and close all from the page wait for `yes` typed in the agent's
+  the page's dashboard, which reads it only after **Connect to my agent** (or once an agent has
+  answered in that browser: recent browsers ask before a site reaches the visitor's own computer)
+  and slows to one read every 30 s while none answers; resume and close all from the page wait for `yes` typed in the agent's
   terminal, since the token sits in the site's browser storage (`status.siteControls`
   `direct` skips that, for an agent run without a terminal). The dashboard shows equity, day
   and peak change, leverage, own positions against the leaders', closes still pending, the
@@ -2057,7 +2066,8 @@ difference explained (the owner's call, 2026-10-06; the in-app definitions, `MD.
 ## Layout
 
 ```
-index.html              shell + script order
+index.html              shell + script order; the Tax center, the Predict pages, the copy simulator and agent
+                        and Chart.js in <template id="lazy-…"> groups, loaded on first need (MD.need in js/router.js)
 css/app.css             theme (Meridian palette, Geist font)
 js/util.js              DOM/format/storage helpers, favorites
 js/api.js               REST + Archive + candles + WebSocket client; every GET has a 60 s limit and is tried again after

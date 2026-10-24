@@ -356,8 +356,12 @@
     function schedule() {
       clearTimeout(refreshT);
       if (!refreshSec) return;
-      refreshT = setTimeout(async () => { if (cx.signal.aborted) return; try { await loadBase(true); } catch (e) { if (isAbort(e)) return; } schedule(); }, refreshSec * 1000);
+      // a hidden tab skips the refresh (and reads at once when it shows again)
+      refreshT = setTimeout(async () => { if (cx.signal.aborted) return; if (document.hidden) { missedRefresh = true; schedule(); return; } try { await loadBase(true); } catch (e) { if (isAbort(e)) return; } schedule(); }, refreshSec * 1000);
     }
+    let missedRefresh = false;
+    const onVis = () => { if (!document.hidden && missedRefresh && !cx.signal.aborted) { missedRefresh = false; loadBase(true).catch(() => {}); } };
+    document.addEventListener('visibilitychange', onVis); cx.onCleanup(() => document.removeEventListener('visibilitychange', onVis));
     const updTick = setInterval(() => { if (lastLoad) updLbl.textContent = 'updated ' + U.fmtAgo(lastLoad); }, 5000);
     cx.onCleanup(() => { clearTimeout(refreshT); clearInterval(updTick); });
 
@@ -1212,6 +1216,7 @@
   /** One line on the Overview: the account's Predict result, the same figures as its Predict tab, loaded after the page.
    *  Nothing when the account has no Predict activity or its Predict wallet cannot be looked up. */
   async function predictGlance(slot, st, cx) {
+    await MD.need('predict');   // P.walletHeadline is in the Predict pages' scripts
     const P = MD.predict;
     const r = await P.wallets.predictAddress(st.addr, { signal: cx.signal });
     if (cx.signal.aborted || r.error || r.active === false) return;
@@ -1240,7 +1245,7 @@
     const who = h('span.dim.small');
     const openBtn = h('a.btn.sm.ghost', { href: '#/predict/bettor?address=' + encodeURIComponent(st.addr) }, U.icon('external'), 'Open in Predict section');
     U.replace(el, h('div.stack', h('div.row.wrap', { style: { gap: '6px' } }, who, h('span.grow'), openBtn), wrap));
-    const r = await MD.predict.wallets.predictAddress(st.addr, { signal: cx.signal });
+    const [r] = await Promise.all([MD.predict.wallets.predictAddress(st.addr, { signal: cx.signal }), MD.need('predict')]);   // (renderBettor is in the Predict pages' scripts)
     if (cx.signal.aborted) return;
     openBtn.href = '#/predict/bettor?address=' + encodeURIComponent(r.address);
     if (r.error) U.replace(who, h('span.small', { style: { color: 'var(--amber)' } }, 'Could not look up this account\'s Predict wallet (the Robinhood Chain RPC did not answer): showing predictions placed from the address itself.'));

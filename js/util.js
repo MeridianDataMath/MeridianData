@@ -372,6 +372,18 @@
 
   // ---------- Misc ----------
   U.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  /** setInterval for reads a page repeats while it is open: a tick that comes while the tab is hidden is skipped (a
+   *  background tab kept scanning every account every two minutes), and one runs as soon as the tab shows again if any
+   *  was skipped. Returns the function that stops it (for ctx.onCleanup). */
+  U.every = (ms, fn) => {
+    let missed = false;
+    const hidden = () => typeof document !== 'undefined' && document.hidden;
+    const tick = () => { if (hidden()) { missed = true; return; } missed = false; fn(); };
+    const t = setInterval(tick, ms);
+    const onVis = () => { if (!hidden() && missed) tick(); };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(t); if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis); };
+  };
   U.debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   U.throttle = (fn, ms) => { let last = 0, t; return (...a) => { const n = Date.now(); if (n - last >= ms) { last = n; fn(...a); } else { clearTimeout(t); t = setTimeout(() => { last = Date.now(); fn(...a); }, ms - (n - last)); } }; };
   /** run tasks with limited concurrency; tasks: array of () => Promise */
