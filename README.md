@@ -1912,7 +1912,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `d2faf2315619eb99a6f6537253658ab138e7ea8a27fad46586aa896fe9951d33` (`tests/agent.test.mjs` fails when this line is
+    `bdd23381d46d23b848a10ebfa9ab5fb864b2ee1897cce58b7d3bad92e93ab2db` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
@@ -2082,7 +2082,7 @@ difference explained (the owner's call, 2026-10-06; the in-app definitions, `MD.
   funding history (`fundingCharge`) report funding as positive when *paid*, the archive's
   `realizedFunding` as positive when *received*; the UI shows positive = received (green)
   everywhere.
-* The leaderboard analyses the most recent 600 positions per account and the Archive API's
+* The leaderboard analyses the most recent 5,000 positions per account and the Archive API's
   1-hour, 2-hour, 8-hour and daily buckets for 24h / 7d / 30d / all-time, plus its hourly funding
   history (3-day windows) so funding counts when charged. With many hundreds of accounts a build
   takes a few minutes; the public rate limit is generous (20 000 points per window).

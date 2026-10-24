@@ -52,8 +52,10 @@
     }
     finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
   }
-  /** GET, tried up to three times: after no answer, a 5xx, or a 429 (waiting what Retry-After asks, 1 to 10 s; 3 s when it
-   *  says nothing). Any other 4xx is final at once, and the caller's abort stops it between tries too. */
+  /** GET, tried up to three times: after no answer, a 5xx, or a 429 (waiting what Retry-After asks, 1 s to RETRY_WAIT_MAX_MS:
+   *  10 s in a browser, a minute in the snapshot build; 3 s when it says nothing). Any other 4xx is final at once, and the
+   *  caller's abort stops it between tries too. */
+  A.RETRY_WAIT_MAX_MS = 10000;
   async function rawGet(url, signal) {
     for (let attempt = 1; ; attempt++) {
       let r;
@@ -62,7 +64,7 @@
       const res = r.res; noteLimit(url, res);
       if ((res.status === 429 || res.status >= 500) && attempt < 3) {
         const asked = waitAsked(res);
-        await U.sleep(res.status === 429 ? Math.min(10000, Math.max(1000, asked != null ? asked : 3000)) : 500 * Math.pow(3, attempt - 1));
+        await U.sleep(res.status === 429 ? Math.min(A.RETRY_WAIT_MAX_MS, Math.max(1000, asked != null ? asked : 3000)) : 500 * Math.pow(3, attempt - 1));
         if (signal && signal.aborted) throw abortErr();
         continue;
       }

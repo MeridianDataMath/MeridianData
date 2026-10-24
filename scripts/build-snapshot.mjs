@@ -556,8 +556,13 @@ export function compactCompetition(c, standings, eligibleN, out = outWallet, leg
 }
 /** A competition whose standings could not be read: the last snapshot's standings of it, marked with when they were read
  *  (`asOf`), else none and `standingsUnread` (never "0 entries", which it would have read as) */
-export function carryStandings(fresh, prev, prevAt) {
-  if (prev && Array.isArray(prev.standings)) return Object.assign({}, fresh, { entries: prev.entries, standings: prev.standings, markets: Object.assign({}, fresh.markets, { eligible: prev.markets ? prev.markets.eligible : null }), asOf: prev.asOf || prevAt || null });
+export function carryStandings(fresh, prev, prevAt, out = outWallet) {
+  // only standings that were read: a build that could not read them either carried an empty list, which the next one took
+  // for standings "as read 30 min ago" with nobody in them; a wallet left out since (P.EXCLUDED) is dropped from them
+  if (prev && Array.isArray(prev.standings) && !prev.standingsUnread) {
+    const standings = prev.standings.filter((x) => !(x && x.a && out(String(x.a).toLowerCase())));
+    return Object.assign({}, fresh, { entries: prev.entries == null ? null : Math.max(0, prev.entries - (prev.standings.length - standings.length)), standings, markets: Object.assign({}, fresh.markets, { eligible: prev.markets ? prev.markets.eligible : null }), asOf: prev.asOf || prevAt || null });
+  }
   return Object.assign({}, fresh, { entries: null, standings: [], standingsUnread: true });
 }
 async function readCompetitions(legsOf, prevList, prevAt, failed) {
@@ -789,9 +794,14 @@ export function mergeTransfers(fresh, kept) {
 }
 /** Its daily balances: the kept ones, each day the fresh read covers taken from it; oldest first */
 export function mergeBalances(fresh, kept) {
-  const m = new Map((kept || []).map((x) => [x[0], x[1]]));
-  for (const x of fresh || []) m.set(x[0], x[1]);
-  return Array.from(m.entries()).sort((a, b) => a[0] - b[0]);
+  // the API's daily buckets end at the moment of each request (22:50:14 one read, 22:51:20 the next), so a fresh read never
+  // matched the kept days by time and added a new set at each read (14 points on one day for a maker). The kept ones from
+  // the fresh read's first day on are replaced by it; before that one point a UTC day is kept (its last), which also thins
+  // out what earlier builds piled up
+  const f = (fresh || []).slice().sort((a, b) => a[0] - b[0]); const from = f.length ? Math.floor(f[0][0] / 86400000) * 86400000 : Infinity;   // the fresh read's first UTC day
+  const day = new Map();
+  for (const x of kept || []) { if (!(x[0] < from)) continue; const k = Math.floor(x[0] / 86400000); const cur = day.get(k); if (!cur || x[0] > cur[0]) day.set(k, x); }
+  return Array.from(day.values()).concat(f).sort((a, b) => a[0] - b[0]);
 }
 /** Where a wallet's balance history needs reading back to: two days before its first activity or transfer, not before
  *  the exchange's start. */
@@ -1227,6 +1237,9 @@ async function previousSnapshots() {
 }
 async function buildPerps() {
   const started = Date.now();
+  // a 429 waits what Retry-After asks, up to a minute (Meridian asks 20 to 60 s; the browsers' 10 s cap made every request of
+  // a penalty fail after two short waits, and its row with it)
+  A.RETRY_WAIT_MAX_MS = 60000;
   const ctx = { signal: new AbortController().signal };
   // the setup reads, each tried once more after a pause (every request already retries its own failures)
   const twice = async (what, f) => { try { return await f(); } catch (e) { console.warn(`${what} failed (${e.message}); once more in 20 s`); await sleep(20000); return f(); } };
@@ -1241,6 +1254,13 @@ async function buildPerps() {
   const prevs = await previousSnapshots();   // the rows to carry over, and the order of this build
   const order = stalestFirst(subs, prevs);
   ctx.prevDrift = prevDrift(prevs);   // the fill drift each account last had measured: it stands in where this build's cannot be
+  // marks at most a minute old for each row (its equity, uPnL and every window's PnL are at them; read once at the start, a
+  // row built minutes later was off by hundreds of dollars on a 0.3 % move): one read shared by the rows of that minute
+  let pricesAt = Date.now(), pricesP = Promise.resolve(prices);
+  const livePrices = () => { if (Date.now() - pricesAt > 60000) { pricesAt = Date.now(); const was = pricesP; pricesP = A.marketPrices(ref.active.map((p) => p.id), ctx).catch(() => was); } return pricesP; };
+  // one account's row: when one of its requests fails for good the others it started stop too (they ran on unawaited while
+  // the next account started, adding load while the API was refusing)
+  const buildRow = async (sa) => { const c = new AbortController(); try { return await AN.buildLeaderboardRow(sa, ref, await livePrices(), Object.assign({}, ctx, { signal: c.signal })); } catch (e) { c.abort(); throw e; } };
   // each account's funding charges as read before: what is over 6 hours old does not change, so only the newer windows
   // are read (A.fundingCharges). data/cache/perps-funding.json, which the deploy keeps between runs (actions/cache)
   const fundFile = path.join(root, 'data', 'cache', 'perps-funding.json');
@@ -1258,7 +1278,7 @@ async function buildPerps() {
   let skipped = 0;
   // built stalest first (stalestFirst); results[i] is order[i]'s, mapped back to the account list's order here
   const byOrder = await U.pLimit(
-    order.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return AN.buildLeaderboardRow(sa, ref, prices, ctx); }),
+    order.map((sa) => async () => { if (Date.now() - started > budgetMs) { skipped++; return null; } return buildRow(sa); }),
     4,
     (done, total) => { if (done % 25 === 0 || done === total) console.log(`  ${done}/${total} · ${((Date.now() - started) / 1000).toFixed(0)}s`); },
   );
@@ -1272,7 +1292,7 @@ async function buildPerps() {
   // under load), while the budget lasts
   if (failedAt.length) {
     await sleep(3000);
-    const again = await U.pLimit(failedAt.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 2);
+    const again = await U.pLimit(failedAt.map((i) => async () => (Date.now() - started > budgetMs ? null : buildRow(subs[i]))), 2);
     again.forEach((r, j) => { const sa = subs[failedAt[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else { lastErr.set(failedAt[j], why(r)); console.warn(`row failed again ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); } });
   }
   // still failing: on GitHub's runners Meridian's API refuses some requests under load (built from a PC every account
@@ -1280,14 +1300,14 @@ async function buildPerps() {
   const left = failedAt.filter((i) => !built.has(subs[i].id));
   if (left.length && Date.now() - started + 20000 < budgetMs) {
     await sleep(20000);
-    const last = await U.pLimit(left.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 1);
+    const last = await U.pLimit(left.map((i) => async () => (Date.now() - started > budgetMs ? null : buildRow(subs[i]))), 1);
     last.forEach((r, j) => { const sa = subs[left[j]]; if (r.ok && r.value) built.set(sa.id, r.value); else { lastErr.set(left[j], why(r)); console.warn(`row failed a third time ${sa.id}: ${r.ok ? 'time budget reached' : r.error && r.error.message}`); } });
   }
   // rows built with a part read in vain (row.soft: volume, funding, position fees; fills or candles without an earlier
   // drift to stand in) are built once more while the budget lasts, and the fuller row kept
   const softIx = subs.map((sa, i) => i).filter((i) => needsRebuild(built.get(subs[i].id)));
   if (softIx.length && Date.now() - started + 10000 < budgetMs) {
-    const again = await U.pLimit(softIx.map((i) => async () => (Date.now() - started > budgetMs ? null : AN.buildLeaderboardRow(subs[i], ref, prices, ctx))), 2);
+    const again = await U.pLimit(softIx.map((i) => async () => (Date.now() - started > budgetMs ? null : buildRow(subs[i]))), 2);
     again.forEach((r, j) => { const id = subs[softIx[j]].id; if (r.ok && r.value && (r.value.soft || []).length < (built.get(id).soft || []).length) built.set(id, r.value); });
   }
   const failedIx = failedAt.filter((i) => !built.has(subs[i].id)), failed = failedIx.length;

@@ -499,7 +499,9 @@ async function run() {
       let sum = 0, cursor = null;
       for (let page = 0; page < 50; page++) {
         const r = await api('/v1/token/transfer', { params: { subaccountId: SID, createdAfter: since, limit: 100, cursor } });
-        for (const t of r.data || []) { const ty = String(t.type || '').toUpperCase(); const amt = num(t.amount); sum += /DEPOSIT/.test(ty) ? amt - num(t.fee) : /WITHDRAW/.test(ty) ? -(amt + num(t.fee)) : 0; }
+        // completed transfers only, as the site's ledger counts them: a rejected or pending one moved nothing (a rejected
+        // 500 USD withdrawal booked as one hid a 150 USD loss from the daily stop and shifted the drawdown peak for good)
+        for (const t of r.data || []) { if (t.status && String(t.status).toUpperCase() !== 'COMPLETED') continue; const ty = String(t.type || '').toUpperCase(); const amt = num(t.amount); sum += /DEPOSIT/.test(ty) ? amt - num(t.fee) : /WITHDRAW/.test(ty) ? -(amt + num(t.fee)) : 0; }
         if (!(r.hasNext && r.nextCursor)) return sum;
         cursor = r.nextCursor;
       }

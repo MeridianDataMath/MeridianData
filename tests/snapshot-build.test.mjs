@@ -346,6 +346,11 @@ test('a competition whose standings could not be read keeps the last ones read, 
   assert.equal(carryStandings(fresh, Object.assign({}, prev, { asOf: 1792700000000 }), 1792790000000).asOf, 1792700000000, 'carried again: its first read\'s time');
   const none = carryStandings(fresh, null, null);
   assert.equal(none.entries, null); assert.equal(none.standingsUnread, true); assert.deepEqual(none.standings, []);
+  // a second failed read: still unread, never "as read" with nobody in them
+  const again = carryStandings(fresh, none, 1792790000000); assert.equal(again.standingsUnread, true); assert.equal(again.asOf, undefined);
+  // a wallet left out since the last read is dropped from what is carried
+  const left = carryStandings(fresh, { entries: 41, standings: [{ r: 1, a: WL(1) }, { r: 2, a: WL(2) }], markets: {} }, 1, (a) => a === WL(1));
+  assert.deepEqual(left.standings.map((x) => x.a), [WL(2)]); assert.equal(left.entries, 40);
 });
 
 test('cash read since the last build merges into what was kept: transfers once each, the latest days replaced', () => {
@@ -353,6 +358,9 @@ test('cash read since the last build merges into what was kept: transfers once e
   const kept = [[T, -50, WL(2), '0xb'], [T - 3 * D, 100, WL(1), '0xa']];
   assert.deepEqual(mergeTransfers([[T + D, 20, WL(3), '0xc'], [T, -50, WL(2), '0xb']], kept), [[T + D, 20, WL(3), '0xc'], [T, -50, WL(2), '0xb'], [T - 3 * D, 100, WL(1), '0xa']]);
   assert.deepEqual(mergeBalances([[T, 60], [T + D, 0]], [[T - 2 * D, 100], [T - D, 100], [T, 50]]), [[T - 2 * D, 100], [T - D, 100], [T, 60], [T + D, 0]]);
+  // buckets that end at each read's own moment (a minute apart): replaced, not piled up; old piles thinned to one a day
+  const m = 60000, kept2 = [[T - 2 * D, 100], [T - 2 * D + m, 101], [T - D, 90], [T - D + m, 91], [T, 80], [T + m, 81]];
+  assert.deepEqual(mergeBalances([[T - D + 2 * m, 92], [T + 2 * m, 82]], kept2), [[T - 2 * D + m, 101], [T - D + 2 * m, 92], [T + 2 * m, 82]]);
   // a read of the latest days only keeps its zeros (the wallet emptied): no trimming as for a whole history
   const day = (d, v) => ({ timestamp: new Date(T + d * D).toISOString(), amount: wei(v) });
   assert.deepEqual(cashBalances([day(1, 0), day(0, 0)], T, false).map((x) => x[1]), [0, 0]);
