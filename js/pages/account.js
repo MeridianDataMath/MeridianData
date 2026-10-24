@@ -43,7 +43,8 @@
   }
   const METRICS = [{ v: 'pnl', label: 'PnL' }, { v: 'volume', label: 'Volume' }, { v: 'balance', label: 'Balance' }, { v: 'equity', label: 'Equity' }, { v: 'funding', label: 'Funding' }, { v: 'fees', label: 'Fees' }];
 
-  const child = (ctx) => { const ac = new AbortController(); const c = { signal: ac.signal, cleanup: [], onCleanup(f) { this.cleanup.push(f); }, abort() { ac.abort(); this.cleanup.forEach((f) => { try { f(); } catch (_) {} }); this.cleanup = []; } }; ctx.onCleanup(() => c.abort()); ctx.signal.addEventListener('abort', () => ac.abort()); return c; };
+  // a tab's own context: aborted when the tab or the page is left; a cleanup registered after that runs at once
+  const child = (ctx) => { const ac = new AbortController(); const c = { signal: ac.signal, cleanup: [], onCleanup(f) { if (ac.signal.aborted) { try { f(); } catch (_) {} } else this.cleanup.push(f); }, abort() { ac.abort(); this.cleanup.splice(0).forEach((f) => { try { f(); } catch (_) {} }); } }; ctx.onCleanup(() => c.abort()); ctx.signal.addEventListener('abort', () => ac.abort()); return c; };
   const isAbort = (e) => e && e.name === 'AbortError';
   /** "#/account" with nothing selected yet: search box, favorites, and pointers to the places that list accounts. */
   function pickAccountCard() {
@@ -306,10 +307,13 @@
         tab = v; MD.router.setParams({ tab: v }, { silent: true });
         U.$$('button', tabsEl).forEach((b) => b.classList.toggle('on', b.dataset.v === v));
         if (tabCtx) tabCtx.abort();
-        tabCtx = child(ctx);
-        U.clear(tabBody);
+        const cx = (tabCtx = child(ctx));
+        // each tab renders into an element of its own: a tab left while it loads (its reads' failures caught as empty
+        // lists) finishes into that, off the page, instead of over the tab the reader picked
+        const pane = h('div');
+        U.replace(tabBody, pane);
         const fn = { overview: mountOverview, live: mountLive, performance: mountPerformance, rewards: mountRewards, predict: mountPredict }[v];
-        fn(tabBody, state, tabCtx).catch((e) => { if (!isAbort(e)) { console.error(e); U.replace(tabBody, UI.error(e, () => show(v))); } });
+        fn(pane, state, cx).catch((e) => { if (!isAbort(e) && tabCtx === cx) { console.error(e); U.replace(pane, UI.error(e, () => show(v))); } });
       }
       state.showTab = show;   // lets a tab switch to another one without reloading the page
       show(tab);

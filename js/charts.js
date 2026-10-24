@@ -51,7 +51,20 @@
   C.axisUsd = (v) => U.fmtUsd(v, { compact: true, dp: Math.abs(v) < 10 && v % 1 !== 0 ? 2 : 0 });
   const alignTicks = (axis) => { const t = C.timeTicks(axis.min, axis.max, 8); if (t.length >= 2) axis.ticks = t.map((value) => ({ value })); };
 
-  C.destroy = (canvas) => { if (canvas && canvas.__chart) { try { canvas.__chart.destroy(); } catch (_) {} canvas.__chart = null; } };
+  // Chart.js keeps every chart in its registry until destroy(), and with it the canvas and whatever page that canvas
+  // was on; a responsive chart whose canvas has left the page also keeps observers on the whole document. So every
+  // chart is kept here: the router destroys them all on a page change (destroyAll), and a chart whose canvas has been
+  // off the page for 15 s (a tab switched away, a dialog closed, a panel redrawn with a new canvas) is destroyed by the
+  // sweep, run on each new chart and every 20 s. (The wait: a canvas drawn before it is attached, or held back by
+  // U.replaceLive while the reader hovers, is not mistaken for one that has gone.)
+  const live = new Set();
+  const kill = (ch) => { const cv = ch.canvas; live.delete(ch); try { ch.destroy(); } catch (_) {} if (cv && cv.__chart === ch) cv.__chart = null; };   // (destroy() drops ch.canvas)
+  C.destroy = (canvas) => { if (canvas && canvas.__chart) kill(canvas.__chart); };
+  C.destroyAll = () => { for (const ch of Array.from(live)) kill(ch); };
+  C.sweep = () => { const now = Date.now(); for (const ch of Array.from(live)) { const cv = ch.canvas; if (cv && cv.isConnected) ch.__offAt = 0; else if (!ch.__offAt) ch.__offAt = now; else if (now - ch.__offAt >= 15000) kill(ch); } };
+  C.count = () => live.size;
+  const keep = (canvas, chart) => { C.sweep(); canvas.__chart = chart; live.add(chart); return chart; };
+  if (typeof setInterval === 'function' && typeof document !== 'undefined') { const t = setInterval(C.sweep, 20000); if (t && t.unref) t.unref(); }   // (unref: a Node test run is not kept alive by it)
 
   /**
    * line/bar chart of time series. opts: {points:[{x,y}], color, type:'line'|'bar', yFmt, tooltipLabel, zero:true,
@@ -106,9 +119,7 @@
     const existing = canvas.__chart;
     if (existing && existing.config.type === type) { existing.data = config.data; existing.options = config.options; existing.update('none'); return existing; }
     C.destroy(canvas);
-    const chart = new Chart(canvas, config);
-    canvas.__chart = chart;
-    return chart;
+    return keep(canvas, new Chart(canvas, config));
   };
 
   C.sparkline = function (canvas, values, opts = {}) {
@@ -122,8 +133,7 @@
       data: { labels: values.map((_, i) => i), datasets: [{ data: values, borderColor: color, borderWidth: 1.5, pointRadius: 0, fill: 'origin', backgroundColor: hexA(color, 0.1), cubicInterpolationMode: 'monotone' }] },
       options: { responsive: false, maintainAspectRatio: false, animation: false, events: [], scales: { x: { display: false }, y: { display: false } }, plugins: { tooltip: { enabled: false }, legend: { display: false } } },
     });
-    canvas.__chart = chart;
-    return chart;
+    return keep(canvas, chart);
   };
 
   /** Bars, green when ≥ 0. opts: {horizontal, fmt (tooltip), axisFmt (value-axis ticks; C.axisUsd unless given)} */
@@ -141,8 +151,7 @@
         plugins: { tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, displayColors: false, callbacks: { label: (it) => (opts.fmt || U.fmtUsd)(it.raw) } } },
       },
     });
-    canvas.__chart = chart;
-    return chart;
+    return keep(canvas, chart);
   };
 
   /** Bars stacked per label from several series [{label, values, color}], with a legend (e.g. trading and referral points
@@ -161,8 +170,7 @@
         plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: col.text, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } }, tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, callbacks: { label: (it) => it.dataset.label + ': ' + fmt(it.raw) } } },
       },
     });
-    canvas.__chart = chart;
-    return chart;
+    return keep(canvas, chart);
   };
 
   /** Two series side by side per label (e.g. implied vs realized probability per odds bucket), in percent. */
@@ -181,7 +189,6 @@
         plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: col.text, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'rectRounded' } }, tooltip: { backgroundColor: '#1e1e1f', borderColor: '#2a2a2c', borderWidth: 1, callbacks: { label: (it) => it.dataset.label + ': ' + fmt(it.raw) } } },
       },
     });
-    canvas.__chart = chart;
-    return chart;
+    return keep(canvas, chart);
   };
 })();

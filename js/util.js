@@ -111,6 +111,16 @@
     el.__pending = null;
     return U.replace(el, ...children);
   };
+  /** Re-render a container without losing the keyboard focus: fn() replaces what is inside el, and when an element in it
+   *  had the focus, the one that replaced it (the same data-focus-key) gets it back. */
+  U.keepFocus = (el, fn) => {
+    const a = document.activeElement;
+    const key = a && a !== el && el.contains(a) && a.dataset ? a.dataset.focusKey : null;
+    fn();
+    if (!key || el.contains(document.activeElement) || !(window.CSS && CSS.escape)) return;
+    const to = el.querySelector('[data-focus-key="' + CSS.escape(key) + '"]');
+    if (to) to.focus({ preventScroll: true });
+  };
   U.esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   U.svg = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; };
 

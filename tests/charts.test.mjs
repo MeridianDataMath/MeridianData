@@ -26,3 +26,21 @@ test('C.bars: the value axis is in dollars unless the caller gives its own forma
   assert.equal(hz.y.ticks.callback, undefined);
   assert.equal(made.length, 3);
 });
+
+test('charts are let go: all of them on a page change, and one whose canvas has been off the page for 15 s', () => {
+  const prev = globalThis.Chart, now = Date.now;
+  let destroyed = 0, t = 1e12;
+  globalThis.Chart = class { constructor(canvas) { this.canvas = canvas; this.config = { type: 'bar' }; } destroy() { destroyed++; this.canvas = null; } };
+  Date.now = () => t;
+  try {
+    C.destroyAll(); destroyed = 0;
+    const on = { isConnected: true }, off = { isConnected: false };
+    C.bars(on, ['a'], [1]); C.bars(off, ['a'], [1]);
+    assert.equal(C.count(), 2);
+    C.sweep(); assert.equal(destroyed, 0, 'a canvas just drawn before it is attached is not taken for gone');
+    t += 16000; C.sweep(); assert.equal(destroyed, 1, 'off the page for 15 s: destroyed'); assert.equal(off.__chart, null);
+    assert.ok(on.__chart, 'the chart on the page stays'); assert.equal(C.count(), 1);
+    C.bars(on, ['a'], [2]); assert.equal(destroyed, 2, 'a new chart on the same canvas replaces the old one'); assert.equal(C.count(), 1);
+    C.destroyAll(); assert.equal(destroyed, 3); assert.equal(C.count(), 0); assert.equal(on.__chart, null);
+  } finally { globalThis.Chart = prev; Date.now = now; }
+});

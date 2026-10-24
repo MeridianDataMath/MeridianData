@@ -50,19 +50,32 @@
     if (window.MD.ui && window.MD.ui.closeModals) window.MD.ui.closeModals();
     if (prev && curHash) scrollPos.set(curHash, R.root.scrollTop);
     curHash = location.hash || '#/';
-    if (R.ctx) { try { R.ctx.abort.abort(); } catch (_) {} for (const f of R.ctx.cleanup || []) { try { f(); } catch (_) {} } }   // one failing cleanup must not leave the others (timers, socket subscriptions) running
+    if (R.ctx) { const old = R.ctx; old.done = true; try { old.abort.abort(); } catch (_) {} for (const f of old.cleanup.splice(0)) { try { f(); } catch (_) {} } }   // one failing cleanup must not leave the others (timers, socket subscriptions) running
     const abort = new AbortController();
-    const ctx = { abort, signal: abort.signal, cleanup: [], route, onCleanup(fn) { this.cleanup.push(fn); } };
+    // a cleanup registered once the page has been left (a timer or a subscription started after a slow read came back)
+    // runs at once: the page's own cleanup has already been and gone
+    const ctx = { abort, signal: abort.signal, cleanup: [], route, onCleanup(fn) { if (this.done) { try { fn(); } catch (_) {} } else this.cleanup.push(fn); } };
     R.ctx = ctx; R.current = route;
     const page = R.pages[route.name] || R.pages.notfound;
     R.root.scrollTop = 0;
+    // Chart.js keeps every chart, and through it its canvas and the page around it, until destroy()
+    if (window.MD.charts && window.MD.charts.destroyAll) window.MD.charts.destroyAll();
     U.clear(R.root);
+    // each page renders into an element of its own: a page left while it loads finishes into that, off the screen,
+    // instead of over the page that replaced it
+    const host = U.h('div.route');
+    R.root.appendChild(host);
     if (R.onRoute) R.onRoute(route);
     const progress = window.MD.ui && window.MD.ui.progress;   // the thin line under the topbar, for every page change
     if (progress) progress.restart();
     if (fromHistory) restoreScroll(curHash, ctx);
-    try { await page.mount(R.root, route, ctx); }
-    catch (e) { if (!(e && e.name === 'AbortError')) { console.error(e); U.replace(R.root, U.h('div.page', U.h('div.error', 'Failed to render page: ' + (e.message || e)))); } }
+    try { await page.mount(host, route, ctx); }
+    catch (e) {
+      if (R.ctx !== ctx || (e && e.name === 'AbortError')) return;   // a page already left: its failure is nobody's business
+      console.error(e);
+      const UI = window.MD.ui, msg = 'Failed to render page: ' + ((e && e.message) || e);
+      U.replace(host, U.h('div.page', UI ? UI.error(msg, () => R.reload()) : U.h('div.error', msg)));
+    }
     finally { if (progress && R.ctx === ctx) progress.done(); }
   };
   /** Mount the current page again (a Retry button, a newer snapshot): dispatch ignores an unchanged route, so a Retry

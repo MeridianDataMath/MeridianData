@@ -127,6 +127,7 @@
       let gaps = [], gapsBy = {};
       const setGaps = (list) => { gaps = list; gapsBy = U.groupBy(list, (g) => g.productId); };
       try { setGaps(await A.gaps(ids, now, now + 7 * U.DAY, ctx)); } catch (_) {}
+      if (ctx.signal.aborted) return;   // left while loading (the catches above take its abort for a failed read): no live feed or timers for a page that is gone
       const closureNote = (p) => {
         const t = Date.now();   // the table re-renders on every ticker, so the countdown must read the clock, not the mount time
         const list = (gapsBy[p.id] || []).filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime);

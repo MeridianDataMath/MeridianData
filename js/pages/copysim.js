@@ -438,7 +438,7 @@
           { key: 'f', label: 'Fee', num: true, render: (r) => U.fmtUsd(r.fee, { dp: 2 }) },
           { key: 'k', label: '', render: (r) => h('span', r.why ? UI.chip(r.closed ? 'closed at mark' : 'cut at mark', 'amber') : r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null, r.why ? h('span.dim.xs', { title: r.why }, ' ⓘ') : null) },
         ], rows: paper.log.slice(0, 30), empty: 'No fills mirrored yet' });
-        const rebuildBtn = h('button.btn.sm.ghost', { title: 'Recompute this account from the exchange\'s fills since it started, at candle prices, from the leader\'s positions at that moment', onclick: async () => {
+        const rebuildBtn = h('button.btn.sm.ghost', { dataset: { focusKey: 'paper:rebuild' }, title: 'Recompute this account from the exchange\'s fills since it started, at candle prices, from the leader\'s positions at that moment', onclick: async () => {
           if (rebuilding || !confirm('Recompute this paper account from the exchange\'s fills since ' + U.fmtDateTime(paper.startedAt) + '? Fills mirrored live are recomputed at candle prices, and funding is kept only for positions still open.')) return;
           rebuilding = true; renderPaper();
           try { const n = await rebuild(); if (n != null) U.toast(`Rebuilt from ${n} fill${n === 1 ? '' : 's'} of the leader`); } catch (e) { if (!isAbort(e)) U.toast('Rebuild failed: ' + (e.message || e)); }
@@ -449,14 +449,15 @@
         // an account kept by an earlier version of this page could have mirrored a leader's sell of a position opened
         // before following as a new short (and closed it at the mark later): offer to recompute it
         const oldNote = (paper.v || 0) < PP.V ? h('div.small', { style: { color: 'var(--amber)', margin: '0 0 10px' } }, 'This paper account was kept by an earlier version of this page, which mirrored the leader cutting or closing a position it already held when you started following as a new position of yours. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); rebuildBtn.click(); } }, 'Rebuild it'), ' from the exchange\'s fills to correct that.') : null;
-        U.replace(paperCard,
+        // redrawn every 10 s while positions are open (unrealized follows the mark): a focused button keeps the focus
+        U.keepFocus(paperCard, () => U.replace(paperCard,
           h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (paper.settings.markets ? ' · ' + paper.settings.markets.map((id) => (ref.byId[id] || {}).displayTicker || id).join(', ') + ' only' : '') + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
             rebuildBtn,
-            h('button.btn.sm.ghost', { disabled: rebuilding, onclick: () => { if (confirm('Stop following and discard this paper account?')) { stopAll(); PP.clear(sid); paper = null; announced.clear(); pending = 0; renderPaper(); } } }, 'Stop & discard')),
+            h('button.btn.sm.ghost', { disabled: rebuilding, dataset: { focusKey: 'paper:discard' }, onclick: () => { if (confirm('Stop following and discard this paper account?')) { stopAll(); PP.clear(sid); paper = null; announced.clear(); pending = 0; renderPaper(); } } }, 'Stop & discard')),
           oldNote,
           tiles,
           h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('Open virtual positions', openTbl), UI.card('Mirrored fills', logTbl, h('span.dim.small', 'newest first'))),
-          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account shows what following would have done from the moment it started, by this page\'s rules; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.'));
+          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'A paper account shows what following would have done from the moment it started, by this page\'s rules; it is not the exchange, so partial fills, rejections and your own market impact are not in it. Funding is accrued only while a tab follows.')));
       }
       // the exchange's clock and the stream first, then the catch-up: a fill during the catch-up is announced, not lost
       if (paper) { renderPaper(); try { await syncClock(); attach(); const n = await sync(); if (n) U.toast(`Caught up ${n} fill${n > 1 ? 's' : ''} from the exchange`); } catch (e) { if (isAbort(e)) return; } renderPaper(); }

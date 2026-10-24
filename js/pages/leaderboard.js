@@ -52,7 +52,10 @@
     },
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title.with-ic', h('span.ic-gold', U.icon('trophyFill')), 'Leaderboard'));
+      // the published snapshot is close to a megabyte: say so while it comes, rather than a blank page
+      if (P._remote === undefined) U.replace(root, h('div.page', h('div.card', UI.loading('Loading the leaderboard…'))));
       await P.loadRemote();
+      if (ctx.signal.aborted) return;
       const state = { interval: route.params.interval || '30d', sort: { key: 'pnl', desc: true }, page: 1, q: '', favOnly: false, style: '', min: {}, max: {} };
       const tableWrap = h('div');
       const progress = h('div');

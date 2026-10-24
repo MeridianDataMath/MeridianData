@@ -157,10 +157,10 @@ body.share { display: grid; place-items: center; min-height: 100vh; overflow: au
 }
 .topbar .search-mini input:focus { border-color: var(--accent); }
 .main { overflow: auto; padding: 20px; min-width: 0; }
-.main > .page { max-width: 1440px; margin: 0 auto; }
+.main > .route > .page { max-width: 1440px; margin: 0 auto; }
 /* home is full-bleed: the hero spans the whole content area; the tiles and cards under it sit centred as on any page */
 .main.home { padding: 0; }
-.main.home > .page { max-width: none; margin: 0; }
+.main.home > .route > .page { max-width: none; margin: 0; }
 .main.home .hero { border-radius: 0; border: 0; }
 .home-body { padding: 20px; max-width: 1440px; margin: 0 auto; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); display: inline-block; }
@@ -839,7 +839,7 @@ textarea.input:focus { border-color: var(--accent); }
   .tax-flags { flex-wrap: wrap; }   /* a disposal's flags stack rather than widen the table */
   .frame { display: block; height: auto; }
   .main { overflow: visible; padding: 0; height: auto; }
-  .main > .page { max-width: none; }
+  .main > .route > .page { max-width: none; }
   .card { break-inside: avoid; box-shadow: none; }
   table.tbl th { position: static; }
   .grid.cols-2, .grid.cols-2.wl { grid-template-columns: 1fr; }
@@ -850,7 +850,7 @@ textarea.input:focus { border-color: var(--accent); }
 @media (min-width: 1400px) {
   body { font-size: 14.5px; }
   .main { padding: 24px 28px; }
-  .main > .page { max-width: 1920px; }
+  .main > .route > .page { max-width: 1920px; }
   .home-body { padding: 24px 28px; max-width: 1920px; }
   .overview { grid-template-columns: 320px minmax(0, 1fr); }
   .chart-box { height: 360px; }

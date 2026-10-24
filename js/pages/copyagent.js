@@ -236,24 +236,41 @@
 
       // ---- step 4 + dashboard
       const dash = h('div'); const histWrap = h('div');
-      let timer = null, last = null, lastErr = null, refused = null, ownPositions = null, ownPosAt = 0;
+      let timer = null, last = null, lastErr = null, refused = null, ownPositions = null, ownPosAt = 0, okAt = 0;
+      ctx.onCleanup(() => clearTimeout(timer));
+      // the dashboard: its controls row is redrawn only when what it shows changes (its buttons keep the keyboard focus,
+      // and a click on one cannot fall between two redraws), the rest only when the agent's status does
+      const ctrl = h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } }); const upTxt = h('span'); const dashBody = h('div');
+      const ageTxt = h('span.dim.small', 'polls the agent every 3 s');
+      let ctrlKey = null, bodySig = null;
+      // a status read that hangs (a stuck agent, a sleeping laptop) times out: a stale "running" must not stay up
+      const timed = (ms) => { if (AbortSignal.any && AbortSignal.timeout) return AbortSignal.any([ctx.signal, AbortSignal.timeout(ms)]); const c = new AbortController(); const t = setTimeout(() => c.abort(), ms); ctx.signal.addEventListener('abort', () => { clearTimeout(t); c.abort(); }); return c.signal; };
       // Resume and Close all answer 202 and wait for a yes typed in the agent's terminal (409: it cannot ask, or already does)
       const post = async (p) => { try { const r = await fetch(agentUrl(p), { method: 'POST', headers: agentHdr() }); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(r.status === 401 ? 'wrong token' : j.msg || 'HTTP ' + r.status); U.toast(j.confirm ? `${p}: ${j.confirm}` : p + ' sent'); poll(); } catch (e) { U.toast(`${p} failed: ${e.message}`); } };
-      const poll = async () => {
+      let polling = false;   // a read after a button press does not start while the timed one is still out
+      const poll = async () => { if (polling) return; polling = true; try { await pollOnce(); } finally { polling = false; } };
+      const pollOnce = async () => {
         try {
-          const r = await fetch(agentUrl('status'), { signal: ctx.signal, headers: agentHdr() });
+          const r = await fetch(agentUrl('status'), { signal: timed(4000), headers: agentHdr() });
           // it answered but will not show itself: the token (or this page's origin) is not one it accepts
-          if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; }
-        } catch (e) { if (isAbort(e)) return; last = null; lastErr = e.message; refused = null; }
+          if (r.status === 401 || r.status === 403) { last = null; lastErr = null; refused = r.status; } else { last = await r.json(); lastErr = null; refused = null; okAt = Date.now(); }
+        } catch (e) { if (ctx.signal.aborted) return; last = null; lastErr = e && (e.name === 'TimeoutError' || e.name === 'AbortError') ? 'no answer within 4 s' : e.message; refused = null; }
+        ageTxt.textContent = 'polls the agent every 3 s' + (last ? ' · updated ' + U.fmtTime(okAt) : okAt ? ' · last answer ' + U.fmtAgo(okAt) : '');
         renderDash();
         // the copy account's position records (funding, liquidations) for the history, refreshed every minute
         if (last && last.subaccountId && !last.dry && Date.now() - ownPosAt > 60000) { ownPosAt = Date.now(); try { ownPositions = await A.positions(last.subaccountId, { maxPages: 3, signal: ctx.signal }); } catch (e) { if (isAbort(e)) return; } }
         renderHistory();
       };
+      // the page polls every 3 s: an unchanged history is not drawn again, and the chart keeps one canvas (a new canvas
+      // on every poll was a new Chart.js chart on every poll, each kept by Chart.js until destroyed)
+      let histSig = null, histKit = null;
       function renderHistory() {
-        if (!last) { U.replace(histWrap, h('div.empty', 'Appears once the agent is running: every position it opens, attributed to the leader whose order caused it, with your slippage against their fills and the delay behind them.')); return; }
+        if (!last) { histSig = null; histKit = null; U.replace(histWrap, h('div.empty', 'Appears once the agent is running: every position it opens, attributed to the leader whose order caused it, with your slippage against their fills and the delay behind them.')); return; }
         const H = history(last, MD._agentRef, ownPositions);
-        if (!H) { U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
+        if (!H) { histSig = null; histKit = null; U.replace(histWrap, h('div.empty', 'No filled order yet. History is built from the fills the exchange reports for the agent\'s orders, attributed to the leader whose order caused each one.')); return; }
+        const sig = JSON.stringify([H.T, H.leaders, H.rows.slice(0, 40), H.series, H.rows.length, !!last.dry]);
+        if (sig === histSig) return;
+        histSig = sig;
         const who = (l) => (l ? (U.shortAddr(l.address, 4)) : 'no leader');
         const col = C.colors(); const palette = [col.accent, col.blue, col.amber, col.green, col.red];
         const usd2 = (v) => U.fmtUsd(v, { sign: true, dp: 2 });
@@ -288,12 +305,20 @@
           { key: 'sl', label: 'Slippage', num: true, title: 'your fill price against the leader\'s, size-weighted over the position\'s fills; "at mark" when the leader\'s price was unknown (a close after a resync)', render: (r) => (r.slipBps == null ? h('span.dim', r.standIn ? 'at mark' : '—') : h('span', { class: r.slipBps > 0 ? 'neg' : 'pos' }, (r.slipBps > 0 ? '+' : '') + U.fmtNum(r.slipBps, 1) + ' bps', r.standIn ? h('span.dim.xs', ' · part at mark') : null)) },
           { key: 'd', label: 'Delay', num: true, render: (r) => (r.delayMs == null ? h('span.dim', '—') : U.fmtNum(r.delayMs / 1000, 1) + ' s') },
         ], rows: H.rows.slice(0, 40), empty: 'No position the agent opened has a fill yet; positions it adopted at start or that were closed by Close all are not listed.' });
-        const canvas = h('canvas');
-        const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Realized by leader'), h('span.grow'), h('span.dim.small', 'cumulative Closed P&L, by position close')), h('div.chart-box.sm', canvas));
-        U.replace(histWrap, tiles, h('div.grid.cols-2', { style: { marginTop: '12px' } }, UI.card('By leader', leadersTbl), chartCard), UI.card('Positions', posTbl, h('span.dim.small', (H.rows.length > 40 ? `newest 40 of ${H.rows.length} positions` : `${H.rows.length} position${H.rows.length === 1 ? '' : 's'}`) + ' from the agent\'s orders, newest first' + (last.dry ? ' · dry run: fills are virtual' : ''))),
-          h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. P&L is what Meridian shows for the position: its Closed P&L (realized − trading fees + settled funding, without position fees; the exchange\'s own record when it covers exactly this position, else the same sum from the fills), or for an open one the P&L at the live mark, before fees and funding. The site\'s net, which also takes off position fees and counts funding charged and not yet settled (and, while a position is open, its partial closes, fees and funding), is in each tooltip; funding, position fees and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".'));
+        // built once: later polls replace the tiles and tables in their slots and update the chart on the same canvas
+        if (!histKit) {
+          histKit = { canvas: h('canvas'), tiles: h('div'), leaders: h('div'), positions: h('div') };
+          const chartCard = h('div.card.chart-fill', h('div.row', { style: { marginBottom: '6px', flex: 'none' } }, h('h3', 'Realized by leader'), h('span.grow'), h('span.dim.small', 'cumulative Closed P&L, by position close')), h('div.chart-box.sm', histKit.canvas));
+          U.replace(histWrap, histKit.tiles, h('div.grid.cols-2', { style: { marginTop: '12px' } }, histKit.leaders, chartCard), histKit.positions, histFoot());
+        }
+        const canvas = histKit.canvas;
+        U.replace(histKit.tiles, tiles); U.replace(histKit.leaders, UI.card('By leader', leadersTbl));
+        U.replace(histKit.positions, UI.card('Positions', posTbl, h('span.dim.small', (H.rows.length > 40 ? `newest 40 of ${H.rows.length} positions` : `${H.rows.length} position${H.rows.length === 1 ? '' : 's'}`) + ' from the agent\'s orders, newest first' + (last.dry ? ' · dry run: fills are virtual' : ''))));
         const ser = Object.entries(H.series).map(([sid, pts], i) => ({ points: pts, color: palette[i % palette.length], label: who((last.leaders || []).find((l) => l.sid === sid) || null) }));
         if (ser.length) C.timeSeries(canvas, { series: ser, yFmt: C.axisUsd, tipFmt: (v) => U.fmtUsd(v, { dp: 2, sign: true }) });
+      }
+      function histFoot() {
+        return h('div.footer-note', { style: { textAlign: 'left', paddingBottom: 0 } }, 'Only positions the agent opened are here (fills the exchange reported for its orders); anything traded by hand on the same subaccount is not attributed. P&L is what Meridian shows for the position: its Closed P&L (realized − trading fees + settled funding, without position fees; the exchange\'s own record when it covers exactly this position, else the same sum from the fills), or for an open one the P&L at the live mark, before fees and funding. The site\'s net, which also takes off position fees and counts funding charged and not yet settled (and, while a position is open, its partial closes, fees and funding), is in each tooltip; funding, position fees and liquidations come from the exchange\'s position records. Slippage is your average fill against the leader\'s average fill on the order that triggered yours; a close made after a resync has no leader price and is shown "at mark".');
       }
       const renderDash = () => {
         if (!last) {
@@ -311,13 +336,23 @@
         // an agent from before that sends no `unsettled`, and its equity is the gross one: said, not hidden
         const netEq = S.unsettled != null; const upnl = U.sum(Object.values(S.own || {}), (o) => U.num(o.upnl));
         const lev = leverage(S);
-        U.replace(dash,
-          h('div.row.wrap', { style: { gap: '8px', marginBottom: '10px' } },
+        if (dash.firstChild !== ctrl) { U.replace(dash, ctrl, dashBody); ctrlKey = null; bodySig = null; }
+        upTxt.textContent = 'up ' + U.fmtDuration(S.uptime);
+        const key = JSON.stringify([S.paused, S.tripped, S.dry, S.ws, S.reconnects, S.signer, (S.leaders || []).length, S.orders ? S.orders.length : 0, S.errors || 0, S.risk && S.risk.maxOrderUsd, S.risk && S.risk.maxPositionUsd]);
+        if (key !== ctrlKey) {
+          ctrlKey = key;
+          U.keepFocus(ctrl, () => U.replace(ctrl,
             UI.chip(S.paused ? 'paused' : S.tripped ? 'risk stop' : 'running', S.paused ? 'amber' : S.tripped ? 'red' : 'green'), S.dry ? UI.chip('DRY RUN · nothing is placed', 'amber') : UI.chip('LIVE · real orders', 'red'), UI.chip('socket ' + S.ws + (S.reconnects ? ' · ' + S.reconnects + ' reconnect' + (S.reconnects > 1 ? 's' : '') : ''), S.ws === 'open' ? 'green' : 'amber'),
-            h('span.dim.small', `up ${U.fmtDuration(S.uptime)} · signer ${U.shortAddr(S.signer, 4)} · ${(S.leaders || []).length} leader(s) · ${S.orders ? S.orders.length : 0} orders · ${S.errors || 0} errors` + (S.risk && S.risk.maxOrderUsd ? ` · at most ${usd0(S.risk.maxOrderUsd)} per order, ${usd0(S.risk.maxPositionUsd)} per position` : '')), h('span.grow'),
-            S.paused || S.tripped ? h('button.btn.sm.primary', { onclick: () => post('resume'), title: 'Clears the pause and the risk stop once you type yes in the agent\'s terminal. A stop that would trip again at once counts afresh from then: today\'s loss from that moment, the drawdown from that equity.' }, 'Resume') : h('button.btn.sm', { onclick: () => post('pause'), title: 'Blocks new and larger positions. Closes and reductions keep following the leaders, as during a risk stop, so a leader\'s exit is never missed. To stop every order, stop the agent (Ctrl+C in its terminal).' }, 'Pause'),
-            h('button.btn.sm.ghost', { onclick: () => post('resync'), title: 'Read the leaders\' positions again now. In markets you copy, a leader found flat closes yours (unless set to hold), a leader found on the other side closes yours without opening the new side, and a reduction is mirrored. Openings and adds the socket missed are listed under Not copied and not placed.' }, 'Resync'),
-            h('button.btn.sm.ghost', { onclick: () => { if (confirm('Close every open position of the copy account? Reduce-only limit orders, widening up to the close cap from the mark. Then type yes in the agent\'s terminal to confirm.')) post('close-all'); } }, 'Close all')),
+            h('span.dim.small', upTxt, ` · signer ${U.shortAddr(S.signer, 4)} · ${(S.leaders || []).length} leader(s) · ${S.orders ? S.orders.length : 0} orders · ${S.errors || 0} errors` + (S.risk && S.risk.maxOrderUsd ? ` · at most ${usd0(S.risk.maxOrderUsd)} per order, ${usd0(S.risk.maxPositionUsd)} per position` : '')), h('span.grow'),
+            S.paused || S.tripped ? h('button.btn.sm.primary', { dataset: { focusKey: 'agent:pause' }, onclick: () => post('resume'), title: 'Clears the pause and the risk stop once you type yes in the agent\'s terminal. A stop that would trip again at once counts afresh from then: today\'s loss from that moment, the drawdown from that equity.' }, 'Resume') : h('button.btn.sm', { dataset: { focusKey: 'agent:pause' }, onclick: () => post('pause'), title: 'Blocks new and larger positions. Closes and reductions keep following the leaders, as during a risk stop, so a leader\'s exit is never missed. To stop every order, stop the agent (Ctrl+C in its terminal).' }, 'Pause'),
+            h('button.btn.sm.ghost', { dataset: { focusKey: 'agent:resync' }, onclick: () => post('resync'), title: 'Read the leaders\' positions again now. In markets you copy, a leader found flat closes yours (unless set to hold), a leader found on the other side closes yours without opening the new side, and a reduction is mirrored. Openings and adds the socket missed are listed under Not copied and not placed.' }, 'Resync'),
+            h('button.btn.sm.ghost', { dataset: { focusKey: 'agent:close' }, onclick: () => { if (confirm('Close every open position of the copy account? Reduce-only limit orders, widening up to the close cap from the mark. Then type yes in the agent\'s terminal to confirm.')) post('close-all'); } }, 'Close all')));
+        }
+        // the rest only when the status itself changed (its uptime and clock aside)
+        const sig = JSON.stringify(Object.assign({}, S, { uptime: 0, now: 0 }));
+        if (sig === bodySig) return;
+        bodySig = sig;
+        U.replace(dashBody,
           S.tripped ? h('div.small', { style: { color: 'var(--red)', marginBottom: '8px' } }, 'Risk stop: ' + S.tripped.why + ' · new and larger positions are blocked until you resume') : null,
           S.asking ? h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, `Waiting for a yes in the agent's terminal: ${S.asking}`) : null,
           ...Object.entries(S.closing || {}).map(([pid, p]) => h('div.small', { style: { color: 'var(--amber)', marginBottom: '8px' } }, `Closing ${ref && ref.byId[pid] ? ref.byId[pid].displayTicker : pid}: ${U.fmtQty(Math.abs(U.num(p.left)))} still open after reduce-only orders up to the close cap (${p.last || 'not filled'}); try ${U.num(p.tries) + 1}${p.next ? ' at ' + U.fmtDateTime(p.next) : ''}. Nothing else is traded in that market until it is flat.`)),
@@ -375,13 +410,15 @@
           ], rows: (S.events || []).slice(0, 30), empty: 'Nothing yet' })));
       };
       const step4 = UI.card('4 · Run and watch', h('div', { style: { padding: '12px 16px' } }, code('node copy-agent.mjs run --dry    # first: every order goes to the margin check, nothing is placed\nnode copy-agent.mjs run          # then live: real orders'), h('p.small.dim', { style: { margin: '8px 0 0' } }, 'Through npm: npm run dry, or npm start -- --dry (the "--" hands the flag to the agent; without it npm keeps the flag for itself). The agent stops at any argument it does not know, so node copy-agent.mjs run --dyr (or npm start -- --dyr) exits without starting. A misspelt flag typed before the "--" (npm start --dyr) stays with npm and the agent starts live, so npm run dry is the safest way to start a dry run. Either way, its first line says DRY RUN or LIVE. Keep it running (a terminal, a scheduled task, a service). It writes its logs to a logs folder next to the script and answers this dashboard on the port above. Stopping it leaves positions open; "Close all" here flattens the copy account.')));
-      const dashCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Dashboard'), UI.chip('local', 'blue'), h('span.grow'), h('span.dim.small', 'polls the agent every 3 s')), dash);
+      const dashCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Dashboard'), UI.chip('local', 'blue'), h('span.grow'), ageTxt), dash);
       const histCard = h('div.card', h('div.row', { style: { marginBottom: '8px' } }, h('h2', 'Copy history'), UI.chip('attribution', 'accent'), h('span.grow'), h('span.dim.small', 'per leader · your slippage against their fills')), histWrap);
       U.replace(body, hero, step1, step2, step3, step4, dashCard, histCard,
         h('div.footer-note', 'The agent is software you run; MeridianDataHub places no orders and holds no keys. Losses follow the leaders you pick and the limits you set. Past performance is not a promise of future returns.'));
       try { MD._agentRef = await A.ref(ctx); } catch (_) {}
       listSigners();
-      await poll(); timer = setInterval(poll, 3000); ctx.onCleanup(() => clearInterval(timer));
+      // each read 3 s after the last one ended: reads never overlap, however slow the agent is to answer
+      const loop = async () => { await poll(); if (!ctx.signal.aborted) timer = setTimeout(loop, 3000); };
+      loop();
     },
   };
 })();

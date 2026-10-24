@@ -62,17 +62,41 @@ test('router: paths, params, and a stray "%" in a pasted link does not throw', (
   assert.equal(R.url('/leaderboard', { interval: '7d', empty: '', none: null }), '#/leaderboard?interval=7d');
 });
 
-test('router: dispatch ignores an unchanged route, reload mounts the page again (a Retry button)', async () => {
-  globalThis.location = { hash: '#/retrytest' };
-  const prevRoot = R.root;
-  R.root = { scrollTop: 0, scrollHeight: 0, clientHeight: 0, firstChild: null };
+// a few lines of DOM: enough for the router's element per page and what a page writes into it
+class RtEl { constructor() { this.kids = []; this.className = ''; this.style = {}; this.dataset = {}; this.classList = { add: (c) => { this.className = c; } }; }
+  get firstChild() { return this.kids[0] || null; } appendChild(c) { this.kids.push(c); return c; } removeChild(c) { this.kids.splice(this.kids.indexOf(c), 1); return c; } addEventListener() {} }
+const withRouter = async (fn) => {
+  globalThis.Node = RtEl; globalThis.document = { createElement: () => new RtEl(), createTextNode: (t) => ({ t }) };
+  globalThis.location = { hash: '#/' };
+  const prevRoot = R.root; R.root = Object.assign(new RtEl(), { scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
+  try { await fn(); } finally { delete globalThis.Node; delete globalThis.document; delete globalThis.location; R.root = prevRoot; R.current = null; R.ctx = null; }
+};
+
+test('router: dispatch ignores an unchanged route, reload mounts the page again (a Retry button)', () => withRouter(async () => {
+  location.hash = '#/retrytest';
   let mounts = 0; R.pages.retrytest = { mount: () => { mounts++; } };
   try {
     await R.dispatch(); assert.equal(mounts, 1);
     await R.dispatch(); assert.equal(mounts, 1, 'same route: nothing');
     await R.reload(); assert.equal(mounts, 2, 'reload mounts again');
-  } finally { delete globalThis.location; delete R.pages.retrytest; R.root = prevRoot; R.current = null; R.ctx = null; }
-});
+  } finally { delete R.pages.retrytest; }
+}));
+
+test('router: a page left while it loads finishes off the screen, and what it starts after that is stopped at once', () => withRouter(async () => {
+  let release, late = null;
+  R.pages.slow = { mount: async (root, route, ctx) => { await new Promise((r) => { release = r; }); root.appendChild(new RtEl()); late = 'running'; ctx.onCleanup(() => { late = 'stopped'; }); throw new Error('a read after the page was left'); } };
+  R.pages.fast = { mount: (root) => { root.appendChild(new RtEl()); } };
+  try {
+    location.hash = '#/slow'; const first = R.dispatch();
+    location.hash = '#/fast'; await R.dispatch();
+    const shown = R.root.firstChild;
+    assert.equal(R.root.kids.length, 1); assert.equal(shown.className, 'route'); assert.equal(shown.kids.length, 1, 'the new page is on screen, in an element of its own');
+    release(); await first;
+    assert.equal(R.root.kids.length, 1); assert.equal(R.root.firstChild, shown, 'the left page wrote into its own element, not over the new page');
+    assert.equal(shown.kids.length, 1, 'and its failure is not shown on the new page');
+    assert.equal(late, 'stopped', 'a cleanup registered after leaving runs at once (a timer or a subscription started late)');
+  } finally { delete R.pages.slow; delete R.pages.fast; }
+}));
 
 // just enough of a DOM for U.h: it records what gets written, so a refusal shows as a property left empty
 class FakeNode {}
