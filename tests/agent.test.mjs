@@ -117,6 +117,13 @@ test('a config that must not trade is refused before anything starts', () => {
   assert.deepEqual(plain(A.checkConfig(example)), [], 'the shipped example passes');
   const bad = (cfg, re) => { const e = plain(A.checkConfig(cfg)); assert.equal(e.length, 1, JSON.stringify(cfg) + ' → ' + JSON.stringify(e)); assert.match(e[0], re); };
   bad({ risk: { maxOrderUsd: 0 } }, /risk\.maxOrderUsd is 0: it must be a number above 0/);
+  // values that silently changed what the agent does: refused
+  bad({ execution: { slippageBps: 5000 } }, /execution\.slippageBps is 5000: .*at most 500/);
+  bad({ risk: { onTrip: 'closeall' } }, /risk\.onTrip is "closeall": it must be "reduceOnly" or "closeAll"/);
+  bad({ execution: { onLeaderFlat: 'Hold' } }, /execution\.onLeaderFlat is "Hold"/);
+  bad({ execution: { onOrphan: 'Close' } }, /execution\.onOrphan is "Close"/);
+  bad({ risk: { markets: { deny: 'BTC-USD' } } }, /risk\.markets\.deny must be a list/);
+  assert.deepEqual(plain(A.checkConfig({ risk: { markets: { deny: ['btc-usd'] } }, execution: { slippageBps: 500, onLeaderLiquidation: 'hold' } })), [], 'a list of names in any case, the most slippage allowed');
   bad({ risk: { maxPositionUsd: -5 } }, /maxPositionUsd/);
   bad({ risk: { maxOrderUsd: '1000' } }, /maxOrderUsd is "1000"/);
   bad({ risk: { maxPriceDeviationPct: 80 } }, /at most 50/);

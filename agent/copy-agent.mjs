@@ -151,7 +151,12 @@ const checkConfig = (cfg) => {
   for (const k of ['maxNotionalPerMarket', 'maxOpenPositions', 'maxLeverage', 'dailyLossStop', 'drawdownStopPct', 'minOrderUsd']) want(r, 'risk', k, 0, false);
   // a plain-http ntfy server other than this machine would carry the pushes (and the topic, the only secret) in the clear
   const nt = cfg.ntfy || {}; if (nt.server != null && nt.server !== '' && !/^https:\/\/[^\s/]|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(String(nt.server))) e.push(`ntfy.server is ${JSON.stringify(nt.server)}: it must be an https:// address (plain http only on localhost)`);
-  want(x, 'execution', 'maxFillAgeMs', 0, true); want(x, 'execution', 'slippageBps', 0, false); want(x, 'execution', 'groupMs', 0, false);
+  // an opening's limit is the mark ± slippageBps: 5000 would buy at the mark + 50 %
+  want(x, 'execution', 'maxFillAgeMs', 0, true); want(x, 'execution', 'slippageBps', 0, false, 500); want(x, 'execution', 'groupMs', 0, false);
+  // a value the agent does not know is refused: "closeall" ran reduce-only, "Hold" closed
+  const oneOf = (obj, where, key, vals) => { const v = obj[key]; if (v != null && !vals.includes(v)) e.push(`${where}.${key} is ${JSON.stringify(v)}: it must be ${vals.map((x) => JSON.stringify(x)).join(' or ')}`); };
+  oneOf(r, 'risk', 'onTrip', ['reduceOnly', 'closeAll']); oneOf(x, 'execution', 'onLeaderFlat', ['close', 'hold']); oneOf(x, 'execution', 'onLeaderLiquidation', ['close', 'hold']); oneOf(x, 'execution', 'onOrphan', ['hold', 'close']);
+  for (const k of ['deny', 'allow']) { const v = (r.markets || {})[k]; if (v != null && (!Array.isArray(v) || v.some((t) => typeof t !== 'string'))) e.push(`risk.markets.${k} must be a list of market names such as "BTC-USD"`); }
   want(x, 'execution', 'closeSlippageBps', 0, true, 1000);
   // market orders are no longer sent: in a book the market makers have left, one fills at whatever is there
   if (x.type != null && x.type !== 'IOC') e.push(`execution.type is ${JSON.stringify(x.type)}: every order is now a limit IOC at the mark ± execution.slippageBps (set "IOC" or leave it out, and raise slippageBps for more fills)`);
@@ -709,8 +714,9 @@ async function run() {
     if (S.closing[prod.id]) return `a close of ours in ${prod.displayTicker} is still pending`;
     if (Date.now() - S.ownAt > 120000) return 'own account data is stale (exchange unreachable?)';
     if (!S.leaderSeeded[leaderSid]) return 'leader positions not read yet';
-    if (risk.markets && risk.markets.deny && risk.markets.deny.includes(prod.displayTicker)) return `${prod.displayTicker} is denied`;
-    if (risk.markets && risk.markets.allow && risk.markets.allow.length && !risk.markets.allow.includes(prod.displayTicker)) return `${prod.displayTicker} is not in the allowed markets`;
+    const named = (list) => list.some((t) => String(t).toUpperCase() === String(prod.displayTicker).toUpperCase());   // "btc-usd" denies BTC-USD too
+    if (risk.markets && risk.markets.deny && named(risk.markets.deny)) return `${prod.displayTicker} is denied`;
+    if (risk.markets && risk.markets.allow && risk.markets.allow.length && !named(risk.markets.allow)) return `${prod.displayTicker} is not in the allowed markets`;
     const cur = S.own[prod.id]; const curNotional = held(prod.id);
     const over = (x, cap) => x > cap * (1 + 1e-9);   // an order cut to exactly the room left must not fail on the last bit of a float
     if (risk.maxNotionalPerMarket && over(curNotional + addNotional, risk.maxNotionalPerMarket)) return `would exceed ${risk.maxNotionalPerMarket} USD in ${prod.displayTicker}`;
@@ -977,15 +983,20 @@ async function run() {
   // ---- Resume and Close all from the site wait for a yes typed here: the control token sits in the site's browser
   //      storage, and a page that got hold of it must not clear a stop or close everything on its own. status.siteControls
   //      "direct" lets the page do both unconfirmed (an agent without a terminal needs that)
+  // one reader for the whole run: a line typed while nothing is asked is dropped, so a late "yes" never confirms the next
+  // request (each prompt had a reader of its own, and what was typed in between waited for the next one)
+  let answer = null;
+  const reader = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, terminal: false }) : null;
+  if (reader) reader.on('line', (line) => { const a = answer; answer = null; if (a) a(line); });
   const confirmHere = (what, act) => {
     const run = () => { Promise.resolve().then(act).catch((e) => note('error', `${what}: ${e.message}`)); };
     if (cfg.status && cfg.status.siteControls === 'direct') { note('control', `${what}: asked from the site`); run(); return { code: 200, body: { ok: true } }; }
     if (S.asking) return { code: 409, body: { error: 'busy', msg: `"${S.asking}" is already waiting for a yes in the agent's terminal` } };
-    if (!process.stdin.isTTY) return { code: 409, body: { error: 'terminal', msg: `the agent has no terminal to confirm in: to let this page ${what} unconfirmed, set status.siteControls to "direct" in config.json and restart the agent` } };
-    S.asking = what; const rl = readline.createInterface({ input: process.stdin, terminal: false });
-    const done = (yes) => { if (!S.asking) return; S.asking = null; clearTimeout(timer); rl.close(); if (yes) { note('control', `${what}: confirmed in the terminal`); run(); } else note('control', `${what}: not confirmed in the terminal, nothing done`); };
+    if (!reader) return { code: 409, body: { error: 'terminal', msg: `the agent has no terminal to confirm in: to let this page ${what} unconfirmed, set status.siteControls to "direct" in config.json and restart the agent` } };
+    S.asking = what;
+    const done = (yes) => { if (!S.asking) return; S.asking = null; answer = null; clearTimeout(timer); if (yes) { note('control', `${what}: confirmed in the terminal`); run(); } else note('control', `${what}: not confirmed in the terminal, nothing done`); };
     const timer = setTimeout(() => done(false), 120000);
-    rl.once('line', (line) => done(/^\s*yes\s*$/i.test(line)));
+    answer = (line) => done(/^\s*yes\s*$/i.test(line));
     console.log(`\n>>> The site asks to ${what}. Type yes and press Enter here within 2 minutes to do it; anything else cancels.\n`);
     note('control', `${what}: asked from the site, waiting for a yes in the terminal`);
     return { code: 202, body: { ok: true, confirm: `type yes in the agent's terminal to ${what}` } };

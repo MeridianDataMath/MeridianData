@@ -6,6 +6,8 @@
  * .html in the folder: index.html, the share pages under a/, p/ and s/, x-bot/index.html.
  * Then every such reference is checked to carry the version of the file as it is: one without would be held a year by
  * browsers after its file changed, so the run fails instead (nothing deploys).
+ * index.html also gets the deploy's build id (<meta name="md-build">, from the versions of everything it loads): a page left
+ * open across a deploy compares it with the live one before it loads a lazy group (MD.need), and reloads when they differ.
  *   node scripts/version-assets.mjs --dist dist
  */
 import fs from 'node:fs';
@@ -22,6 +24,17 @@ export function versionPage(html, hashOf) {
     const h = hashOf(p); if (!h) throw new Error(`${p} is referenced but not there`);
     return `${attr}="${slash}${p}?v=${h}"`;
   });
+}
+/** The build id of a versioned index.html: the first 12 hex of the SHA-256 of every versioned reference in it, sorted */
+export function buildId(html) {
+  const refs = Array.from(new Set(Array.from(html.matchAll(REF), (m) => m[3] + (m[4] || '')))).sort();
+  return crypto.createHash('sha256').update(refs.join('\n')).digest('hex').slice(0, 12);
+}
+/** index.html with its build id in <meta name="md-build"> (throws when the tag is not there) */
+export function stampBuild(html, id) {
+  const re = /<meta name="md-build" content="[^"]*">/;
+  if (!re.test(html)) throw new Error('index.html has no <meta name="md-build">');
+  return html.replace(re, () => `<meta name="md-build" content="${id}">`);
 }
 /** The references of a page that do not carry their file's version, in words (empty: all do) */
 export function unversioned(html, hashOf) {
@@ -46,7 +59,9 @@ function main(argv) {
   const bad = [];
   for (const p of pages) for (const x of unversioned(fs.readFileSync(p, 'utf8'), hashOf)) bad.push(`${path.relative(dist, p)}: ${x}`);
   if (bad.length) { for (const b of bad.slice(0, 20)) console.error('::error::not versioned: ' + b); process.exit(1); }
-  console.log(`versioned: ${memo.size} scripts and stylesheets in ${changed} of ${pages.length} pages`);
+  const idx = path.join(dist, 'index.html'); const html = fs.readFileSync(idx, 'utf8'); const id = buildId(html);
+  fs.writeFileSync(idx, stampBuild(html, id));
+  console.log(`versioned: ${memo.size} scripts and stylesheets in ${changed} of ${pages.length} pages; build ${id}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main(process.argv.slice(2));

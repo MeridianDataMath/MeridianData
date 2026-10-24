@@ -8,17 +8,30 @@
    *  resolves once every one has run. A failed load can be tried again. Without its template (a test page) it is taken
    *  as loaded. */
   const groups = {};
-  MD.need = (name) => groups[name] || (groups[name] = new Promise((resolve, reject) => {
+  // A page left open across a deploy names the old deploy's files (?v= of its own index.html), and the host answers any ?v
+  // with today's file (a removed one with the site's page, which the browser then keeps a year as that script): its lazy
+  // groups would run new code on the old page's core. The deploy's build id (index.html's <meta name="md-build">) is
+  // compared with the live one before a group loads, and after one fails: a newer deploy reloads the page instead.
+  const pageBuild = () => { const m = typeof document !== 'undefined' && document.querySelector ? document.querySelector('meta[name="md-build"]') : null; return m ? m.getAttribute('content') : null; };
+  let liveP = null;
+  const liveBuild = () => liveP || (liveP = fetch('./', { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : '')).then((t) => { const m = /<meta name="md-build" content="([^"]*)">/.exec(t); return m ? m[1] : null; }, () => null).then((v) => { setTimeout(() => { liveP = null; }, 60000); return v; }));
+  const outdated = async () => { const mine = pageBuild(); if (!mine || mine === 'dev' || typeof fetch !== 'function') return false; const live = await liveBuild(); return !!live && live !== mine; };
+  const reload = () => { try { U.toast('A newer version of the site is out: loading it'); } catch (_) {} location.reload(); return new Promise(() => {}); };
+  MD.need = (name) => groups[name] || (groups[name] = (async () => {
     const tpl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('lazy-' + name) : null;
     const srcs = tpl && tpl.content ? Array.from(tpl.content.querySelectorAll('script')).map((s) => s.getAttribute('src')) : [];
-    let left = srcs.length; if (!left) { resolve(); return; }
-    for (const src of srcs) {
-      const s = document.createElement('script'); s.src = src; s.async = false;   // they run in the order given
-      s.onload = () => { if (--left === 0) resolve(); };
-      s.onerror = () => { delete groups[name]; reject(new Error('Part of the site did not load (' + src + '): check the connection and try again')); };
-      document.head.appendChild(s);
-    }
-  }));
+    if (!srcs.length) return;
+    if (await outdated()) return reload();
+    await new Promise((resolve, reject) => {
+      let left = srcs.length;
+      for (const src of srcs) {
+        const s = document.createElement('script'); s.src = src; s.async = false;   // they run in the order given
+        s.onload = () => { if (--left === 0) resolve(); };
+        s.onerror = () => reject(new Error('Part of the site did not load (' + src + '): check the connection and try again'));
+        document.head.appendChild(s);
+      }
+    });
+  })().catch(async (e) => { delete groups[name]; if (await outdated()) return reload(); throw e; }));
   /** route name → the script group its page is in (the Tax center, the Predict pages), loaded before it mounts */
   R.LAZY = { tax: 'tax', predict: 'predict' };
 

@@ -7,10 +7,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 import { pick, problems, excludedWallets, MAX_FILES, NAME } from '../scripts/check-snapshot.mjs';
 import { keepLeaderboard, keepFx } from '../scripts/keep-live.mjs';
 import { alarm, SNAPSHOT_MAX, TIMER_MAX, LB_MAX, leaderboardProblem, timerAlarm } from '../scripts/deploy-health.mjs';
-import { versionPage, unversioned } from '../scripts/version-assets.mjs';
+import { versionPage, unversioned, buildId, stampBuild } from '../scripts/version-assets.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'md-deploy-'));
 const put = (dir, rel, text) => { const p = path.join(dir, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
@@ -34,6 +36,11 @@ test('the snapshot gate refuses what is not JSON, too big, too many, or without 
   assert.deepEqual(problems([ok, st]), []);
   assert.match(problems([ok, { name: 'predict-status.json', size: 2, text: '{}' }]).join(), /no predict-status\.json with a build time/);
   assert.match(problems([ok]).join(), /no predict-status\.json with a build time/, 'the status file is required');
+  // a snapshot built with an older wallet list: refused, without naming the wallet (the run's log is public)
+  const left = '0x' + 'e'.repeat(40), ex = new Set([left]);
+  const named = problems([ok, st, { name: 'slips/0a.json', size: 60, text: JSON.stringify({ slips: { x: { p: left.toUpperCase().replace('0X', '0x') } } }) }], ex).join();
+  assert.match(named, /older wallet list than the site's: update the snapshot machine/); assert.ok(!named.includes(left) && !named.includes('slips'));
+  assert.deepEqual(problems([ok, st, { name: 'bettors/' + left + '.json', size: 2, text: '{"address":"' + left + '"}' }], ex), [], 'its own file is dropped by pick, not refused');
   assert.match(problems([ok, st, { name: 'slips/00.json', size: 3, text: '{"x' }]).join(), /slips\/00\.json is not JSON/);
   assert.match(problems([ok, st, { name: 'questions/x.json', size: 26e6, text: '{}' }]).join(), /over 25 MB/);
   assert.match(problems([{ name: 'predict.json', size: 9, text: JSON.stringify({ error: 'Error: boom\n at x', builtAt: 1 }) }]).join(), /holds no Predict data \(its build failed: Error: boom\)/);
@@ -119,6 +126,16 @@ test('the leaderboard on the site goes stale: its file not rebuilt, or most of i
   assert.equal(leaderboardProblem(null, now), null); assert.equal(leaderboardProblem({}, now), null);
 });
 
+test('the three wrangler versions agree (a bumped one would make the deploy action install its own, with the token set)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const want = String((pkg.devDependencies || {}).wrangler || (pkg.dependencies || {}).wrangler || '').replace(/^[~^]/, '');
+  assert.ok(/^\d+\.\d+\.\d+$/.test(want), 'package.json pins wrangler exactly');
+  for (const f of ['.github/workflows/pages.yml', '.github/workflows/cron.yml']) {
+    const got = Array.from(fs.readFileSync(path.join(root, f), 'utf8').matchAll(/wranglerVersion:\s*['"]?([\d.]+)/g), (m) => m[1]);
+    assert.ok(got.length, f + ' sets wranglerVersion'); for (const v of got) assert.equal(v, want, f);
+  }
+});
+
 test('every page asks for the site\'s scripts and stylesheets by their content (?v=), or the deploy stops', () => {
   const H = { 'js/app.js': 'aaaaaaaaaa', 'css/app.css': 'bbbbbbbbbb', 'js/share.js': 'cccccccccc' };
   const hashOf = (p) => H[p] || null;
@@ -127,6 +144,13 @@ test('every page asks for the site\'s scripts and stylesheets by their content (
   assert.equal(out, '<link rel="stylesheet" href="css/app.css?v=bbbbbbbbbb"><script defer src="js/app.js?v=aaaaaaaaaa"></script><script src="/js/share.js?v=cccccccccc"></script><a href="https://x.com/js/app.js">x</a><img src="assets/logo.svg">');
   assert.deepEqual(unversioned(out, hashOf), []);
   assert.equal(versionPage(out, hashOf), out, 'a second run changes nothing');
+  // the deploy's build id: from the versions index.html loads, in its <meta name="md-build"> (the lazy loader compares it)
+  const idx = '<meta name="md-build" content="dev">' + out;
+  const id = buildId(idx); assert.match(id, /^[0-9a-f]{12}$/);
+  assert.equal(buildId(idx.replace(/\?v=[0-9a-f]+/, '?v=0000000000')), buildId(idx.replace(/\?v=[0-9a-f]+/, '?v=0000000000')), 'the same versions, the same id');
+  assert.notEqual(buildId(idx.replace(/\?v=[0-9a-f]+/, '?v=0000000000')), id, 'a file changed: another id');
+  assert.match(stampBuild(idx, id), new RegExp('<meta name="md-build" content="' + id + '">'));
+  assert.throws(() => stampBuild(out, id), /no <meta name="md-build">/);
   assert.deepEqual(unversioned(page, hashOf), ['css/app.css (want ?v=bbbbbbbbbb)', 'js/app.js (want ?v=aaaaaaaaaa)', 'js/share.js?v=old (want ?v=cccccccccc)']);
   assert.throws(() => versionPage('<script src="js/gone.js"></script>', hashOf), /js\/gone\.js is referenced but not there/);
 });

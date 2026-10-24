@@ -93,6 +93,7 @@ if (lb && Array.isArray(lb.rows)) {
   const byAddr = new Map();
   for (const r of lb.rows) { const a = String(r.account).toLowerCase(); const cur = byAddr.get(a); if (!cur || (Number(r.volumeAll) || 0) > (Number(cur.volumeAll) || 0)) byAddr.set(a, Object.assign({}, r, { account: a })); }
   for (const [a, r] of byAddr) {
+    if (MD.util.isExcluded(a)) continue;   // a left-out wallet gets no page (a snapshot from an older list could still hold it)
     if (only && a !== only) continue;
     if (!mine()) continue;
     const ok = each('account', a, () => {
@@ -116,6 +117,7 @@ if (pr && pr.agg) {
   for (const [r, isMaker] of rows) {
     const a = lc(r); if (!isAddr(a)) { skip('wallet', r && r.address); continue; }
     if (seen.has(a)) continue; seen.add(a);
+    if (MD.util.isExcluded(a)) continue;
     if (only && a !== only) continue;
     if (!mine()) continue;
     const ok = each('wallet', a, () => {
@@ -142,6 +144,7 @@ if (fs.existsSync(slipDir)) {
     for (const r of Object.values((file && file.slips) || {})) {
       let s; try { s = MD.predict.full(r); } catch (e) { if (first) { failed++; console.warn('slip unreadable in', f, e.message); } continue; }
       const id = String((s && s.id) || '').toLowerCase(); if (!isId(id)) { skip('slip', s && s.id); continue; }
+      if (MD.predict.excluded(s)) continue;
       if (only && id !== only) continue;
       if (K.slipCardWanted(s, now)) list.push([id, s, s.decided ? (MD.predict.decidedAt(s) || 0) : Infinity]);
     }

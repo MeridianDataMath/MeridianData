@@ -48,7 +48,10 @@ schedule on (`keepalive`). The perps build stops after 10 minutes whatever it wa
 cancelling it. The timer itself (`cron/`) deploys from `.github/workflows/cron.yml` when it changes.
 Every page asks for the site's scripts and stylesheets with `?v=<the file's hash>`
 (`scripts/version-assets.mjs`, after the cards; a reference left without it fails the run), so
-`_headers` lets browsers keep `js/`, `css/` and `vendor/` a year without asking again.
+`_headers` lets browsers keep `js/`, `css/` and `vendor/` a year without asking again. `index.html` also
+carries the deploy's build id (`<meta name="md-build">`): a page left open across a deploy compares it with the
+live one before it loads a part of the site on demand (and after one fails to load), and reloads when they differ,
+so it never runs a new deploy's scripts on an old page (the host answers any `?v=` with today's file).
 
 * **Cloudflare** (recommended; works from a **private** repo, free): a Worker with static assets
   named `meridiandatahub` (`wrangler.jsonc`). Create it once in the dashboard (Workers & Pages →
@@ -1846,7 +1849,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   liquidation (or a liquidation event prompted the re-read), the liquidation option applies
   instead, on every re-read, and a position held after a liquidation is no longer followed
   (an orphan). Every order is a limit IOC at the mark ± a slippage cap; market orders are not
-  sent (an `execution.type` other than IOC stops the agent), since in a book the market makers
+  sent (an `execution.type` other than IOC stops the agent, as do `execution.slippageBps` over 500 and an
+  `onTrip`, `onLeaderFlat`, `onLeaderLiquidation` or `onOrphan` value it does not know; market names in
+  `risk.markets` match in any case), since in a book the market makers
   have left one fills at whatever is there. A close is a reduce-only IOC for what is held: at
   the slippage cap, then wider in steps (50, 100 bps) up to `execution.closeSlippageBps` (200 by
   default, at most 1000), each at the current mark. Where the mark has not moved for 5 minutes (an
@@ -1912,7 +1917,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `bdd23381d46d23b848a10ebfa9ab5fb864b2ee1897cce58b7d3bad92e93ab2db` (`tests/agent.test.mjs` fails when this line is
+    `f6de8c234105dc28c5a297c803b72a128728298c3138ab3e15c8b07f8f14215d` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
