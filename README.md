@@ -73,8 +73,9 @@ How the workflow keeps the Cloudflare token safe:
 - Nothing is checked out with stored credentials.
 - From the snapshot repository, only regular JSON files in the published layout are copied
   (`scripts/check-snapshot.mjs`), at most 8,000 files and 150 MB in all (25 MB a file).
-- A Predict snapshot that cannot be read, or that is missing or empty, fails the run, so the
-  previous deploy stays live. Nothing older is used in its place.
+- A Predict snapshot that cannot be read, that is missing or empty, or whose `predict.json` names
+  a questions file (`predict-questions.json`) it lacks, fails the run, so the previous deploy
+  stays live. Nothing older is used in its place.
 
 The Predict snapshot is produced on a home connection, the Mac mini's kit (see the Predict
 section below), whichever host is used.

@@ -6,6 +6,7 @@
  *   node scripts/check-snapshot.mjs --from .snap-repo --to data
  * Refused (exit 1: nothing deploys, and the live site keeps the last good snapshot):
  *   - no predict.json, or one without Predict data
+ *   - a predict.json naming a questions file (predict-questions.json) the snapshot lacks: the Questions page would be empty
  *   - a file that is not JSON, or one over 25 MB (Cloudflare's limit for one file)
  *   - more than MAX_FILES files or MAX_BYTES in all (2,230 files and 29 MB on 2026-10-24): a runaway build or a
  *     tampered repository must not push the deploy past Cloudflare's 20,000-file limit
@@ -52,6 +53,7 @@ export function problems(files) {
   if (bytes > MAX_BYTES) e.push(`${(bytes / 1e6).toFixed(0)} MB in all, more than the ${MAX_BYTES / 1e6} MB a snapshot may have`);
   if (!predict) { if (!files.some((f) => f.name === 'predict.json')) e.push('no predict.json'); }
   else if (!predict.agg || !(predict.predictions > 0)) e.push('predict.json holds no Predict data' + (predict.error ? ` (its build failed: ${String(predict.error).split('\n')[0].slice(0, 200)})` : ''));
+  else if (predict.questionsFile && !predict.questionsWithOi && !files.some((f) => f.name === predict.questionsFile)) e.push(`predict.json names ${String(predict.questionsFile).slice(0, 80)}, which the snapshot lacks (the Questions page would list none)`);
   return e;
 }
 

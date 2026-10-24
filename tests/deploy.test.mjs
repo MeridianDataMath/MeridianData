@@ -35,6 +35,10 @@ test('the snapshot gate refuses what is not JSON, too big, too many, or without 
   assert.match(problems([ok, { name: 'questions/x.json', size: 26e6, text: '{}' }]).join(), /over 25 MB/);
   assert.match(problems([{ name: 'predict.json', size: 9, text: JSON.stringify({ error: 'Error: boom\n at x', builtAt: 1 }) }]).join(), /holds no Predict data \(its build failed: Error: boom\)/);
   assert.match(problems([{ name: 'predict-status.json', size: 2, text: '{}' }]).join(), /no predict\.json/);
+  // a predict.json whose questions are in a file of their own comes with that file
+  const split = { name: 'predict.json', size: 40, text: JSON.stringify({ agg: { bettors: [] }, predictions: 5, questionsFile: 'predict-questions.json' }) };
+  assert.match(problems([split]).join(), /names predict-questions\.json, which the snapshot lacks/);
+  assert.deepEqual(problems([split, { name: 'predict-questions.json', size: 25, text: '{"questionsWithOi":[]}' }]), []);
   const many = Array.from({ length: MAX_FILES + 1 }, (_, i) => ({ name: `bettors/${i}.json`, size: 2, text: '{}' }));
   assert.match(problems([ok].concat(many)).join(), new RegExp(`${MAX_FILES + 2} files, more than`));
   assert.match(problems([ok, { name: 'bettors/a.json', size: 140e6, text: '{}' }, { name: 'bettors/b.json', size: 20e6, text: '{}' }]).join(), /MB in all, more than/);
