@@ -280,7 +280,7 @@
       try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }
 
       // ---- topbar header ----
-      const subSel = h('select', { onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name))));
+      const subSel = h('select', { 'aria-label': 'Subaccount', onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name))));
       const head = h('div.acct-head',
         h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)),
         UI.starBtn(fav, 'btn icon'),
@@ -300,14 +300,14 @@
 
       // ---- tabs ----
       let tab = TABS.some((t) => t[0] === route.params.tab) ? route.params.tab : 'overview';
-      const tabsEl = h('div.tabs', TABS.map(([v, label]) => h('button', { class: v === tab ? 'on' : '', dataset: { v }, onclick: () => show(v) }, label)));
+      const tabsEl = h('div.tabs', { role: 'tablist', 'aria-label': 'Account sections' }, TABS.map(([v, label]) => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === tab), class: v === tab ? 'on' : '', dataset: { v }, onclick: () => show(v) }, label)));
       const tabBody = h('div', { style: { marginTop: '16px' } });
       U.replace(page, h('div.stack', headSlot, tabsEl, tabBody));
       let tabCtx = null;
       const state = { addr, sa, subs, ref, fav, subName };
       function show(v) {
         tab = v; MD.router.setParams({ tab: v }, { silent: true });
-        U.$$('button', tabsEl).forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+        U.$$('button', tabsEl).forEach((b) => { const on = b.dataset.v === v; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
         if (tabCtx) tabCtx.abort();
         const cx = (tabCtx = child(ctx));
         // each tab renders into an element of its own: a tab left while it loads (its reads' failures caught as empty
@@ -504,7 +504,7 @@
     const ttBody = h('div');
     function renderTables() {
       if (tt == null) tt = base && !base.acct.positions.length ? 'history' : 'positions';
-      const tabs = h('div.tabs', { style: { padding: '0 8px' } }, TT.map((x) => (x ? h('button', { class: x[0] === tt ? 'on' : '', dataset: { v: x[0] }, onclick: () => { tt = x[0]; U.$$('button', tabs).forEach((b) => b.classList.toggle('on', b.dataset.v === x[0])); renderTT(); } }, x[1], ttCount[x[0]] ? h('span.tab-n') : null) : h('span.tab-sep', { 'aria-hidden': 'true' }))));
+      const tabs = h('div.tabs', { role: 'tablist', 'aria-label': 'Account tables', style: { padding: '0 8px' } }, TT.map((x) => (x ? h('button', { type: 'button', role: 'tab', 'aria-selected': String(x[0] === tt), class: x[0] === tt ? 'on' : '', dataset: { v: x[0] }, onclick: () => { tt = x[0]; U.$$('button', tabs).forEach((b) => { const on = b.dataset.v === x[0]; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }); renderTT(); } }, x[1], ttCount[x[0]] ? h('span.tab-n') : null) : h('span.tab-sep', { 'aria-hidden': 'true' }))));
       U.replace(tablesCard, tabs, ttBody);
       ttCounts();
       renderTT();
@@ -798,7 +798,7 @@
     const posBody = h('div.scroll-y.pause-hover'), ordBody = h('div.scroll-y.pause-hover'), fillBody = h('div.feed.pause-hover'), evBody = h('div.feed.pause-hover'), book = h('div.book'), bookTitle = h('span.dim.small');
     const mktTrades = h('div.feed.pause-hover', UI.loading('Loading trades…')), mktTitle = h('span.dim.small');
     const mktFill = h('div.feed-fill', mktTrades);   // the market's trade tape fills whatever height the position / order / fill cards leave beside the book
-    const mkSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
+    const mkSel = h('select.input.sm', { 'aria-label': 'Market', style: { width: 'auto' }, onchange: (e) => selectMarket(e.target.value) }, ref.active.map((p) => h('option', { value: p.ticker }, p.displayTicker)));
     // the book: the levels nearest the touch (top), every level (all), or every resting limit order with the account
     // that placed it (orders); the choice is this viewer's, remembered in this browser
     const BOOK_TOP = 12, BOOK_MODES = ['top', 'all', 'orders'];

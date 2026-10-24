@@ -445,7 +445,7 @@
         lad.list.filter((r) => r.price <= m).map(rowEl), farNote(lad.farDown, false),
         lad.bin ? h('div.xs.dim.center', { style: { padding: '6px' } }, 'levels binned to 0.25% of mark') : null];
       const nearCell = (l, r) => (l ? h('span', U.fmtPrice(l.price, r.p.tickSize), h('span.xs.dim', ' ' + U.fmtPct(((l.price - r.mark) / r.mark) * 100, { sign: true, dp: 1 }))) : h('span.dim', '—'));
-      const toggleDetail = (detail) => () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; };
+      const toggleDetail = (detail) => (e) => { const open = detail.style.display === 'none'; detail.style.display = open ? '' : 'none'; if (e && e.currentTarget && e.currentTarget.setAttribute) e.currentTarget.setAttribute('aria-expanded', String(open)); };   // (its state announced)
 
       // ---- stop map: the orders (TP / SL / entry stops); a stop fires as a market order into the order book ----
       function renderStopMap() {
@@ -492,7 +492,7 @@
             h('span.dim', (i.kind === 'ENTRY' ? 'opens ' : 'closes ') + i.posSide + ' · ' + (i.mech === 'limit' ? 'reduce-only limit' : 'stop' + (i.trigger === 'last' ? ' (last px)' : '')) + (i.oco ? ' · OCO' : '') + note(i)),
             h('span.grow'), h('span.num', U.fmtQty(i.qty, cur.p.lotSize) + ' · ' + U.fmtUsd(i.usd, { compact: true })))));
           const title = dead ? 'Won\'t happen: these positions are closed by then (a nearer exit, or their liquidation)' : r.flow === 'sell' ? 'Sells when the price gets here' : 'Buys when the price gets here';
-          const el = h('div.lvl', { class: r.flow + (dead ? ' dead' : ''), title, onclick: toggleDetail(detail) },
+          const el = h('div.lvl', { class: r.flow + (dead ? ' dead' : ''), title, role: 'button', tabindex: 0, 'aria-expanded': 'false', onclick: toggleDetail(detail), onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); e.currentTarget.click(); } } },
             h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
             h('span', (lad.bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
             h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),
@@ -567,7 +567,7 @@
               h('span.grow'), h('span.num', U.fmtQty(i.qty, cur.p.lotSize) + ' · ' + U.fmtUsd(i.usd, { compact: true })));
           }));
           const title = dead ? 'Their stop-losses close these positions first, unless a gap jumps past them' : (r.side === 'long' ? 'Longs liquidated when the price falls here' : 'Shorts liquidated when the price rises here') + ': the liquidator takes them over, nothing is sold into the order book';
-          const el = h('div.lvl', { class: dead ? 'dead' : null, title, onclick: toggleDetail(detail) },
+          const el = h('div.lvl', { class: dead ? 'dead' : null, title, role: 'button', tabindex: 0, 'aria-expanded': 'false', onclick: toggleDetail(detail), onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); e.currentTarget.click(); } } },
             h('i', { style: { width: (r.usd / maxUsd) * 100 + '%' } }),
             h('span', (lad.bin ? '≈' : '') + U.fmtPrice(r.price, tick)),
             h('span', { class: dist == null ? '' : dist > 0 ? 'pos' : 'neg' }, dist == null ? '' : U.fmtPct(dist, { sign: true, dp: 1 })),

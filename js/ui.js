@@ -11,8 +11,14 @@
   UI.table = function (o) {
     const cols = o.cols;
     const thead = h('thead', h('tr', cols.map((c) => {
-      const th = h('th', { class: [c.num ? 'num' : '', c.sortVal ? 'sortable' : '', o.sort && o.sort.key === c.key ? 'sorted ' + (o.sort.desc ? '' : 'asc') : '', c.cls || ''].join(' ').trim(), title: c.title || null }, c.label);
-      if (c.sortVal && o.onSort) th.addEventListener('click', () => o.onSort(c.key));
+      const on = o.sort && o.sort.key === c.key;
+      const th = h('th', { class: [c.num ? 'num' : '', c.sortVal ? 'sortable' : '', on ? 'sorted ' + (o.sort.desc ? '' : 'asc') : '', c.cls || ''].join(' ').trim(), title: c.title || null }, c.label);
+      if (c.sortVal && o.onSort) {
+        // reachable with Tab and sorted with Enter or Space too, its order announced (aria-sort)
+        th.tabIndex = 0; th.setAttribute('aria-sort', on ? (o.sort.desc ? 'descending' : 'ascending') : 'none');
+        th.addEventListener('click', () => o.onSort(c.key));
+        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); o.onSort(c.key); } });
+      }
       return th;
     })));
     const tbody = h('tbody');
@@ -89,8 +95,8 @@
   /** segmented control: seg([{v,label}], value, onChange) → el with .set(v) */
   UI.seg = function (options, value, onChange, cls) {
     const el = h('div.seg', { class: cls || '' });
-    const set = (v) => { value = v; U.$$('button', el).forEach((b) => b.classList.toggle('on', b.dataset.v === String(v))); };
-    for (const o of options) el.appendChild(h('button', { dataset: { v: String(o.v) }, title: o.title || null, onclick: () => { set(o.v); onChange(o.v); } }, o.label));
+    const set = (v) => { value = v; U.$$('button', el).forEach((b) => { const on = b.dataset.v === String(v); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); }); };
+    for (const o of options) el.appendChild(h('button', { type: 'button', dataset: { v: String(o.v) }, title: o.title || null, onclick: () => { set(o.v); onChange(o.v); } }, o.label));
     set(value); el.set = set; el.get = () => value;
     return el;
   };
@@ -210,7 +216,7 @@
    *  router, and after a click on a link to the page already shown). The top dialog takes the focus, everything behind
    *  it is inert (no Tab or Enter reaches the page), and a dialog opened from the keyboard gives the focus back where it
    *  was when it closes. */
-  const modals = [];
+  const modals = []; let dialogSeq = 0;
   // how the last dialog was opened: only a keyboard user gets the focus back on close (a mouse user's row, focused by
   // the click, would otherwise hold its live tape still under U.replaceLive's keyboard-focus rule)
   let lastInput = 'pointer';
@@ -230,7 +236,8 @@
     };
     // the focus goes to the scrolling body, so the arrow keys, Page Down and Space scroll the dialog
     const scroller = h('div.modal-body', { tabindex: -1 }, U.kid(body));
-    const dialog = h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true' }, h('div.modal-head', h('h2', U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', onclick: close }, U.icon('x'))), scroller);
+    const titleId = 'dlg-' + (++dialogSeq);   // the dialog is named by its title (aria-labelledby)
+    const dialog = h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, h('div.modal-head', h('h2', { id: titleId }, U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', 'aria-label': 'Close', onclick: close }, U.icon('x'))), scroller);
     const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } }, dialog);
     // capture phase: links in a dialog often stop the click's propagation (a row behind them has its own action); the
     // dialogs close once the click has gone through, and only when it navigated here (not a new tab, not prevented)
@@ -248,8 +255,9 @@
   UI.checkbox = (label, checked, onChange) => { const inp = h('input', { type: 'checkbox', checked, onchange: (e) => onChange(e.target.checked) }); return h('label.checkbox', inp, label); };
 
   UI.starBtn = function (fav, cls) {
-    const b = h('button.star-btn', { class: (U.favorites.has(fav.subaccountId) ? 'on ' : '') + (cls || ''), title: 'Favorite' }, U.icon(U.favorites.has(fav.subaccountId) ? 'starFill' : 'star'));
-    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const on = U.favorites.toggle(fav); b.classList.toggle('on', on); U.replace(b, U.icon(on ? 'starFill' : 'star')); U.toast(on ? 'Added to favorites' : 'Removed from favorites'); });
+    const has = U.favorites.has(fav.subaccountId);
+    const b = h('button.star-btn', { type: 'button', class: (has ? 'on ' : '') + (cls || ''), title: 'Favorite', 'aria-label': 'Favorite ' + U.shortAddr(fav.address || '', 4), 'aria-pressed': String(has), dataset: { focusKey: 'star:' + fav.subaccountId } }, U.icon(has ? 'starFill' : 'star'));
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const on = U.favorites.toggle(fav); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); U.replace(b, U.icon(on ? 'starFill' : 'star')); U.toast(on ? 'Added to favorites' : 'Removed from favorites'); });
     return b;
   };
 

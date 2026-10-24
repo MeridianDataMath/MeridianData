@@ -405,7 +405,7 @@
     toastEl.textContent = msg; toastEl.classList.add('show');
     clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), ms > 0 ? ms : 1600);
   };
-  U.copyBtn = (text) => U.h('span.copy', { title: 'Copy', onclick: (e) => { e.preventDefault(); e.stopPropagation(); U.copyText(text); } }, U.icon('copy'));
+  U.copyBtn = (text) => U.h('button.copy', { type: 'button', title: 'Copy', 'aria-label': 'Copy ' + (String(text).length > 20 ? U.shortAddr(String(text), 4) : String(text)), onclick: (e) => { e.preventDefault(); e.stopPropagation(); U.copyText(text); } }, U.icon('copy'));
   U.sum = (arr, f) => arr.reduce((a, x) => a + (f ? f(x) : x), 0);
   U.groupBy = (arr, f) => arr.reduce((m, x) => { const k = f(x); (m[k] || (m[k] = [])).push(x); return m; }, {});
   U.sortBy = (arr, f, desc) => arr.slice().sort((a, b) => { const x = f(a), y = f(b); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return desc ? (y > x ? 1 : y < x ? -1 : 0) : (x > y ? 1 : x < y ? -1 : 0); });

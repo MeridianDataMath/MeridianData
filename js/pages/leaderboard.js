@@ -89,13 +89,13 @@
       placeFilters(); narrow.addEventListener('change', placeFilters); window.addEventListener('resize', placeFilters); ctx.onCleanup(() => { narrow.removeEventListener('change', placeFilters); window.removeEventListener('resize', placeFilters); });
       ctx.onCleanup(U.on('favorites', () => renderTable()));
 
-      const numInput = (k, which, ph) => h('input.input.sm', { type: 'number', placeholder: ph || which, value: state[which][k] ?? '', oninput: (e) => { const v = e.target.value; if (v === '') delete state[which][k]; else state[which][k] = U.num(v); state.page = 1; renderTable(); } });
+      const numInput = (k, which, ph) => h('input.input.sm', { type: 'number', placeholder: ph || which, 'aria-label': (which === 'min' ? 'Minimum ' : 'Maximum ') + k, value: state[which][k] ?? '', oninput: (e) => { const v = e.target.value; if (v === '') delete state[which][k]; else state[which][k] = U.num(v); state.page = 1; renderTable(); } });
       const minmax = (k, unit) => h('div.minmax', h('div.row', numInput(k, 'min', 'Min'), h('span.dim.xs', unit)), h('div.row', numInput(k, 'max', 'Max'), h('span.dim.xs', unit)));
       const fld = (label, el) => h('div', { style: { marginBottom: '10px' } }, h('label.lbl', label), el);
       function renderFilters() {
         U.replace(filters,
           h('div.row', h('h2', 'Filters'), h('span.grow'), h('button.btn.sm.ghost', { onclick: () => { state.q = ''; state.favOnly = false; state.style = ''; state.min = {}; state.max = {}; state.page = 1; renderFilters(); renderTable(); } }, 'Reset all')),
-          h('div', { style: { marginTop: '10px' } }, h('input.input', { placeholder: 'Search by address', value: state.q, oninput: (e) => { state.q = e.target.value.trim().toLowerCase(); state.page = 1; renderTable(); } })),
+          h('div', { style: { marginTop: '10px' } }, h('input.input', { placeholder: 'Search by address', 'aria-label': 'Search accounts by address', value: state.q, oninput: (e) => { state.q = e.target.value.trim().toLowerCase(); state.page = 1; renderTable(); } })),
           h('div', { style: { marginTop: '10px' } }, UI.seg([{ v: 'all', label: 'All' }, { v: 'fav', label: '★ Favorites' }], state.favOnly ? 'fav' : 'all', (v) => { state.favOnly = v === 'fav'; state.page = 1; renderTable(); })),
           h('div.sec', h('h3', 'Interval'), UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderToolbar(); renderTable(); }), h('div.dim.xs', { style: { marginTop: '6px' } }, intervalNote)),
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
@@ -153,7 +153,7 @@
           rows: slice, empty: 'No accounts match the filters',
           onRow: (r) => { location.hash = U.accountUrl(r.account, r.sid).slice(1); },
         });
-        U.replace(tableWrap, tbl, UI.pager({ page: state.page, pageSize: PAGE, total, onPage: (p) => { state.page = p; renderTable(); tableWrap.scrollIntoView({ block: 'start' }); } }));
+        U.keepFocus(tableWrap, () => U.replace(tableWrap, tbl, UI.pager({ page: state.page, pageSize: PAGE, total, onPage: (p) => { state.page = p; renderTable(); tableWrap.scrollIntoView({ block: 'start' }); } })));
         saveState();
         shownBuiltAt = data.builtAt;
         renderSummary(data);

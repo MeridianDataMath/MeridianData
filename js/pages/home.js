@@ -29,7 +29,7 @@
   MD.router.pages.home = {
     async mount(root, route, ctx) {
       const err = h('div.err', { role: 'status', 'aria-live': 'polite' });   // read out when a search finds nothing
-      const input = h('input', { type: 'text', placeholder: window.innerWidth <= 480 ? 'Wallet address or subaccount ID' : 'Search by wallet address or subaccount ID', autocomplete: 'off', spellcheck: false });
+      const input = h('input', { type: 'text', 'aria-label': 'Search by wallet address, subaccount ID or slip id', placeholder: window.innerWidth <= 480 ? 'Wallet address or subaccount ID' : 'Search by wallet address or subaccount ID', autocomplete: 'off', spellcheck: false });
       let busy = false;
       const search = async (v) => {
         if (busy) return; busy = true; err.textContent = ''; form.classList.add('busy'); form.setAttribute('aria-busy', 'true');

@@ -1322,7 +1322,7 @@
       const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
       let page = st.page; const wrap = h('div'); const summary = h('span.dim.small');
-      const search = h('input.input', { placeholder: 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
+      const search = h('input.input', { placeholder: 'Search questions with Meridian bets', 'aria-label': 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (not settled: open bets or escrow not yet claimed)
       // on the Open and Ended tabs: an unsettled question whose open predictions have all lost on Polymarket (a leg
       // resolved against the bettor, or 50/50) or were cashed out to the makers (sold to them before Meridian settled,
@@ -1864,7 +1864,7 @@
     // Open positions: one resolution line per leg (Polymarket + UMA oracle), a combo settles once every leg has resolved
     const legView = (k) => ({ end: k.endTime, settled: !!k.settled, yes: k.resolvedToYes, nd: !!k.nonDecisive, question: k.q });
     const legCell = (r) => h('div.legs', r.picks.map((k) => (k.id
-      ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: questionAppUrl(k.id) }); } }, R.line(legView(k), k.id))
+      ? h('div', { style: { cursor: 'pointer' }, title: 'Resolution details', role: 'button', tabindex: 0, onclick: (e) => { e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: questionAppUrl(k.id) }); }, onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); e.stopPropagation(); R.openDetails(legView(k), k.id, { appUrl: questionAppUrl(k.id) }); } } }, R.line(legView(k), k.id))
       : h('div.res-line', h('span.dim.small', k.endTime ? (k.endTime > Date.now() ? 'in ' + U.fmtCountdown(k.endTime - Date.now()) : 'pending') : '—')))));
     const openWrap = h('div');
     // a row opens its prediction where it is among the loaded predictions (a live position names it too)
