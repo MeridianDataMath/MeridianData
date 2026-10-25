@@ -40,6 +40,7 @@
     list() { const l = U.storage.get(RECENT_KEY, []); return Array.isArray(l) ? l.filter((v) => typeof v === 'string' && v && !leftOut(v)) : []; },
     add(v) { v = String(v || '').trim(); if (U.isAddress(v)) v = v.toLowerCase(); if (!v || leftOut(v)) return; U.storage.set(RECENT_KEY, [v].concat(this.list().filter((x) => x.toLowerCase() !== v.toLowerCase())).slice(0, RECENT_MAX)); },
     clear() { U.storage.set(RECENT_KEY, []); },
+    forget(v) { v = String(v || '').trim().toLowerCase(); U.storage.set(RECENT_KEY, this.list().filter((x) => x.toLowerCase() !== v)); },
   };
   /** What a search box was given, as the site can open it: a pasted link (this site's share or page links, Meridian's
    *  app) gives the slip id or the address in it; an id or address without its 0x gets one. */
@@ -56,7 +57,7 @@
   };
   // the page it opens is opened only if the reader is still where the search started (a lookup can take seconds)
   // (the recent search keeps what was found, the address or the id, not the link it was pasted as: its chip read "https:…79e0")
-  MD.search = async (raw) => { const at = location.hash; const r = await find(raw, () => location.hash === at); if (r && r.ok) { const t = MD.searchTerm(raw); MD.recent.add(t.slip || t.v || raw); } return r; };
+  MD.search = async (raw) => { const at = location.hash; const r = await find(raw, () => location.hash === at); if (r && r.ok && r.recent !== false) { const t = MD.searchTerm(raw); MD.recent.add(t.slip || t.v || raw); } return r; };
   async function find(raw, still = () => true) {
     const t = MD.searchTerm(raw);
     if (t.slip) { if (still()) MD.router.navigate('/predict/p/' + t.slip); return { ok: true }; }
@@ -64,6 +65,7 @@
     const go = (path, params) => { if (still()) MD.router.navigate(path, params); return { ok: true }; };
     if (!v) return { error: 'Enter a wallet address or subaccount ID' };
     if (U.isAddress(v)) {
+      if (U.isExcluded(v)) return go('/account', { address: v.toLowerCase() });   // U.EXCLUDED
       let subs;
       try { subs = await A.subaccountsOf(v); } catch (e) { return { error: 'Lookup failed: ' + e.message }; }
       if (subs.length) return go('/account', { address: v.toLowerCase(), sub: t.sub && subs.some((s) => s.id === t.sub) ? t.sub : subs[0].id });
@@ -85,7 +87,11 @@
       return { error: 'No Meridian perps account or Predict activity found for this address' };
     }
     if (U.isUuid(v)) {
-      try { const sa = await A.subaccount(v); return go('/account', { address: sa.account, sub: sa.id }); }
+      try {
+        const sa = await A.subaccount(v);
+        if (U.isExcluded(sa.account)) { MD.recent.forget(v); return Object.assign(go('/account', { address: sa.account, sub: sa.id }), { recent: false }); }   // (its page: "not shown")
+        return go('/account', { address: sa.account, sub: sa.id });
+      }
       catch (e) { return { error: e.status === 404 ? 'Subaccount not found' : 'Lookup failed: ' + e.message }; }
     }
     return { error: 'Enter a 0x wallet address (40 hex chars), a subaccount UUID, a slip id or a link to one of them' };

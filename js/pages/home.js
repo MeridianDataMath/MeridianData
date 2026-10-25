@@ -49,10 +49,12 @@
         a.draggable = false;   // h() skips a false attribute; the browser's own link dragging would take over the move
         return a;
       };
+      const subChecked = new Set();   // (a recent subaccount id's wallet, read once a visit)
       const renderShortcuts = () => {
         const all = U.favorites.list(), favs = all.slice(0, FAV_MAX);
         const have = new Set(favs.map((f) => String(f.address || '').toLowerCase()));
         const recent = MD.recent.list().filter((v) => !have.has(v.toLowerCase())).slice(0, Math.max(0, Math.min(3, 6 - favs.length)));
+        for (const v of recent) if (U.isUuid(v) && !subChecked.has(v)) { subChecked.add(v); A.subaccount(v, { signal: ctx.signal }).then((sa) => { if (sa && U.isExcluded(sa.account) && !ctx.signal.aborted) { MD.recent.forget(v); renderShortcuts(); } }).catch(() => {}); }
         U.replace(shortcuts,
           favs.map(favChip),
           all.length > favs.length ? h('a.chipbtn', { href: '#/favorites', title: 'Every favorite' }, '+' + (all.length - favs.length)) : null,

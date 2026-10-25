@@ -675,6 +675,7 @@
       const openAccount = async (t, which) => {
         let sid = t[which];
         if (!sid && t[which + 'Order']) { try { sid = (await A.order(t[which + 'Order'], ctx)).subaccountId; t[which] = sid; } catch (_) {} }
+        if (sid && hiddenSids.has(sid)) sid = null;   // a left-out wallet's (U.EXCLUDED)
         if (sid) MD.router.navigate('/account', { address: '', sub: sid }); else U.toast('Account not available for this trade');
       };
       // a fill's fees, on its notional: the REST history's own figures, a live fill's worked out from the fee rates (≈)
@@ -690,12 +691,13 @@
           h('span.t', U.fmtFeedTime(t.t)), h('span.m', t.ticker), U.sideEl(t.side), h('span.num', U.fmtQty(t.size, t.lot) + ' @ ' + U.fmtPrice(t.price, t.tick)), h('span.grow'), h('span.num.dim', { title: feeTitle(t) }, U.fmtUsd(U.num(t.size) * U.num(t.price))),
           h('span.xs.tm', link('taker', 'taker'), h('span.dim', ' · '), link('maker', 'maker')));   // .tm: left out on a phone (css)
       };
-      const renderTrades = () => U.replaceLive(tradesBody, trades.length ? trades.slice(0, SHOW).map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet'));
+      const shownTrades = () => trades.filter((t) => !hiddenSids.has(t.taker) && !hiddenSids.has(t.maker)).slice(0, SHOW);   // (U.EXCLUDED)
+      const renderTrades = () => { const v = shownTrades(); U.replaceLive(tradesBody, v.length ? v.map((t, i) => tradeRow(t, t._new && i < 5)) : UI.empty('No trades yet')); };
       let resolving = false;
       const resolveVisible = async () => {
         if (resolving) return; resolving = true;
         try {
-          const todo = trades.slice(0, SHOW).filter((t) => (!t.taker && t.takerOrder) || (!t.maker && t.makerOrder));
+          const todo = shownTrades().filter((t) => (!t.taker && t.takerOrder) || (!t.maker && t.makerOrder));
           let i = 0, changed = false;
           await Promise.all(Array.from({ length: 3 }, async () => {
             while (i < todo.length && !ctx.signal.aborted) {

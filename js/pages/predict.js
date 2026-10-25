@@ -1722,6 +1722,7 @@
   P.walletHeadline = async (addr, ctx) => { const m = await loadBettor(addr, ctx); if (!m) return null; const x = await headline(addr, m, ctx.signal); return x ? Object.assign({ m }, x) : null; };
   /** opts.embedded: inside the perps account's Predict tab, which has already resolved the Predict wallet. */
   P.renderBettor = async function (el, addr, ctx, opts = {}) {
+    if (P.EXCLUDED.has(String(addr || '').toLowerCase())) { U.replace(el, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }
     U.replace(el, loadingCard('Loading bettor history…'));
     UI.progress.start();
     let m;
