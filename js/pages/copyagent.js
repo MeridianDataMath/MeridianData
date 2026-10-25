@@ -175,20 +175,35 @@
         let req; try { req = JSON.parse(linkIn.value.trim()); } catch (_) { return { err: 'That is not the JSON the agent printed.' }; }
         const d = req && req.data; if (!d || !req.signerSignature) return { err: 'The request needs "data" and "signerSignature".' };
         if (!U.isAddress(d.signer) || !U.isAddress(d.sender)) return { err: 'The request has no valid signer or owner address.' };
+        if (!U.isUuid(d.subaccountId) || !d.subaccount) return { err: 'The request has no valid subaccount.' };
         if (Date.now() / 1000 - U.num(d.signedAt) > 3300) return { err: 'This request is more than 55 minutes old, so this page no longer signs it: run "node copy-agent.mjs link" again for a fresh one.' };
         if (U.isAddress(st.cfg.owner) && d.sender.toLowerCase() !== st.cfg.owner.toLowerCase()) return { err: `This request is for the wallet ${d.sender}, not the one in step 3 (${st.cfg.owner}).` };
         if (U.isUuid(st.cfg.subaccountId) && d.subaccountId !== st.cfg.subaccountId) return { err: `This request is for subaccount ${d.subaccountId}, not the one in step 3 (${st.cfg.subaccountId}).` };
         return { req, d };
       };
-      // what the wallet is about to authorise, shown as soon as it is pasted and before anything is signed
+      const b32 = (x) => { const s = String(x == null ? '' : x).trim(); return /^(0x)?[0-9a-f]*$/i.test(s) ? s.replace(/^0x/i, '').toLowerCase().padEnd(64, '0') : Array.from(new TextEncoder().encode(s)).map((b) => b.toString(16).padStart(2, '0')).join('').padEnd(64, '0'); };
+      const checkPair = async (d) => {
+        let sa; try { sa = await A.subaccount(d.subaccountId); } catch (e) { return 'the subaccount could not be checked with the exchange (' + (e.message || e) + ')'; }
+        if (!sa || String(sa.account || '').toLowerCase() !== String(d.sender).toLowerCase()) return `subaccount ${d.subaccountId} does not belong to ${d.sender}`;
+        if (b32(sa.name) !== b32(d.subaccount)) return `the subaccount this request names is not ${d.subaccountId}: your wallet would authorise another subaccount. Run "node copy-agent.mjs link" again for a request of your own`;
+        return null;
+      };
+      // what the wallet is about to authorise, shown as soon as it is pasted and before anything is signed (then checked
+      // with the exchange: the name and the ID belong together)
       const linkWho = h('div.small', { style: { marginTop: '8px' } });
+      let whoSeq = 0;
       linkIn.addEventListener('input', () => {
+        const my = ++whoSeq;
         const r = readLink(); if (!linkIn.value.trim()) { U.replace(linkWho); return; }
-        U.replace(linkWho, r.err ? h('span.neg', r.err) : h('div', h('div', 'Signer this would let trade: ', h('b.mono', r.d.signer)), h('div.dim', `on subaccount ${U.decodeBytes32(r.d.subaccount)} (${r.d.subaccountId}) of ${r.d.sender}. It must be the address "node copy-agent.mjs link" printed on your machine.`)));
+        if (r.err) { U.replace(linkWho, h('span.neg', r.err)); return; }
+        const pair = h('span.dim', ' · checking it with the exchange…');
+        U.replace(linkWho, h('div', h('div', 'Signer this would let trade: ', h('b.mono', r.d.signer)), h('div.dim', `on subaccount ${U.decodeBytes32(r.d.subaccount)} (${r.d.subaccountId}) of ${r.d.sender}. It must be the address "node copy-agent.mjs link" printed on your machine.`, pair)));
+        checkPair(r.d).then((bad) => { if (my !== whoSeq) return; if (bad) U.replace(linkWho, h('span.neg', 'Refused: ' + bad + '.')); else U.replace(pair, ' · name and ID checked with the exchange'); });
       });
       const linkBtn = h('button.btn.primary.sm', { onclick: async () => {
         const lr = readLink(); if (lr.err) { U.replace(linkOut, h('span.neg', lr.err)); return; }
         const { req, d } = lr;
+        const bad = await checkPair(d); if (bad) { U.replace(linkOut, h('span.neg', 'Refused: ' + bad + '.')); return; }
         // the running agent's own signer, when it answers: a request for any other key is refused outright
         const ag = await agentSigner();
         if (ag && ag.signer && ag.signer.toLowerCase() !== d.signer.toLowerCase()) { U.replace(linkOut, h('span.neg', `Refused: this request would let ${d.signer} trade, but the agent running on this machine signs with ${ag.signer}. Link only the key your own agent printed; a request from anyone else hands them your account.`)); return; }
