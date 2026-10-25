@@ -15,7 +15,8 @@
   MD.router.pages.tax = {
     async mount(root, route, ctx) {
       MD.setTopbar(h('span.title', 'Tax center'));
-      const last = U.storage.get('md.lastAccount', null) || {};
+      const last0 = U.storage.get('md.lastAccount', null) || {};
+      const last = U.isExcluded(last0.address) ? {} : last0;   // (one stored before the account page refused it)
       let addr = String(route.params.address || last.address || '').trim().toLowerCase();
       let subParam = route.params.sub || (addr && addr === String(last.address || '').toLowerCase() ? last.sub : null);
 
@@ -43,6 +44,8 @@
       U.replace(root, h('div.page', h('div.stack', head, body)));
 
       if (!U.isAddress(addr)) { U.replace(body, h('div.card', h('div.empty', 'Enter a wallet address above, or open any account page and press "Tax" in its header.'))); return; }
+      // as the account page: a wallet the site leaves out (U.EXCLUDED) gets no report, from a link or a subaccount ID
+      if (U.isExcluded(addr)) { U.replace(body, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }
 
       // ---- resolve subaccount ----
       let subs, sa, ref;
@@ -163,7 +166,7 @@
         if (rep.lots && rep.lots.warnings) for (const x of rep.lots.warnings) w.push('USDe lots: ' + x);
         return Array.from(new Set(w));
       };
-      const recCtx = (title) => ({ title, addr, sid: sa ? sa.id : null, subName: sa ? U.decodeBytes32(sa.name) : null, pw: rep.pw, link: String(location.href), period, money, perps: !!sa, predict: predictInfo(), lots: rep.lots, rateBasis: vp ? vp.rateBasis() : null, warnings: allWarnings(), now: Date.now() });
+      const recCtx = (title) => ({ title, addr, sid: sa ? sa.id : null, pw: rep.pw, link: String(location.href), period, money, perps: !!sa, predict: predictInfo(), lots: rep.lots, rateBasis: vp ? vp.rateBasis() : null, warnings: allWarnings(), now: Date.now() });
       const record = (title) => M.build(recCtx(title));
       // a site report's first rows: the record, titled by the file, with the file's own completeness and describe rows
       const meth = (file, extra) => M.csvRows(record(), file.label || file.name, { warnings: file.warnings || [], extra: extra || file.extra });

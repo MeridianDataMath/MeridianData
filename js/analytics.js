@@ -460,7 +460,8 @@
     // the parts read in vain, on the row (row.soft): a figure that falls back (all-time volume from the daily buckets, the
     // settled basis for funding and position fees, no fill drift) is not a fully built row, and the build reads it again
     const soft = []; if (vol == null) soft.push('volume');
-    const row = { sid, account: sa.account, name: U.decodeBytes32(sa.name), createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
+    // (no subaccount name: shown in the subaccount pickers only, it travelled unused in the published leaderboard.json)
+    const row = { sid, account: sa.account, createdAt: sa.createdAt, equity: acct.equity, balance: acct.balance, upnl: acct.upnl, notional: acct.notional, openCount: positionsOpen.length, volumeAll: vol, basis: 'app', stats: {}, winRate: null, positionsCount: 0, closedCount: 0, liquidated: 0, style: '—', inactive: false };
     // for the share cards, which have no MD.analytics: one of Meridian's own accounts, and the label of a named wallet
     if (AN.exchangeAccount({ sid, account: sa.account })) row.exchange = true;
     const known = AN.known({ account: sa.account }); if (known) row.role = known.label;

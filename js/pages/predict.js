@@ -2017,7 +2017,7 @@
       // trade; Meridian's perps exchange contract and the wallet's owner once looked up
       const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
       const names = {}, peers = [];
-      const who = (a, inflow, trade) => (a === ZERO_ADDR ? h('span', { title: inflow ? 'USDe minted by its LayerZero bridge: brought in from another chain' : 'USDe burned by its LayerZero bridge: sent to another chain' }, 'the bridge')
+      const who = (a, inflow, trade) => (!a ? h('span.dim', '—') : a === ZERO_ADDR ? h('span', { title: inflow ? 'USDe minted by its LayerZero bridge: brought in from another chain' : 'USDe burned by its LayerZero bridge: sent to another chain' }, 'the bridge')
         : U.RELAY.has(a) ? h('span', { title: a + ' · Relay\'s router on Robinhood Chain: Meridian\'s app deposits through Relay, from another chain or token' }, 'Relay (bridge)')
         : names[a] ? h('span', { title: a + (names[a] === 'Meridian perps' ? ' · Meridian\'s perps exchange contract' : '') }, names[a])
         : trade ? h('span', { title: 'The payment for position tokens traded on the secondary market (the Secondary market table has the trade)' }, inflow ? 'the buyer of its tokens ' : 'the seller of tokens ', bettorLink(a, 3))

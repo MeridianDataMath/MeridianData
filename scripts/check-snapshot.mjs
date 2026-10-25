@@ -47,15 +47,17 @@ export function pick(dir, excluded) {
 export function problems(files, excluded) {
   const e = []; let bytes = 0;
   if (files.length > MAX_FILES) e.push(`${files.length} files, more than the ${MAX_FILES} a snapshot may have`);
-  let predict = null;
+  let predict = null; const cash = [];
   for (const f of files) {
     bytes += f.size;
     if (f.size > MAX_FILE) { e.push(`${f.name} is over 25 MB`); continue; }
     let j; try { j = JSON.parse(f.text); } catch (err) { e.push(`${f.name} is not JSON (${err.message})`); continue; }
     if (f.name === 'predict.json') predict = j;
+    // a bettor file's USDe transfers name the other address of each (the builder blanks a left-out one: publicCash)
+    if (/^bettors\//.test(f.name) && j && j.cash && Array.isArray(j.cash.xf)) cash.push(JSON.stringify(j.cash.xf).toLowerCase());
   }
   // the message names neither the wallet nor the file: the run's log is public
-  if (excluded && excluded.size && files.some((f) => !/^bettors\//.test(f.name) && Array.from(excluded).some((a) => f.text.toLowerCase().includes(a)))) e.push('it was built with an older wallet list than the site\'s: update the snapshot machine (update.sh)');
+  if (excluded && excluded.size && (files.some((f) => !/^bettors\//.test(f.name) && Array.from(excluded).some((a) => f.text.toLowerCase().includes(a))) || cash.some((t) => Array.from(excluded).some((a) => t.includes(a))))) e.push('it was built with an older wallet list than the site\'s: update the snapshot machine (update.sh)');
   if (bytes > MAX_BYTES) e.push(`${(bytes / 1e6).toFixed(0)} MB in all, more than the ${MAX_BYTES / 1e6} MB a snapshot may have`);
   const st = files.find((f) => f.name === 'predict-status.json'); let stAt = 0; try { stAt = st ? Number(JSON.parse(st.text).builtAt) : 0; } catch (_) {}
   if (!(stAt > 0)) e.push('no predict-status.json with a build time (the pages and the health check read the snapshot\'s age there)');

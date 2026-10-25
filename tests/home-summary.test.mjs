@@ -25,8 +25,8 @@ test('top wallets and books: traders only, the biggest PnL and the biggest open 
   assert.equal(s.lb.accounts, 11);
   assert.deepEqual(s.lb.cov, { accounts: 11, rows: 11, carried: 0, oldest: null, missing: 0, partial: false });
   assert.equal(s.lb.copyable, 0, 'no copy profiles, nothing copyable');
-  // a top row keeps what the card and its tooltips read, nothing else
-  assert.deepEqual(Object.keys(s.lb.top[0]).sort(), ['account', 'basis', 'builtAt', 'carried', 'name', 'sid', 'stats', 'style']);
+  // a top row keeps what the card and its tooltips read, nothing else (no subaccount name: the pickers only show one)
+  assert.deepEqual(Object.keys(s.lb.top[0]).sort(), ['account', 'basis', 'builtAt', 'carried', 'sid', 'stats', 'style']);
   assert.equal(JSON.parse(JSON.stringify(s)).lb.top[0].stats.all.pnl, 900);
 });
 

@@ -629,12 +629,19 @@ export function legacyCompetitions(norms, trades, out = outWallet) {
     };
   });
 }
-/** Meridian's PnL ranks by wallet (its app's leaderboard): { address: [rank, PnL in USDe] }, its own ranks. */
+/** Meridian's PnL ranks by wallet (its app's leaderboard): { address: [rank, PnL in USDe] }. The wallets the site leaves
+ *  out are not ranked: each one ranked above a wallet moves it up a place, so no place is left empty (an empty #2 pointed
+ *  at the left-out wallet on Meridian's public leaderboard). */
+const nodeAddr = (x) => String((x && x.account && x.account.address) || '').toLowerCase();
 export function rankMap(nodes, out = outWallet) {
   const m = dict();
-  for (const x of nodes || []) { const a = String((x && x.account && x.account.address) || '').toLowerCase(); if (!out(a) && x.rank != null) m[a] = [x.rank, round2(P.usd(x.pnl))]; }
+  const ranked = (nodes || []).filter((x) => x && x.rank != null);
+  const outRanks = ranked.filter((x) => out(nodeAddr(x))).map((x) => x.rank);
+  for (const x of ranked) { const a = nodeAddr(x); if (!out(a)) m[a] = [x.rank - outRanks.filter((r) => r < x.rank).length, round2(P.usd(x.pnl))]; }
   return m;
 }
+/** How many of Meridian's ranked wallets the site leaves out: taken off its count ("of 778") */
+export const leftOutRanked = (nodes, out = outWallet) => (nodes || []).filter((x) => x && x.rank != null && out(nodeAddr(x))).length;
 /** All time and over the last 30 days, the window its app ranks its top traders by (its social search): { n (wallets
  *  ranked), all, n30, d30, at }. */
 async function readPnlRanks() {
@@ -646,7 +653,7 @@ async function readPnlRanks() {
       nodes.push(...(lb.nodes || [])); pages++;
       after = lb.pageInfo && lb.pageInfo.hasNextPage ? lb.pageInfo.endCursor : null;
     } while (after && pages < 80);
-    return { n: total, map: rankMap(nodes) };
+    return { n: total != null ? Math.max(0, total - leftOutRanked(nodes)) : total, map: rankMap(nodes) };
   };
   const all = await read(0), d30 = await read(Math.floor(Date.now() / 1000) - 30 * 86400);
   return { n: all.n, all: all.map, n30: d30.n, d30: d30.map, at: Date.now() };
@@ -792,6 +799,9 @@ export const cashBalances = (nodes, from = 0, trim = true) => {
   const i = list.findIndex((x) => x[1] !== 0);
   return i < 0 ? [] : list.slice(Math.max(0, i - 1));
 };
+/** A wallet's transfers as published: the other address of one with a wallet the site leaves out is blanked (null), so a
+ *  listed wallet's file never names it under "From / to" (the cache keeps it as read) */
+export const publicCash = (xf, out = outWallet) => (xf || []).map((x) => (x[2] && isAddr(x[2]) && out(x[2]) ? [x[0], x[1], null, x[3]] : x));
 /** The transfers read since a wallet's last read merged into the kept ones: newest first, each once */
 export function mergeTransfers(fresh, kept) {
   const seen = new Set(), out = [];
@@ -1123,7 +1133,7 @@ async function buildPredict() {
     const cs = cash[addr];
     const aggRow = truncated ? (mk ? agg.makers : agg.bettors).find((r) => r.address === addr) : null;
     fs.writeFileSync(path.join(dir, addr + '.json'), JSON.stringify({ address: addr, total: list.length, truncated, newest: Math.min(list.length, 600), aggRow: aggRow ? { role: mk ? 'maker' : 'bettor', row: aggRow } : undefined, curve: curve && curve.length >= 2 ? curve : undefined, daily, predictions: kept.map((n) => Object.assign(P.slim(n, { stx: true, vt: true }), agg.soldOf(n))), trades: tradesOf[addr] || undefined, rd: rdOf[addr] || undefined, rows, rowsFmt: rows ? P.ROWS_FMT : undefined, claim,
-      cash: cs ? { at: cs.at, xf: cs.xf.slice(0, 200), xfN: cs.xf.length, xfMore: cs.more || undefined, bh: cs.bh } : undefined }));
+      cash: cs ? { at: cs.at, xf: publicCash(cs.xf.slice(0, 200)), xfN: cs.xf.length, xfMore: cs.more || undefined, bh: cs.bh } : undefined }));
     files++;
   }
   // every prediction by its id, for the slip page (#/predict/p/<id>): one file per first two hex digits of the id
@@ -1197,7 +1207,8 @@ export function mergeRows(subs, built, prevs, now = Date.now()) {
   for (const sa of subs) {
     const r = built.get(sa.id), o = r ? null : old.get(sa.id);
     if (r) rows.push(r);
-    else if (o) { rows.push(Object.assign({}, o.r, { carried: true, builtAt: o.at })); carried++; }
+    // (a row carried from a build before subaccount names were left out loses its name: shown in the pickers only)
+    else if (o) { const c = Object.assign({}, o.r, { carried: true, builtAt: o.at }); delete c.name; rows.push(c); carried++; }
     else missing++;
   }
   return { rows, carried, missing };

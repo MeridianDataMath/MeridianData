@@ -101,7 +101,9 @@
   PR.prepare = (o) => {
     const P = MD.predict;
     const addr = String(o.addr || '').toLowerCase();
-    const all = (o.norms || []).filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n));
+    // (not the bets of a wallet the site leaves out, P.excluded: as P.ledger and P.taxRows; a counterparty's record listed
+    // the left-out address and counted its bets)
+    const all = (o.norms || []).filter((n) => (n.predictor === addr || n.counterparty === addr) && !P.selfMatch(n) && !(P.excluded && P.excluded(n)));
     const L = P.ledger(all, o.trades || [], addr, o.rd || undefined);
     const mine = all.map((n) => {
       const mk = n.counterparty === addr; const bp = L.byPrediction[n.id];

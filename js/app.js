@@ -34,9 +34,11 @@
   /** The last few searches that found something, newest first, kept in this browser only: the home page offers them as
    *  shortcuts under its search box. */
   const RECENT_KEY = 'md.recentSearches', RECENT_MAX = 5;
+  const leftOut = (v) => { const t = MD.searchTerm(v); return !!(t.v && U.isExcluded(t.v)); };
   MD.recent = {
-    list() { const l = U.storage.get(RECENT_KEY, []); return Array.isArray(l) ? l.filter((v) => typeof v === 'string' && v) : []; },
-    add(v) { v = String(v || '').trim(); if (U.isAddress(v)) v = v.toLowerCase(); if (!v) return; U.storage.set(RECENT_KEY, [v].concat(this.list().filter((x) => x.toLowerCase() !== v.toLowerCase())).slice(0, RECENT_MAX)); },
+    // (never a wallet the site leaves out: its search opens "not shown", and its chip stayed on Home)
+    list() { const l = U.storage.get(RECENT_KEY, []); return Array.isArray(l) ? l.filter((v) => typeof v === 'string' && v && !leftOut(v)) : []; },
+    add(v) { v = String(v || '').trim(); if (U.isAddress(v)) v = v.toLowerCase(); if (!v || leftOut(v)) return; U.storage.set(RECENT_KEY, [v].concat(this.list().filter((x) => x.toLowerCase() !== v.toLowerCase())).slice(0, RECENT_MAX)); },
     clear() { U.storage.set(RECENT_KEY, []); },
   };
   /** What a search box was given, as the site can open it: a pasted link (this site's share or page links, Meridian's
@@ -125,7 +127,8 @@
 
   // Account / Tax center reopen the last viewed account; before any has been viewed in this browser they open the
   // pages' own "pick an account" screens (a bare "#/" made the buttons look dead on a fresh domain).
-  function lastAccountHref() { const last = U.storage.get('md.lastAccount', null); return last ? U.accountUrl(last.address, last.sub) : '#/account'; }
+  // (never a wallet the site leaves out: the rail's Account and Tax links are built from it)
+  function lastAccountHref() { const last = U.storage.get('md.lastAccount', null); return last && !U.isExcluded(last.address) ? U.accountUrl(last.address, last.sub) : '#/account'; }
 
   // ---- sidebar (expanded with labels by default on desktop; collapsible to icons, remembered) ----
   const RAIL_KEY = 'md.rail.collapsed';
@@ -195,7 +198,7 @@
     MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
     const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }
-    if (route.name === 'account' && route.params.address) {
+    if (route.name === 'account' && route.params.address && !U.isExcluded(route.params.address)) {
       U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub });
       const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
       const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');

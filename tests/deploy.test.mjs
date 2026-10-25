@@ -41,6 +41,10 @@ test('the snapshot gate refuses what is not JSON, too big, too many, or without 
   const named = problems([ok, st, { name: 'slips/0a.json', size: 60, text: JSON.stringify({ slips: { x: { p: left.toUpperCase().replace('0X', '0x') } } }) }], ex).join();
   assert.match(named, /older wallet list than the site's: update the snapshot machine/); assert.ok(!named.includes(left) && !named.includes('slips'));
   assert.deepEqual(problems([ok, st, { name: 'bettors/' + left + '.json', size: 2, text: '{"address":"' + left + '"}' }], ex), [], 'its own file is dropped by pick, not refused');
+  // a listed wallet's USDe transfer with a left-out one, named under "From / to": refused the same way
+  const peerFile = (other) => ({ name: 'bettors/0x' + '1'.repeat(40) + '.json', size: 90, text: JSON.stringify({ cash: { xf: [[1792800000000, 25, other, '0xtx']] } }) });
+  assert.match(problems([ok, st, peerFile(left)], ex).join(), /older wallet list than the site's/);
+  assert.deepEqual(problems([ok, st, peerFile(null)], ex), [], 'blanked by the builder: fit');
   assert.match(problems([ok, st, { name: 'slips/00.json', size: 3, text: '{"x' }]).join(), /slips\/00\.json is not JSON/);
   assert.match(problems([ok, st, { name: 'questions/x.json', size: 26e6, text: '{}' }]).join(), /over 25 MB/);
   assert.match(problems([{ name: 'predict.json', size: 9, text: JSON.stringify({ error: 'Error: boom\n at x', builtAt: 1 }) }]).join(), /holds no Predict data \(its build failed: Error: boom\)/);

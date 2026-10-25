@@ -240,7 +240,7 @@
       if (!addr && !subParam) {
         // nothing asked for: reopen the last account seen in this browser, else offer a way to pick one
         const last = U.storage.get('md.lastAccount', null);
-        if (last && U.isAddress(last.address)) { location.replace(U.accountUrl(last.address, last.sub)); return; }
+        if (last && U.isAddress(last.address) && !U.isExcluded(last.address)) { location.replace(U.accountUrl(last.address, last.sub)); return; }
         U.replace(page, pickAccountCard());
         return;
       }
@@ -274,8 +274,7 @@
         return;
       }
       const sa = subs.find((s) => s.id === subParam) || subs[0];
-      const subName = U.decodeBytes32(sa.name);
-      const fav = { address: addr, subaccountId: sa.id, name: subName };
+      const fav = { address: addr, subaccountId: sa.id };
       let ref;
       try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }
 
@@ -304,7 +303,7 @@
       const tabBody = h('div', { style: { marginTop: '16px' } });
       U.replace(page, h('div.stack', headSlot, tabsEl, tabBody));
       let tabCtx = null;
-      const state = { addr, sa, subs, ref, fav, subName };
+      const state = { addr, sa, subs, ref, fav };
       function show(v) {
         tab = v; MD.router.setParams({ tab: v }, { silent: true });
         U.$$('button', tabsEl).forEach((b) => { const on = b.dataset.v === v; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
@@ -429,8 +428,7 @@
           ...kv('Open orders', base.workingRead ? String(base.working.length) : '—', '', base.workingRead ? null : 'The open orders could not be read'),
           ...kv('Stop orders (TP/SL)', base.pendingRead ? String(base.pending.length) : '—', '', base.pendingRead ? null : 'The stop orders could not be read'),
           h('span.sep'),
-          ...kv('Volume (all time)', base.vol == null ? '—' : U.fmtUsd(base.vol)),
-          ...kv('Subaccount', st.subName)),
+          ...kv('Volume (all time)', base.vol == null ? '—' : U.fmtUsd(base.vol))),
         pools.length ? h('div', { style: { marginTop: '6px' } }, pools) : h('div.empty.small', 'No balances'),
         base.ordersErr ? h('div.small', { style: { color: 'var(--amber)', marginTop: '8px' } }, base.ordersErr.unknown ? 'The orders and stops could not be read: their counts and the TP / SL of the positions are not known. ' : 'The last read of the orders and stops failed: those shown are from ' + U.fmtTime(base.ordersErr.at) + '. ',
           h('a', { href: '#', onclick: (e) => { e.preventDefault(); loadBase(true).catch((er) => { if (!isAbort(er)) U.toast('Read failed: ' + er.message); }); } }, 'Try again')) : null);
@@ -1253,8 +1251,12 @@
     const who = h('span.dim.small');
     const openBtn = h('a.btn.sm.ghost', { href: '#/predict/bettor?address=' + encodeURIComponent(st.addr) }, U.icon('external'), 'Open in Predict section');
     U.replace(el, h('div.stack', h('div.row.wrap', { style: { gap: '6px' } }, who, h('span.grow'), openBtn), wrap));
-    const [r] = await Promise.all([MD.predict.wallets.predictAddress(st.addr, { signal: cx.signal }), MD.need('predict')]);   // (renderBettor is in the Predict pages' scripts)
+    const [r0] = await Promise.all([MD.predict.wallets.predictAddress(st.addr, { signal: cx.signal }), MD.need('predict')]);   // (renderBettor is in the Predict pages' scripts)
     if (cx.signal.aborted) return;
+    // a Predict wallet the site leaves out (U.EXCLUDED) is no Predict wallet here: never named, linked or shown
+    const r = Object.assign({}, r0);
+    if (r.via && U.isExcluded(r.via)) { r.via = null; r.address = st.addr; }
+    if (r.also && U.isExcluded(r.also)) r.also = null;
     openBtn.href = '#/predict/bettor?address=' + encodeURIComponent(r.address);
     if (r.error) U.replace(who, h('span.small', { style: { color: 'var(--amber)' } }, 'Could not look up this account\'s Predict wallet (the Robinhood Chain RPC did not answer): showing predictions placed from the address itself.'));
     else if (r.via) U.replace(who, 'Predict wallet ', h('a.addr', { href: '#/predict/bettor?address=' + r.via, title: r.via }, U.shortAddr(r.via, 6)), U.copyBtn(r.via), ' · the smart account this address controls; the Meridian app places its predictions from it',

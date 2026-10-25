@@ -11,7 +11,7 @@
   const iso = (t) => new Date(U.num(t)).toISOString().replace('T', ' ').slice(0, 19);
 
   /**
-   * The record. ctx: {title, addr, sid, subName, pw ({address, via} or an address: the Predict wallet; null: not looked
+   * The record. ctx: {title, addr, sid (the subaccount, by its ID only: no name in any file), pw ({address, via} or an address: the Predict wallet; null: not looked
    * up), link (this report's address), period (T.periods.resolve), money (T.fx.money), perps (the wallet has a perps
    * subaccount), predict ({mode, live, builtAt, held (T.predict.heldClaimText)} | {missing: true} | {failed: true} |
    * null while loading), lots ({method, scope, dep, valuation {kind, name, rule}, opening (how many lots entered)} once
@@ -27,7 +27,7 @@
       ['Report', ctx.title || 'Meridian tax records'],
       ['Disclaimer', T.DISCLAIMER],
       ['Wallet', ctx.addr || ''],
-      ['Subaccount', ctx.sid ? (ctx.subName ? ctx.subName + ' · ' : '') + ctx.sid : 'none: this wallet has no Meridian perps subaccount'],
+      ['Subaccount', ctx.sid ? ctx.sid : 'none: this wallet has no Meridian perps subaccount'],
       ['Predict wallet', pw ? pw + (ctx.pw && ctx.pw.error ? ' (the address itself: its Predict wallet could not be looked up)' : ctx.pw && ctx.pw.via ? ' (the smart account the wallet owns, from which the Meridian app places predictions)' : '') : pr && pr.failed ? 'not known (the Predict data did not load)' : 'not looked up yet'],
       ['Report link', ctx.link || ''],
       ['Period', P.label + ': ' + P.startText + ' → ' + P.endText + ' (the end is the first instant after the period)'],
@@ -69,7 +69,7 @@
     const pw = ctx.pw && typeof ctx.pw === 'object' ? ctx.pw.address : ctx.pw;
     return [
       'Wallet ' + (ctx.addr || '—'),
-      ctx.sid ? 'subaccount ' + (ctx.subName ? ctx.subName + ' (' + ctx.sid + ')' : ctx.sid) : 'no perps subaccount',
+      ctx.sid ? 'subaccount ' + ctx.sid : 'no perps subaccount',
       'Predict wallet ' + (pw || (pr && pr.failed ? 'not known (the Predict data did not load)' : 'not looked up yet')),
       P.label + ': ' + P.startText + ' → ' + P.endText,
       'generated ' + iso(ctx.now != null ? ctx.now : Date.now()) + ' UTC',

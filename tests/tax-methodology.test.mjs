@@ -39,7 +39,7 @@ test('the record names the wallet, the period in local time and UTC, the zone, t
   assert.equal(m[0][0], 'Report'); assert.equal(get(m, 'Disclaimer'), T.DISCLAIMER);
   assert.match(T.DISCLAIMER, /not a tax adviser/);
   assert.equal(get(m, 'Wallet'), '0x8ddba2fdbfa8542bc52340b74eca451f180c8cec');
-  assert.equal(get(m, 'Subaccount'), 'main · 01a0c566-fb90-71c2-8d5b-31da92ffcf6b');
+  assert.equal(get(m, 'Subaccount'), '01a0c566-fb90-71c2-8d5b-31da92ffcf6b', 'by its ID: a subaccount name is never written into a file');
   assert.match(get(m, 'Predict wallet'), /^0x1111.*smart account/);
   assert.match(get(m, 'Period'), /6 Apr 2026 00:00 Europe\/London \(2026-04-05 23:00 UTC\)/, 'local and the exact UTC instant');
   assert.match(get(m, 'Time zone'), /^Europe\/London \(Europe\/London, UTC\+01:00 at the period start\)/);

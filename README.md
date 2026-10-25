@@ -804,7 +804,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     * **The exports card** says, from the registry, which files add the report currency beside each amount, which
       add only the net, which have none, and which are per event, per UTC day, per position or period totals.
   * *Methodology, import notes and the ZIP* (`methodology.js`, `zip.js`) – one record per report, as key, value
-    rows: report, disclaimer, wallet, subaccount (name and ID), Predict wallet, report link, period (local and the
+    rows: report, disclaimer, wallet, subaccount (its ID), Predict wallet, report link, period (local and the
     exact UTC instants), fiscal year, time zone, report currency, rate source, rate rule (with the holiday rule and
     the date convention), latest rate and rate notes, how times count, USDe valuation, perps disposals, perps fees,
     proceeds and costs, funding and position fees (both readings), holding period, Meridian Predict (the basis used
@@ -821,7 +821,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     built), each named as its own download, plus methodology.txt (the record, the files and what each misses, what
     was not included and why, the tool notes) and methodology.json (the same as data).
   * *Print and phone* – **Print / PDF** prints the whole report: the identity line at the top (the full wallet, the
-    subaccount's name and ID, the Predict wallet, the period in its zone with the exact UTC instants, the time it
+    subaccount's ID, the Predict wallet, the period in its zone with the exact UTC instants, the time it
     was generated), the balance reconciliation open, every row of the disposals, closed-positions and transactions
     tables (above 2,000 disposals the per-position-per-local-day view, with a note; the USDe lots the newest 2,000),
     the Predict card with its addresses in full and the basis in force, *Not computed for this report* for lots not

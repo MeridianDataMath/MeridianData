@@ -411,3 +411,12 @@ test('an instant before the first published rate has none: the card\'s heading, 
   // the tile line of a period that ended: the USD figure, said so
   assert.match(HO.tileLine(1, -25, money, P0.start), /^-\$25\.00 \(no rate \(before the first published rate\)\) unrealized at period end/);
 });
+
+test('the Predict record leaves out the bets with a wallet the site leaves out (U.EXCLUDED), as the ledger does', () => {
+  const left = Array.from(U.EXCLUDED)[0];
+  const a = mk({ id: 'xa', stake: 10, cp: 30, t: T0 });
+  const z = mk({ id: 'xz', counterparty: left, stake: 7, cp: 7, t: T0 + HOUR });   // a counterparty the site never shows
+  const prep = PR.prepare({ norms: [a, z], trades: [], addr: W });
+  assert.deepEqual(prep.mine.map((x) => x.n.id), ['xa']);
+  assert.ok(!JSON.stringify(prep.items).includes(left), 'the left-out address appears nowhere in the record');
+});

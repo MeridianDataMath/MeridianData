@@ -74,7 +74,7 @@ test('the printed report names the wallet, subaccount, Predict wallet and period
   const P = period('2026-04-06', '2027-04-05', 'Europe/London');
   const ctx = { addr: '0x8ddba2fdbfa8542bc52340b74eca451f180c8cec', sid: '01a0c566-fb90-71c2-8d5b-31da92ffcf6b', subName: 'main', pw: { address: '0x1111111111111111111111111111111111111111', via: '0x8ddb' }, period: P, now: Date.UTC(2026, 9, 3, 9, 30, 5) };
   const line = M.identity(ctx);
-  assert.equal(line, 'Wallet 0x8ddba2fdbfa8542bc52340b74eca451f180c8cec · subaccount main (01a0c566-fb90-71c2-8d5b-31da92ffcf6b) · Predict wallet 0x1111111111111111111111111111111111111111 · '
+  assert.equal(line, 'Wallet 0x8ddba2fdbfa8542bc52340b74eca451f180c8cec · subaccount 01a0c566-fb90-71c2-8d5b-31da92ffcf6b · Predict wallet 0x1111111111111111111111111111111111111111 · '
     + '2026-04-06 → 2027-04-05: ' + P.startText + ' → ' + P.endText + ' · generated 2026-10-03 09:30:05 UTC');
   // the period is in its zone and in UTC: 6 Apr 2026 00:00 in London is 5 Apr 23:00 UTC
   assert.match(line, /Europe\/London \(2026-04-05 23:00 UTC\)/);

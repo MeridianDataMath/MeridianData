@@ -120,10 +120,14 @@
 
       // the markets and their prices are the page: without them it says why, with a Retry
       let ref, ids, prices, projected, subs, points;
+      // the wallets the site leaves out (U.EXCLUDED) are neither counted nor listed (the Accounts tile read 382 where Home
+      // and the Leaderboard read 380); their subaccounts are kept apart, so their liquidations are left out too
+      const hiddenSids = new Set();
+      const shownSubs = (list) => { if (!list) return list; for (const sa of list) if (U.isExcluded(sa.account)) hiddenSids.add(sa.id); return list.filter((sa) => !U.isExcluded(sa.account)); };
       try {
         ref = await A.ref(ctx);
         ids = ref.active.map((p) => p.id);
-        [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
+        [prices, projected, subs, points] = await Promise.all([A.marketPrices(ids, ctx), A.projectedFunding(ids, ctx).catch(() => ({})), A.allSubaccounts(ctx).then(shownSubs).catch(() => null), A.pointsTotal(ctx).catch(() => null)]);
       } catch (e) {
         if (e && e.name === 'AbortError') return;
         U.replace(root, h('div.page', h('div.card', UI.error('The markets could not be read from Meridian: ' + ((e && e.message) || e), () => MD.router.reload()))));
@@ -365,7 +369,7 @@
           const snap = LB && LB.cache(); const known = {}; if (snap && snap.rows) for (const r of snap.rows) known[r.sid] = r;
           // a fresh list on every scan, so accounts opened after the page loaded are scanned too; the last good
           // list stands in when the refresh fails, and with no list at all the scan fails as before
-          const accounts = await A.allSubaccounts({ signal: ctx.signal, ttl: 60000 }).catch((e) => { if (isAbort(e) || !subs) throw e; return subs; });
+          const accounts = await A.allSubaccounts({ signal: ctx.signal, ttl: 60000 }).then(shownSubs).catch((e) => { if (isAbort(e) || !subs) throw e; return subs; });
           if (accounts.length) subs = accounts;               // the Accounts tile follows on the next render
           const levels = []; let scanned = 0, skipped = 0;
           const tasks = accounts.map((sa) => async () => {
@@ -734,11 +738,13 @@
       };
       async function loadLiq() {
         try {
-          const rows = await A.liquidations(20, ctx);
+          // each by its wallet (the subaccount list), a left-out wallet's not at all
+          const rows = (await A.liquidations(20, ctx)).filter((r) => !hiddenSids.has(r.subaccountId));
+          const subOf = new Map((subs || []).map((sa) => [sa.id, sa]));
           U.replace(liqBody, UI.table({
             cols: [
               { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtDateTimeS(r.createdAt)) },
-              { key: 'acct', label: 'Account', render: (r) => h('a.addr', { href: U.accountUrl('', r.subaccountId) }, U.shortAddr(r.subaccountId, 4)) },
+              { key: 'acct', label: 'Account', render: (r) => { const sa = subOf.get(r.subaccountId); return sa ? U.addrLink(sa.account, sa.id) : h('a.addr', { href: U.accountUrl('', r.subaccountId) }, U.shortAddr(r.subaccountId, 4)); } },
               { key: 'm', label: 'Market', render: (r) => (ref.byId[r.productId] ? ref.byId[r.productId].displayTicker : '—') },
               { key: 'side', label: 'Side', render: (r) => U.sideEl(r.positionSide, true) },
               { key: 'cost', label: 'Notional', num: true, title: 'USD value of the position closed by the liquidation (size × liquidation fill price), as the exchange reports it; not the trader\'s loss', render: (r) => U.fmtUsd(r.cost) },

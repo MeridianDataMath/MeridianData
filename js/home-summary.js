@@ -17,7 +17,7 @@
   /** When a big win counts, as the Overview's Recent sorts them: a win from its settlement, a cash-out from its last sale. */
   HS.winAt = (n) => (P.fromSale(n) ? n.cashOut.t : P.decidedAt(n));
   // a top row keeps what the card and its tooltips read (AN.sitePnlTitle reads basis and stats.all)
-  const topRow = (r) => ({ account: r.account, sid: r.sid, name: r.name, style: r.style, basis: r.basis, carried: r.carried || undefined, builtAt: r.carried ? r.builtAt : undefined, stats: { all: r.stats.all } });
+  const topRow = (r) => ({ account: r.account, sid: r.sid, style: r.style, basis: r.basis, carried: r.carried || undefined, builtAt: r.carried ? r.builtAt : undefined, stats: { all: r.stats.all } });
 
   /** The summary of a leaderboard snapshot (lb), a Predict snapshot (snap, with its agg) and the Predict status file
    *  (status); a part whose source is missing is left out. Wins and bets stay in the snapshot's own slim and compact

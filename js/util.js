@@ -353,7 +353,8 @@
   const FAV_KEY = 'md.favorites.v1';
   U.FAV_LABEL_MAX = 32;
   U.favorites = {
-    list() { const l = U.storage.get(FAV_KEY, []); return Array.isArray(l) ? l : []; },
+    // (never a wallet the site leaves out, U.EXCLUDED: one saved before it was left out showed on Home with live equity)
+    list() { const l = U.storage.get(FAV_KEY, []); return Array.isArray(l) ? l.filter((f) => !(f && U.isExcluded(f.address))) : []; },
     has(sid) { return this.list().some((f) => f.subaccountId === sid); },
     add(f) { const old = this.list().find((x) => x.subaccountId === f.subaccountId); const l = this.list().filter((x) => x.subaccountId !== f.subaccountId); l.unshift(Object.assign({ addedAt: Date.now() }, old && old.label ? { label: old.label } : null, f)); U.storage.set(FAV_KEY, l); U.emit('favorites'); },
     remove(sid) { U.storage.set(FAV_KEY, this.list().filter((f) => f.subaccountId !== sid)); U.emit('favorites'); },
