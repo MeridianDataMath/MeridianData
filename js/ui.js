@@ -8,16 +8,27 @@
    * table({cols:[{key,label,num,render(row),sortVal(row),title}], rows, empty, sort:{key,desc}, onSort(key), onRow(row), canRow(row)
    * (which rows onRow takes: the others look and act as plain rows), rowClass(row)})
    */
+  /** Give the focus back to the control a re-render replaced (the same data-focus-key), when it had it: a sort or a page
+   *  change re-renders the table, and the keyboard's place dropped to the page */
+  const refocus = (el, act) => {
+    const had = document.activeElement === el; const key = el.dataset.focusKey;
+    act();
+    if (!had || el.isConnected || !key || !(window.CSS && CSS.escape)) return;
+    const to = document.querySelector('[data-focus-key="' + CSS.escape(key) + '"]');
+    if (to && to.disabled) { const alt = to.parentNode && to.parentNode.querySelector('button:not([disabled])'); if (alt) alt.focus({ preventScroll: true }); return; }
+    if (to) to.focus({ preventScroll: true });
+  };
   UI.table = function (o) {
-    const cols = o.cols;
+    const cols = o.cols; const sig = cols.map((c) => c.key).join(',');
     const thead = h('thead', h('tr', cols.map((c) => {
       const on = o.sort && o.sort.key === c.key;
       const th = h('th', { class: [c.num ? 'num' : '', c.sortVal ? 'sortable' : '', on ? 'sorted ' + (o.sort.desc ? '' : 'asc') : '', c.cls || ''].join(' ').trim(), title: c.title || null }, c.label);
       if (c.sortVal && o.onSort) {
         // reachable with Tab and sorted with Enter or Space too, its order announced (aria-sort)
         th.tabIndex = 0; th.setAttribute('aria-sort', on ? (o.sort.desc ? 'descending' : 'ascending') : 'none');
-        th.addEventListener('click', () => o.onSort(c.key));
-        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); o.onSort(c.key); } });
+        th.dataset.focusKey = 'sort:' + sig + ':' + c.key;
+        th.addEventListener('click', () => refocus(th, () => o.onSort(c.key)));
+        th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); refocus(th, () => o.onSort(c.key)); } });
       }
       return th;
     })));
@@ -76,7 +87,8 @@
   UI.pager = function ({ page, pageSize, total, onPage }) {
     const pages = Math.max(1, Math.ceil(total / pageSize));
     const from = total ? (page - 1) * pageSize + 1 : 0, to = Math.min(total, page * pageSize);
-    const b = (icon, disabled, target, title) => h('button.btn.sm.icon', { disabled, title, onclick: () => onPage(target) }, U.icon(icon));
+    // (each keeps the focus across the page change; a button now disabled at an end passes it to the pager's next one)
+    const b = (icon, disabled, target, title) => { const el = h('button.btn.sm.icon', { disabled, title, 'aria-label': title, dataset: { focusKey: 'pager:' + title }, onclick: () => refocus(el, () => onPage(target)) }, U.icon(icon)); return el; };
     return h('div.pager', h('span', `${from}-${to} of ${total}`), h('span.grow'), h('span', `Page ${page} of ${pages}`), b('first', page <= 1, 1, 'First'), b('chevL', page <= 1, page - 1, 'Previous'), b('chevR', page >= pages, page + 1, 'Next'), b('last', page >= pages, pages, 'Last'));
   };
   /** cursor pager for server-side pages */
@@ -104,14 +116,18 @@
    *  under a filter field. Typing narrows it by the label and the option's keys (every word must be found, accents and
    *  case ignored; an exact word or a word's start ranks first), arrows and Enter choose, Escape, Tab or a click
    *  elsewhere closes. pick({ options: [{ v, label, keys?, note? }], value, onChange, label, title, placeholder }) */
+  let pickSeq = 0;
   UI.pick = function ({ options, value, onChange, label, title, placeholder }) {
+    const pid = 'pick-' + (++pickSeq);
     const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     const index = options.map((o, i) => { const hay = norm(o.label + ' ' + (o.keys || '') + ' ' + (o.note || '')); return { o, i, hay, toks: hay.split(/[\s,()·]+/).filter(Boolean) }; });
     const cur = options.find((o) => o.v === value) || null;
     const btn = h('button.input.sm.pick-btn', { type: 'button', title: title || label || null, 'aria-label': label || null, 'aria-haspopup': 'listbox', 'aria-expanded': 'false' },
       h('span.pick-val', cur ? cur.label : String(value == null ? '' : value)), h('span.pick-caret', '▾'));
-    const search = h('input.input.sm', { type: 'search', placeholder: placeholder || 'Search…', autocomplete: 'off', spellcheck: false, 'aria-label': 'Search ' + (label || '').toLowerCase() });
-    const list = h('div.pick-list', { role: 'listbox', 'aria-label': label || null });
+    // the search box drives the list (a combobox): the option the arrow keys are on is announced (aria-activedescendant)
+    const search = h('input.input.sm', { type: 'search', placeholder: placeholder || 'Search…', autocomplete: 'off', spellcheck: false, 'aria-label': 'Search ' + (label || '').toLowerCase(), role: 'combobox', 'aria-autocomplete': 'list', 'aria-controls': pid + '-list', 'aria-expanded': 'true' });
+    const list = h('div.pick-list', { role: 'listbox', id: pid + '-list', 'aria-label': label || null });
+    const mark = () => search.setAttribute('aria-activedescendant', shown.length ? pid + '-' + active : '');
     const panel = h('div.pick-panel', search, list); panel.hidden = true;
     const wrap = h('span.pick', btn, panel);
     let shown = [], active = 0;
@@ -123,9 +139,10 @@
         .map((x) => Object.assign({ score: words.reduce((s, w) => s + (x.toks.includes(w) ? 2 : x.toks.some((t) => t.startsWith(w)) ? 1 : 0), 0) }, x))
         .sort((a, b) => b.score - a.score || a.i - b.i);
       if (active >= shown.length) active = Math.max(0, shown.length - 1);
-      U.replace(list, shown.length ? shown.map((x, k) => h('div.pick-opt', { role: 'option', 'aria-selected': String(x.o.v === value), class: (k === active ? 'on' : '') + (x.o.v === value ? ' sel' : ''),
+      U.replace(list, shown.length ? shown.map((x, k) => h('div.pick-opt', { role: 'option', id: pid + '-' + k, 'aria-selected': String(x.o.v === value), class: (k === active ? 'on' : '') + (x.o.v === value ? ' sel' : ''),
         onmousedown: (e) => { e.preventDefault(); choose(x.o); }, onmousemove: () => { if (active !== k) { active = k; U.$$('.pick-opt', list).forEach((el, j) => el.classList.toggle('on', j === k)); } } },
       h('span', x.o.label), x.o.note ? h('span.note', x.o.note) : null)) : h('div.pick-empty', 'Nothing matches'));
+      mark();
     };
     const outside = (e) => { if (!wrap.contains(e.target)) close(); };
     function open() {
@@ -141,7 +158,7 @@
     btn.addEventListener('click', () => (panel.hidden ? open() : close()));
     search.addEventListener('input', () => { active = 0; draw(); list.scrollTop = 0; });
     search.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!shown.length) return; active = (active + (e.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length; U.$$('.pick-opt', list).forEach((el, j) => el.classList.toggle('on', j === active)); scrollTo(); }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (!shown.length) return; active = (active + (e.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length; U.$$('.pick-opt', list).forEach((el, j) => el.classList.toggle('on', j === active)); scrollTo(); mark(); }
       else if (e.key === 'Enter') { e.preventDefault(); if (shown[active]) choose(shown[active].o); }
       else if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); }
       else if (e.key === 'Tab') close();

@@ -157,6 +157,8 @@
       return h('a.more-link', { href: a.getAttribute('href'), target: '_blank', rel: 'noopener', class: Array.from(a.classList).filter((c) => c.startsWith('ic-')).join(' ') || null, onclick: () => close() }, ic ? ic.cloneNode(true) : null, h('span', lbl ? lbl.textContent : a.textContent)); });
     const menu = h('nav.more-menu', { 'aria-label': 'More pages' }, links, exts.length ? h('div.more-rule') : null, exts);
     document.body.appendChild(menu); btn.setAttribute('aria-expanded', 'true');
+    // the focus leaving it (Tab past its last link) closes it too: it stayed drawn over the page
+    menu.addEventListener('focusout', (e) => { const to = e.relatedTarget; if (to && !menu.contains(to) && to !== btn && !btn.contains(to)) close(); });
     document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', onKey, true);
     const first = menu.querySelector('a'); if (first) first.focus();
   }

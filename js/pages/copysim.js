@@ -103,18 +103,18 @@
       const traded = Array.from(new Set(episodes.map((e) => e.pid))).map((pid) => ref.byId[pid]).filter(Boolean);
 
       // ---- settings
-      const sinceIn = h('input.input.sm', { type: 'date', value: st.since, min: isoDate(firstT), max: isoDate(Date.now()), style: { width: 'auto' } });
-      const sizeIn = h('input.input.sm', { type: 'number', min: 10, step: 100, value: st.size, style: { width: '110px' } });
-      const maxIn = h('input.input.sm', { type: 'number', min: 10, step: 100, placeholder: String(S.MAX_SCALE) + '× size', value: st.maxPos || '', style: { width: '110px' }, title: 'The most one position may grow to when the leader adds to it (empty = ' + S.MAX_SCALE + ' times the size)' });
-      const ratioIn = h('input.input.sm', { type: 'number', min: 0.1, step: 1, value: st.ratio, style: { width: '90px' } });
+      const sinceIn = h('input.input.sm', { 'aria-label': 'Copy from (date)', type: 'date', value: st.since, min: isoDate(firstT), max: isoDate(Date.now()), style: { width: 'auto' } });
+      const sizeIn = h('input.input.sm', { 'aria-label': 'Size (USD)', type: 'number', min: 10, step: 100, value: st.size, style: { width: '110px' } });
+      const maxIn = h('input.input.sm', { 'aria-label': 'Most per position (USD)', type: 'number', min: 10, step: 100, placeholder: String(S.MAX_SCALE) + '× size', value: st.maxPos || '', style: { width: '110px' }, title: 'The most one position may grow to when the leader adds to it (empty = ' + S.MAX_SCALE + ' times the size)' });
+      const ratioIn = h('input.input.sm', { 'aria-label': 'Share of the leader\'s quantity (%)', type: 'number', min: 0.1, step: 1, value: st.ratio, style: { width: '90px' } });
       const maxWrap = h('span.row', { style: { gap: '4px' } }, h('span.dim.small', 'max'), maxIn);
       const modeSeg = UI.seg([{ v: 'fixed', label: '$ per position', title: 'the leader\'s opening order becomes this much; adds follow in proportion up to the maximum, reductions cut the same share' }, { v: 'perfill', label: '$ per fill', title: 'every entry fill becomes this much, up to the maximum per position; reductions cut the same share' }, { v: 'ratio', label: '% of leader', title: 'every fill is this share of the leader\'s quantity' }], st.mode, (v) => { st.mode = v; sizeIn.style.display = maxWrap.style.display = v === 'ratio' ? 'none' : ''; ratioIn.parentElement.style.display = v === 'ratio' ? '' : 'none'; }, 'sm');
       const ratioWrap = h('span.row', { style: { gap: '4px', display: st.mode === 'ratio' ? '' : 'none' } }, ratioIn, h('span.dim.small', '%'));
       sizeIn.style.display = maxWrap.style.display = st.mode === 'ratio' ? 'none' : '';
       const delaySeg = UI.seg(DELAYS.map((d) => ({ v: d, label: d ? d + ' s' : 'instant' })), st.delay, (v) => { st.delay = v; if (!paper) renderPaper(); }, 'sm');   // the paper card's text names the delay
-      const slipIn = h('input.input.sm', { type: 'number', min: 0, step: 0.5, placeholder: 'auto', value: st.slip === 'auto' ? '' : st.slip, style: { width: '80px' }, title: 'Leave empty to take today\'s books at your size (' + usd0(AN.COPY_SIZE) + ' in % of leader mode)' });
+      const slipIn = h('input.input.sm', { 'aria-label': 'Slippage (bps)', type: 'number', min: 0, step: 0.5, placeholder: 'auto', value: st.slip === 'auto' ? '' : st.slip, style: { width: '80px' }, title: 'Leave empty to take today\'s books at your size (' + usd0(AN.COPY_SIZE) + ' in % of leader mode)' });
       const mkWrap = h('div.row.wrap', { style: { gap: '4px' } });
-      const renderMarkets = () => U.replace(mkWrap, traded.map((p) => { const on = !st.markets || st.markets.has(p.id); return h('button.chip', { class: on ? 'green' : '', style: { cursor: 'pointer' }, onclick: () => { if (!st.markets) st.markets = new Set(traded.map((x) => x.id)); if (st.markets.has(p.id)) st.markets.delete(p.id); else st.markets.add(p.id); if (st.markets.size === traded.length) st.markets = null; renderMarkets(); } }, p.displayTicker); }));
+      const renderMarkets = () => U.replace(mkWrap, traded.map((p) => { const on = !st.markets || st.markets.has(p.id); return h('button.chip', { class: on ? 'green' : '', 'aria-pressed': String(on), style: { cursor: 'pointer' }, onclick: () => { if (!st.markets) st.markets = new Set(traded.map((x) => x.id)); if (st.markets.has(p.id)) st.markets.delete(p.id); else st.markets.add(p.id); if (st.markets.size === traded.length) st.markets = null; renderMarkets(); } }, p.displayTicker); }));
       renderMarkets();
       const runBtn = h('button.btn.primary.sm', { onclick: () => run() }, 'Run');
       const settings = h('div.card.no-print', h('div.stack', { style: { gap: '10px' } },

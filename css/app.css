@@ -12,7 +12,7 @@
   --border-3: #2a2a2c;
   --text-1: #ececee;
   --text-2: #a1a1a8;
-  --text-3: #6b6b72;
+  --text-3: #85858d;   /* 5.1:1 on cards, 4.55:1 on chips (WCAG AA for small text; #6b6b72 read 3.5:1) */
   --accent: #23d4bc;
   --accent-dim: rgba(35, 212, 188, 0.14);
   --accent-2: #6895ff;
@@ -60,6 +60,8 @@ input, select { font: inherit; color: inherit; }
 :focus { outline: none; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 table.tbl tr.clickable:focus-visible { outline-offset: -2px; }
+/* inside what clips it: a collapsible card (overflow hidden) and a tab bar (it scrolls) showed no ring or a sliver */
+.tabs a:focus-visible, .tabs button:focus-visible, .toggle-head:focus-visible { outline-offset: -2px; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-6); border-radius: 6px; border: 2px solid var(--bg-0); }
@@ -188,6 +190,11 @@ body.share { display: grid; place-items: center; min-height: 100vh; min-height: 
 .right { text-align: right; }
 .center { text-align: center; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a prediction's question with its "+N legs": the question shortens, the count stays (cut off on a phone, a combo read as
+   a single bet) */
+.ellipsis.picks { display: flex; align-items: baseline; gap: 4px; }
+.ellipsis.picks > .q { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ellipsis.picks > .legs { flex: none; white-space: nowrap; }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: -0.01em; }
 h2 { font-size: 15px; }
 h3 { font-size: 13px; color: var(--text-2); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
@@ -529,6 +536,11 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .acct-head .addr-box { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 13px; }
 .acct-head .subsel { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px; padding: 4px 6px 4px 10px; font-size: 12.5px; color: var(--text-2); }
 .acct-head .subsel select { background: transparent; border: 0; color: var(--text-1); outline: none; font-size: 12.5px; }
+/* up to 900 px the account header lives in the page (account.js); it may wrap, and shows everything the topbar hid */
+.acct-head-slot:empty { display: none; }
+.acct-head-slot .acct-head { flex-wrap: wrap; overflow: visible; gap: 8px; margin-bottom: -4px; }
+.acct-head-slot .acct-head .explorer, .acct-head-slot .acct-head .since { display: inline-flex; }
+.acct-head-slot .acct-head .since { flex-basis: 100%; }
 
 .overview { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
 .state-card .big { font-size: 26px; font-weight: 700; font-family: var(--mono); letter-spacing: -0.02em; }
@@ -950,11 +962,6 @@ textarea.input:focus { border-color: var(--accent); }
   .feed .it:has(.grow.ellipsis) { flex-wrap: wrap; row-gap: 2px; }
   .feed .it .grow.ellipsis { flex: 1 1 200px; order: 10; min-width: 0 !important; color: var(--text-2); }
   .feed .it:has(.grow.ellipsis) > .chip:last-child { order: 11; margin-left: auto; }   /* result chip sits at the end of the question line */
-  /* the account header lives in the page here (see account.js); it may wrap, and shows everything the topbar hid */
-  .acct-head-slot:empty { display: none; }
-  .acct-head-slot .acct-head { flex-wrap: wrap; overflow: visible; gap: 8px; margin-bottom: -4px; }
-  .acct-head-slot .acct-head .explorer, .acct-head-slot .acct-head .since { display: inline-flex; }
-  .acct-head-slot .acct-head .since { flex-basis: 100%; }
   /* toasts clear the bottom navigation bar */
   .toast { bottom: 72px; }
   .tax-meth { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }

@@ -423,8 +423,11 @@
   let toastEl, toastT;
   /** A short message at the bottom of the screen, read out by screen readers (a polite live region); ms: how long it
    *  stays (1.6 s by default; longer for a warning that must be read). */
+  // the live region is on the page from the start (one created with its first message was often not read out)
+  const toastBox = () => { if (!toastEl && document.body) { toastEl = U.h('div.toast', { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }); document.body.appendChild(toastEl); } return toastEl; };
+  if (typeof document !== 'undefined' && document.addEventListener) { if (document.body) toastBox(); else document.addEventListener('DOMContentLoaded', toastBox); }
   U.toast = (msg, ms) => {
-    if (!toastEl) { toastEl = U.h('div.toast', { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }); document.body.appendChild(toastEl); }
+    if (!toastBox()) return;
     toastEl.textContent = msg; toastEl.classList.add('show');
     clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), ms > 0 ? ms : 1600);
   };

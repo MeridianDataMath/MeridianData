@@ -240,7 +240,8 @@
         const predRow = (n, at, ...cells) => h('div.it.click', { title: 'Open the slip', tabindex: 0, onclick: () => { location.hash = slipUrl(n.id); }, onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) location.hash = slipUrl(n.id); } },
           h('span.t', { title: U.fmtDateTime(at) }, U.fmtAgo(at)),
           h('a.addr.opt', { href: bettorUrl(n.predictor), title: n.predictor, onclick: (e) => e.stopPropagation() }, U.shortAddr(n.predictor, 4)),
-          h('span.grow.ellipsis', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n') }, n.picks[0] ? n.picks[0].q : '', n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null),
+          // (the question shortens, its "+N legs" stays: css .ellipsis.picks)
+          h('span.grow.ellipsis.picks', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n') }, h('span.q', n.picks[0] ? n.picks[0].q : ''), n.legs > 1 ? h('span.dim.xs.legs', '+' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null),
           ...cells);
         if (!pr) { U.replace(winsBody, UI.empty('Appears with the Predict snapshot')); U.replace(betsBody, UI.empty('Appears with the Predict snapshot')); }
         else {

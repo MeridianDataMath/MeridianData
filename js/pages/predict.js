@@ -360,7 +360,8 @@
       // and the maker's addresses keep their own links. Rows are reachable with Tab and open with Enter.
       // (dataset.focusKey: a dialog closing after a refresh replaced its row gives the focus to the row that replaced it)
       const predRow = (n, list, cls, ...cells) => h('div.it.click', { class: cls || '', title: 'Details', tabindex: 0, dataset: { focusKey: list + ':' + n.id }, onclick: () => openPrediction(n, ctx), onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) openPrediction(n, ctx); } }, ...cells);
-      const picksCell = (n) => h('span.grow.ellipsis', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n'), style: { minWidth: '120px' } }, n.picks[0] ? n.picks[0].q : '', n.legs > 1 ? h('span.dim.xs', ' +' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null);
+      // (the question shortens, its "+N legs" stays: css .ellipsis.picks; cut off on a phone, a combo read as a single bet)
+      const picksCell = (n) => h('span.grow.ellipsis.picks', { title: n.picks.map((k) => (k.yes === true ? 'YES · ' : k.yes === false ? 'NO · ' : '') + k.q).join('\n'), style: { minWidth: '120px' } }, h('span.q', n.picks[0] ? n.picks[0].q : ''), n.legs > 1 ? h('span.dim.xs.legs', '+' + (n.legs - 1) + (n.legs === 2 ? ' leg' : ' legs')) : null);
 
       // big wins: every win whose net PnL is above P.BIG_WIN, as of the snapshot (a snapshot built before the list has none)
       // (filtered here too: a snapshot built before the list went by net PnL listed every payout above it)
@@ -475,7 +476,7 @@
       const controls = h('div.card', h('div.row.wrap',
         h('input.input', { placeholder: 'Search address', 'aria-label': 'Search bettors by address', value: st.q, style: { maxWidth: '260px' }, oninput: (e) => { st.q = e.target.value.trim().toLowerCase(); st.page = 1; render(); } }),
         h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
-        h('span.dim.small', 'Top category'), h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c, selected: c === st.cat }, c))),
+        h('span.dim.small', 'Top category'), h('select.input.sm', { 'aria-label': 'Top category', style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c, selected: c === st.cat }, c))),
         h('span.grow'), summary));
       // Meridian's own PnL ranking (snap.pnlRank, its API's leaderboard): [rank, PnL] all time and over the last 30 days,
       // the window its app ranks its top traders by (an older snapshot: 7 days)
@@ -1063,7 +1064,7 @@
 
   /** No id: paste a Meridian link or an id (a link's id first; a bare id only as the whole input). */
   function slipForm() {
-    const input = h('input.input', { placeholder: 'https://app.meridian.xyz/predict/p/0x… or 0x…', style: { flex: '1', minWidth: '0' } });
+    const input = h('input.input', { placeholder: 'https://app.meridian.xyz/predict/p/0x… or 0x…', 'aria-label': 'A slip link or id', style: { flex: '1', minWidth: '0' } });
     const go = () => { const v = input.value; const m = /\/predict\/p\/(0x[0-9a-f]{64})(?![0-9a-f])/i.exec(v) || /^\s*(0x[0-9a-f]{64})\s*$/i.exec(v); if (!m) { U.toast('No Meridian prediction link or id in that'); return; } location.hash = '#/predict/p/' + m[1].toLowerCase(); };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     return h('div.slip-wrap', h('div.slip',
@@ -1233,10 +1234,10 @@
     if (st.cat && cats.length && !seenSlug.has(st.cat)) st.cat = '';   // (a link's category that is none of these: all)
     const wrap = h('div');
     const summary = h('span.dim.small');
-    const search = h('input.input', { placeholder: 'Search questions (e.g. Bitcoin, Berlin, Lakers)', value: st.search, style: { maxWidth: '360px' } });
+    const search = h('input.input', { placeholder: 'Search questions (e.g. Bitcoin, Berlin, Lakers)', 'aria-label': 'Search every question', value: st.search, style: { maxWidth: '360px' } });
     const debounced = U.debounce(() => { st.search = search.value.trim(); load(); }, 400);
     search.addEventListener('input', debounced);
-    const catSel = h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; load(); } }, h('option', { value: '' }, 'All categories'), cats.map((c) => h('option', { value: c.slug, selected: c.slug === st.cat }, c.name + (c.slug.startsWith('prices-') ? ' (prices)' : ''))));
+    const catSel = h('select.input.sm', { 'aria-label': 'Category', style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; load(); } }, h('option', { value: '' }, 'All categories'), cats.map((c) => h('option', { value: c.slug, selected: c.slug === st.cat }, c.name + (c.slug.startsWith('prices-') ? ' (prices)' : ''))));
     const controls = h('div.card', h('div.row.wrap', search, catSel,
       UI.seg(STATUS_OPTS, st.status, (v) => { st.status = v; load(); }, 'sm'),
       h('span.dim.small', 'Sort'), UI.seg([{ v: 'OPEN_INTEREST', label: 'Meridian OI' }, { v: 'END_TIME', label: 'Ending soon' }, { v: 'CREATED_AT', label: 'Newest' }], st.sort, (v) => { st.sort = v; load(); }, 'sm'),
@@ -1357,7 +1358,7 @@
       if (st.tag && !tagSet.has(st.tag)) st.tag = '';
       const tagRow = tagList.length ? h('div', { style: { marginTop: '8px', overflowX: 'auto' } }, UI.seg([{ v: '', label: 'All tags' }].concat(tagList.map((x) => ({ v: x, label: x, title: 'Questions Meridian tags ' + x + ' (among its most used tags)' }))), st.tag || '', (v) => { st.tag = v; page = 1; render(); }, 'sm')) : null;
       const controls = h('div.card', h('div.row.wrap', search,
-        h('select.input.sm', { style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
+        h('select.input.sm', { 'aria-label': 'Category', style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; page = 1; render(); } }, h('option', { value: '' }, 'All categories'), cats.map(([slug, name]) => h('option', { value: slug, selected: slug === st.cat }, name + (slug.startsWith('prices-') ? ' (prices)' : '')))),
         h('span.status-seg', UI.seg(STATUS_OPTS.map((o) => (o.v === 'ended' ? Object.assign({}, o, { label: o.label + (endedCount ? ' (' + endedCount + ')' : '') }) : o)), st.status, (v) => { st.status = v; page = 1; headerSorted = false; render(); renderBacklog(); }, 'sm')),
         h('span.grow'), summary), tagRow);
       // header sorting like the leaderboard; the Ended tab keeps its pipeline order unless a header is chosen
@@ -2041,7 +2042,7 @@
       const tbl = UI.table({ cols: [
         { key: 't', label: 'Time', render: (x) => h('span.dim', U.fmtDateTimeS(x[0])) },
         { key: 'v', label: 'USDe', num: true, render: (x) => pnlEl(x[1]) },
-        { key: 'p', label: 'From / to', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x)) },
+        { key: 'p', label: 'From / to', cls: 'wrap-any', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x)) },   // (wraps: a phone scrolled the card sideways)
         { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction' }, U.icon('external')) : '') },
       ], rows: xf.slice(0, 25), empty: 'No deposits or withdrawals', phone: false });
       // xfMore: the snapshot read the newest 1,000 of more (the oldest are not counted)

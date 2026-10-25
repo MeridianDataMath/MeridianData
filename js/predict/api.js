@@ -56,6 +56,10 @@
   P.gql = async function (query, variables, opts = {}) {
     const key = query + '|' + JSON.stringify(variables || {});
     if (opts.ttl) { const c = cache.get(key); if (c && c.exp > Date.now()) return c.value; }
+    // where the API does not answer this site (CORS: the one probe of P.live says so, remembered an hour) nothing is sent:
+    // every call's preflight failed, was tried three times more (6 s) and logged errors before the page fell back to the
+    // snapshot (the bettor and account pages on every view)
+    if (!opts.probe && !(await P.live())) throw new GqlError('Network error: the Predict API does not answer this site', 'NETWORK');
     const body = JSON.stringify({ query, variables: variables || {} });
     for (let attempt = 0; ; attempt++) {
       await pace();
@@ -115,12 +119,17 @@
   P.live = async function () {
     if (P._live !== null) return P._live;
     if (typeof window === 'undefined' || typeof location === 'undefined') { P._live = true; return true; }
-    const memo = U.storage.get('md.predict.live', null);
-    if (memo && memo.origin === location.origin && memo.exp > Date.now()) { P._live = !!memo.v; return P._live; }
-    try { await P.gql('query { predictions(first: 0) { totalCount } }', null, { ttl: 60000, retry: false }); P._live = true; }
-    catch (e) { P._live = !(e && (e.code === 'NETWORK' || e.code === 403 || e.code === 405)); }
-    U.storage.set('md.predict.live', { v: P._live, origin: location.origin, exp: Date.now() + P.LIVE_MEMO_MS });
-    return P._live;
+    // one probe shared by every call made while it runs (each call of P.gql asks first)
+    if (P._liveP) return P._liveP;
+    P._liveP = (async () => {
+      const memo = U.storage.get('md.predict.live', null);
+      if (memo && memo.origin === location.origin && memo.exp > Date.now()) { P._live = !!memo.v; return P._live; }
+      try { await P.gql('query { predictions(first: 0) { totalCount } }', null, { ttl: 60000, retry: false, probe: true }); P._live = true; }
+      catch (e) { P._live = !(e && (e.code === 'NETWORK' || e.code === 403 || e.code === 405)); }
+      U.storage.set('md.predict.live', { v: P._live, origin: location.origin, exp: Date.now() + P.LIVE_MEMO_MS });
+      return P._live;
+    })();
+    return P._liveP;
   };
   /** Fetch a snapshot file by relative path (served next to the site; the deploy copies the "snapshots" branch into data/). */
   P.SNAPSHOT_BASES = ['data/'];

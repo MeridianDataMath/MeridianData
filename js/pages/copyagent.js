@@ -219,7 +219,11 @@
       const ntfyTopic = inp(c.ntfy, 'topic', { placeholder: 'topic', style: { width: '200px' } }); ntfyTopic.addEventListener('input', ntfyCheck);
       const ntfyServer = inp(c.ntfy, 'server', { placeholder: 'https://ntfy.sh', style: { width: '160px' } }); ntfyServer.addEventListener('input', ntfyCheck);
       ntfyCheck();
-      const fld = (label, el, hint) => h('div', { style: { marginBottom: '8px' } }, h('div.field-lbl', label), el, hint ? h('div.dim.xs', { style: { marginTop: '2px' } }, hint) : null);
+      // (each control named for a screen reader by the captions beside it, "USD max per order", else by its field: only
+      // captions in divs named them)
+      const cap = (n) => (n && n.matches && n.matches('span.dim.small, span.dim.xs') ? n.textContent.trim() : '');
+      const named = (el, label) => { const list = el.matches && el.matches('input, select, textarea') ? [el] : el.querySelectorAll ? el.querySelectorAll('input, select, textarea') : []; for (const c of list) if (!c.getAttribute('aria-label')) { const t = [cap(c.previousElementSibling), cap(c.nextElementSibling)].filter(Boolean).join(' … '); c.setAttribute('aria-label', t ? label + ': ' + t : label); } };
+      const fld = (label, el, hint) => { named(el, label); return h('div', { style: { marginBottom: '8px' } }, h('div.field-lbl', label), el, hint ? h('div.dim.xs', { style: { marginTop: '2px' } }, hint) : null); };
       const leadersWrap = h('div');
       const renderLeaders = () => U.replace(leadersWrap, h('div.row.wrap', { style: { gap: '6px' } }, c.leaders.map((l) => h('span.chip', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button', { style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' }, onclick: () => { c.leaders = c.leaders.filter((x) => x.sid !== l.sid); save(); renderLeaders(); renderJson(); } }, U.icon('x')))),
         AL.state().leaders.filter((l) => !c.leaders.some((x) => x.sid === l.sid)).map((l) => h('button.btn.sm.ghost', { onclick: () => { c.leaders.push({ sid: l.sid, address: l.address, name: '' }); save(); renderLeaders(); renderJson(); } }, '+ ' + (U.shortAddr(l.address, 4))))),

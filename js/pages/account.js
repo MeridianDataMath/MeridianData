@@ -286,14 +286,16 @@
         h('span.subsel', 'sub:', subSel),
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
-        h('button.btn.sm.ghost.explorer', { title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'),
-        h('button.btn.sm.ghost.explorer', { title: 'Equity curve flex: this account\'s PnL card, to download, copy or post', onclick: () => openFlex(addr, sa, ref) }, U.icon('trophy'), 'Flex'),
+        // Share and Flex: icons only where the topbar is short of room (css .share), never hidden as Explorer is there
+        h('button.btn.sm.ghost.share', { 'aria-label': 'Share', title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), h('span.lbl', 'Share')),
+        h('button.btn.sm.ghost.share', { 'aria-label': 'Flex', title: 'Equity curve flex: this account\'s PnL card, to download, copy or post', onclick: () => openFlex(addr, sa, ref) }, U.icon('trophy'), h('span.lbl', 'Flex')),
         // the UTC day, like the flex card, the share card and the all-time curve's first day
         h('span.dim.small.nowrap.since', { title: 'Subaccount created ' + new Date(U.num(sa.createdAt)).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
           + (sa.createdBlockNumber ? ' · created in Robinhood Chain block ' + sa.createdBlockNumber : '') + (sa.registeredBlockNumber ? ', registered in block ' + sa.registeredBlockNumber : '') }, 'since ' + U.fmtDayUTC(sa.createdAt).replace(' (UTC day)', '')));
-      // phones: the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
+      // up to 900 px the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
+      // (at 721 to 900 px the topbar cut it off: Share, Flex and Explorer hidden, the subaccount picker cut short)
       const headSlot = h('div.acct-head-slot');
-      const narrow = window.matchMedia('(max-width: 720px)');
+      const narrow = window.matchMedia('(max-width: 900px)');
       const placeHead = () => { if (narrow.matches) { headSlot.appendChild(head); MD.setTopbar(h('span.title', 'Account')); } else { MD.setTopbar(head); } };
       placeHead(); narrow.addEventListener('change', placeHead); window.addEventListener('resize', placeHead); ctx.onCleanup(() => { narrow.removeEventListener('change', placeHead); window.removeEventListener('resize', placeHead); });
 

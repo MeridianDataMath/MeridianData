@@ -108,7 +108,7 @@
           h('div', { style: { marginTop: '10px' } }, UI.seg([{ v: 'all', label: 'All' }, { v: 'fav', label: '★ Favorites' }], state.favOnly ? 'fav' : 'all', (v) => { state.favOnly = v === 'fav'; state.page = 1; renderTable(); })),
           h('div.sec', h('h3', 'Interval'), UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderToolbar(); renderTable(); }), h('div.dim.xs', { style: { marginTop: '6px' } }, intervalNote)),
           h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
-            fld('Trading style', h('select.input.sm', { onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
+            fld('Trading style', h('select.input.sm', { 'aria-label': 'Trading style', onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
           h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
           h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; an account it could not rebuild keeps its row from an earlier one, marked "older". Update rebuilds one in your browser right now.'),
           h('div.sec', MD.defsLink()));

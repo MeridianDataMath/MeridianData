@@ -16,7 +16,7 @@
   // the button shows what a click did (in the leader dialog and the simulator nothing else redraws it, so a second click
   // quietly unfollowed), says so in a toast, and its state is announced (aria-pressed)
   MD.bellBtn = (l, cls) => {
-    const bb = h('button.star-btn.bell', { class: cls || '' });
+    const bb = h('button.star-btn.bell', { class: cls || '', dataset: { focusKey: 'bell:' + l.sid } });
     const paint = () => { const on = AL.isFollowed(l.sid); bb.classList.toggle('on', on); bb.title = on ? 'Alerts on · click to stop following' : 'Alert me when this account trades'; bb.setAttribute('aria-label', on ? 'Stop alerts for ' + U.shortAddr(l.address, 4) : 'Alert me when ' + U.shortAddr(l.address, 4) + ' trades'); bb.setAttribute('aria-pressed', String(on)); U.replace(bb, U.icon(on ? 'bellFill' : 'bell')); };
     bb.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const was = AL.isFollowed(l.sid); AL.toggle(l); const on = AL.isFollowed(l.sid); paint(); if (on !== was) U.toast(on ? 'Alerts on for ' + U.shortAddr(l.address, 4) : 'Alerts off for ' + U.shortAddr(l.address, 4)); });
     paint();
@@ -242,7 +242,7 @@
         const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
         MD.router.setParams({ page: state.page > 1 ? state.page : null }, { silent: true });
         const noProfiles = !traders.some((r) => r.copy);
-        U.replace(tableWrap,
+        U.keepFocus(tableWrap, () => U.replace(tableWrap,
           noProfiles ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } }, data.remote ? 'This snapshot predates copyability; the next one (within 30 minutes) will carry the profiles.' : 'A leaderboard built in the browser has no copy profiles; scores need the published snapshot.') : null,
           UI.table({
             sort: state.sort, onSort,
@@ -267,7 +267,7 @@
             rows: slice, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',
             onRow: (x) => { if (x.sc) openLeader(x.r, x.sc); else location.hash = U.accountUrl(x.r.account, x.r.sid).slice(1); },
           }),
-          rows.length > PAGE ? UI.pager({ page: state.page, pageSize: PAGE, total: rows.length, onPage: (p) => { state.page = p; render(); tableWrap.scrollIntoView({ block: 'start' }); } }) : null);
+          rows.length > PAGE ? UI.pager({ page: state.page, pageSize: PAGE, total: rows.length, onPage: (p) => { state.page = p; render(); tableWrap.scrollIntoView({ block: 'start' }); } }) : null));
         const copyable = scored.filter((x) => x.sc && x.sc.verdict === 'Copyable').length, nScored = scored.filter((x) => x.sc).length;
         // as the Leaderboard says it: accounts missing from the snapshot, rows carried over from an earlier build, staleness
         U.replace(summary, `${rows.length} of ${traders.length} traders · ${nScored} scored · ${copyable} copyable · snapshot `, U.agoEl(data.builtAt), LB ? LB.coverageNote(data) : null, UI.staleNote(data.builtAt, 'the publishing job may be down'));
