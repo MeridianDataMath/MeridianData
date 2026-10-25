@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { publicCash, leftOutRanked, prevDrift, needsRebuild, mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { fullAtOf, publicCash, leftOutRanked, prevDrift, needsRebuild, mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -26,6 +26,10 @@ test('mergeRows: built rows in the account list\'s order; an account not built k
   assert.equal(m.carried, 1); assert.equal(m.missing, 1);
   assert.equal(prev.rows[1].carried, undefined, 'the earlier snapshot\'s row is copied, not changed');
   assert.ok(!('name' in m.rows[1]), 'a carried row loses the subaccount name an older build wrote (shown in the pickers only)');
+  // fullAt: this build's time while at most half its rows are carried; otherwise the last one's, unknown without one
+  assert.equal(fullAtOf({ builtAt: 9, rows: [1, 2, 3, 4], carried: 2 }, []), 9);
+  assert.equal(fullAtOf({ builtAt: 9, rows: [1, 2, 3, 4], carried: 3 }, [{ fullAt: 5 }, { fullAt: 7 }, {}]), 7);
+  assert.equal(fullAtOf({ builtAt: 9, rows: [1, 2, 3, 4], carried: 3 }, [{ builtAt: 8 }]), null);
 });
 
 test('mergeRows: the newest row wins across the local and the published snapshot; a row carried twice keeps its first build time', () => {

@@ -522,6 +522,9 @@
       if (ps.closed.length >= 3 && !row.exchange && !(known && known.kind === 'maker')) {
         try {
           const fills = await A.page(A.BASE, '/v1/order/fill', { subaccountId: sid }, { maxPages: 2, signal: o.signal }); decays = await AN.fillDrift(fills, ref, copyCtx.candles);
+          // fillDrift's reads swallow an abort (each candle read fails on its own): a drift cut off by the build's deadline
+          // measured only some fills, or none, and the row went out as fully built
+          if (o.signal && o.signal.aborted) throw new DOMException('Aborted', 'AbortError');
           if (decays && !decays.n && fills.length && copyCtx.candles.failed && copyCtx.candles.failed()) soft.push('candles');   // nothing measured because the candles could not be read
         } catch (e) { if (e && e.name === 'AbortError') throw e; soft.push('fills'); }
         // unmeasured this time: the drift the last build measured stands in, dated (the friction part of the score is 45 %,

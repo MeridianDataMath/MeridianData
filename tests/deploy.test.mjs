@@ -78,6 +78,12 @@ test('a perps build that wrote nothing deploys the published leaderboard again; 
   const g = tmp(); fs.writeFileSync(path.join(g, 'leaderboard.json'), '{"builtAt":1,"rows":[{"sid":"a"},{"si');
   assert.match(await keepLeaderboard({ site, data: g, fetchImpl: fakeSite({ 'data/leaderboard.json': live }) }), /left a leaderboard.json that is not one: the published one/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(g, 'leaderboard.json'), 'utf8')), live);
+  // the live one unreadable too: the last one built here (the deploy's cache) goes out, rather than none
+  const k = tmp(); fs.mkdirSync(path.join(k, 'cache'), { recursive: true });
+  const kept = { builtAt: Date.UTC(2026, 9, 23, 21, 30), rows: [{ sid: 'k' }] };
+  fs.writeFileSync(path.join(k, 'cache', 'leaderboard-last.json'), JSON.stringify(kept));
+  assert.match(await keepLeaderboard({ site, data: k, fetchImpl: fakeSite({}) }), /not read \(HTTP 404\): the last one built here \(built 2026-10-23T21:30:00\.000Z\) goes out instead/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(k, 'leaderboard.json'), 'utf8')), kept);
 });
 
 test('an exchange-rate source this run did not write comes from the live site, with its index entry', async () => {
@@ -127,6 +133,10 @@ test('the leaderboard on the site goes stale: its file not rebuilt, or most of i
   const carried = leaderboardProblem({ builtAt: now - 10 * 60000, cov: { rows: 380, carried: 300, oldest: now - LB_MAX - 60000 } }, now);
   assert.match(carried.what, /300 of the leaderboard's 380 rows are carried/);
   assert.equal(leaderboardProblem({ builtAt: now - 10 * 60000, cov: { rows: 380, carried: 300, oldest: now - H } }, now), null, 'carried, but not yet for two hours');
+  // with fullAt (the last build mostly its own): its age, which only grows, not the oldest row's, which levels off
+  const lev = leaderboardProblem({ builtAt: now - 10 * 60000, fullAt: now - 3 * H, cov: { rows: 380, carried: 300, oldest: now - H } }, now);
+  assert.match(lev.what, /none of the builds since 3\.0 h ago built most of them/); assert.equal(lev.age, 3 * H);
+  assert.equal(leaderboardProblem({ builtAt: now - 10 * 60000, fullAt: now - H, cov: { rows: 380, carried: 300, oldest: now - 5 * H } }, now), null, 'a build mostly its own an hour ago: fine');
   assert.equal(leaderboardProblem(null, now), null); assert.equal(leaderboardProblem({}, now), null);
 });
 

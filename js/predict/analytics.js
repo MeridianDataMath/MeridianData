@@ -199,7 +199,8 @@
 
   /** Won / lost and the win rate (percent) as Meridian's app counts them: its Predict portfolio's Positions Won / Lost
    *  are the sums of the exchange's statsHistory predictionsWon / predictionsLost, and a prediction leaves pending there
-   *  only when the API flags it settled, i.e. when a claim went through it (checked 2026-10-06: the flag's counts equal
+   *  only when the API flags it settled (settled on Meridian, which a claim does, though a win can be settled while its tokens
+   *  are still held: settled is not claimed; checked 2026-10-06 and 2026-10-25: the flag's counts equal
    *  the stats exactly on four bettors and on the maker 0xdd9b…f223, 1,158 / 1,954 of 4,095). So a decided prediction
    *  nobody has claimed, and one a claim on its token paid without flagging it (viaToken, P.markTokenClaims), is still
    *  pending, and a void (NON_DECISIVE) is neither. asMaker: from the maker's side. */

@@ -243,7 +243,7 @@
           { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => { const p = prizeOf(s.r); return p ? h('span.pos', p) : h('span.dim', '—'); } },
         ], rows: c.standings || [], onRow: openStanding, empty: c.standingsUnread ? 'The standings could not be read for this snapshot; a later one brings them' : st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
         // standings the snapshot kept from an earlier read (its own read of them failed)
-        c.asOf ? h('div.xs', { style: { padding: '6px 14px 0', color: 'var(--amber)' } }, `Standings as read ${U.fmtAgo(c.asOf)}: the latest read failed`) : null,
+        c.asOf ? h('div.xs', { style: { padding: '6px 14px 0', color: 'var(--amber)' } }, 'Standings as read ', U.agoEl(c.asOf), ': the latest read failed') : null,
         c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
     };
     const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
@@ -467,8 +467,9 @@
       const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 3, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
       const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
       // the medals go with a best-first order only (sorted the other way, the biggest loss took gold)
-      const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc', mrank: 'asc' };
+      const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc', mrank: 'desc' };   // (mrank sorts on −rank: best first is descending)
       const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
+      if (st.cat && !cats.includes(st.cat)) st.cat = '';   // (a link's category that is none of these: all, as the select reads)
       const wrap = h('div');
       const summary = h('span.dim.small');
       const controls = h('div.card', h('div.row.wrap',
@@ -697,7 +698,12 @@
     return n.picks.every((k) => onMeridian(k) && !k.nonDecisive && k.resolvedToYes === !!k.yes) ? 'won' : null;
   };
   /** Its chip (pv from appPending: Meridian's own legs); asMaker: from the maker's side, whose result is the bettor's turned round. */
-  const pendingChip = (pv, asMaker) => ((pv === 'lost') !== !!asMaker ? h('span.chip.red', { title: 'A leg has settled against the bettor on Meridian; the prediction itself is not settled yet' }, 'lost · awaiting settlement') : h('span.chip.green', { title: 'Every leg has settled in the bettor\'s favour on Meridian; the prediction itself is not settled yet' }, 'won · awaiting settlement'));
+  // (the title by pv, what happened on Meridian: a maker's page showed "won" over a leg settled against the bettor with
+  // the title "Every leg has settled in the bettor's favour")
+  const pendingChip = (pv, asMaker) => {
+    const title = pv === 'lost' ? 'A leg has settled against the bettor on Meridian; the prediction itself is not settled yet' : 'Every leg has settled in the bettor\'s favour on Meridian; the prediction itself is not settled yet';
+    return (pv === 'lost') !== !!asMaker ? h('span.chip.red', { title }, 'lost · awaiting settlement') : h('span.chip.green', { title }, 'won · awaiting settlement');
+  };
   /** What the source markets already say about an undecided prediction Meridian still shows as open (pendingVerdict where
    *  appPending has nothing), from one side, for a title: the site no longer shows it as lost or won (the app does not). */
   const sourceNote = (pv, n, asMaker) => (pv === 'lost'
@@ -1078,11 +1084,11 @@
   // combos can make one bet); the PnL is something else, the bettor's over all its predictions, token trades included
   const recordText = (b) => `${U.fmtNum(b.n, 0)} decided bets${b.predictions > b.n ? ` (${U.fmtNum(b.predictions, 0)} predictions: those linked by a shared question, directly or through others, count as one bet)` : ''}, ${U.fmtNum(b.won, 0)} won where the locked odds implied ${U.fmtNum(b.expected, 1)}. PnL over all its predictions, position-token trades included: ${usd(b.pnl, { sign: true })}${b.roi != null ? ' (ROI ' + U.fmtPct(b.roi, { sign: true, dp: 0 }) + ' on its decided stake)' : ''}. If every bet had exactly the chance its odds priced, a record this good would come ${luckPhrase(b.luck)} by luck alone.`;
   // the record the cells show is Meridian's app's (P.ideas' appWon / appLost / appWinRate: its Positions Won / Lost and
-  // Win Rate, each prediction once it is claimed); the record against the odds, which the chip and By luck rest on, goes
+  // Win Rate, each prediction once it is settled on Meridian); the record against the odds, which the chip and By luck rest on, goes
   // in the title. An ideas file from before the app's counts shows the record against the odds, as it did.
   const ideaApp = (b) => b.appWon != null;
   const ideaRecord = (b) => (ideaApp(b) ? `${U.fmtNum(b.appWon, 0)}W / ${U.fmtNum(b.appLost || 0, 0)}L · ${winPct(b.appWinRate)}` : `${U.fmtNum(b.won, 0)} of ${U.fmtNum(b.n, 0)} bets won`);
-  const ideaTitle = (b) => (ideaApp(b) ? `Won / lost and win rate as Meridian's app counts them (Positions Won / Lost, Win Rate): every prediction, each once it is claimed; one decided but not claimed is still pending there. Site's record, which the chip and By luck rest on: ` : '') + recordText(b);
+  const ideaTitle = (b) => (ideaApp(b) ? `Won / lost and win rate as Meridian's app counts them (Positions Won / Lost, Win Rate): every prediction, each once it is settled on Meridian; one decided but not settled yet is still pending there. Site's record, which the chip and By luck rest on: ` : '') + recordText(b);
   // a badge where the bettor also beat its odds by a margin luck rarely gives (P.ideas' tier); none otherwise: the list is
   // ranked by what they made, and the By luck column has every bettor's figure
   const recordChip = (b) => (b.tier ? h('span.chip', { class: b.tier === 'strong' ? 'green' : 'blue', title: recordText(b) }, b.tier === 'strong' ? 'strong record' : 'good record') : null);
@@ -1100,7 +1106,7 @@
     const footText = (f) => [
       `Winning bettors: at least ${P.IDEAS.minDecided} decided bets and at least ${usd(P.IDEAS.minPnl)} of profit (PnL over all their predictions, position-token trades included), the biggest first, as the large exchanges rank their lead traders by what they made. `,
       `A chip marks the ones that have also won more of their bets than their locked odds implied, by a margin luck alone rarely gives one bettor: strong at 1 in ${Math.round(1 / P.IDEAS.strongLuck)} or rarer, good at 1 in ${Math.round(1 / P.IDEAS.goodLuck)} or rarer; hover it for the numbers. For that record, predictions that share a question, directly or through a chain of other predictions that do (the same pick placed again, overlapping combos on one match or one round of fixtures), count as one bet, at its largest-stake prediction's own odds and with its own result; and wins count, not money: a long shot that hit counts as one win, however much it paid. `,
-      f && f.bettors && f.bettors.some(ideaApp) ? 'The record shown beside it is Meridian\'s app\'s (its Positions Won / Lost and Win Rate): every prediction on its own, each once it is claimed, so it can read very differently from the record against the odds; hover it for both. ' : '',
+      f && f.bettors && f.bettors.some(ideaApp) ? 'The record shown beside it is Meridian\'s app\'s (its Positions Won / Lost and Win Rate): every prediction on its own, each once it is settled on Meridian, so it can read very differently from the record against the odds; hover it for both. ' : '',
       f && f.tested ? `These are thresholds for one bettor, not a test across all of them: ${U.fmtNum(f.tested, 0)} bettors have at least ${P.IDEAS.minDecided} decided bets, and if every bet had exactly the chance its odds priced, luck alone would on average give at most about ${Math.max(1, Math.round(f.tested * P.IDEAS.goodLuck))} of them a record at 1 in ${Math.round(1 / P.IDEAS.goodLuck)} or rarer and at most about ${Math.max(1, Math.round(f.tested * P.IDEAS.strongLuck))} a record at 1 in ${Math.round(1 / P.IDEAS.strongLuck)} or rarer. A tier ranks records; on its own it does not show skill. ` : '',
       'An idea is one of their predictions this page still offers to copy: undecided, with no leg past the end time Meridian lists, settled or closed on Polymarket. A slip on a game that has finished is left out, even while Meridian still takes bets on it. Copy to Meridian opens it there, press Add To Slip and choose your amount. ',
       'Meridian\'s makers quote fresh odds and their margin applies to you too; across all bettors, decided bets have returned less than they staked (', h('a', { href: '#/predict/vig' }, 'Vig & edge'), '). A record is no promise.'];
@@ -1127,7 +1133,7 @@
           { key: 'b', label: 'Bettor', render: (b) => h('div.row', { style: { gap: '6px' } }, bettorLink(b.address, 5), recordChip(b)) },
           { key: 'p', label: 'PnL', num: true, title: 'Over all its predictions, position-token trades included: the list is ranked by it', render: (b) => pnlEl(b.pnl) },
           { key: 'roi', label: 'ROI', num: true, render: (b) => UI.pct(b.roi, { dp: 0 }) },
-          { key: 'r', label: 'Record', title: appRec ? 'Won / lost and win rate as Meridian\'s app counts them (its Positions Won / Lost and Win Rate: every prediction, each once it is claimed). The chip and By luck rest on the site\'s record, decided bets (predictions linked by a shared question, directly or through others, count as one) against the number their locked odds implied: hover a cell for it' : 'Decided bets won (predictions linked by a shared question, directly or through others, count as one), against the number their locked odds implied', render: (b) => h('span', { title: ideaTitle(b) }, ideaRecord(b), ideaApp(b) ? null : h('span.dim.xs', ' · odds implied ' + U.fmtNum(b.expected, 1))) },
+          { key: 'r', label: 'Record', title: appRec ? 'Won / lost and win rate as Meridian\'s app counts them (its Positions Won / Lost and Win Rate: every prediction, each once it is settled on Meridian). The chip and By luck rest on the site\'s record, decided bets (predictions linked by a shared question, directly or through others, count as one) against the number their locked odds implied: hover a cell for it' : 'Decided bets won (predictions linked by a shared question, directly or through others, count as one), against the number their locked odds implied', render: (b) => h('span', { title: ideaTitle(b) }, ideaRecord(b), ideaApp(b) ? null : h('span.dim.xs', ' · odds implied ' + U.fmtNum(b.expected, 1))) },
           { key: 'z', label: 'By luck', num: true, title: 'How rarely a record this good comes about by luck alone, if every bet had exactly the chance its odds priced', render: (b) => luckText(b.luck) },
           { key: 'w', label: 'Wagered', num: true, render: (b) => usd(b.wagered, { compact: true }) },
           { key: 'o', label: 'Open slips', num: true, title: 'Its open predictions this page still offers to copy, on games that have not finished', render: (b) => { const k = openCount.get(b.address) || 0; return k ? h('b', String(k)) : h('span.dim', '0'); } },
@@ -1224,6 +1230,7 @@
     try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
     if (ctx.signal.aborted) return;   // answered from the cache after the page was left: nothing is drawn or linked
     const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
+    if (st.cat && cats.length && !seenSlug.has(st.cat)) st.cat = '';   // (a link's category that is none of these: all)
     const wrap = h('div');
     const summary = h('span.dim.small');
     const search = h('input.input', { placeholder: 'Search questions (e.g. Bitcoin, Berlin, Lakers)', value: st.search, style: { maxWidth: '360px' } });
@@ -1328,6 +1335,7 @@
       let live = false;
       const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
+      if (st.cat && !cats.some(([slug]) => slug === st.cat)) st.cat = '';   // (a link's category that is none of these: all, as the select reads)
       let page = st.page; const wrap = h('div'); const summary = h('span.dim.small');
       const search = h('input.input', { placeholder: 'Search questions with Meridian bets', 'aria-label': 'Search questions with Meridian bets', value: st.search, style: { maxWidth: '360px' }, oninput: U.debounce((e) => { st.search = e.target.value.trim().toLowerCase(); page = 1; render(); }, 250) });
       const exposure = (q) => !q.settled && (q.oi > 0 || q.b > 0 || q.b == null);   // money still riding on it (not settled: open bets or escrow not yet claimed)
@@ -1421,7 +1429,7 @@
         // price checks too, not only the ones visible on the first render
         if (!keepTracking || slice.some((q) => !tracked.has(qId(q)))) { slice.forEach((q) => tracked.add(qId(q))); const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
       }
-      U.replace(body, controls, backlog, h('div.card.tight', wrap), hotCard(snap, all, ctx), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ' + U.fmtAgo(snap.builtAt) + (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
+      U.replace(body, controls, backlog, h('div.card.tight', wrap), hotCard(snap, all, ctx), h('div.footer-note', 'Only questions people have bet on through Meridian: those with money still on them (open predictions, or decided ones not yet claimed), then the questions of the most recently settled predictions' + (snap.recentFrom ? ', back to those settled ' + U.fmtDateTime(snap.recentFrom) : '') + ', ' + U.fmtNum(all.length, 0) + ' questions in all, as of the snapshot ', U.agoEl(snap.builtAt), UI.staleNote(snap.builtAt, 'the publishing job may be down'), (snap.questions ? ` (the exchange lists ${U.fmtNum(snap.questions.all, 0)} questions in total)` : '') + '. A combo counts in full on every question it includes, so stakes and open interest overlap across rows and do not add up to a total.' + (live ? '' : ' Searching every question on the exchange needs live API access, which the Predict API does not grant to this domain.')), resFootnote());
       render();
       // (shown: the rows on screen, whose midpoints are asked again once a minute is up)
       resTicker(ctx, (n) => { loadEnded(); refreshEndedLabel(); render(true); loadMids(shown.map(qId), ctx.signal).then((ok) => { if (ok && !ctx.signal.aborted) render(true); }).catch(() => {}); if (n % 4 === 0) reResolve(shown.map(qId), ctx, () => render(true)); });
@@ -1695,7 +1703,7 @@
     // count at the verdict, for the tooltips
     const aRec = agg ? (m.live ? { won: totals.won, lost: totals.lost, app: true } : P.rowRecord(agg)) : null;
     const F = agg
-      ? { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : `decided, claimed or not · as of the snapshot ${U.fmtAgo(agg.at)}`, won: aRec.won, lost: aRec.lost, vWon: agg.won, vLost: agg.lost, appBasis: aRec.app, nd: agg.nd || 0, open: agg.open, unclaimedWon: claim ? claimWon(claim) : agg.unclaimedWon, unclaimedPayout: claim ? claim.payout : agg.unclaimedPayout, claim, roi: agg.roi, roiNote: 'on decided stakes and any sold share of open ones · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true }
+      ? { pnl: m.live ? totals.pnl : agg.pnl, pnlNote: m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · as of the snapshot ', pnlAt: m.live ? null : agg.at, won: aRec.won, lost: aRec.lost, vWon: agg.won, vLost: agg.lost, appBasis: aRec.app, nd: agg.nd || 0, open: agg.open, unclaimedWon: claim ? claimWon(claim) : agg.unclaimedWon, unclaimedPayout: claim ? claim.payout : agg.unclaimedPayout, claim, roi: agg.roi, roiNote: 'on decided stakes and any sold share of open ones · all predictions', avgOdds: agg.avgOdds, avgLegs: agg.avgLegs, fromSnap: true }
       : Object.assign(fig, { appBasis: true, pnlNote: (m.live ? 'decided, claimed or not · exchange stats' : 'decided, claimed or not · from predictions') + (L.trades.length ? ' · incl. the secondary market' : ''),
         roiNote: 'on decided stakes' + (fig.soldOpen > 0.005 ? ' and the sold share of open ones' : '') + (L.trades.length ? ' · incl. the secondary market' : ''), fromSnap: false });
     // Open as Meridian's Open Positions (one per pick configuration and side with tokens still held): live the API's own
@@ -1815,9 +1823,11 @@
     const openAll = m.truncated && agg && !m.live ? agg.openWagered : U.sum(m.posRows, (r) => r.stake);
     const openHeld = m.truncated && agg && !m.live ? agg.openWagered - U.sum(m.posRows.filter((r) => r.id && riskOf(r) <= 1e-6), (r) => r.stake) : U.sum(posRows, (r) => r.stake);
     const nPos = (k) => `${U.fmtNum(k, 0)} position${k === 1 ? '' : 's'}`;
+    // (worded again on hover: its age keeps moving on a page left open)
+    const clTip = () => 'The winning position tokens this wallet still holds: one per pick configuration and side, each pays $1' + (m.live ? '' : `, as the snapshot read them ${U.fmtAgo(m.builtAt)}`);
     const tiles = h('div.stats',
       // (the exchange's PnL live, from its start: launch-day tests included, as in the app)
-      UI.stat(isMaker ? (marketMaker ? 'Maker PnL' : 'Counterparty PnL') : 'Net PnL', usd(F.pnl, { sign: true }), pre ? h('span', F.pnlNote + ' · ', exclEl()) : F.pnlNote, U.pnlClass(F.pnl)),
+      UI.stat(isMaker ? (marketMaker ? 'Maker PnL' : 'Counterparty PnL') : 'Net PnL', usd(F.pnl, { sign: true }), pre ? h('span', F.pnlNote, F.pnlAt ? U.agoEl(F.pnlAt) : null, ' · ', exclEl()) : F.pnlAt ? h('span', F.pnlNote, U.agoEl(F.pnlAt)) : F.pnlNote, U.pnlClass(F.pnl)),
       // a wallet that only trades tokens has placed nothing: what it paid and was paid on the secondary market instead
       !mine.length && L.trades.length ? UI.stat('Traded', usd(U.sum(L.trades, (t) => t.paid), { compact: true }), 'on the secondary market · no predictions placed')
         : UI.stat('Volume', usd(volume, { compact: true }), exclText ? h('span', 'all time · ', exclEl(` Meridian's Volume, with them: ${cents(appVolume)}.`)) : 'all time'),
@@ -1825,7 +1835,7 @@
       // (a maker's uncollected wins are its own business and change none of these figures: not called out)
       // the record and win rate as Meridian's app counts them (claimed only), the site's count at the verdict in the tooltip
       UI.stat('Record', h('span', { title: F.recordTitle }, `${U.fmtNum(F.won, 0)}W / ${U.fmtNum(F.lost, 0)}L`), ((s) => (s || exclText ? h('span', s, exclText ? [s ? ' · ' : '', exclEl()] : null) : null))([F.open ? (F.openIsPos ? nPos(F.open) : U.fmtNum(F.open, 0)) + ' open' : null, F.unclaimedWon && !isMaker ? U.fmtNum(F.unclaimedWon, 0) + ' won, not yet claimed' : null, F.nd ? F.nd + ' void' : null].filter(Boolean).join(' · '))),
-      UI.stat('Win rate', h('span', { title: F.recordTitle }, F.won + F.lost ? winPct((F.won / (F.won + F.lost)) * 100) : '—'), F.appBasis ? 'of claimed predictions, as in Meridian\'s app' : 'of decided predictions'),
+      UI.stat('Win rate', h('span', { title: F.recordTitle }, F.won + F.lost ? winPct((F.won / (F.won + F.lost)) * 100) : '—'), F.appBasis ? 'of settled predictions, as Meridian\'s app counts them' : 'of decided predictions'),
       UI.stat('ROI', F.roi == null ? '—' : U.fmtPct(F.roi, { sign: true, dp: 0 }), F.roiNote, U.pnlClass(F.roi)),
       UI.stat(isMaker ? 'Avg bettor odds' : 'Avg odds', pct(F.avgOdds, 0), F.avgLegs ? 'avg ' + U.fmtNum(F.avgLegs, 1) + ' legs' : null),
       m.balance == null ? UI.stat('Open stake', usd(openHeld), h('span', { title: 'The stakes of its open positions it still holds. Meridian\'s Active Stake (its deployed collateral) also counts open positions whose tokens were sold, or matched with the other side bought back, on the secondary market' + (openAll - openHeld > 0.005 ? `: ${cents(openAll)}` : '') + '.' },
@@ -1840,7 +1850,7 @@
       // (CL) it is the app's Claimable Payout, less a self-matched prediction's pot and, offline, the launch-day tests',
       // which the site leaves out and names with the app's figure; to the cent, as the app shows what there is to claim
       !isMaker && (CL ? CL.total > 0.005 : F.unclaimedWon) ? UI.stat('Unclaimed winnings', CL ? cents(F.unclaimedPayout) : usd(F.unclaimedPayout), h('span',
-        CL ? h('span', { title: 'The winning position tokens this wallet still holds: one per pick configuration and side, each pays $1' + (m.live ? '' : `, as the snapshot read them ${U.fmtAgo(m.builtAt)}`) }, `${nPos(CL.positions)} to claim`) : `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
+        CL ? h('span', { title: clTip(), onmouseenter: (e) => { e.currentTarget.title = clTip(); } }, `${nPos(CL.positions)} to claim`) : `${U.fmtNum(F.unclaimedWon, 0)} won prediction${F.unclaimedWon > 1 ? 's' : ''} to claim`,
         CL && (CL.self > 0.005 || CL.other > 0.005) ? h('div.xs', { title: exclTitle }, [CL.self > 0.005 ? `excl. ${cents(CL.self)} on ${CL.selfN === 1 ? 'a self-matched prediction' : CL.selfN + ' self-matched predictions'}` : null, CL.other > 0.005 ? `excl. ${cents(CL.other)} on pre-launch predictions` : null].filter(Boolean).join(' · ') + ` · Meridian's Claimable Payout ${cents(CL.total)}`) : null,
         h('div', { style: { marginTop: '8px' } }, h('a.btn.sm', { href: P.CLAIM_URL, target: '_blank', rel: 'noopener', title: 'Opens the Predict portfolio in the Meridian app, where the wallet\'s owner claims every payout at once' }, U.icon('external'), 'Claim on Meridian'))), 'pos') : null);
     const cPnl = h('canvas'), cVol = h('canvas');

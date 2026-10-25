@@ -36,7 +36,15 @@ export async function keepLeaderboard({ site, data, fetchImpl = globalThis.fetch
     if (!Array.isArray(json.rows) || !json.rows.length) throw new Error('it has no rows');
     fs.mkdirSync(data, { recursive: true }); fs.writeFileSync(f, text);
     return `${what}: the published one (built ${new Date(json.builtAt).toISOString()}) goes out again`;
-  } catch (e) { return `${what}, and the published one was not read (${e.message}): the pages build it in the browser`; }
+  } catch (e) {
+    // the last one a build here wrote (data/cache/leaderboard-last.json, kept by the deploy's cache): with the live one
+    // unreadable too (an edge hiccup), none went out, the live file was removed and the pages built it in the browser
+    try {
+      const text = fs.readFileSync(path.join(data, 'cache', 'leaderboard-last.json'), 'utf8'); const j = JSON.parse(text);
+      if (Array.isArray(j.rows) && j.rows.length) { fs.mkdirSync(data, { recursive: true }); fs.writeFileSync(f, text); return `${what}, and the published one was not read (${e.message}): the last one built here (built ${new Date(j.builtAt).toISOString()}) goes out instead`; }
+    } catch (_) {}
+    return `${what}, and the published one was not read (${e.message}): the pages build it in the browser`;
+  }
 }
 
 /** The FX sources this run did not write, from the live site. → what was done, in words (null: nothing) */

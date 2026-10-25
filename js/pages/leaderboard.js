@@ -118,7 +118,7 @@
       function rowsFiltered(data) {
         const iv = state.interval;
         const favs = new Set(U.favorites.list().map((f) => f.subaccountId));
-        const val = (r, k) => { const s = r.stats && r.stats[iv]; switch (k) { case 'equity': return r.equity; case 'volume': return s ? s.volume : 0; case 'pnl': return s ? s.pnl : 0; case 'roi': return s ? s.roi : null; case 'sharpe': return s ? s.sharpe : null; case 'ddPct': return s ? s.ddPct : null; case 'winRate': return r.winRate; case 'positions': return r.positionsCount; case 'style': { const i = STYLES.indexOf(r.style); return i < 0 ? null : i; } case 'account': return r.account; default: return null; } };
+        const val = (r, k) => { const s = r.stats && r.stats[iv]; switch (k) { case 'equity': return r.equity; case 'volume': return s ? s.volume : 0; case 'pnl': return s ? s.pnl : 0; case 'roi': return s ? s.roi : null; case 'sharpe': return s ? s.sharpe : null; case 'ddPct': return s && s.ddPct > 0 ? s.ddPct : null; /* none measured, shown '—', after the measured ones either way: best first gave the medals to '—' */ case 'winRate': return r.winRate; case 'positions': return r.positionsCount; case 'style': { const i = STYLES.indexOf(r.style); return i < 0 ? null : i; } case 'account': return r.account; default: return null; } };
         let rows = data.rows.slice();
         if (state.q) rows = rows.filter((r) => r.account.includes(state.q) || r.sid.includes(state.q));
         if (state.favOnly) rows = rows.filter((r) => favs.has(r.sid));
@@ -196,11 +196,19 @@
           // that had them read "2 of 381 accounts missing"
           const subs = (await A.allSubaccounts({ signal: ctx.signal, ttl: force ? 0 : 60000 })).filter((sa) => !U.isExcluded(sa.account));
           const ids = ref.active.map((p) => p.id);
-          const prices = await A.marketPrices(ids, { signal: ctx.signal, ttl: 10000 });
+          // read again once a minute: a build runs for minutes, and rows built later took the prices of its start (as the
+          // snapshot build reads them)
+          let prices = await A.marketPrices(ids, { signal: ctx.signal, ttl: 10000 }), pricesAt = Date.now();
+          const priced = async () => {
+            if (Date.now() - pricesAt < 60000) return prices;
+            pricesAt = Date.now();
+            try { prices = await A.marketPrices(ids, { signal: ctx.signal, ttl: 0 }); } catch (e) { if (e.name === 'AbortError') throw e; }   // a failed read keeps the last prices
+            return prices;
+          };
           const rows = new Array(subs.length); let done = 0;
           const tasks = subs.map((sa, i) => async () => {
             if (cancel || ctx.signal.aborted) return;
-            try { rows[i] = await AN.buildLeaderboardRow(sa, ref, prices, ctx); }
+            try { rows[i] = await AN.buildLeaderboardRow(sa, ref, await priced(), ctx); }
             catch (e) { if (e.name === 'AbortError') throw e; console.warn('leaderboard row failed', sa.id, e); rows[i] = null; }
             done++; bar.style.width = ((done / subs.length) * 100).toFixed(1) + '%'; txt.textContent = `Analysing accounts… ${done}/${subs.length}`;
           });

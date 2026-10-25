@@ -207,10 +207,10 @@
   UI.staleNote = (builtAt, hint) => {
     if (!builtAt) return null;
     const el = h('span.stale-note', { style: { color: 'var(--amber)' } }, ' · ', h('a', { href: '#/status', style: { color: 'inherit' }, title: (hint ? hint + ' · ' : '') + 'refreshed every 30 minutes normally; click for the data status page' }, 'stale'));   // the age itself is printed just before
-    el.__t = builtAt; el.hidden = !(Date.now() - builtAt > UI.STALE_MS);
+    el.__t = builtAt; el.hidden = !(U.now() - builtAt > UI.STALE_MS);
     return el;
   };
-  if (typeof document !== 'undefined') setInterval(() => { for (const el of document.querySelectorAll('.stale-note')) el.hidden = !(Date.now() - el.__t > UI.STALE_MS); }, 30000);
+  if (typeof document !== 'undefined') setInterval(() => { for (const el of document.querySelectorAll('.stale-note')) el.hidden = !(U.now() - el.__t > UI.STALE_MS); }, 30000);
   /** modal({title, body}) → {close}; closes on the backdrop, the × button or Escape. Dialogs stack (a prediction opened
    *  from a question's list): Escape closes the top one, and a page change closes them all (UI.closeModals from the
    *  router, and after a click on a link to the page already shown). The top dialog takes the focus, everything behind

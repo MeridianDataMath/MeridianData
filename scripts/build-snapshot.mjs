@@ -1248,9 +1248,22 @@ export function publishProblem(out, prevs, now = Date.now()) {
 }
 /** The snapshots this build replaces: the one in the output directory (a local run's) and the published one (an
  *  Action's checkout has no data/). Either can be absent; nothing here fails the build. */
+/** When the leaderboard was last built with at most half its rows its own (not carried over): the health check's alarm
+ *  reads this age, which only grows. The oldest carried row's age levels off (stalest-first rebuilds the oldest rows every
+ *  run), and a steady 76 to 94 accounts a run raised the alarm 45 runs a day. null: not known (no earlier snapshot has it) */
+export const fullAtOf = (out, prevs) => {
+  if (!(out && out.rows && out.rows.length)) return null;
+  if ((out.carried || 0) / out.rows.length <= 0.5) return out.builtAt;
+  const prev = Math.max(0, ...(prevs || []).map((s) => (s && s.fullAt > 0 ? s.fullAt : 0)));
+  return prev > 0 ? prev : null;
+};
+// the last leaderboard a build here wrote, kept between the deploy's runs by its cache (never deployed): the rows to carry
+// over, and the file keep-live sends out when the live one cannot be read either
+const lastLbFile = path.join(root, 'data', 'cache', 'leaderboard-last.json');
 async function previousSnapshots() {
   const out = [];
   try { out.push(JSON.parse(fs.readFileSync(path.join(outDir, 'leaderboard.json'), 'utf8'))); } catch (_) {}
+  try { out.push(JSON.parse(fs.readFileSync(lastLbFile, 'utf8'))); } catch (_) {}
   // tried twice: without it the accounts not built this run would be missing instead of carried
   for (let i = 1; i <= 2; i++) {
     try {
@@ -1360,6 +1373,7 @@ async function buildPerps() {
   const softN = rows.filter((r) => r && !r.carried && r.soft).length;   // built with a part read in vain (row.soft)
   const out = { builtAt: Date.now(), rows, partial: failed > 0 || skipped > 0, soft: softN, source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local', accounts: subs.length, failed, failReasons, skipped, retried: failedAt.length, carried, missing, budgetS: budgetMs / 1000, durationMs: Date.now() - started };
   if (ctx.copy.missing.length) out.booksMissing = ctx.copy.missing;
+  const fullAt = fullAtOf(out, prevs); if (fullAt) out.fullAt = fullAt;
   // a build that would replace the published snapshot with an empty or cut-short list writes nothing: the step fails,
   // and the deploy sends the published one out again (scripts/keep-live.mjs)
   const refused = !built.size ? 'no account was built' : publishProblem(out, prevs);
@@ -1375,6 +1389,7 @@ async function buildPerps() {
   if (refused) { console.error(`leaderboard.json not written: ${refused}`); process.exit(1); }
   const text = JSON.stringify(out);
   writeAtomic(path.join(outDir, 'leaderboard.json'), text);   // whole or not at all: a step stopped mid-write deploys no half file
+  try { writeAtomic(lastLbFile, text); } catch (e) { console.warn('the leaderboard was not kept for the next run:', e.message); }
   if (text.length > 20e6) console.warn(`::warning::leaderboard.json is ${(text.length / 1e6).toFixed(1)} MB: Cloudflare takes 25 MB a file`);
   const profiled = rows.filter((r) => r.copy && r.copy.driftN).length;
   console.log(`wrote ${path.join(outDir, 'leaderboard.json')}: ${rows.length} rows (${built.size} built${softN ? ` (${softN} with a part read in vain)` : ''}, ${carried} carried over, ${missing} missing; ${profiled} with fill drift, ${ctx.copy.candles.size()} candle windows${ctx.copy.candles.failed() ? ', ' + ctx.copy.candles.failed() + ' of them unread' : ''}), ${failed} failed (${failedAt.length} retried), ${skipped} skipped, ${((Date.now() - started) / 1000).toFixed(1)}s`);

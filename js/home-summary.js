@@ -27,7 +27,7 @@
     if (lb && Array.isArray(lb.rows)) {
       const tr = HS.traders(lb.rows);
       out.lb = {
-        builtAt: lb.builtAt, cov: AN.snapshotCoverage(lb), accounts: lb.rows.length,
+        builtAt: lb.builtAt, fullAt: lb.fullAt || undefined, cov: AN.snapshotCoverage(lb), accounts: lb.rows.length,
         top: U.sortBy(tr, (r) => r.stats.all.pnl, true).slice(0, HS.ROWS).map(topRow),
         copyable: tr.filter((r) => { const sc = AN.copyScore(r); return !!(sc && sc.verdict === 'Copyable'); }).length,
         // the biggest open books as of the snapshot: the home page reads their positions live

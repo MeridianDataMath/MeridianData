@@ -26,6 +26,14 @@ test('money: two decimals everywhere, dust without a sign, compact columns witho
 test('percent, drawdown and durations', () => {
   assert.equal(U.fmtPct(-12.345), '-12.35%');
   assert.equal(U.fmtPct(3, { sign: true, dp: 1 }), '+3.0%');
+  // not known: "—", never "0.00%"; a tiny negative never reads "-0"
+  for (const v of [null, undefined, NaN, Infinity, '']) assert.equal(U.fmtPct(v), '—');
+  assert.equal(U.fmtPct('1.5'), '1.50%');
+  assert.equal(U.fmtNum(-0.0004, 0), '0'); assert.equal(U.fmtNum(-0.04, 1), '0.0'); assert.equal(U.fmtNum(-1.26, 1), '-1.3');
+  assert.equal(U.fmtQty(-0.0000001), '0'); assert.equal(U.fmtQty(-0.5, '0.01'), '-0.50');
+  assert.equal(U.ratioFmt(-0.001, 1), '0.0'); assert.equal(U.ratioFmt(-2.25, 1), '-2.3');
+  // a negative price at the decimals of its size, as a positive one
+  assert.equal(U.fmtPrice(-12.5), '-12.50'); assert.equal(U.fmtPrice(12.5), '12.50'); assert.equal(U.fmtPrice(-0.0000001), '0.000000');
   assert.equal(U.fmtDd(0.004), '<0.01%');
   assert.equal(U.fmtDd(null), '—');
   assert.equal(U.fmtDuration(90 * 1000), '2m');

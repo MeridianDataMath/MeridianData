@@ -36,7 +36,13 @@ export const leaderboardProblem = (lb, now) => {
   const age = now - lb.builtAt;
   if (age >= LB_MAX) return { age, what: `the perps leaderboard on the site is ${ago(age)} old: the perps build has failed on every run since (the published file goes out again; see the "Build perps snapshot" step)` };
   const c = lb.cov;
-  if (c && c.rows > 0 && c.carried / c.rows > CARRIED_SHARE && c.oldest > 0 && now - c.oldest >= LB_MAX) return { age: now - c.oldest, what: `${c.carried} of the leaderboard's ${c.rows} rows are carried from earlier builds, the oldest ${ago(now - c.oldest)} old: the perps build runs but its reads fail` };
+  // most rows carried: for how long the leaderboard has gone without a build mostly its own (fullAt). The oldest carried
+  // row's age levels off, as stalest-first rebuilds the oldest rows every run, and alarmed on almost every run; a summary
+  // without fullAt (an older build) falls back to it
+  if (c && c.rows > 0 && c.carried / c.rows > CARRIED_SHARE) {
+    const since = lb.fullAt > 0 ? lb.fullAt : c.oldest;
+    if (since > 0 && now - since >= LB_MAX) return { age: now - since, what: `${c.carried} of the leaderboard's ${c.rows} rows are carried from earlier builds, ${lb.fullAt > 0 ? 'none of the builds since ' + ago(now - since) + ' ago built most of them' : 'the oldest ' + ago(now - since) + ' old'}: the perps build runs but its reads fail` };
+  }
   return null;
 };
 /** Whether this run raises the timer's alarm: every scheduled run while the timer is silent past TIMER_MAX (the two-hourly

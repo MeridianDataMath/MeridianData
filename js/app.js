@@ -206,8 +206,15 @@
     document.title = ((PATH_TITLES[route.path] || TITLES[route.name]) ? (PATH_TITLES[route.path] || TITLES[route.name]) + ' · ' : '') + 'MeridianDataHub';
   }
 
+  // the exchange's clock, read once (half the round trip allowed for): a device clock off by more than half a minute is
+  // corrected in the ages and the stale marks (U.clockSkew)
+  function readClock() {
+    const t0 = Date.now();
+    A.get(A.BASE + '/v1/time', { ttl: 0 }).then((r) => { const t = U.num(r && r.time), t1 = Date.now(); if (t > 0) { const skew = t - (t0 + t1) / 2; if (Math.abs(skew) > 30000) U.clockSkew = skew; } }).catch(() => {});
+  }
   function boot() {
     renderRail();
+    readClock();
     const input = U.$('#mini-search input');
     const mini = U.$('#mini-search');
     mini.addEventListener('submit', async (e) => {

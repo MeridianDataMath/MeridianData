@@ -82,6 +82,19 @@ jobs:
           key: perps-funding-${{ github.run_id }}
           restore-keys: perps-funding-
 
+      # the last leaderboard.json a build here wrote (data/cache/leaderboard-last.json): rows to carry over, and the file
+      # keep-live sends out when the live one cannot be read either. Its own cache, beside the funding one
+      - name: Restore the last leaderboard
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        timeout-minutes: 2
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
+        with:
+          path: data/cache/leaderboard-last.json
+          key: perps-lb-${{ github.run_id }}
+          restore-keys: perps-lb-
+
       # a failure here does not stop the deploy: the published leaderboard.json goes out again (keep-live below). Stopped
       # after 10 minutes whatever it waits on, so the job's 15 still deploy the rest (a hang ran into them: nothing deployed)
       - name: Build perps snapshot (data/leaderboard.json)
@@ -97,6 +110,15 @@ jobs:
         with:
           path: data/cache/perps-funding.json
           key: perps-funding-${{ github.run_id }}
+
+      - name: Keep the last leaderboard
+        if: always()
+        timeout-minutes: 2
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830   # v4.3.0
+        with:
+          path: data/cache/leaderboard-last.json
+          key: perps-lb-${{ github.run_id }}
 
       # The Predict snapshot, built on a home connection (the Mac mini's kit) and published to a repository of its own,
       # MeridianData-snapshots: the machine that builds it holds a token for that repository only, so nothing on it can

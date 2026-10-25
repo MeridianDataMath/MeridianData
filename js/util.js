@@ -230,20 +230,22 @@
     const n = U.num(x);
     let dp;
     if (tick) { const t = String(tick); dp = t.includes('.') ? t.split('.')[1].length : 0; }
-    else dp = n >= 10000 ? 1 : n >= 1000 ? 2 : n >= 1 ? 2 : n >= 0.01 ? 4 : 6;
-    return fmtN(n, dp);
+    else { const a = Math.abs(n); dp = a >= 10000 ? 1 : a >= 1000 ? 2 : a >= 1 ? 2 : a >= 0.01 ? 4 : 6; }   // (by size: every negative price had 6 decimals)
+    return signOf(n, n, dp) + fmtN(Math.abs(n), dp);
   };
-  U.fmtNum = (x, dp = 2) => fmtN(U.num(x), dp);
+  // the sign follows the rounded figure in every formatter: a tiny negative read "-0" ("-0 bps", and "-0.0 bps" in green)
+  U.fmtNum = (x, dp = 2) => { const n = U.num(x); return signOf(n, n, dp) + fmtN(Math.abs(n), dp); };
   /** A size. With the product's lotSize: at its decimals, padded, as Meridian's app shows sizes (a size off the lot grid
    *  cannot exist, and rounding one to 4 dp showed 1.19645 BTC as 1.1965); without: up to 6 dp, trailing zeros dropped. */
   U.fmtQty = (x, lot) => {
     const n = U.num(x); const a = Math.abs(n);
-    if (lot != null && lot !== '') { const t = String(lot); const dp = t.includes('.') ? t.split('.')[1].length : 0; return fmtN(n, dp, dp); }
+    if (lot != null && lot !== '') { const t = String(lot); const dp = t.includes('.') ? t.split('.')[1].length : 0; return signOf(n, n, dp) + fmtN(a, dp, dp); }
     const dp = a >= 1000 ? 2 : a >= 1 ? 4 : 6;
-    return fmtN(n, dp, 0);
+    return signOf(n, n, dp) + fmtN(a, dp, 0);
   };
   U.fmtPct = (x, opts = {}) => {
-    const n = U.num(x);
+    // not known (null, NaN, ∞): "—" (read through U.num first, it was 0, "0.00%")
+    const n = typeof x === 'number' ? x : x == null || x === '' ? NaN : parseFloat(String(x));
     if (!Number.isFinite(n)) return '—';
     // the sign follows the rounded figure: -0.04 at one decimal reads "0.0%", not "-0.0%"
     const dp = opts.dp ?? 2, zero = Number(Math.abs(n).toFixed(dp)) === 0;
@@ -264,7 +266,7 @@
   U.fmtDd = (pct) => (pct == null || !(pct > 0) ? '—' : pct < 0.01 ? '<0.01%' : U.fmtPct(pct, { dp: 2 }));
   U.pnlClass = (x) => { const n = U.num(x); return n > 0 ? 'pos' : n < 0 ? 'neg' : ''; };
   U.pnlEl = (x, opts) => U.h('span', { class: 'num ' + U.pnlClass(x) }, U.fmtUsd(x, Object.assign({ sign: true }, opts)));
-  U.ratioFmt = (x, dp = 2) => (x == null || !Number.isFinite(x) ? '—' : fmtN(x, dp));
+  U.ratioFmt = (x, dp = 2) => (x == null || !Number.isFinite(x) ? '—' : signOf(x, x, dp) + fmtN(Math.abs(x), dp));
 
   // ---------- Time ----------
   U.now = () => Date.now();
@@ -283,9 +285,14 @@
   /** "Sep 22, 23:00" within the current year, "Sep 22, 2025 23:00" otherwise: for schedules where the year is noise */
   U.fmtWhen = (ms) => { const d = new Date(U.num(ms)); return d.getFullYear() === new Date().getFullYear() ? `${MON[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : U.fmtDateTime(ms); };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+  /** The device clock's error against the exchange's, in ms (app.js reads Meridian's /v1/time once and keeps an error of
+   *  more than half a minute): ages and the stale mark count from U.now(), so a clock running 2 h fast does not mark every
+   *  fresh snapshot stale, nor a slow one read "0s ago" */
+  U.clockSkew = 0;
+  U.now = () => Date.now() + U.clockSkew;
   U.fmtAgo = (ms) => {
     if (!(U.num(ms) > 0)) return '—';   // no time known (a status file that did not load): not "20750d ago"
-    const s = Math.max(0, (Date.now() - U.num(ms)) / 1000);
+    const s = Math.max(0, (U.now() - U.num(ms)) / 1000);
     if (s < 60) return `${Math.floor(s)}s ago`;
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
     if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
