@@ -261,6 +261,7 @@ button.card-head.toggle-head { width: 100%; background: transparent; border: 0; 
 /* a box holding a seg in a wrapping row (a card head): it may shrink to the row, so the seg inside scrolls */
 .seg-box { display: block; max-width: 100%; min-width: 0; }
 .seg button { flex: none; }
+.seg.wrap { flex-wrap: wrap; overflow-x: visible; }   /* a row of choices that wraps rather than scrolls (a phone) */
 .seg button {
   background: transparent; border: 0; padding: 5px 10px; border-radius: 6px; cursor: pointer;
   color: var(--text-2); font-size: 12.5px; transition: background .12s, color .12s; white-space: nowrap;

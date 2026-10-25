@@ -107,6 +107,21 @@
    * notional legs (entryNotionalC, exitNotionalC) at the disposal date, netC, netAllC, proceedsC and costC (built the same
    * way, so proceedsC − costC = netC).
    */
+  /** A position's fills in the order they apply: at an instant whose reductions are more than the position holds, its
+   *  increases first. An add and a close listed in one millisecond can come close first, which then ran over what was
+   *  held and left the add standing: 6 of 0x2f46…'s positions did not replay and their days were off by cents (the
+   *  exchange's own PnL on such a close is against the average after the add). Elsewhere the listed order stands. */
+  F.applyOrder = (fills, side) => {
+    const out = fills.slice(); let q = 0;
+    for (let i = 0; i < out.length;) {
+      let j = i + 1; while (j < out.length && out[j].t === out[i].t) j++;
+      const dec = j - i > 1 ? out.slice(i, j).reduce((a, x) => a + (x.side !== side && x.qty > 0 ? x.qty : 0), 0) : 0;
+      if (dec > q + QEPS) { const g = out.slice(i, j); out.splice(i, j - i, ...g.filter((x) => x.side === side), ...g.filter((x) => x.side !== side)); }
+      for (let m = i; m < j; m++) { const x = out[m]; if (!(x.qty > 0)) continue; q = x.side === side ? q + x.qty : Math.max(0, q - x.qty); }
+      i = j;
+    }
+    return out;
+  };
   F.replay = function (p, fills, settle, o = {}) {
     const tz = o.tz || 'UTC', prod = o.prod || null, fx = o.fx || ((v) => v);
     const long = String(p.side) === '0', dir = long ? 1 : -1;
@@ -117,7 +132,7 @@
     // the same three in the report currency, each amount at the rate of the date it was paid
     let openFeesC = 0, carryFC = 0, carryPC = 0;
     let incQ = 0, decQ = 0, incN = 0, realized = 0, maxDiff = 0, over = 0, nFills = 0;
-    for (const f of fills) {
+    for (const f of F.applyOrder(fills, String(p.side))) {
       k++;
       if (!(f.qty > 0)) continue;
       nFills++;
@@ -255,7 +270,7 @@
       // opening fees of increases not yet closed at the period end: paid, but not part of any disposal of the period (in
       // the report currency each at the date it was paid)
       let of = 0, ofC = 0, q = 0;
-      for (const x of fs) { if (x.t >= P.end) break; if (x.side === String(p.side)) { of += x.fee; ofC += fx(x.fee, x.t); q += x.qty; } else if (q > 0) { const c = Math.min(x.qty, q); of -= of * c / q; ofC -= ofC * c / q; q -= c; } }
+      for (const x of F.applyOrder(fs, String(p.side))) { if (x.t >= P.end) break; if (x.side === String(p.side)) { of += x.fee; ofC += fx(x.fee, x.t); q += x.qty; } else if (q > 0) { const c = Math.min(x.qty, q); of -= of * c / q; ofC -= ofC * c / q; q -= c; } }
       if (q > QEPS) { openFeesEnd += of; openFeesEndC += ofC; }
     }
     rows.sort((a, b) => a.t - b.t || a.n - b.n);

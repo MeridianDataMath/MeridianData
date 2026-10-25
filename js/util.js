@@ -312,6 +312,12 @@
   U.fmtDayUTC = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()} (UTC day)`; };
   /** "Sep 22, 23:00" within the current year, "Sep 22, 2025 23:00" otherwise: for schedules where the year is noise */
   U.fmtWhen = (ms) => { const d = new Date(U.num(ms)); return d.getFullYear() === new Date().getFullYear() ? `${MON[d.getMonth()]} ${d.getDate()}, ${pad(d.getHours())}:${pad(d.getMinutes())}` : U.fmtDateTime(ms); };
+  /** UTC as the simulator's tables write it: "2026-10-22 18:26 UTC". */
+  U.fmtUTC = (ms) => new Date(U.num(ms)).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  /** U.fmtFeedTime in UTC: the clock time on today's UTC day, "Oct 24 21:06" before it. */
+  U.fmtFeedTimeUTC = (ms) => { const d = new Date(U.num(ms)), iso = d.toISOString(); return iso.slice(0, 10) === new Date().toISOString().slice(0, 10) ? iso.slice(11, 19) : `${MON[d.getUTCMonth()]} ${d.getUTCDate()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+  /** This browser's time zone, short ("CET", "GMT+1"), to name a local clock time by. */
+  U.tzName = () => { try { const p = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date()).find((x) => x.type === 'timeZoneName'); return p ? p.value : 'local time'; } catch (_) { return 'local time'; } };
   U.fmtDateTimeS = (ms) => { const d = new Date(U.num(ms)); return `${MON[d.getMonth()]} ${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
   /** The device clock's error against the exchange's, in ms (app.js reads Meridian's /v1/time once and keeps an error of
    *  more than half a minute): ages and the stale mark count from U.now(), so a clock running 2 h fast does not mark every
@@ -354,6 +360,24 @@
   U.shortAddr = (a, n = 4) => { a = String(a || ''); return a.length > 2 * n + 4 ? `${a.slice(0, 2 + n)}…${a.slice(-n)}` : a; };
   U.isAddress = (s) => /^0x[0-9a-fA-F]{40}$/.test(String(s || '').trim());
   U.isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || '').trim());
+  /** A subaccount's name as its owner set it, where it reads as text (UTF-8, no control characters); null otherwise. */
+  U.subName = (s) => {
+    const raw = String((s && s.name) || '').trim();
+    if (!/^(0x)?[0-9a-f]*$/i.test(raw)) return raw && !/[\u0000-\u001f\u007f-\u009f\ufffd]/.test(raw) ? raw : null;   // (given as text)
+    try {
+      const hx = raw.replace(/^0x/i, ''), b = [];
+      for (let i = 0; i + 1 < hx.length; i += 2) { const c = parseInt(hx.substr(i, 2), 16); if (!c) break; b.push(c); }
+      const t = b.length && typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(b)).trim() : '';
+      return t && !/[\u0000-\u001f\u007f-\u009f\ufffd]/.test(t) ? t : null;
+    } catch (_) { return null; }
+  };
+  /** A subaccount picker's option: its name (U.subName), else "#2 · 01a1654c… · since Oct 22, 2026" (its place among
+   *  the wallet's subaccounts, oldest first: list). */
+  U.subLabel = (s, list) => {
+    const n = U.subName(s); if (n) return n;
+    const ord = U.sortBy(list && list.length ? list : [s], (x) => U.num(x.createdAt));
+    return '#' + (ord.indexOf(s) + 1) + ' · ' + String(s.id || '').slice(0, 8) + '… · since ' + U.fmtDate(s.createdAt);
+  };
   U.decodeBytes32 = (hex) => {
     try {
       const h = String(hex || '').replace(/^0x/, '');
@@ -447,9 +471,13 @@
     await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
     return results;
   };
-  U.copyText = async (text) => {
-    try { await navigator.clipboard.writeText(text); U.toast('Copied'); }
-    catch (_) { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); U.toast('Copied'); } catch (e) {} ta.remove(); }
+  /** Copy text, then say so: msg ("Copied" by default) once it is copied, for ms (U.toast's). True when it was. */
+  U.copyText = async (text, msg, ms) => {
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; }
+    catch (_) { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy') !== false; } catch (e) {} ta.remove(); }
+    U.toast(ok ? msg || 'Copied' : 'The browser did not allow copying: select the text and copy it by hand', ok ? ms : 4000);
+    return ok;
   };
   let toastEl, toastT;
   /** A short message at the bottom of the screen, read out by screen readers (a polite live region); ms: how long it

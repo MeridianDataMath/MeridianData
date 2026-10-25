@@ -4,7 +4,7 @@
   const MD = window.MD; const U = MD.util;
   const T = (MD.tax = MD.tax || {});
 
-  T.VERSION = '2026-10-03.1';   // written into exports and the methodology, so a file says which site built it
+  T.VERSION = '2026-10-25.1';   // written into exports and the methodology, so a file says which site built it: bump it with every change to js/tax or the Tax center page
   T.DISCLAIMER = 'MeridianDataHub is not a tax adviser. These are records, not tax advice: the rules for perpetual futures, funding and prediction markets differ by country, and no tax is computed here. Use these records with a professional or a tax tool.';
 
   T.isAbort = (e) => !!e && e.name === 'AbortError';

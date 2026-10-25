@@ -87,7 +87,17 @@
   // the stretch after the scheduled start that the played check measured (R.history asks for at most 3 days)
   const hvWin = (hv, game) => (!hv || !hv.to || !Number.isFinite(hv.to) ? 'hours' : hv.to - game >= 3 * DAY - 60000 ? '3 days' : U.fmtCountdown(hv.to - game));
   /** "Tohoku Rakuten Golden Eagles 27% · Fukuoka SoftBank Hawks 73%" */
-  R.oddsText = (m) => (m && m.prices.length ? m.outcomes.map((o, i) => o + ' ' + (Number.isFinite(m.prices[i]) ? pct(m.prices[i]) : '—')).join(' · ') : '');
+  R.oddsText = (m) => {
+    if (!m || !m.prices.length) return '';
+    const ps = m.prices, sum = ps.reduce((a, p) => a + p, 0);
+    let whole = null;
+    if (Number.isFinite(sum) && Math.abs(sum - 1) < 0.005 && ps.every((p) => p >= 0.01 && p <= 0.99)) {
+      const raw = ps.map((p) => p * 100), base = raw.map((x) => Math.floor(x)); let left = 100 - base.reduce((a, b) => a + b, 0);
+      raw.map((x, i) => [x - base[i], i]).sort((a, b) => b[0] - a[0]).forEach(([, i]) => { if (left > 0) { base[i]++; left--; } });
+      whole = base;
+    }
+    return m.outcomes.map((o, i) => o + ' ' + (whole ? whole[i] + '%' : Number.isFinite(ps[i]) ? pct(ps[i]) : '—')).join(' · ');
+  };
   /** What Polymarket's game feed says in the event's `period`: 'postponed', 'cancelled' or null (NS, a live period, or
    *  nothing: the feeds of some leagues, NPB and CPBL among them, stay on NS whatever happens). */
   // seen: "POST" (La Liga Levante–Athletic, re-dated), "CAN" (WTA Monterrey Bartunkova–Potapova, never played: 50-50)
@@ -99,6 +109,7 @@
   // pre-game level. Odds that stay where they were long after the scheduled start mean the game was most likely not played.
   R.PRICES = 'https://clob.polymarket.com/prices-history';
   R.NO_RESULT_HOURS = 12;   // this long after the scheduled start with no result, a game is checked for a postponement
+  R.IN_PLAY_HOURS = 4;      // where a league's feed never moves (NPB, CPBL: "NS" throughout), a game this soon after its start counts as in play
   R.MOVE = 0.1;             // |median odds after the start − median before| at which the game counts as played (a tie
                             // from 38 % moves 12 points; the rained-out NPB game's median moved half a point)
   R.SWING = 0.25;           // or this wide a swing in the first six hours: in-game trading
@@ -411,6 +422,13 @@
         return { code: 'trading', chip: ['open', 'accent'], main: 'Game starts ' + U.fmtDateTime(game) + ' (' + cd(game) + ')', sub: 'resolves after the final result' + (meridianEnd ? ' · ' + meridianEnd : ''), at: game, m, o };
       }
       const what = moved ? 'Make-up game' : 'Game';
+      // in play: the game feed shows a live period (not before the start, not over), or, where it never moves, the first
+      // R.IN_PLAY_HOURS after the start while the market trades; Gamma's ended flag says it is over
+      const per = String(m.period || '').trim();
+      const livePeriod = !!per && !feed && !/^(ns|tbd|sched|pre|ft|fin|final|end|aet|ap)\b/i.test(per);
+      if (!m.ended && (livePeriod || ((!per || /^ns$/i.test(per)) && m.acceptingOrders && now - game < R.IN_PLAY_HOURS * 3600000))) {
+        return Object.assign(base, { code: 'inplay', chip: ['in play', 'accent'], main: what + ' started ' + cd(game) + (moved ? ' (postponed' + was + ')' : '') + (livePeriod ? ' · ' + per : '') + (known ? ' · Polymarket prices ' + known.name + ' at ' + pct(known.p) : ''), sub: 'being played · the outcome is proposed once the final result is in · ' + proposal });
+      }
       // a price this lopsided can come minutes before the end, so "started", not "over"
       if (known) return Object.assign(base, { code: 'awaiting', chip: ['awaiting proposal', 'amber'], main: what + ' started ' + cd(game) + ' · Polymarket prices ' + known.name + ' at ' + pct(known.p), sub: 'the outcome is proposed once the final result is in · ' + proposal });
       if (feed === 'postponed') return Object.assign(base, { code: 'postponed', chip: ['postponed', 'amber'], main: 'Postponed · not played on ' + day, sub: 'Polymarket\'s game feed marks it postponed · no new date listed yet · ' + postponedText(m) });

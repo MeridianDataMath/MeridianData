@@ -167,7 +167,7 @@ ${t(W - 64, 610, o.footRight || '', 17, { anchor: 'end', fill: C.text3 })}
     const accountSvg = (r) => flexSvg(accountInput(r));
     const accountText = (r) => {
       const s = (r.stats && r.stats.all) || {};
-      const bits = [s.roi != null ? pct(s.roi, 1, true) + ' ROI' : null, U.fmtUsd(r.volumeAll || 0, { compact: true }) + ' volume', r.winRate != null ? pct(r.winRate, 0) + ' win rate' : null, s.ddPct > 0 ? U.fmtDd(s.ddPct) + ' max drawdown' : null, r.style && r.style !== '—' && !r.exchange ? r.style + ' trader' : null].filter(Boolean);
+      const bits = [s.roi != null ? pct(s.roi, 1, true) + ' ROI' : null, U.fmtUsd(r.volumeAll || 0, { compact: true }) + ' volume', r.winRate != null ? pct(r.winRate, 0) + ' win rate' : null, s.ddPct > 0 ? U.fmtDd(s.ddPct) + ' max drawdown' : null, r.role || r.exchange ? r.role || 'Exchange account' : r.style && r.style !== '—' ? r.style + ' trader' : null].filter(Boolean);
       return { title: `${short(r.account)} on Meridian: ${money(s.pnl || 0, true)} all-time PnL`, description: bits.join(' · ') + '. Live positions, performance, copyability and tax records on MeridianDataHub.' };
     };
 

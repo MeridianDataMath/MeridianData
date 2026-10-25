@@ -70,7 +70,7 @@
     return {
       mode, preset, year, years, tz, tzGiven, start, end, now, label, fromKey, toKey, badRange, from: pf, to: pt, reqYear,
       yearMissing: mode === 'year' && reqYear != null && !years.includes(reqYear),
-      startText: text(start), endText: (!ongoing ? '' : end === now ? 'now, ' : 'the last whole hour, ') + text(end), ongoing,
+      startText: text(start), endText: (!ongoing ? '' : end === now ? 'now, ' : end === hourEnd ? 'the last whole hour, ' : '') + text(end), ongoing,
     };
   };
 

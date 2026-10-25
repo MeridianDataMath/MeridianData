@@ -161,6 +161,8 @@ const checkConfig = (cfg) => {
   // market orders are no longer sent: in a book the market makers have left, one fills at whatever is there
   if (x.type != null && x.type !== 'IOC') e.push(`execution.type is ${JSON.stringify(x.type)}: every order is now a limit IOC at the mark ± execution.slippageBps (set "IOC" or leave it out, and raise slippageBps for more fills)`);
   const sc = (cfg.status || {}).siteControls; if (sc != null && !['confirm', 'direct'].includes(sc)) e.push(`status.siteControls is ${JSON.stringify(sc)}: it must be confirm or direct`);
+  // the dashboard's port: one the system can listen on, above the reserved ones (99999 stopped the agent at its start)
+  const sp = (cfg.status || {}).port; if (sp != null && !(Number.isInteger(sp) && sp >= 1024 && sp <= 65535)) e.push(`status.port is ${JSON.stringify(sp)}: it must be a whole number from 1024 to 65535`);
   return e;
 };
 /** The price caps a close tries in turn, in bps from the mark: the order slippage cap first, then wider, up to the close

@@ -193,6 +193,7 @@
       ev.push({ t: it.t, kind: 'placed', stake: it.stakeW, pnl: 0, ref: it });
       if (it.res === 'open') continue;
       const ve = it.traded && it.pc ? verdictOf.get(it.pc) : null;
+      if (it.traded && !ve && it.held != null && it.held <= 1e-6) continue;   // sold in full before the verdict
       const t = ve ? whenVerdict(ve, mode) : PR.when(it, mode); if (t == null) continue;
       if (it.traded) { ev.push({ t, kind: it.res, count: 1, ledger: true, pnl: 0, ref: it }); continue; }
       const e = { t, kind: it.res, count: 1, pnl: it.res === 'void' ? 0 : it.pnlW, payout: 0, cost: it.stakeW, winGain: 0, lostStake: 0, refund: 0, ref: it };

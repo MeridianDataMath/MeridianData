@@ -770,9 +770,12 @@
 
       // ---- closures ----
       // a function so the minute refresh can redraw it: "closed now" is read against the clock at each render
+      const GAPS_SHOWN = 12; let gapsAll = false;
       function renderGaps() {
         const t = Date.now();
-        const upcoming = gaps.filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime).slice(0, 12);
+        const every = gaps.filter((g) => g.endTime > t).sort((a, b) => a.startTime - b.startTime);
+        const upcoming = gapsAll ? every : every.slice(0, GAPS_SHOWN);
+        const more = every.length - Math.min(every.length, GAPS_SHOWN);
         U.replace(gapBody, UI.table({
           cols: [
             { key: 'm', label: 'Market', render: (g) => (ref.byId[g.productId] ? ref.byId[g.productId].displayTicker : '—') },
@@ -780,7 +783,7 @@
             { key: 'e', label: 'Reopens', render: (g) => U.fmtWhen(g.endTime) },
             { key: 'd', label: 'Duration', num: true, render: (g) => U.fmtDuration(g.endTime - g.startTime) },
           ], rows: upcoming, empty: gapsErr ? 'The closures could not be read: tried again every minute' : 'No closures scheduled', phone: { title: 'm', aside: 'd' },
-        }));
+        }), more > 0 ? h('div.pager', h('span.dim.small', `${upcoming.length} of ${every.length}`), h('span.grow'), h('button.btn.sm', { type: 'button', 'aria-expanded': String(gapsAll), dataset: { focusKey: 'gaps:all' }, onclick: () => { gapsAll = !gapsAll; renderGaps(); } }, gapsAll ? `Show the first ${GAPS_SHOWN}` : `Show ${more} more`)) : null);
       }
       renderGaps();
     },

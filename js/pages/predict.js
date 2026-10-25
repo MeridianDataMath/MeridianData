@@ -408,8 +408,9 @@
         h('span.num', usd(n.stake)), h('span.num.dim.opt', '@ ' + oddsPct(n.odds)), h('span.num', mult(n.multiple)), h('span.dim.xs.opt2', 'vs ', h('a.addr', { href: bettorUrl(n.counterparty), title: (MK.oneOff.some((x) => x.address === n.counterparty) ? 'One-off counterparty ' : 'Market maker ') + n.counterparty + (MAKER_NAMES[n.counterparty] ? ' (' + MAKER_NAMES[n.counterparty] + ')' : ''), onclick: (e) => e.stopPropagation() }, U.shortAddr(n.counterparty, 3))), resultChip(n, false, n.held == null ? 1 : n.held, false));
       const renderTape = (fresh) => U.replaceLive(tapeBody, tapeRows.length ? tapeRows.map((n) => tapeRow(n, fresh && fresh.has(n.id))) : UI.empty('No predictions yet'));
       renderTape();
-      let tT = null;
+      let tT = null, tapeDay = new Date().toDateString();
       const pollTape = async () => {
+        const day = new Date().toDateString(); if (day !== tapeDay) { tapeDay = day; renderTape(); }
         try {
           let norms;
           if (live) norms = (await P.tape(25, { signal: ctx.signal })).map(P.norm).filter((n) => !P.excluded(n));
@@ -540,7 +541,7 @@
   // Questions explorer (server-side paged)
   // =====================================================================
   const R = P.res;
-  const STATUS_OPTS = [{ v: 'open', label: 'Open' }, { v: 'ended', label: 'Ended · unsettled', title: 'Past their end time on Meridian but not settled yet — where is each one in the resolution pipeline?' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }];
+  const STATUS_OPTS = [{ v: 'open', label: 'Open', title: 'Money on them and not past their end time on Meridian (the ones past it are under Ended · unsettled)' }, { v: 'ended', label: 'Ended · unsettled', title: 'Past their end time on Meridian but not settled yet — where is each one in the resolution pipeline?' }, { v: 'settled', label: 'Settled' }, { v: 'all', label: 'All' }];
   /** Meridian's view of a question as the resolution tracker wants it (live API row or snapshot row). */
   const qView = (c) => (c.conditionId
     ? { end: c.endTime ? c.endTime * 1000 : null, settled: !!c.settled, yes: c.resolvedToYes, nd: !!c.nonDecisive, pub: c.isPublic, question: c.question, src: c.similarMarket && c.similarMarket.markets ? c.similarMarket.markets[0] : null }
@@ -575,11 +576,13 @@
   const volCell = (c, win) => {
     const v = P.questionVolume(c), app = win === '24h' ? v.d24 : v.d7, raw = win === '24h' ? v.raw24 : v.raw7, x = app != null ? app : raw;
     if (!x) return h('span.dim', '—');
-    return h('span', { title: app != null ? `The mirrored Polymarket market's volume over the last ${winText(win)}, low-odds trading left out: what Meridian's app adds up over a group's questions on a list card sorted ${win === '24h' ? 'Hot' : 'Top'} (a question alone in its group shows just this). Every trade: ${P.fmtVol(raw)}` + (v.all != null ? ` · all time ${P.fmtVol(v.all)} (the app's question page)` : '')
+    return h('span', { title: app != null ? `The mirrored ${srcName(c)} market's volume over the last ${winText(win)}, low-odds trading left out: what Meridian's app adds up over a group's questions on a list card sorted ${win === '24h' ? 'Hot' : 'Top'} (a question alone in its group shows just this). Every trade: ${P.fmtVol(raw)}` + (v.all != null ? ` · all time ${P.fmtVol(v.all)} (the app's question page)` : '')
       + (v.h1 != null || v.h4 != null ? ` · the shorter windows its Hot lists can sort by: last hour ${P.fmtVol(v.h1)}, 4 hours ${P.fmtVol(v.h4)}` : '')
-      : `Every trade on the mirrored Polymarket market over the last ${winText(win)} (this snapshot predates the figure Meridian's app shows)` }, P.fmtVol(x));
+      : `Every trade on the mirrored ${srcName(c)} market over the last ${winText(win)} (this snapshot predates the figure Meridian's app shows)` }, P.fmtVol(x));
   };
   const winText = (win) => (win === '24h' ? '24 hours' : '7 days');
+  /** The market a question mirrors: Kalshi for the ones Meridian links to kalshi.com (since 13 Oct), else Polymarket. */
+  const srcName = (c) => (/kalshi\.com/i.test(String((c && (c.src || (c.similarMarket && c.similarMarket.markets && c.similarMarket.markets[0]))) || '')) ? 'Kalshi' : 'Polymarket');
   /** The match a question belongs to (snap.matches, by its group's event id): its name and start, the match's volume
    *  windows in the tooltip; null without one. */
   const matchEl = (snap, c) => {
@@ -591,7 +594,7 @@
   };
   /** The line under a question in the lists: its match, then its first tags */
   const qSub = (snap, c) => { const m = matchEl(snap, c), tags = (c.tags || []).slice(0, 4).join(' · '); return h('div.xs.dim', m, m && tags ? ' · ' : null, tags || null); };
-  const volColTitle = (win) => `Volume on the mirrored Polymarket market over the last ${winText(win)}, low-odds trading left out: the figure Meridian's app adds up over a group's questions on its list cards sorted ${win === '24h' ? 'Hot (24H Volume)' : 'Top (7D Volume)'}. A figure's tooltip has every trade, and the all-time volume its question page shows`;
+  const volColTitle = (win) => `Volume on the mirrored Polymarket market (Kalshi for the questions from there) over the last ${winText(win)}, low-odds trading left out: the figure Meridian's app adds up over a group's questions on its list cards sorted ${win === '24h' ? 'Hot (24H Volume)' : 'Top (7D Volume)'}. A figure's tooltip has every trade, and the all-time volume its question page shows`;
   const PROB_TITLE = 'The chance of YES now as Meridian\'s app shows it: the midpoint of Polymarket\'s order book, rounded to a whole percent; until that has loaded, Polymarket\'s last price, else Meridian\'s own estimate, which stops moving once a game starts. Settled questions show their result';
   /** Every prediction on a question (from the snapshot's question file), each with all its legs: who bet, how much,
    *  at what odds, and where each leg stands, so a "won" leg can be read together with the rest of the combo. */
@@ -619,7 +622,7 @@
     const predState = (n) => {
       const sold = soldChip(n, n.decided ? 'before the verdict' : 'before Meridian settled');
       // undecided: as Meridian's app shows it, open until Meridian settles its legs, the source markets' verdict in the title
-      const state = n.decided ? resultChip(n, false, n.held == null ? 1 : n.held) : undecidedChip(n, false) || UI.chip('open', 'accent');
+      const state = n.decided ? resultChip(n, false, n.held == null ? 1 : n.held) : undecidedChip(n, false, n.held == null ? 1 : n.held) || UI.chip('open', 'accent');
       return sold ? h('span', state, ' ', sold) : state;
     };
     // the mirrored Polymarket market's all-time volume, as the question's page in Meridian's app shows it ("$16.99M Vol";
@@ -707,12 +710,16 @@
   };
   /** What the source markets already say about an undecided prediction Meridian still shows as open (pendingVerdict where
    *  appPending has nothing), from one side, for a title: the site no longer shows it as lost or won (the app does not). */
-  const sourceNote = (pv, n, asMaker) => (pv === 'lost'
-    ? `On Polymarket a leg has already resolved against the bettor's pick (50/50 counts as a loss on Meridian), so ${asMaker ? 'the market maker wins' : 'the bettor loses the stake'} once Meridian settles that leg. Until then Meridian's app shows the prediction as open.`
-    : `Every leg has resolved in the bettor's favour on Polymarket, so it pays ${cents(n.pool)} ${asMaker ? 'to the bettor ' : ''}once Meridian settles them. Until then Meridian's app shows the prediction as open.`);
+  // held: the share of the position tokens the bettor still holds (the rest sold on the secondary market)
+  const sourceNote = (pv, n, asMaker, held = 1) => {
+    const all = !asMaker && held != null && held <= 1e-6, part = !asMaker && !all && held != null && held < 0.999;
+    return pv === 'lost'
+      ? `On Polymarket a leg has already resolved against the bettor's pick (50/50 counts as a loss on Meridian), so ${asMaker ? 'the market maker wins' : all ? 'the tokens the bettor sold lose their value: the bettor\'s result was fixed by the sale' : part ? 'the bettor loses the share still held (the result on the share sold was fixed by the sale)' : 'the bettor loses the stake'} once Meridian settles that leg. Until then Meridian's app shows the prediction as open.`
+      : `Every leg has resolved in the bettor's favour on Polymarket, so it pays ${cents(n.pool)} ${asMaker ? 'to the bettor ' : all ? 'to whoever holds the tokens the bettor sold ' : part ? '(to the bettor for the share still held, to the buyers for the rest) ' : ''}once Meridian settles them. Until then Meridian's app shows the prediction as open.`;
+  };
   /** An undecided prediction's chip as Meridian's app shows it: Meridian's own legs' verdict (pendingChip), else open, with
    *  the source markets' verdict, if any, in its title; null when there is neither (the caller's own open chip). */
-  const undecidedChip = (n, asMaker) => { const av = appPending(n); if (av) return pendingChip(av, asMaker); const pv = pendingVerdict(n); return pv ? h('span.chip.accent', { title: sourceNote(pv, n, asMaker) }, 'open') : null; };
+  const undecidedChip = (n, asMaker, held) => { const av = appPending(n); if (av) return pendingChip(av, asMaker); const pv = pendingVerdict(n); return pv ? h('span.chip.accent', { title: sourceNote(pv, n, asMaker, held) }, 'open') : null; };
   /** When a leg was settled: Meridian's own settlement time, else its source market's resolution once loaded, else its
    *  listed end (which can be a day late: a price question about Sep 28 is listed to end on the 29th). */
   const legTime = (k) => { if (k.settledAt) return k.settledAt; const m = k.id ? R.get(k.id).m : null; return (m && (m.resolvedAt || m.closedAt)) || U.num(k.endTime) || null; };
@@ -793,7 +800,7 @@
       const tc = n.toClaim != null && !n.nd ? n.toClaim : null;
       const claimedAt = n.settled && n.settledAt ? U.fmtDateTime(n.settledAt) : null;
       U.replace(body,
-        h('div.row.wrap', { style: { gap: '8px', marginBottom: '12px' } }, (!n.decided && undecidedChip(n, false)) || resultChip(n, false, held), h('span', U.capitalize(what)), h('span.grow'),
+        h('div.row.wrap', { style: { gap: '8px', marginBottom: '12px' } }, (!n.decided && undecidedChip(n, false, held)) || resultChip(n, false, held), h('span', U.capitalize(what)), h('span.grow'),
           // an open slip can be copied: Meridian's page for it (Add To Slip), under the site's referral code
           slipOpen(n) ? h('a.btn.sm.primary', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Opens this slip on Meridian Predict: press Add To Slip there, choose your amount and place it' }, U.icon('external'), 'Copy slip to Meridian') : null,
           n.predictor && n.predictor !== opts.here ? h('a.btn.sm', { class: slipOpen(n) ? '' : 'primary', href: bettorUrl(n.predictor), title: 'Every prediction of this bettor, its PnL and open positions' }, U.icon('account'), 'Open bettor\'s account') : null,
@@ -991,16 +998,19 @@
         : own.soldPart ? ` · the bettor ${n.decided ? 'had' : 'has'} sold ${own.soldPct} of its tokens` : '';
       const selfNote = !self ? '' : n.decided ? ' · self-matched: the same wallet was the market maker, so it nets to $0 and is left out of the Predict figures' : ' · self-matched: the same wallet is the market maker';
       const ownLabel = own.ownPnl != null ? ' · the bettor\'s PnL, incl. selling its tokens' : '';
+      // (sold before the verdict: the picks' result is not the bettor's)
+      const lostK = own.ownPnl != null && own.soldAll ? 'Cashed out before the loss' : own.ownPnl != null && own.soldPart ? 'Lost · part cashed out' : 'Lost';
+      const wonK = own.ownPnl != null && own.soldAll ? 'Cashed out before the win' : own.ownPnl != null && own.soldPart ? 'Won · part cashed out' : 'Won';
       // not claimed: the bettor still holds its winning tokens where the snapshot read them (tc), else the API's flag
       const unclaimedWin = n.toClaim != null ? n.toClaim : n.unclaimed && !own.soldAll;
       const [heroK, heroV, heroCls, heroS] = !n.decided
         // lost on its legs, only the settlement pending: what the bettor loses (its own result where it sold them all)
-        ? (pv === 'lost' ? (own.soldAll && own.ownPnl != null ? ['Lost' + ownLabel, cents(own.ownPnl, { sign: true }), U.pnlClass(own.ownPnl)] : [own.soldPart ? 'Lost · on the tokens it still holds' : 'Lost', cents(-n.stake * own.held || 0, { sign: true }), 'neg'])
+        ? (pv === 'lost' ? (own.soldAll && own.ownPnl != null ? [lostK + ownLabel, cents(own.ownPnl, { sign: true }), U.pnlClass(own.ownPnl)] : [own.soldPart ? 'Lost · on the tokens it still holds' : 'Lost', cents(-n.stake * own.held || 0, { sign: true }), 'neg'])
           .concat(`a leg settled against the bettor on Meridian; the prediction itself is not settled yet · it would have paid ${cents(n.pool)}` + sold)
           : ['Pays', cents(n.pool), '', (pv === 'won' ? 'every leg has settled in the bettor\'s favour on Meridian · the prediction itself is not settled yet' : `on a ${cents(n.stake)} stake, if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`) + sold])
-        : n.won ? [self ? 'Won · bettor side' : 'Won' + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `${cents(n.pool)} paid on a ${cents(n.stake)} stake` + (unclaimedWin ? ' · not claimed yet' : '') + sold]
+        : n.won ? [self ? 'Won · bettor side' : wonK + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `${cents(n.pool)} paid on a ${cents(n.stake)} stake` + (unclaimedWin ? ' · not claimed yet' : '') + sold]
           : n.nd ? ['Void', cents(pnl, { sign: true }), '', 'the stake goes back to the bettor']
-            : [self ? 'Lost · bettor side' : 'Lost' + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `the ${cents(n.stake)} stake went to the market maker · it would have paid ${cents(n.pool)}` + sold];
+            : [self ? 'Lost · bettor side' : lostK + ownLabel, cents(pnl, { sign: true }), U.pnlClass(pnl), `the ${cents(n.stake)} stake went to the market maker · it would have paid ${cents(n.pool)}` + sold];
       // the whole slip's chance on Polymarket now (legs as independent), against the odds this bettor locked; until
       // Polymarket answers, Meridian's estimates from the snapshot, and the labels say so
       const probs = n.decided ? [] : n.picks.map(pickProb);
@@ -1213,7 +1223,7 @@
    *  "resolved" or "settled" on a page left open */
   const reResolve = (ids, ctx, redraw) => { if (ids.length) R.load(ids, { signal: ctx.signal }).then(() => { if (!ctx.signal.aborted) redraw(); }).catch(() => {}); };
   /** "Ended · unsettled" order: the ones furthest along the pipeline first, then by end time. */
-  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, noresult: 4, resolved: 5, paused: 6, postponed: 7, unknown: 8, trading: 9, settled: 10 };
+  const STAGE_RANK = { vote: 0, disputed: 1, proposed: 2, settling: 3, awaiting: 4, noresult: 4, resolved: 5, paused: 6, postponed: 7, unknown: 8, inplay: 8.5, trading: 9, settled: 10 };
   const byStage = (rows) => U.sortBy(rows, (c) => { const st = R.state(qView(c), qId(c)); return (st.code === 'resolved' && st.stuck ? -1 : (STAGE_RANK[st.code] || 0)) * 1e13 + (st.stuck ? (st.at || 0) : (qView(c).end || 0)); });
   const resFootnote = () => h('div.footer-note', { style: { maxWidth: '980px', margin: '0 auto' } }, R.explainer() + ' Click ⓘ on a row for the exact timing, the proposal and dispute status, and the market\'s resolution rules.');
 
@@ -1300,11 +1310,11 @@
     // this site's questions of a row: the question itself, a group's questions, a match's questions
     const oursOf = (r) => (r.k === 'c' ? [byId.get(String(r.id).toLowerCase())].filter(Boolean) : r.k === 'g' ? all.filter((q) => q.g != null && String(q.g) === String(r.id)) : r.k === 'm' ? all.filter((q) => q.ev != null && String(q.ev) === String(r.ev)) : []);
     const appOf = (r) => P.appPageUrl(r.k === 'm' ? '/event/' + encodeURIComponent(r.ev || r.id) : '/' + encodeURIComponent(r.id));
-    const what = (r) => (r.k === 'g' ? ` · a group of ${r.n} question${r.n === 1 ? '' : 's'}` : r.k === 'm' ? ' · a match' + (r.lg ? ' · ' + String(r.lg).toUpperCase() : '') + (r.t ? ' · ' + U.fmtWhen(r.t) : '') : '');
+    const what = (r) => (r.k === 'g' ? ` · a group of ${r.n} open question${r.n === 1 ? '' : 's'}` : r.k === 'm' ? ' · a match' + (r.lg ? ' · ' + String(r.lg).toUpperCase() : '') + (r.t ? ' · ' + U.fmtWhen(r.t) : '') : '');
     const body = h('div', { style: { display: 'none' } });
     // a group's or a match's row with several questions this site lists: a short list to pick one from
     const pickQuestion = (r, qs) => {
-      const m = UI.modal({ title: r.q || 'Questions', body: h('div.stack', { style: { gap: '6px' } }, h('div.small.dim', qs.length + ' of its questions have Meridian bets:'),
+      const m = UI.modal({ title: r.q || 'Questions', body: h('div.stack', { style: { gap: '6px' } }, h('div.small.dim', qs.length + ' of its questions have Meridian bets' + (qs.some((q) => q.settled) ? ', settled ones included' : '') + ':'),
         qs.map((q) => h('button.btn.sm.ghost', { type: 'button', style: { justifyContent: 'flex-start', textAlign: 'left', whiteSpace: 'normal' }, onclick: () => { m.close(); openQuestion(q, ctx); } }, qView(q).question || q.q))) });
     };
     const draw = () => {
@@ -1404,7 +1414,7 @@
         if (st.search) { const s = st.search.toLowerCase(); rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(s)); }   // a linked ?q= keeps its case
         if (st.cat) rows = rows.filter((q) => q.slug === st.cat);
         if (st.tag) rows = rows.filter((q) => (q.tags || []).includes(st.tag));
-        if (st.status === 'open') rows = rows.filter(exposure);
+        if (st.status === 'open') rows = rows.filter((q) => exposure(q) && !(q.end && q.end < t));
         else if (st.status === 'settled') rows = rows.filter((q) => q.settled);
         else if (st.status === 'ended') rows = rows.filter((q) => exposure(q) && q.end && q.end < t);
         // after the search and category filters, so the count of the ones left out follows them too
@@ -1425,7 +1435,7 @@
           { key: 'l', label: '', render: (c) => (webUrl(c.src) ? srcBtn(c.src) : '') },
         ], rows: slice, phone: { title: 'q', aside: 'sw', wide: ['r'] }, empty: st.status === 'ended' ? 'Nothing waiting for resolution' : 'No questions match', onRow: (c) => openQuestion(c, ctx) }), UI.pager({ page, pageSize: PAGE, total, onPage: (p) => { page = p; render(); wrap.scrollIntoView({ block: 'start' }); } }));
         const deadNote = deadN ? ` · ${U.fmtNum(deadN, 0)} more not listed: nothing is at stake on ${deadN === 1 ? 'it' : 'them'} any more (every open bet was cashed out to a market maker, or has a leg resolved against the bettor on Polymarket)` : '';
-        U.replace(summary, (st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} questions with Meridian bets`) + deadNote);
+        U.replace(summary, (st.status === 'ended' ? `${U.fmtNum(total, 0)} ended, not settled yet` : `${U.fmtNum(total, 0)} question${total === 1 ? '' : 's'} with Meridian bets`) + deadNote);
         // rows that move onto the page once their state is known (the Ended tab re-sorts by stage) need their oracle and
         // price checks too, not only the ones visible on the first render
         if (!keepTracking || slice.some((q) => !tracked.has(qId(q)))) { slice.forEach((q) => tracked.add(qId(q))); const my = ++renderSeq; trackResolution(slice, ctx, () => render(true), () => my === renderSeq); }
@@ -1563,8 +1573,10 @@
         if (!r || !r.overall.n) return null;
         const o = r.overall; const cr = h('canvas');
         const buckets = r.byOddsBucket.filter((b) => b.n >= 30);
-        // combos with a leg whose Polymarket event is unknown (a handful at most) stay in the overall figures, not as a row
-        const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different matches', ...r.combosOnly }, { k: 'Combos · legs on one match or asset', ...r.combosSameEvent }];
+        // combos with a leg whose Polymarket event is unknown get a row of their own, so the rows add up to the decided
+        // predictions above (146 of them were left out of the table, in the overall figures only)
+        const splits = [{ k: 'Singles', ...r.singles }, { k: 'Combos · different matches', ...r.combosOnly }, { k: 'Combos · legs on one match or asset', ...r.combosSameEvent }]
+          .concat(r.combosUnknown && r.combosUnknown.n ? [{ k: 'Combos · a leg\'s match unknown', ...r.combosUnknown }] : []);
         const sec = snap.agg.secondary;
         const node = h('div.stack', { style: { marginTop: '8px' } },
           h('div.card', h('h2', { style: { marginBottom: '6px' } }, 'Quote-implied vs realized'), h('p.muted', { style: { margin: '0 0 6px', maxWidth: '900px' } }, 'The other way to measure the edge, needing no source price at all: on decided bets (the exchange\x27s verdict is in, claimed or not), the odds the bettors locked are the win probability they paid for; compare that with how often they actually won. Outcomes carry the real correlation between legs and any skill the bettors have, so this is the maker\'s realized edge rather than a quoted one. It costs waiting for the verdict and some luck: the interval shown is a 95% interval on the hit rate that allows for bets on the same question winning or losing together, and a gap inside it may be chance.'), h('p.muted.small', { style: { margin: 0 } }, 'Money matters more than counts here: a bet at 3% odds that hits 2% of the time loses a third of its stakes on average, while the same one-point gap at 60% odds costs about 1.7% (59 ÷ 60 − 1). Bettor ROI is each bet\'s result (payout − stake, or the stake lost) ÷ stake, as if every position was held to the verdict, and is the number to read; the maker side is its mirror image.' + (sec && Math.abs(sec.toBettors) >= 1 ? ` The Overview\'s bettor net result also counts the secondary-market trades between wallets (${U.fmtUsd(sec.toBettors, { sign: true, compact: true })} to bettors), so it differs from ROI × stake by that much.` : ''))),
@@ -1600,7 +1612,7 @@
     // (most wallets' owners have no perps account: the account page says so and links back)
     const perpsBtn = h('a.btn.sm.ghost', { href: U.accountUrl(addr), title: 'Account page of this address (its perps account, if it has one)' }, U.icon('account'), 'Perps');
     if (U.isAddress(addr)) P.wallets.ownerOf(addr).then((o) => { if (o) { perpsBtn.href = U.accountUrl(o); perpsBtn.title = 'Account page of the owner ' + o + ' (its perps account, if it has one)'; } }).catch(() => {});
-    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), perpsBtn, h('button.btn.sm.ghost', { title: 'Copy a share link: Discord, X, Telegram and the like show this wallet\'s card with its result (every wallet that placed or took a prediction by the last snapshot; any other address gets the site\'s card)', onclick: () => { U.copyText(MD.api.shareUrl('p', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
+    const head = h('div.acct-head', h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)), perpsBtn, h('button.btn.sm.ghost', { title: 'Copy a share link: Discord, X, Telegram and the like show this wallet\'s card with its result (every wallet that placed or took a prediction by the last snapshot; any other address gets the site\'s card)', onclick: () => { U.copyText(MD.api.shareUrl('p', addr), 'Share link copied · it shows a preview card'); } }, U.icon('copy'), 'Share'), h('a.btn.sm.ghost', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Explorer'));
     // phones: the header goes into the page (the topbar cannot fit it); same arrangement as the perps account page
     const headSlot = h('div.acct-head-slot'); if (body.parentElement) body.parentElement.prepend(headSlot); else body.prepend(headSlot);
     const narrow = window.matchMedia('(max-width: 720px)');
@@ -1953,7 +1965,7 @@
       // matched amount books its result before the verdict. An undecided prediction is shown as Meridian's app shows it,
       // from this wallet's side: lost or won once the legs Meridian has settled tell, else open, with what the source
       // markets already say in the chip's title (undecidedChip)
-      { key: 'r', label: 'Result', render: (n) => { const bp = L.byPrediction[n.id]; return h('span', (!n.decided && undecidedChip(n, isMaker)) || resultChip(n, isMaker, bp ? bp.held : 1),
+      { key: 'r', label: 'Result', render: (n) => { const bp = L.byPrediction[n.id]; return h('span', (!n.decided && undecidedChip(n, isMaker, bp ? bp.held : 1)) || resultChip(n, isMaker, bp ? bp.held : 1),
         bp && bp.held < 0.999 ? h('span.dim.xs', { title: 'This wallet sold these position tokens on the secondary market: its PnL is the sale plus whatever it still held at the verdict' }, bp.held < 1e-6 ? ' sold' : ` ${U.fmtPct((1 - bp.held) * 100, { dp: 0 })} sold`) : null,
         bp && bp.hedged && bp.held >= 0.999 ? h('span.dim.xs', { title: 'This wallet also bought the other side\'s position tokens: the matched amount pays out whatever the verdict, and its result is booked when it held both sides' }, ' hedged') : null); } },
       // a prediction whose tokens were traded shows its share of the ledger's result (the sale, and the verdict on what was
@@ -2051,7 +2063,7 @@
       return {
         el: h('div.grid.cols-2',
           h('div.card', h('div.row', { style: { marginBottom: '10px' } }, h('h3', { title: 'The USDe the wallet held day by day (Meridian\'s balance history of the account), as the snapshot last read it' }, 'Cash in the wallet'), h('span.grow'), h('span.dim.xs', 'USDe · read ' + U.fmtAgo(c.at))),
-            bh.length >= 2 ? h('div.chart-box.sm', cv) : h('div.empty.small', bh.length ? 'One day so far: ' + usd(bh[0][1]) : 'No balance read yet')),
+            bh.length >= 2 ? h('div.chart-box.sm', cv) : h('div.empty.small', bh.length ? 'One day so far: ' + usd(bh[0][1]) : c.at ? 'Meridian has no balance history for this wallet' : 'No balance read yet')),
           h('div.card.tight', h('div.card-head', h('h3', { title: 'USDe moved in and out of the wallet, as Meridian\'s app lists its deposits and withdrawals: transfers that are not the protocol\'s own, so its bets and payouts are left out. A position token sold to or bought from a market maker shows up as the maker\'s payment, marked, and is not in the in / out totals' }, 'Deposits & withdrawals'), h('span.dim.small', note)), tbl)),
         draw: () => { if (bh.length >= 2) C.timeSeries(cv, { points: bh.map((x) => ({ x: x[0], y: x[1] })), color: C.colors().accent, label: 'USDe' }); },
       };

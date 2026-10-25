@@ -7,6 +7,7 @@
   const PAGE = 25;
   const isoDate = (ms) => new Date(U.num(ms)).toISOString().slice(0, 10);
   const usd0 = (v, o) => U.fmtUsd(v, Object.assign({ dp: 0 }, o));
+  const usdS = (v, o) => U.fmtUsd(v, Object.assign({ dp: Math.abs(U.num(v)) < 10 ? 2 : 0 }, o));   // (cents under $10: costs)
   const bpsEl = (v) => (v == null ? h('span.dim', '—') : h('span.dim.xs', ' ' + (v > 0 ? '+' : '') + U.fmtNum(v, 0) + ' bps'));
   // what every copier figure is: a model on the site's net basis, not a figure Meridian's app shows
   const COPIER_NET = 'Modelled for the copier, not a Meridian figure: its fills less taker fees and mPerp position fees, plus the leader\'s funding (settled and not yet settled), scaled to your size. The leader\'s result it is compared with is on the same basis.';
@@ -130,6 +131,7 @@
         const mx = U.num(maxIn.value); st.maxPos = mx > 0 ? mx : null; maxIn.value = st.maxPos || '';
         if (st.maxPos && st.mode !== 'ratio' && st.maxPos < st.size) U.toast(`The maximum (${usd0(st.maxPos)}) is below the size (${usd0(st.size)}): every position is capped at ${usd0(st.maxPos)}`, 4000);
         st.slip = slipIn.value === '' ? 'auto' : Math.max(0, U.num(slipIn.value));
+        sizeIn.value = st.size; ratioIn.value = st.ratio; slipIn.value = st.slip === 'auto' ? '' : st.slip;
       }
       async function run() {
         runBtn.disabled = true;
@@ -169,9 +171,9 @@
           UI.stat('Leader P&L', h('span', { title: `Meridian's figures for the same positions, summed: Closed P&L (realized − trading fees + settled funding, without position fees) for closed ones, and P&L at the mark (before fees and funding) for open ones. Site's net incl. position fees and unsettled funding (open ones also with their partial closes, fees and funding): ${U.fmtUsd(T.leaderNet, { sign: true, dp: 2 })}; the copier is modelled on that basis, and the share it keeps is measured against it.` }, usd0(T.leaderApp, { sign: true })), 'the same positions as Meridian shows them: Closed P&L, open ones at the mark', U.pnlClass(T.leaderApp)),
           UI.stat('Per position', (perPos > 0 ? '+' : '') + U.fmtNum(avgEntry ? (perPos / avgEntry) * 1e4 : 0, 0) + ' bps', h('span', { title: 'Both on the site\'s net basis (trading and position fees, all funding), so they compare like for like; the leader\'s Closed P&L % of each position is beside its P&L in the table' }, `${usd0(perPos, { sign: true })} on ${usd0(avgEntry)} average entry` + (st.mode === 'fixed' && avgEntry > st.size * 1.3 ? ' (the leader adds to positions)' : '') + ` · leader ${lBps != null ? (lBps > 0 ? '+' : '') + U.fmtNum(lBps, 0) : '—'} bps net at your size`), U.pnlClass(perPos)),
           UI.stat('Positions', String(T.n), `${U.fmtPct(T.winRate || 0, { dp: 0 })} profitable for the copier` + (T.open ? ` · ${T.open} still open (marked)` : '') + (T.liq ? ` · ${T.liq} liquidated` : '') + (T.capped ? ` · ${T.capped} capped at ${usd0(maxPos)}` : '')),
-          UI.stat('Costs', usd0(T.fees + T.drift + T.slip + T.posFee), `${usd0(T.fees)} fees · ${usd0(T.drift, { sign: true })} drift · ${usd0(T.slip)} slippage` + (T.posFee ? ` · ${usd0(T.posFee)} position fees` : ''), 'neg'),
+          UI.stat('Costs', usdS(T.fees + T.drift + T.slip + T.posFee), `${usdS(T.fees)} fees · ${usdS(T.drift, { sign: true })} drift · ${usdS(T.slip)} slippage` + (T.posFee ? ` · ${usdS(T.posFee)} position fees` : ''), 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'the leader\'s, scaled to your size', U.pnlClass(T.funding)),
-          UI.stat(h('span', { title: 'The deepest fall of the copier\'s cumulative result, each position booked when it closes: a position that went deep into a loss and recovered before closing shows no drawdown here, so the real one, open positions marked to the market, can be larger' }, 'Max drawdown (realized)'), usd0(T.maxDd), (avgEntry ? `${U.fmtNum(T.maxDd / avgEntry, 1)}× an average position · ` : '') + 'by position close, open dips not counted', T.maxDd > 0 ? 'neg' : ''),
+          UI.stat(h('span', { title: 'The deepest fall of the copier\'s cumulative result, each position booked when it closes: a position that went deep into a loss and recovered before closing shows no drawdown here, so the real one, open positions marked to the market, can be larger' }, 'Max drawdown (realized)'), usd0(T.maxDd), (avgEntry ? `${U.fmtPct((T.maxDd / avgEntry) * 100, { dp: 1 })} of an average position · ` : '') + 'by position close, open dips not counted', T.maxDd > 0 ? 'neg' : ''),
           UI.stat('If instant', usd0(R0.copierNet, { sign: true }), 'the same copy with zero delay: what latency costs is the gap', U.pnlClass(R0.copierNet)));
         const canvas = h('canvas');
         const col = C.colors();
@@ -218,7 +220,7 @@
           h('div.it', h('div.t', 'Not modelled'), h('div.d', 'Your own market impact on top of the leader\'s, rejected or partially filled orders, and the leader trading in more than one subaccount.')),
           (data.truncated || data.positionsTruncated || T.partial || T.noFunding || T.unmarked || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
             (T.unmarked ? `${T.unmarked} open position${T.unmarked > 1 ? 's were' : ' was'} left out: the market prices to value ${T.unmarked > 1 ? 'them' : 'it'} could not be read (reload the page to read them again). ` : '') +
-            (data.truncated ? `The exchange returned the newest ${U.fmtNum(data.fills.length, 0)} fills (back to ${U.fmtDateTime(data.oldestFill)}); older positions are not replayed. ` : '') +
+            (data.truncated ? `The exchange returned the newest ${U.fmtNum(data.fills.length, 0)} fills (back to ${U.fmtUTC(data.oldestFill)}); older positions are not replayed. ` : '') +
             (data.positionsTruncated ? `The exchange returned the newest ${U.fmtNum(data.positions.length, 0)} position records only: an older position the exchange closed without a fill of its own (a liquidation) has no record here and is not closed in the replay, so earlier episodes in its market can be off. ` : '') +
             (T.partial ? `${T.partial} position${T.partial > 1 ? 's' : ''} whose opening lies before that window ${T.partial > 1 ? 'were' : 'was'} left out. ` : '') +
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
@@ -438,7 +440,7 @@
           legacy ? UI.stat('Result so far', usd0(unreal, { sign: true }), `${openRows.length} open · at the live mark, incl. partial closes, fees and funding · Rebuild to split it`, U.pnlClass(unreal))
             : UI.stat('Unrealized', usd0(unreal, { sign: true }), `${openRows.length} open · ` + (openRows.some((p) => marksOld.includes(p.pid)) ? 'some at the prices loaded with the page (no live price now)' : 'at the live mark') + ', before fees', U.pnlClass(unreal)),
           UI.stat('Delay cost', usd0(delay, { sign: true }), `${usd0(T.driftLive, { sign: true })} measured on ${T.liveFills} live fill${T.liveFills === 1 ? '' : 's'} · ${usd0(T.driftModeled, { sign: true })} modelled on ${T.caughtUp} caught up`, delay > 0 ? 'neg' : delay < 0 ? 'pos' : ''),
-          UI.stat('Fees & slippage', usd0(T.fees + T.slip), `${usd0(T.fees)} fees · ${usd0(T.slip)} slippage`, 'neg'),
+          UI.stat('Fees & slippage', usdS(T.fees + T.slip), `${usdS(T.fees)} fees · ${usdS(T.slip)} slippage`, 'neg'),
           UI.stat('Funding', usd0(T.funding, { sign: true }), 'accrued each minute at each market\'s latest hourly rate while a tab follows', U.pnlClass(T.funding)));
         const tickOf = (pid) => (ref.byId[pid] || {}).tickSize;
         const openTbl = UI.table({ cols: [
@@ -452,7 +454,7 @@
         ], rows: openRows, empty: 'No open virtual position' });
         const tickOfT = (t) => (ref.products.find((p) => p.displayTicker === t) || {}).tickSize;   // log rows hold display tickers; ref.byTicker is keyed by the raw ones
         const logTbl = UI.table({ cols: [
-          { key: 't', label: 'Time', render: (r) => h('span.dim', U.fmtFeedTime ? U.fmtFeedTime(r.t) : U.fmtAgo(r.t)) },
+          { key: 't', label: 'Time (UTC)', render: (r) => h('span.dim', U.fmtFeedTimeUTC(r.t)) },
           { key: 'm', label: 'Market', render: (r) => UI.marketCell(r.ticker) },
           { key: 's', label: 'Side', render: (r) => U.sideEl(r.side === 'BUY') },
           { key: 'q', label: 'Size', num: true, render: (r) => U.fmtQty(r.qty) },
@@ -463,7 +465,7 @@
           { key: 'k', label: '', render: (r) => h('span', r.why ? UI.chip(r.closed ? 'closed at mark' : 'cut at mark', 'amber') : r.live ? UI.chip('live', 'blue') : UI.chip('caught up', ''), r.closed ? h('span.dim.xs', ' closed ' + U.fmtUsd(r.closed.net, { sign: true, dp: 2 })) : null, r.why ? h('span.dim.xs', { title: r.why }, ' ⓘ') : null) },
         ], rows: paper.log.slice(0, 30), empty: 'No fills mirrored yet' });
         const rebuildBtn = h('button.btn.sm.ghost', { dataset: { focusKey: 'paper:rebuild' }, title: 'Recompute this account from the exchange\'s fills since it started, at candle prices, from the leader\'s positions at that moment', onclick: async () => {
-          if (rebuilding || !confirm('Recompute this paper account from the exchange\'s fills since ' + U.fmtDateTime(paper.startedAt) + '? Fills mirrored live are recomputed at candle prices, and funding is kept only for positions still open.')) return;
+          if (rebuilding || !confirm('Recompute this paper account from the exchange\'s fills since ' + U.fmtUTC(paper.startedAt) + '? Fills mirrored live are recomputed at candle prices, and funding is kept only for positions still open.')) return;
           rebuilding = true; renderPaper();
           try { const n = await rebuild(); if (n != null) U.toast(`Rebuilt from ${n} fill${n === 1 ? '' : 's'} of the leader`); } catch (e) { if (!isAbort(e)) U.toast('Rebuild failed: ' + (e.message || e)); }
           finally { rebuilding = false; }
@@ -475,7 +477,7 @@
         const oldNote = (paper.v || 0) < PP.V ? h('div.small', { style: { color: 'var(--amber)', margin: '0 0 10px' } }, 'This paper account was kept by an earlier version of this page, which mirrored the leader cutting or closing a position it already held when you started following as a new position of yours. ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); rebuildBtn.click(); } }, 'Rebuild it'), ' from the exchange\'s fills to correct that.') : null;
         // redrawn every 10 s while positions are open (unrealized follows the mark): a focused button keeps the focus
         U.keepFocus(paperCard, () => U.replace(paperCard,
-          h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtDateTime(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (paper.settings.markets ? ' · ' + paper.settings.markets.map((id) => (ref.byId[id] || {}).displayTicker || id).join(', ') + ' only' : '') + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
+          h('div.row.wrap', { style: { marginBottom: '8px', gap: '8px' } }, h('h2', 'Paper copy'), UI.chip(unsubs.length ? 'following' : 'paused', unsubs.length ? 'green' : 'amber'), h('span.dim.small', `since ${U.fmtUTC(paper.startedAt)} · ${paper.settings.mode === 'fixed' ? usd0(paper.settings.size) + ' per position' : paper.settings.mode === 'perfill' ? usd0(paper.settings.size) + ' per fill' : U.fmtNum(paper.settings.ratio * 100, 1) + '% of the leader'} · ${paper.settings.delay ? paper.settings.delay + ' s' : 'no'} delay` + (paper.settings.markets ? ' · ' + paper.settings.markets.map((id) => (ref.byId[id] || {}).displayTicker || id).join(', ') + ' only' : '') + (pending ? ` · ${pending} fill${pending > 1 ? 's' : ''} waiting` : '')), h('span.grow'),
             rebuildBtn,
             h('button.btn.sm.ghost', { disabled: rebuilding, dataset: { focusKey: 'paper:discard' }, onclick: () => { if (confirm('Stop following and discard this paper account?')) { stopAll(); PP.clear(sid); paper = null; announced.clear(); pending = 0; renderPaper(); } } }, 'Stop & discard')),
           oldNote,

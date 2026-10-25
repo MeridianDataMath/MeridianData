@@ -54,7 +54,7 @@ test('past its listed end but still trading with no outcome priced in: open, not
   const s = R.state({ end: Date.parse('2026-06-03T03:59:00Z'), settled: false }, id, now);
   assert.equal(s.code, 'trading'); assert.equal(s.chip[0], 'open');
   assert.match(s.main, /^Still trading on Polymarket · its listed end date \(Jun [23], 2026\) has passed$/);
-  assert.match(s.sub, /^no outcome priced in yet \(Yes 40% · No 61%\) · resolves as its rules state$/);
+  assert.match(s.sub, /^no outcome priced in yet \(Yes 40% · No 60%\) · resolves as its rules state$/);
   // halted with no bond on record: no amount is invented
   const e = R.state({ end: Date.parse('2026-09-01T03:59:00Z'), settled: false }, ended, now);
   assert.equal(e.code, 'awaiting'); assert.match(e.sub, /a proposal opens a 2 h challenge window/); assert.doesNotMatch(e.sub, /\$/);
@@ -93,7 +93,8 @@ test('a game long past its scheduled start with nothing proposed is flagged, not
   const q = { end: Date.parse('2026-07-10T13:35:00Z'), settled: false };
   assert.equal(R.state(q, id, Date.parse('2026-07-09T00:00:00Z')).code, 'trading', 'before the game');
   const during = R.state(q, id, Date.parse('2026-07-10T12:00:00Z'));
-  assert.equal(during.code, 'awaiting'); assert.match(during.main, /^Game started/);
+  assert.equal(during.code, 'inplay'); assert.equal(during.chip[0], 'in play'); assert.match(during.main, /^Game started/);
+  assert.equal(R.state(q, id, Date.parse('2026-07-10T15:00:00Z')).code, 'awaiting', 'four and a half hours in, with no feed: waiting');
   const late = R.state(q, id, Date.parse('2026-09-23T00:00:00Z'));
   assert.equal(late.code, 'noresult', 'without price history it is not called postponed');
   assert.equal(late.chip[0], 'no result · 74d');
@@ -142,7 +143,7 @@ test('a played game: the odds go to 99 % → the leader is shown, and odds that 
   assert.equal(p.code, 'awaiting'); assert.match(p.main, /^Game started .+ · Polymarket prices Tohoku Rakuten Golden Eagles at 99\.8%$/);
   const c = R.state({ end: Date.parse('2026-09-23T17:07:00Z') }, abandoned, now);
   assert.equal(c.code, 'noresult'); assert.equal(c.chip[0], 'no result · 12h');
-  assert.match(c.sub, /the odds moved after the start, but no winner is priced in \(Nigeria 69% · Sierra Leone 32%\)/);
+  assert.match(c.sub, /the odds moved after the start, but no winner is priced in \(Nigeria 69% · Sierra Leone 31%\)/);
 });
 
 test('re-dated fixtures and Polymarket\'s own "postponed" read as postponed, with the new date', async () => {
@@ -161,7 +162,7 @@ test('re-dated fixtures and Polymarket\'s own "postponed" read as postponed, wit
   assert.equal(b.m.source, null, 'only http(s) sources become links');
   // the make-up game itself, once under way
   const later = R.state({ end: Date.parse('2026-04-12T23:59:00Z') }, rsl, Date.parse('2026-09-24T02:30:00Z'));
-  assert.equal(later.code, 'awaiting'); assert.match(later.main, /^Make-up game started .* \(postponed from Apr 12\)$/);
+  assert.equal(later.code, 'inplay'); assert.match(later.main, /^Make-up game started .* \(postponed from Apr 12\)$/);
   // a fixture that is simply later than its listing day but matches Meridian's cutoff is not a postponement
   assert.equal(R.state({ end: Date.parse('2026-09-24T04:30:00Z') }, rsl, now).code, 'trading');
 });

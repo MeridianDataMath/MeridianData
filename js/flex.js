@@ -90,7 +90,7 @@
       window.open('https://x.com/intent/post?text=' + encodeURIComponent(text) + '&url=' + encodeURIComponent(url), '_blank', 'noopener');
     } }, U.icon('external'), 'Post on X');
     // the link's card is the published one, with dollar amounts: said when they are hidden here
-    const btnLink = o.shareUrl ? h('button.btn.ghost', { onclick: () => { U.copyText(o.shareUrl); U.toast(hide ? 'Share link copied · its card is the all-time one and shows dollar amounts (hidden only in this image)' : 'Share link copied · it shows the all-time card', hide ? 5000 : undefined); } }, U.icon('copy'), 'Copy share link') : null;
+    const btnLink = o.shareUrl ? h('button.btn.ghost', { onclick: () => { U.copyText(o.shareUrl, hide ? 'Share link copied · its card is the all-time one and shows dollar amounts (hidden only in this image)' : 'Share link copied · it shows the all-time card', hide ? 5000 : undefined); } }, U.icon('copy'), 'Copy share link') : null;
     // the image's buttons work on the card on screen only: while another period loads, or after it failed, they are off
     // (they saved the previous period's image under the new period's name, and Post on X did nothing)
     const ready = (on) => { for (const b of [btnDl, btnCopy, btnShare, btnX]) if (b) b.disabled = !on; if (btnLink) btnLink.title = hide ? 'The link shows the published all-time card, with dollar amounts' : ''; };
@@ -131,7 +131,7 @@
     const img = h('img', { alt: o.alt || o.title, style: { width: '100%', height: 'auto', display: 'block', borderRadius: '12px', border: '1px solid var(--border-3)' } });
     const frame = h('div.flex-frame.busy', img);
     const linkIn = h('input.input.mono.share-link-input', { value: o.shareUrl, readOnly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() });
-    const btnLink = h('button.btn.primary', { onclick: () => { U.copyText(o.shareUrl); U.toast(ready ? 'Link copied: wherever you paste it, it shows this card' : 'Link copied'); } }, U.icon('copy'), 'Copy link');
+    const btnLink = h('button.btn.primary', { onclick: () => { U.copyText(o.shareUrl, ready ? 'Link copied: wherever you paste it, it shows this card' : 'Link copied'); } }, U.icon('copy'), 'Copy link');
     const btnDl = h('button.btn', { onclick: async () => { if (!svg) return; try { btnDl.disabled = true; saveBlob(await (pngP || FX.png(svg)), o.fname); U.toast('Saved ' + o.fname); } catch (e) { U.toast(e.message || 'Download failed'); } finally { btnDl.disabled = false; } } }, U.icon('download'), 'Download PNG');
     const canCopy = !!(navigator.clipboard && window.ClipboardItem);
     const btnCopy = canCopy ? h('button.btn', { onclick: async () => {

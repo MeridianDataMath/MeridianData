@@ -288,7 +288,7 @@
       try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }
 
       // ---- topbar header ----
-      const subSel = h('select', { 'aria-label': 'Subaccount', onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name))));
+      const subSel = h('select', { 'aria-label': 'Subaccount', onchange: (e) => MD.router.navigate('/account', { address: addr, sub: e.target.value, tab: route.params.tab || 'overview' }) }, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.subLabel(s, subs))));
       const head = h('div.acct-head',
         h('span.addr-box', h('span', { title: addr }, U.shortAddr(addr, 6)), U.copyBtn(addr)),
         UI.starBtn(fav, 'btn icon'),
@@ -296,11 +296,11 @@
         h('a.btn.sm.ghost', { href: '#/tax?address=' + encodeURIComponent(addr) + '&sub=' + encodeURIComponent(sa.id), title: 'Tax center for this account' }, U.icon('receipt'), 'Tax'),
         h('a.btn.sm.ghost.explorer', { href: U.explorerAddr(addr), target: '_blank', rel: 'noopener', title: 'Robinhood Chain explorer' }, U.icon('external'), 'Explorer'),
         // Share and Flex: icons only where the topbar is short of room (css .share), never hidden as Explorer is there
-        h('button.btn.sm.ghost.share', { 'aria-label': 'Share', title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr)); U.toast('Share link copied · it shows a preview card'); } }, U.icon('copy'), h('span.lbl', 'Share')),
+        h('button.btn.sm.ghost.share', { 'aria-label': 'Share', title: 'Copy a share link: Discord, X, Telegram and the like show this account\'s card with its PnL', onclick: () => { U.copyText(A.shareUrl('a', addr), 'Share link copied · it shows a preview card'); } }, U.icon('copy'), h('span.lbl', 'Share')),
         h('button.btn.sm.ghost.share', { 'aria-label': 'Flex', title: 'Equity curve flex: this account\'s PnL card, to download, copy or post', onclick: () => openFlex(addr, sa, ref) }, U.icon('trophy'), h('span.lbl', 'Flex')),
         // the UTC day, like the flex card, the share card and the all-time curve's first day
         h('span.dim.small.nowrap.since', { title: 'Subaccount created ' + new Date(U.num(sa.createdAt)).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
-          + (sa.createdBlockNumber ? ' · created in Robinhood Chain block ' + sa.createdBlockNumber : '') + (sa.registeredBlockNumber ? ', registered in block ' + sa.registeredBlockNumber : '') }, 'since ' + U.fmtDayUTC(sa.createdAt).replace(' (UTC day)', '')));
+          + (sa.createdBlockNumber ? ' · created in Robinhood Chain block ' + sa.createdBlockNumber : '') + (sa.registeredBlockNumber ? ', registered in block ' + sa.registeredBlockNumber : '') }, 'since ' + U.fmtDayUTC(sa.createdAt).replace(' (UTC day)', ' UTC')));
       // up to 900 px the topbar has no room for the header's controls, so the header sits in the page above the tabs instead
       // (at 721 to 900 px the topbar cut it off: Share, Flex and Explorer hidden, the subaccount picker cut short)
       const headSlot = h('div.acct-head-slot');
@@ -1322,7 +1322,7 @@
     const seasons = U.sortBy(summaries, (s) => s.season, true);
     if (fails.points) cards.push(h('div.card', UI.error('The points could not be read: ' + (fails.points.message || fails.points), () => st.showTab('rewards'))));
     else if (!seasons.length) {
-      cards.push(h('div.card', h('div.empty', h('div', { style: { marginBottom: '6px' } }, 'No points recorded for this address yet.'), h('div.small', 'Meridian distributes points per season and epoch; they show up here once the first epoch is settled.'))));
+      cards.push(h('div.card', h('div.empty', h('div', { style: { marginBottom: '6px' } }, 'No points recorded for this address yet.'), h('div.small', 'Meridian distributes points per season and epoch: this address has none in the epochs distributed so far.'))));
     }
     for (const s of seasons) {
       const share = total && U.num(total.totalPoints) > 0 ? (U.num(s.totalPoints) / U.num(total.totalPoints)) * 100 : null;

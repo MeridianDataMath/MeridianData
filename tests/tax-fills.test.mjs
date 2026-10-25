@@ -65,6 +65,27 @@ test('average entry, opening-fee shares, partial disposals and VARIOUS acquisiti
   near(assert, sr.gross, 20, 1e-12); near(assert, sr.proceeds, 100 - 0.1, 1e-12, 'a short\'s proceeds: entry notional less its opening fee'); near(assert, sr.proceeds - sr.cost, sr.net, 1e-12);
 });
 
+test('a position opened and closed in one millisecond, its close listed first: the open is applied first (0x2f46…, 23 Oct)', () => {
+  // as the exchange listed them: the closing buy (its realized PnL on it), then the opening sell, both at 19:19:55.443
+  const t = at('2026-10-23T19:19:55.443Z');
+  const list = [fill('c', t, 0, 0.0693, 2390.8, 0, { realizedPnl: '0.02772' }), fill('o', t, 1, 0.0693, 2391.2)].map((x) => F.norm(x, 'position'));
+  const p = pos('S', 1, t, t, 0, { totalIncreaseQuantity: '0.0693', totalDecreaseQuantity: '0.0693', totalIncreaseNotional: String(0.0693 * 2391.2), realizedPnl: '0.02772' });
+  const r = F.replay(p, list, null, { complete: true });
+  assert.equal(r.check.ok, true, 'it reproduces the exchange\'s totals'); assert.equal(r.check.over, 0);
+  assert.equal(r.rows.length, 1); near(assert, r.rows[0].gross, 0.02772, 1e-9);
+  assert.deepEqual(F.applyOrder(list, '1').map((x) => x.side), ['1', '0'], 'the increase first');
+  // where it already holds enough for the reduction, the listed order stands (a reduction, then an add)
+  const held = [fill('a', 0, 1, 1, 100), fill('b', 5, 0, 1, 90), fill('c', 5, 1, 1, 95)].map((x) => F.norm(x, 'position'));
+  assert.deepEqual(F.applyOrder(held, '1').map((x) => x.side), ['1', '0', '1']);
+  // holding 0.17, a close of 6.95 and an add of 6.95 in one millisecond: the add first, and the close's PnL is the
+  // exchange's against the average after it (0x2f46…, 01a15810: 0.172363904 on its 12:09:47.628 buy)
+  const t2 = at('2026-10-20T12:09:47.628Z');
+  const l2 = [fill('o1', at('2026-10-20T06:47:44.443Z'), 1, 0.17, 57.475), fill('c1', t2, 0, 6.95, 56.886, 0, { realizedPnl: '0.172363904' }), fill('o2', t2, 1, 6.95, 56.897), fill('c2', at('2026-10-21T06:51:05.907Z'), 0, 0.17, 57.191, 0, { realizedPnl: '-0.047633904' })].map((x) => F.norm(x, 'position'));
+  const p2 = pos('S2', 1, at('2026-10-20T06:47:44.443Z'), at('2026-10-21T06:51:05.907Z'), 0, { totalIncreaseQuantity: '7.12', totalDecreaseQuantity: '7.12', totalIncreaseNotional: '405.2049', realizedPnl: '0.12473' });
+  const r2 = F.replay(p2, l2, null, { complete: true });
+  assert.equal(r2.check.ok, true); assert.ok(r2.check.maxDiff < 1e-6, 'its own PnL agrees with the exchange\'s: ' + r2.check.maxDiff);
+});
+
 test('a position marked deleveraged whose fills carry no DELEVERAGE type: its final reduction is flagged', () => {
   const fs = [fill('1', 0, 0, 2, 100), fill('2', 1, 1, 1, 90), fill('3', 2, 1, 1, 80, 0, { type: 'DELEVERAGE' })].map((f) => F.norm(f, 'position'));
   assert.deepEqual(F.replay(pos('P', 0, 0, 2, 0, { wasDeleveraged: true }), fs, null, {}).rows.map((r) => r.adl), [false, true], 'by its type');

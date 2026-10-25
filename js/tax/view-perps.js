@@ -326,7 +326,7 @@
     // ---- all transactions: every fill (liquidation and deleverage fills included), settlement, transfer and close ----
     let events = null;
     const txWrap = h('div'); let txType = 'all', txPage = 1;
-    const TX_TYPES = [{ v: 'all', label: 'All' }, { v: 'trade', label: 'Fills' }, { v: 'funding', label: 'Funding & position fees' }, { v: 'transfer', label: 'Deposits, withdrawals & conversions' }, { v: 'close', label: 'Position closes' }];
+    const TX_TYPES = [{ v: 'all', label: 'All' }, { v: 'trade', label: 'Fills' }, { v: 'funding', label: 'Funding & fees', title: 'Funding and mPerp position fees' }, { v: 'transfer', label: 'Transfers', title: 'Deposits, withdrawals & conversions' }, { v: 'close', label: 'Closes', title: 'Position closes' }];
     const txCount = h('span.dim.small'), txCheck = h('div.small', { style: { padding: '8px 14px' } });
     // every fill, settlement, transfer and close of the period (js/tax/exports.js: the same rows as the export)
     const buildEvents = () => EX.transactions({ ev, D, ref, period, tz, closed, now, led });
@@ -353,7 +353,7 @@
       ], rows: slice, empty: 'No events of this type in the period', phone: { title: 'w', aside: 'a' } }), !printAll && rows.length > PAGE ? UI.pager({ page: txPage, pageSize: PAGE, total: rows.length, onPage: (p) => { txPage = p; renderTx(); } }) : null,
         printAll && rows.length > PRINT_MAX ? h('div.small.dim', { style: { padding: '8px 14px' } }, `The first ${U.fmtNum(PRINT_MAX, 0)} of ${U.fmtNum(rows.length, 0)} events are printed; the All transactions file has every one.`) : null);
     };
-    const txHead = h('div.row.wrap', { style: { gap: '8px', padding: '10px 14px 0' } }, UI.seg(TX_TYPES, txType, (v) => { txType = v; txPage = 1; renderTx(); }, 'sm'), h('span.grow'), txCount);
+    const txHead = h('div.row.wrap', { style: { gap: '8px', padding: '10px 14px 0' } }, UI.seg(TX_TYPES, txType, (v) => { txType = v; txPage = 1; renderTx(); }, 'sm wrap'), h('span.grow'), txCount);
     // left out of print until the detail is in: a printed report holds the rows or not the card
     const txCard = h('div.card.tight.no-print', h('div.card-head', h('h2', 'All transactions'), h('span.dim.small', 'fills (liquidation and auto-deleverage fills included), funding and position-fee settlements, deposits, withdrawals and conversions, position closes; newest first')), txHead, txCheck, txWrap);
 

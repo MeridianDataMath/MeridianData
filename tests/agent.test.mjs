@@ -123,6 +123,10 @@ test('a config that must not trade is refused before anything starts', () => {
   bad({ execution: { onLeaderFlat: 'Hold' } }, /execution\.onLeaderFlat is "Hold"/);
   bad({ execution: { onOrphan: 'Close' } }, /execution\.onOrphan is "Close"/);
   bad({ risk: { markets: { deny: 'BTC-USD' } } }, /risk\.markets\.deny must be a list/);
+  // the dashboard's port: one it can listen on (99999 stopped the agent at its start)
+  bad({ status: { port: 99999 } }, /status\.port is 99999: it must be a whole number from 1024 to 65535/);
+  bad({ status: { port: 80 } }, /status\.port is 80/);
+  assert.deepEqual(plain(A.checkConfig({ status: { port: 8790 } })), [], 'the default port');
   assert.deepEqual(plain(A.checkConfig({ risk: { markets: { deny: ['btc-usd'] } }, execution: { slippageBps: 500, onLeaderLiquidation: 'hold' } })), [], 'a list of names in any case, the most slippage allowed');
   bad({ risk: { maxPositionUsd: -5 } }, /maxPositionUsd/);
   bad({ risk: { maxOrderUsd: '1000' } }, /maxOrderUsd is "1000"/);

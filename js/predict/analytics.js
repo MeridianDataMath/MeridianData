@@ -788,7 +788,7 @@
     const sold = (n) => (agg.soldOf ? agg.soldOf(n) : null);
     const held = (n) => { const s = sold(n); return s && s.h != null ? s.h : 1; };
     const open = norms.filter((n) => byAddr.has(n.predictor) && !n.decided && !P.selfMatch(n) && !P.excluded(n) && n.picks.length && n.picks.every((k) => k.endTime && k.endTime > now && !k.settled) && held(n) >= 0.5);
-    const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+    const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100), r4 = (x) => (x == null ? null : Math.round(x * 1e4) / 1e4);
     const ranked = winning.slice().sort((a, b) => b.pnl - a.pnl || a.rec.luck - b.rec.luck);
     const rank = new Map(ranked.map((b, i) => [b.address, i]));
     // one idea per bettor and set of picks: the same slip placed again (0x2dc3… put the same 97% favourite on four
@@ -803,7 +803,7 @@
     // won / n / expected: the record against the odds, which the tier rests on; appWon / appLost / appWinRate: the row's
     // record as Meridian's app counts it (P.appRecord, claimed predictions only), the one the page shows (added: a file
     // from before them has none, and the page shows the record against the odds as it did)
-    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, appWon: b.appWon, appLost: b.appLost, appWinRate: r2(b.appWinRate), pnl: r2(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
+    const bettors = ranked.map((b) => ({ address: b.address, luck: b.rec.luck, tier: tierOf(b), n: b.rec.n, predictions: b.rec.predictions, won: b.rec.won, expected: b.rec.expected, appWon: b.appWon, appLost: b.appLost, appWinRate: r2(b.appWinRate), pnl: r4(b.pnl), roi: r2(b.roi), wagered: r2(b.wagered), last: b.last, topCat: b.topCat, ideas: count[b.address] || 0 }));
     return { bettors, ideas, tested: tested.length };
   };
 

@@ -1929,7 +1929,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `db443007d806e24a9a7f7b71e81b31d0971ad331d663fc159637308fa0496dd2` (`tests/agent.test.mjs` fails when this line is
+    `56df9de03a9c5df100b0633678cccad94e4bc027afe81090b085a1bccdd6c6c7` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again

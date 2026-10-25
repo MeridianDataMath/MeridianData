@@ -52,7 +52,7 @@
       try { [subs, ref] = await Promise.all([A.subaccountsOf(addr, ctx), A.ref(ctx)]); }
       catch (e) { if (isAbort(e)) return; U.replace(body, UI.error(e, () => MD.router.reload())); return; }
       sa = subs.length ? (subs.find((s) => s.id === subParam) || subs[0]) : null;
-      if (subs.length > 1) { subSel.style.display = ''; U.replace(subSel, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.decodeBytes32(s.name)))); }
+      if (subs.length > 1) { subSel.style.display = ''; U.replace(subSel, subs.map((s) => h('option', { value: s.id, selected: s.id === sa.id }, U.subLabel(s, subs)))); }
       const sid = sa ? sa.id : null;
 
       // ---- period: fiscal-year preset + year, or a custom range, from local midnight in the chosen zone ----
