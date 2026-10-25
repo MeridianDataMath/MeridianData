@@ -379,7 +379,12 @@ test('prices at bet by condition id: a combo the API lists in another order keep
   assert.equal(needsPrice(n(['0xa']), { p: [0.5], at: 1 }, now), false);
   assert.deepEqual(cachedPrices(n(['0xa']), { p: [0.5], at: 1 }), [0.5]);
   assert.equal(needsPrice(n(['0xa', '0xb']), { p: [0.5, 0.4], at: 1, w: 1 }, now), true);
-  assert.deepEqual(cachedPrices(n(['0xa', '0xb']), { p: [0.5, 0.4], at: 1 }), [0.5, 0.4], 'its old prices stand until it is priced again');
+  // until then its old prices stand, mapped through the API's leg order as read (they were stored in it), never by
+  // position onto the legs P.norm sorted: the API listed this combo NZ, WS, SK, AL; the legs are sorted AL, NZ, SK, WS
+  const old = { p: [0.435, 0.71, 0.575, 0.335], at: 1, w: 1 };
+  assert.deepEqual(cachedPrices(n(['0xal', '0xnz', '0xsk', '0xws']), old, ['0xnz', '0xws', '0xsk', '0xal']), [0.335, 0.435, 0.575, 0.71]);
+  assert.equal(cachedPrices(n(['0xal', '0xnz', '0xsk', '0xws']), old), null, 'without the order a combo kept by position has no prices (rather than wrong ones)');
+  assert.deepEqual(cachedPrices(n(['0xa', '0xb']), { p: [0.5, 0.4], at: 1 }, ['0xb', '0xa']), [0.4, 0.5]);
   // legs that came back without a price are asked again after 3 days; no entry at all, at once
   assert.equal(needsPrice(n(['0xa']), { p: [null], ids: ['0xa'], at: now - 86400000, w: 1 }, now), false);
   assert.equal(needsPrice(n(['0xa']), { p: [null], ids: ['0xa'], at: now - 4 * 86400000, w: 1 }, now), true);

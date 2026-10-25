@@ -79,13 +79,18 @@ async function getJson(url, tries = 3) {
   }
 }
 const lc = (id) => String(id).toLowerCase();
-/** A cached price-at-bet entry's prices in the order of n's legs: by condition id (an entry from before the ids were kept:
- *  by position, as it was stored). null when there is none. The API has returned a combo's legs in different orders, so
- *  prices kept by position alone landed on other legs (a fair price of 0.032 instead of 0.153, a vig of +0.85) */
-export const cachedPrices = (n, c) => {
+/** A cached price-at-bet entry's prices in the order of n's legs: by condition id. An entry from before the ids were kept
+ *  holds them in the API's leg order as it was read (`order`: the API's condition ids for this prediction, as read now),
+ *  never P.norm's sorted order: applied by position onto the sorted legs, three in four old combos carried other legs'
+ *  prices and the published vig read a fifth too high (3.65 % for 3.07 %). Such an entry without the order: a single leg
+ *  only. null when there is none. (The API has also listed a combo's legs in different orders over time: prices kept by
+ *  position alone landed on other legs, a fair price of 0.032 instead of 0.153; those old combos are priced again.) */
+export const cachedPrices = (n, c, order) => {
   if (!c || !Array.isArray(c.p)) return null;
-  if (Array.isArray(c.ids) && c.ids.length === c.p.length) { const by = new Map(c.ids.map((id, i) => [lc(id), c.p[i]])); return n.picks.map((k) => { const v = by.get(lc(k.id)); return v === undefined ? null : v; }); }
-  return c.p.length === n.picks.length ? c.p : null;
+  const byId = (ids) => { const by = new Map(ids.map((id, i) => [lc(id), c.p[i]])); return n.picks.map((k) => { const v = by.get(lc(k.id)); return v === undefined ? null : v; }); };
+  if (Array.isArray(c.ids) && c.ids.length === c.p.length) return byId(c.ids);
+  if (Array.isArray(order) && order.length === c.p.length) return byId(order);
+  return c.p.length === 1 && n.picks.length === 1 ? c.p : null;
 };
 /** Whether a prediction's price at bet is looked up (again): no entry, an entry that does not cover its legs, a combo kept
  *  by leg position only, or legs that came back without a price over 3 days ago (asked again until priced) */
@@ -99,7 +104,8 @@ export const needsPrice = (n, c, now) => {
  *  prices stand until then): 250 add about two minutes to a build, which then still lands before the next deploy; all at
  *  once would take one build an hour */
 export const REPRICE_PER_RUN = 250;
-async function attachPricesAtBet(norms) {
+async function attachPricesAtBet(norms, apiOrder) {
+  const orderOf = (n) => (apiOrder ? apiOrder.get(n.id) : null);   // the API's leg order, for entries kept by position (cachedPrices)
   const cache = Object.assign({ v: 1, tokens: {}, preds: {} }, readCache());
   cache.tokens = Object.assign(dict(), cache.tokens); cache.preds = Object.assign(dict(), cache.preds);
   const save = () => updateCache({ v: cache.v || 1, tokens: cache.tokens, preds: cache.preds });
@@ -146,7 +152,7 @@ async function attachPricesAtBet(norms) {
     if (!tokFailed) for (const id of chunk) if (!seen.has(id)) cache.tokens[id] = Object.assign({ yes: null }, cache.tokens[id], { ev: null, evv: 2, at: now });
   }
   for (const n of norms) for (const k of n.picks) { const t = k.id && cache.tokens[k.id]; k.event = t && t.ev ? t.ev : null; }
-  if (!todo.length) { for (const n of norms) P.applyAtBet(n, cachedPrices(n, cache.preds[n.id])); save(); return; }
+  if (!todo.length) { for (const n of norms) P.applyAtBet(n, cachedPrices(n, cache.preds[n.id], orderOf(n))); save(); return; }
   // 3. history requests per condition covering its new bets, then the last price at or before each bet
   const byCond = dict();
   for (const n of todo) n.picks.forEach((k, i) => { if (k.id && cache.tokens[k.id] && cache.tokens[k.id].yes) (byCond[k.id] || (byCond[k.id] = [])).push({ n, i }); });
@@ -182,7 +188,7 @@ async function attachPricesAtBet(norms) {
   const unasked = (n) => failedPred.has(n.id) || n.picks.some((k) => isCond(k.id) && !cache.tokens[k.id]);
   const runOnly = new Map(todo.filter(unasked).map((n) => [n.id, n.picks.map((k) => (k.priceAtBet == null ? null : k.priceAtBet))]));   // this run's prices still count
   for (const n of todo) if (!runOnly.has(n.id)) cache.preds[n.id] = { p: n.picks.map((k) => (k.priceAtBet == null ? null : Math.round(k.priceAtBet * 10000) / 10000)), ids: n.picks.map((k) => k.id), at: now, w: 1 };
-  for (const n of norms) P.applyAtBet(n, runOnly.get(n.id) || cachedPrices(n, cache.preds[n.id]));
+  for (const n of norms) P.applyAtBet(n, runOnly.get(n.id) || cachedPrices(n, cache.preds[n.id], orderOf(n)));
   if (runOnly.size) console.warn(`  predict: ${runOnly.size} predictions not cached (a Polymarket request failed): asked again next run`);
   save();
   const got = norms.filter((n) => n.vig != null).length;
@@ -919,7 +925,9 @@ async function buildPredict() {
   // a claim pays every prediction the wallet holds on that token, the API flags one: the others count as claimed with it
   // (before attachDecidedAt, whose dates are never after the claim)
   console.log('  predict: ' + P.markTokenClaims(norms) + ' decided predictions paid by a claim on the same token');
-  try { await attachPricesAtBet(norms); } catch (e) { lost('prices', e, 'price-at-bet lookup failed, vig will be missing for new predictions'); }
+  // each prediction's legs in the API's order as read (P.norm sorts them): what prices kept by position were stored in
+  const apiOrder = new Map(raw.map((x) => [x && x.predictionId, ((x && x.pickConfig && x.pickConfig.picks) || []).map((k) => k.conditionId)]));
+  try { await attachPricesAtBet(norms, apiOrder); } catch (e) { lost('prices', e, 'price-at-bet lookup failed, vig will be missing for new predictions'); }
   try { await attachDecidedAt(norms); } catch (e) { lost('settlement-times', e, 'settlement times failed, the page estimates them'); }
   // the secondary market: every trade, tied to its pick configuration and side through the predictions' position tokens,
   // with the verdict (value per token) where it is in, so PnL can follow the tokens rather than the original bettor
