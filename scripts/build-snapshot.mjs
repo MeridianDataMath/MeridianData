@@ -1284,7 +1284,11 @@ async function buildPerps() {
   // the file is written before the step's 10-minute stop (the time budget only kept new accounts from starting, and a slow
   // API ran a build past the step and the job)
   const stop = new AbortController();
-  const endT = setTimeout(() => { console.warn('the build\'s time is up: rows still being read are carried over'); stop.abort(); }, Math.max(0, performance.timeOrigin + 9.5 * 60000 - Date.now()));
+  // (in the deploy also 8 minutes after the job started, JOB_START: the cache restores before it and the saves after it
+  // could take the job to its 15th minute with the deploy still to come; at least two minutes of reading either way)
+  const jobEnd = Number(process.env.JOB_START) > 0 ? Number(process.env.JOB_START) * 1000 + 8 * 60000 : Infinity;
+  const deadline = Math.max(Date.now() + 2 * 60000, Math.min(performance.timeOrigin + 9.5 * 60000, jobEnd));
+  const endT = setTimeout(() => { console.warn('the build\'s time is up: rows still being read are carried over'); stop.abort(); }, Math.max(0, deadline - Date.now()));
   if (endT.unref) endT.unref();
   const ctx = { signal: stop.signal };
   // the setup reads, each tried once more after a pause (every request already retries its own failures)

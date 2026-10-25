@@ -123,11 +123,14 @@
           // a signer can be refreshed (its expiry extended, signed by the owner wallet) from this many hours before it expires
           const refreshH = quota && U.num(quota.linkedSignerRefreshHoursBeforeExpiry) > 0 ? U.num(quota.linkedSignerRefreshHoursBeforeExpiry) : null;
           const expMs = (r) => (r.expiresAt ? (U.num(r.expiresAt) < 1e12 ? U.num(r.expiresAt) * 1000 : U.num(r.expiresAt)) : null);
+          // the exchange's time, to sign at (a device clock off by more than its tolerance got Revoke refused every time)
+          const exchangeNow = async () => { try { const t0 = Date.now(); const x = await A.get(A.BASE + '/v1/time', { ttl: 0 }); const t1 = Date.now(); if (x && U.num(x.time) > 0) return Date.now() + (U.num(x.time) - (t0 + t1) / 2); } catch (_) {} return Date.now() + (U.clockSkew || 0); };
           const refresh = async (r) => {
             if (!confirm(`Refresh the signer ${U.shortAddr(r.signer, 4)}? Your wallet signs the refresh and the exchange extends its expiry; the agent keeps running with the same key.`)) return;
             try {
               const sa = await A.subaccount(sid);
-              const msg = { sender: sa.account, signer: r.signer, nonce: String(Date.now()) + '000000', signedAt: Math.floor(Date.now() / 1000) };
+              const at = Math.round(await exchangeNow());
+              const msg = { sender: sa.account, signer: r.signer, nonce: String(at) + '000000', signedAt: Math.floor(at / 1000) };
               const signature = await walletSign('RefreshLinkedSigner', msg, sa.account);
               const x = await fetch(A.BASE + '/v1/linked-signer/refresh', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: Object.assign({}, msg, { subaccount: sa.name, subaccountId: sid }), signature }) });
               const j = await x.json().catch(() => ({}));
@@ -155,7 +158,8 @@
               try {
                 // a signer row carries no subaccount: the message needs its bytes32 name, and the owner, from the exchange
                 const sa = await A.subaccount(sid);
-                const msg = { sender: sa.account, signer: r.signer, subaccount: sa.name, nonce: String(Date.now()) + '000000', signedAt: Math.floor(Date.now() / 1000) };
+                const at = Math.round(await exchangeNow());
+                const msg = { sender: sa.account, signer: r.signer, subaccount: sa.name, nonce: String(at) + '000000', signedAt: Math.floor(at / 1000) };
                 const signature = await walletSign('RevokeLinkedSigner', msg, sa.account);
                 const x = await fetch(A.BASE + '/v1/linked-signer/revoke', { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: Object.assign({}, msg, { subaccountId: sid }), signature }) });
                 const j = await x.json().catch(() => ({}));

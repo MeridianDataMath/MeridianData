@@ -79,6 +79,12 @@
     }
   }
 
+  /** Expired answers out, and at most 1,000 kept, the oldest dropped first: nothing was ever removed, and a dashboard left
+   *  open kept two new mark-price-gap answers a minute for good (about 0.4 MB of JSON an hour) */
+  const prune = () => {
+    const now = Date.now(); for (const [k, c] of cache) if (c.exp <= now) cache.delete(k);
+    if (cache.size > 1000) { let n = cache.size - 1000; for (const k of cache.keys()) { if (n-- <= 0) break; cache.delete(k); } }
+  };
   /** GET with optional TTL cache (ms). Identical concurrent requests share one fetch. A.NO_TTL (the snapshot build): no
    *  answer is kept, since an account's reads are each asked once and kept them all for the whole build (8 to 20 MB per
    *  100 accounts). */
@@ -93,7 +99,7 @@
     if (cur && !(cur.signal && cur.signal.aborted)) return cur.p;
     const entry = { signal: opts.signal || null, p: null };
     const drop = () => { if (inflight.get(url) === entry) inflight.delete(url); };
-    entry.p = rawGet(url, opts.signal).then((v) => { if (ttl && !A.NO_TTL) cache.set(url, { exp: Date.now() + ttl, value: v }); drop(); return v; }, (e) => { drop(); throw e; });
+    entry.p = rawGet(url, opts.signal).then((v) => { if (ttl && !A.NO_TTL) { cache.set(url, { exp: Date.now() + ttl, value: v }); if (cache.size > 400) prune(); } drop(); return v; }, (e) => { drop(); throw e; });
     inflight.set(url, entry);
     return entry.p;
   };

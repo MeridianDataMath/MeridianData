@@ -21,7 +21,16 @@
     Chart.defaults.plugins.legend.display = false;
   };
   setup();
-  const later = (fn, args) => { if (MD.need) MD.need('charts').then(() => { setup(); if (window.Chart) fn.apply(null, args); }).catch(() => {}); return null; };
+  // (one that did not load says so where the chart goes, with a Retry: the box stayed empty without a word)
+  const later = (fn, args) => {
+    if (MD.need) MD.need('charts').then(() => { setup(); if (window.Chart) fn.apply(null, args); }).catch((e) => {
+      const at = args && args[0]; const UIx = MD.ui;
+      if (!at || !at.parentNode || !UIx || at.parentNode.querySelector(':scope > .chart-failed')) return;
+      const box = U.h('div.chart-failed', UIx.error('The chart did not load (' + ((e && e.message) || e) + ')', () => { box.remove(); later(fn, args); }));
+      at.parentNode.insertBefore(box, at);
+    });
+    return null;
+  };
 
   const xTick = (range) => (v) => {
     if (range <= 2 * U.DAY) return U.fmtHM(v);

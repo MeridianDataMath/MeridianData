@@ -195,7 +195,7 @@
         if (!iso.length) return;
         try { pfProj = await A.projectedPositionFee(isoIds, ctx); } catch (e) { if (isAbort(e)) return; }
         try {
-          const t = Date.now(); const past = await A.gaps(isoIds, t - 9 * U.DAY, t, ctx);
+          const t = Math.ceil(Date.now() / 3600000) * 3600000; const past = await A.gaps(isoIds, t - 9 * U.DAY, t, ctx);   // (by the hour: one address an hour)
           // a weekend's charges are read once: the next weekend replaces them
           await Promise.all(iso.map(async (p) => {
             const g = lastLongGap(past, p.id, t); if (!g || (pfLast[p.id] && pfLast[p.id].g.endTime === g.endTime)) return;
@@ -347,7 +347,7 @@
           Object.assign(projected, await A.projectedFunding(ids, ctx));
           renderMarketsThrottled(); renderSpecs();
         } catch (_) {}
-        try { const t = Date.now(); setGaps(await A.gaps(ids, t, t + 7 * U.DAY, ctx)); renderGaps(); renderMarketsThrottled(); } catch (_) {}
+        try { const t = Math.floor(Date.now() / 3600000) * 3600000; setGaps(await A.gaps(ids, t, t + 7 * U.DAY, ctx)); renderGaps(); renderMarketsThrottled(); } catch (_) {}   // (by the hour, as above)
         loadPf();   // the next position fee changes every charge; the last weekend's figure only after a new weekend
       };
       ctx.onCleanup(U.every(60000, refreshRest));   // (not while the tab is hidden: U.every)

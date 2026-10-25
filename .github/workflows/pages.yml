@@ -67,6 +67,7 @@ jobs:
       # a few seconds; a failure stops the job here, so nothing is deployed
       - name: Tests
         run: node --test "tests/*.test.mjs"
+        timeout-minutes: 3
 
       # the perps build's funding charges from earlier runs (data/cache/perps-funding.json): what is over 6 hours old does
       # not change, so the build reads only the newer windows (A.fundingCharges). Kept by GitHub's cache, never deployed
@@ -125,11 +126,13 @@ jobs:
       # change this site's code, and what it publishes is taken as data only. Required: the Predict pages cannot query the
       # API from the site's origin, so a run that cannot read the snapshot fails here and the live deploy keeps the last
       # one (no fallback to anything older).
+      # each try cut off after 90 s (a clone that stalls held the job until its 15th minute)
       - name: Fetch the Predict snapshot (MeridianData-snapshots, public)
+        timeout-minutes: 6
         run: |
           for i in 1 2 3; do
             rm -rf .snap-repo
-            GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo && exit 0
+            GIT_TERMINAL_PROMPT=0 timeout 90 git clone --quiet --depth 1 https://github.com/MeridianDataMath/MeridianData-snapshots.git .snap-repo && exit 0
             echo "clone failed (try $i of 3)"; sleep $((i * 10))
           done
           echo "::error::MeridianData-snapshots could not be read: nothing is deployed, the live site keeps its snapshot"; exit 1
@@ -138,6 +141,7 @@ jobs:
       # Predict data (scripts/check-snapshot.mjs); anything else fails the run
       - name: Add the Predict snapshot (data/predict.json, bettors/, questions/, slips/)
         run: node scripts/check-snapshot.mjs --from .snap-repo --to data
+        timeout-minutes: 2
 
       # The Tax center's official exchange rates (data/fx/*.json): the ECB's euro reference rates, NBP table A for USD/PLN
       # and the Bank of Canada's USD/CAD, about one GET per source from a fixed start date (scripts/build-fx.mjs), plus
@@ -146,12 +150,14 @@ jobs:
       # and keep-live below puts the published file back, so this step never blocks the deploy.
       - name: Official exchange rates (data/fx)
         run: node scripts/build-fx.mjs --out data/fx
+        timeout-minutes: 2
         continue-on-error: true
 
       # what a builder above failed to write comes from the live site: the published leaderboard.json, and each exchange-
       # rate file this run lacks (scripts/keep-live.mjs). Never blocks the deploy.
       - name: Keep the live files a build did not write
         run: node scripts/keep-live.mjs
+        timeout-minutes: 2
         continue-on-error: true
 
       # The home page's summary (data/home.json, a few KB: js/home-summary.js) from the snapshots above, so the home page
@@ -159,6 +165,7 @@ jobs:
       # never blocks the deploy.
       - name: Home page summary (data/home.json)
         run: node scripts/build-home.mjs
+        timeout-minutes: 1
         continue-on-error: true
 
       - name: Assemble the site (dist/)
@@ -177,6 +184,7 @@ jobs:
       # wranglerVersion below (and in cron.yml) to match.
       - name: Install the build tools (package-lock.json)
         run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 3
 
       # link previews: a card image per perps account, Predict wallet and shared Predict slip plus the small pages behind
       # /a/<address>, /p/<address> and /s/<prediction id> that carry them (Discord, X and co. never see the site's #/
@@ -185,12 +193,14 @@ jobs:
       # to index.html and the home page's card.
       - name: Link preview cards (dist/cards, dist/a, dist/p, dist/s)
         run: node scripts/build-cards.mjs --dist dist --jobs "$(nproc)" --deadline "$((JOB_START + 720))"
+        timeout-minutes: 12
         continue-on-error: true
 
       # every page's scripts and stylesheets asked for with ?v=<hash of the file>, so _headers can let browsers keep them a
       # year; a reference left without its version fails the run (it would be held a year after its file changed)
       - name: Versioned scripts and stylesheets
         run: node scripts/version-assets.mjs --dist dist
+        timeout-minutes: 2
 
       # Cloudflare takes at most 20,000 files in one version of the Worker's assets: said plainly here rather than as a
       # wrangler failure halfway through the upload
@@ -200,6 +210,7 @@ jobs:
           if [ "$n" -gt 19500 ]; then echo "::error::dist holds $n files: Cloudflare takes 20,000 per version"; exit 1; fi
 
       - name: Deploy to Cloudflare
+        timeout-minutes: 5
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd   # v3.15.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

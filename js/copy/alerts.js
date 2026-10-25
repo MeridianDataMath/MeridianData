@@ -148,7 +148,7 @@
 
   function emit(a) {
     const s = AL.state(); const l = s.leaders.find((x) => x.sid === a.sid); if (!l) return;
-    a.address = l.address; a.name = l.name; a.id = a.sid.slice(0, 8) + '-' + a.t + '-' + a.kind + (a.kind === 'liq' && a.ticker ? '-' + a.ticker : '');   // one liquidation event can list several markets: their notifications must not replace each other
+    a.address = l.address; a.name = l.name; a.id = a.sid.slice(0, 8) + '-' + a.t + '-' + a.kind + (a.pid ? '-' + a.pid : '') + (a.kind === 'liq' && a.ticker ? '-' + a.ticker : '');   // one liquidation event can list several markets: their notifications must not replace each other
     if (!s.events[a.kind]) return;
     if (s.minNotional && a.notional && a.notional < s.minNotional) return;
     a.msg = AL.describe(a);

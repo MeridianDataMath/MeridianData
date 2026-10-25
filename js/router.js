@@ -63,15 +63,18 @@
     const params = Object.assign({}, r.params, patch);
     for (const k of Object.keys(params)) if (params[k] == null || params[k] === '') delete params[k];
     const u = R.url(r.path, params);
-    if (opts.silent) { R.silent = true; history.replaceState(null, '', u); R.silent = false; if (R.current) R.current.params = params; curHash = u; }
+    if (opts.silent) { R.silent = true; history.replaceState(history.state, '', u); R.silent = false; if (R.current) R.current.params = params; curHash = u; }
     else location.hash = u.slice(1);
   };
 
   // Scroll positions per hash, so Back returns to where the reader was instead of the top of the page.
   // Pages fill in asynchronously, so the restore is retried for a moment until the page is tall enough.
   const scrollPos = new Map();
-  let viaHistory = false, curHash = null;   // curHash follows silent param updates too, so the key matches what Back returns to
-  window.addEventListener('popstate', () => { viaHistory = true; });
+  let curHash = null;   // curHash follows silent param updates too, so the key matches what Back returns to
+  // each history entry numbered (history.state.i, from this load's time up: unique across reloads): an entry seen before
+  // is reached by Back or Forward, a new one (state null) by a link. Only those restore a scroll position (Chrome fires
+  // popstate on every hash change, so a link to a page seen before came back scrolled down)
+  let entrySeq = Date.now(), curEntry = null;
   const restoreScroll = (hash, ctx) => {
     const y = scrollPos.get(hash); if (!y) return;
     const t0 = Date.now();
@@ -86,7 +89,10 @@
   R.dispatch = async function () {
     const route = R.parse();
     const prev = R.current;
-    const fromHistory = viaHistory; viaHistory = false;
+    const hs = typeof history !== 'undefined' ? history : null;   // (none where the tests run the router)
+    const was = hs && hs.state && typeof hs.state.i === 'number' ? hs.state.i : null;
+    const fromHistory = was != null && was !== curEntry;
+    if (was == null) { try { if (hs) hs.replaceState(Object.assign({}, hs.state, { i: ++entrySeq }), ''); } catch (_) {} curEntry = entrySeq; } else curEntry = was;
     // same page + same params → nothing
     if (prev && prev.path === route.path && JSON.stringify(prev.params) === JSON.stringify(route.params)) return;
     // a dialog belongs to the page it was opened on (Back, Forward, a link or a notification leave it behind otherwise)
@@ -112,8 +118,9 @@
     if (progress) progress.restart();
     if (fromHistory) restoreScroll(curHash, ctx);
     // a page in a group not loaded yet: its scripts first (a failed load says so, with a Retry)
-    const lazy = R.LAZY[route.name];
-    if (lazy && !R.pages[route.name]) {
+    const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);   // (#/constructor is no page)
+    const lazy = own(R.LAZY, route.name);
+    if (lazy && !own(R.pages, route.name)) {
       const UI = window.MD.ui;
       U.replace(host, U.h('div.page', UI ? UI.loading('Loading…') : 'Loading…'));
       try { await MD.need(lazy); }
@@ -121,7 +128,7 @@
       if (R.ctx !== ctx) return;
       U.clear(host);
     }
-    const page = R.pages[route.name] || R.pages.notfound;
+    const page = own(R.pages, route.name) || R.pages.notfound;
     try { await page.mount(host, route, ctx); }
     catch (e) {
       if (R.ctx !== ctx || (e && e.name === 'AbortError')) return;   // a page already left: its failure is nobody's business

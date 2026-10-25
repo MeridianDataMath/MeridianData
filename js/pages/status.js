@@ -101,8 +101,9 @@
       let ticks = 0;
       ctx.onCleanup(U.every(60000, () => { ticks++; drawPerps(ticks % 5 === 0); drawPredict(); }));
 
-      // ---- the exchange itself: round trip to /v1/time, clock offset, maintenance flag, WebSocket state
-      (async () => {
+      // ---- the exchange itself: round trip to /v1/time, clock offset, maintenance flag, WebSocket state (a failed read
+      // offers a Retry: it stayed "unreachable" for as long as the page was open)
+      const drawApi = async () => {
         try {
           const t0 = Date.now(); const t = await A.serverTime({ signal: ctx.signal }); const rtt = Date.now() - t0;
           const offset = U.num(t && t.time) - (t0 + rtt / 2);
@@ -123,12 +124,13 @@
             h('div.dim.xs', { style: { marginTop: '10px' } }, alerting
               ? 'This tab is listening for leader alerts on this socket, so "closed" or "connecting" means the connection dropped and is being retried.'
               : 'This is this browser tab\'s own connection, not the exchange\'s service. It opens only while something uses it (the dashboard, an account\'s Live tab, a paper copy in the copy simulator, leader alerts) and closes 20 seconds after the last one stops, so "closed" here is normal.'));
-        } catch (e) { if (!isAbort(e)) U.replace(api, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange API'), UI.chip('unreachable', 'red')), h('div.neg.small', String(e.message || e))); }
-      })();
+        } catch (e) { if (!isAbort(e)) U.replace(api, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange API'), UI.chip('unreachable', 'red')), h('div.neg.small', String(e.message || e)), h('button.btn.sm', { style: { marginTop: '8px' }, onclick: () => { U.replace(api, UI.loading('Asking the exchange…')); drawApi(); } }, 'Retry')); }
+      };
+      drawApi();
 
       // ---- the exchange's configuration: its contract and signing domain, its tokens, and the API's rate limits (what each
       // route costs, and this browser's budget from the headers of the exchange's last answers)
-      (async () => {
+      const drawConf = async () => {
         try {
           const [tokens, products, rpc, routes] = await Promise.all([A.tokens(ctx), A.products(ctx).catch(() => []), A.rpcConfig(ctx).catch(() => null), A.rateLimitConfig(ctx).catch(() => null)]);
           if (ctx.signal.aborted) return;
@@ -190,8 +192,9 @@
                 { key: 'c', label: 'Points', num: true, title: 'A fixed cost, or a base cost plus a share of a point for each row a page returns', render: routeCost },
               ], rows: routes, phone: false })) : null,
             h('div.dim.xs', { style: { marginTop: '10px' } }, 'Meridian counts the points of every request against the address it comes from (each visitor\'s browser has its own budget) and, when the request is signed, against the account too; a request over the budget is refused until the window resets (', h('a', { href: 'https://docs.meridian.xyz/developer-guides/trading-api/system-limits', target: '_blank', rel: 'noopener' }, 'Meridian\'s docs: System Limits'), ').'));
-        } catch (e) { if (!isAbort(e)) U.replace(conf, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange configuration')), UI.error(e)); }
-      })();
+        } catch (e) { if (!isAbort(e)) U.replace(conf, h('div.row', { style: { marginBottom: '10px', gap: '8px' } }, h('h2', 'Exchange configuration')), UI.error(e, () => { U.replace(conf, UI.loading('Reading the exchange\'s configuration…')); drawConf(); })); }
+      };
+      drawConf();
     },
   };
 })();

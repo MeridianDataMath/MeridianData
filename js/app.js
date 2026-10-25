@@ -48,13 +48,15 @@
     const slip = /0x[0-9a-fA-F]{64}(?![0-9a-fA-F])/.exec(v), addr = /0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/.exec(v);
     if (slip) return { slip: slip[0].toLowerCase() };
     if (/^[0-9a-fA-F]{64}$/.test(v)) return { slip: '0x' + v.toLowerCase() };
-    if (addr) return { v: addr[0] };
+    // (a link's sub= too: the account opens on that subaccount, not the first)
+    if (addr) { const sub = /[?&]sub=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(v); return sub ? { v: addr[0], sub: sub[1].toLowerCase() } : { v: addr[0] }; }
     if (/^[0-9a-fA-F]{40}$/.test(v)) return { v: '0x' + v };
     const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.exec(v);
     return { v: uuid && !U.isUuid(v) && /^https?:|[#?&=]/.test(v) ? uuid[0] : v };
   };
   // the page it opens is opened only if the reader is still where the search started (a lookup can take seconds)
-  MD.search = async (raw) => { const at = location.hash; const r = await find(raw, () => location.hash === at); if (r && r.ok) MD.recent.add(raw); return r; };
+  // (the recent search keeps what was found, the address or the id, not the link it was pasted as: its chip read "https:…79e0")
+  MD.search = async (raw) => { const at = location.hash; const r = await find(raw, () => location.hash === at); if (r && r.ok) { const t = MD.searchTerm(raw); MD.recent.add(t.slip || t.v || raw); } return r; };
   async function find(raw, still = () => true) {
     const t = MD.searchTerm(raw);
     if (t.slip) { if (still()) MD.router.navigate('/predict/p/' + t.slip); return { ok: true }; }
@@ -64,7 +66,7 @@
     if (U.isAddress(v)) {
       let subs;
       try { subs = await A.subaccountsOf(v); } catch (e) { return { error: 'Lookup failed: ' + e.message }; }
-      if (subs.length) return go('/account', { address: v.toLowerCase(), sub: subs[0].id });
+      if (subs.length) return go('/account', { address: v.toLowerCase(), sub: t.sub && subs.some((s) => s.id === t.sub) ? t.sub : subs[0].id });
       // no perps account: a Predict wallet (the smart account the Meridian app places predictions from) opens its
       // owner's Predict tab when the owner trades perps, else its bettor page; an owner without perps its Predict wallet
       const W = MD.predict.wallets;
@@ -195,7 +197,9 @@
     });
     const more = U.$('.more-menu'); if (more) more.remove();   // a page change closes the phone's More menu
     const mb = U.$('#rail .more-btn'); if (mb) { mb.setAttribute('aria-expanded', 'false'); mb.classList.toggle('active', U.$$('#rail a.nav.ph-more.active').length > 0); }
-    MD.setTopbar(h('span.title', PATH_TITLES[route.path] || TITLES[route.name] || 'MeridianDataHub'));
+    const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);   // (#/constructor is no title)
+    const title = own(PATH_TITLES, route.path) || own(TITLES, route.name);
+    MD.setTopbar(h('span.title', title || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
     const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }
     if (route.name === 'account' && route.params.address && !U.isExcluded(route.params.address)) {
@@ -203,7 +207,7 @@
       const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
       const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');
     }
-    document.title = ((PATH_TITLES[route.path] || TITLES[route.name]) ? (PATH_TITLES[route.path] || TITLES[route.name]) + ' · ' : '') + 'MeridianDataHub';
+    document.title = (title ? title + ' · ' : '') + 'MeridianDataHub';
   }
 
   // the exchange's clock, read once (half the round trip allowed for): a device clock off by more than half a minute is

@@ -238,7 +238,9 @@
     const scroller = h('div.modal-body', { tabindex: -1 }, U.kid(body));
     const titleId = 'dlg-' + (++dialogSeq);   // the dialog is named by its title (aria-labelledby)
     const dialog = h('div.modal', { class: wide ? 'wide' : '', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, h('div.modal-head', h('h2', { id: titleId }, U.kid(title)), h('button.btn.sm.icon.ghost', { title: 'Close', 'aria-label': 'Close', onclick: close }, U.icon('x'))), scroller);
-    const bg = h('div.modal-bg', { onclick: (e) => { if (e.target === bg) close(); } }, dialog);
+    // (a click that also began on the backdrop: a drag selecting text, let go past the dialog's edge, closed it)
+    let downOnBg = false;
+    const bg = h('div.modal-bg', { onpointerdown: (e) => { downOnBg = e.target === bg; }, onclick: (e) => { if (e.target === bg && downOnBg) close(); downOnBg = false; } }, dialog);
     // capture phase: links in a dialog often stop the click's propagation (a row behind them has its own action); the
     // dialogs close once the click has gone through, and only when it navigated here (not a new tab, not prevented)
     bg.addEventListener('click', (e) => {
@@ -257,7 +259,7 @@
   UI.starBtn = function (fav, cls) {
     const has = U.favorites.has(fav.subaccountId);
     const b = h('button.star-btn', { type: 'button', class: (has ? 'on ' : '') + (cls || ''), title: 'Favorite', 'aria-label': 'Favorite ' + U.shortAddr(fav.address || '', 4), 'aria-pressed': String(has), dataset: { focusKey: 'star:' + fav.subaccountId } }, U.icon(has ? 'starFill' : 'star'));
-    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const on = U.favorites.toggle(fav); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); U.replace(b, U.icon(on ? 'starFill' : 'star')); U.toast(on ? 'Added to favorites' : 'Removed from favorites'); });
+    b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const on = U.favorites.toggle(fav); if (on == null) { U.toast('This browser blocks the site\'s storage: favorites cannot be saved'); return; } b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); U.replace(b, U.icon(on ? 'starFill' : 'star')); U.toast(on ? 'Added to favorites' : 'Removed from favorites'); });
     return b;
   };
 

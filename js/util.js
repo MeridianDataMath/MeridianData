@@ -363,9 +363,10 @@
     // (never a wallet the site leaves out, U.EXCLUDED: one saved before it was left out showed on Home with live equity)
     list() { const l = U.storage.get(FAV_KEY, []); return Array.isArray(l) ? l.filter((f) => !(f && U.isExcluded(f.address))) : []; },
     has(sid) { return this.list().some((f) => f.subaccountId === sid); },
-    add(f) { const old = this.list().find((x) => x.subaccountId === f.subaccountId); const l = this.list().filter((x) => x.subaccountId !== f.subaccountId); l.unshift(Object.assign({ addedAt: Date.now() }, old && old.label ? { label: old.label } : null, f)); U.storage.set(FAV_KEY, l); U.emit('favorites'); },
-    remove(sid) { U.storage.set(FAV_KEY, this.list().filter((f) => f.subaccountId !== sid)); U.emit('favorites'); },
-    toggle(f) { if (this.has(f.subaccountId)) this.remove(f.subaccountId); else this.add(f); return this.has(f.subaccountId); },
+    add(f) { const old = this.list().find((x) => x.subaccountId === f.subaccountId); const l = this.list().filter((x) => x.subaccountId !== f.subaccountId); l.unshift(Object.assign({ addedAt: Date.now() }, old && old.label ? { label: old.label } : null, f)); const ok = U.storage.set(FAV_KEY, l); U.emit('favorites'); return ok; },
+    remove(sid) { const ok = U.storage.set(FAV_KEY, this.list().filter((f) => f.subaccountId !== sid)); U.emit('favorites'); return ok; },
+    /** → whether it is a favorite now, or null when the browser would not save the change (site storage blocked) */
+    toggle(f) { const ok = this.has(f.subaccountId) ? this.remove(f.subaccountId) : this.add(f); return ok === false ? null : this.has(f.subaccountId); },
     /** Name a favorite (trimmed, at most U.FAV_LABEL_MAX characters); an empty name takes it off. */
     setLabel(sid, label) { const v = String(label == null ? '' : label).replace(/\s+/g, ' ').trim().slice(0, U.FAV_LABEL_MAX); U.storage.set(FAV_KEY, this.list().map((f) => { if (f.subaccountId !== sid) return f; const g = Object.assign({}, f); if (v) g.label = v; else delete g.label; return g; })); U.emit('favorites'); },
     /** Put these favorites (subaccount ids, e.g. the ones a page shows, in their new order) into the places they hold in

@@ -267,7 +267,7 @@
         UI.stat('Combos', T.n ? U.fmtPct((T.combos / T.n) * 100, { dp: 0 }) : '—', 'of predictions are multi-leg'),
         UI.stat('Avg vig paid', a.vig.overall.avg == null ? '—' : pp(a.vig.overall.avg), a.vig.overall.avg == null ? 'odds vs Polymarket price at bet time' : `odds vs Polymarket price at bet time · ${U.fmtNum(a.vig.overall.n, 0)} of ${U.fmtNum((a.vig.coverage || {}).total || T.n, 0)} predictions; combos with legs on the same match or asset left out`));
       // Claiming is only the cash step: PnL and the category and combo win rates count a prediction at its verdict, so
-      // unclaimed wins change none of them; the Bettor win rate is the app's (claimed predictions only, recTitle). They get
+      // unclaimed wins change none of them; the Bettor win rate is the app's (settled predictions only, recTitle). They get
       // a line under the tiles, not tiles of their own; the questions stuck on Meridian's side live on the Questions page
       // (Ended · unsettled).
       const cWager = h('canvas'), cCount = h('canvas');

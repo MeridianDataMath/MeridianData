@@ -970,7 +970,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     - *Sorting.* Latest settlement first by default, or by PnL or multiplier. A row's time is
       when the win was settled (decided), never when its payout was claimed, which can be weeks
       later: 0x4a72… settled Sep 13 and was claimed Sep 29. A win settled but not claimed yet is
-      listed all the same, with an *unclaimed* chip, and the card's header counts them. The
+      listed all the same, with no mark of its own. The
       tooltip has the verdict (*Decided*), the on-chain settle with whether the payout is claimed,
       and the placement time. The same rule holds across the site:
       a result is dated at its settlement.
@@ -1182,9 +1182,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     The same per-leg status sits on the open positions of every bettor page. Every question row
     opens a panel with the actual predictions on it: bettor, stake, odds, payout, maker, and every
     leg of the combo with its own state, since a combo pays only if all legs resolve for the bettor.
-    On the Ended tab, an ended question none of whose open predictions can still win (each has a
-    leg resolved against its bettor, or 50/50, on Polymarket) is left out and counted under the
-    list; the other tabs list every question. The ended questions and every leg of their open
+    On the Open and Ended tabs, an unsettled question none of whose open predictions can still win
+    (each has a leg resolved against its bettor, or 50/50, on Polymarket, or was cashed out to a
+    market maker) is left out and counted under the list; Settled and All list every question. The ended questions and every leg of their open
     predictions are loaded for this, again on each 30-second tick, so a question that passes its
     end while the page is open joins the tab and its count. The snapshot carries
     `questions/<conditionId>.json` per question for this.
@@ -1609,8 +1609,9 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   never above 100% (until 2026-10-23 they counted as gains, and one leader making 1.7 bps a
   position read 877%). Where nothing would be left it says why instead of a share (user
   10-23: not "none"): *unrealized profit* when at least half the account's all-time PnL is in
-  its open positions (with that amount under it), *too fast to copy* when the minute's delay
-  costs more than fees and slippage, otherwise *edge too thin*; *no edge* when the leader's
+  its open positions (with that amount under it), *too fast to copy* when the price's move in
+  the minute after the leader's fills, in and out, is at least what the leader makes a trade,
+  otherwise *edge too thin*; *no edge* when the leader's
   closed positions lose money on average, *not measured* where the fills or order books to
   measure it are missing. Under a share the cell says what it is a share of, the
   leader's average per closed position (*99% · of +2.47% a trade*): every position counts once
