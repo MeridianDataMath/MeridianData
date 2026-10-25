@@ -45,6 +45,28 @@
 
   // ---------------------------------------------------------------- Polymarket (Gamma)
   const markets = new Map();  // conditionId → { at, m | null }
+  // Questions Meridian mirrors from Kalshi (since 13 Oct): Kalshi's market as the Predict snapshot read it (row.k), shaped
+  // like a Polymarket one (outcomes Yes / No, prices, closed, resolvedAt) so the lost / won checks and the chances read it
+  // too; m.kalshi holds the record. A browser on the site cannot ask Kalshi (403 to other sites' pages), hence the snapshot.
+  const kalshiMs = new Map();  // conditionId → m
+  const kalshiMarket = (k, src, at, start) => {
+    const st = String(k.st || '').toLowerCase(), done = st === 'finalized' || st === 'settled' || st === 'determined';
+    // a result: 1 YES, 0 NO; a fair price in between (a cancelled event, Kalshi's "scalar") counts as 50/50, as Meridian
+    // settled the one seen (a cancelled player prop at $0.42: non-decisive)
+    const sv = Number.isFinite(k.sv) ? k.sv : k.r === 'yes' ? 1 : k.r === 'no' ? 0 : null;
+    const res = !done || sv == null ? null : sv >= 0.999 ? 1 : sv <= 0.001 ? 0 : 0.5;
+    // the chance now: the middle of the YES bid and ask where the book is tight, else the last price
+    const mid = Number.isFinite(k.b) && Number.isFinite(k.a) && k.a > 0 && k.a >= k.b && k.a - k.b <= 0.2 ? (k.a + k.b) / 2 : null;
+    const yes = res != null ? res : mid != null ? mid : Number.isFinite(k.p) ? k.p : null;
+    return { id: null, kalshi: Object.assign({}, k, { at: at || null, start: start || null, st }), url: src || 'https://kalshi.com/markets', question: '', outcomes: ['Yes', 'No'], prices: yes == null ? [] : [yes, 1 - yes],
+      closed: done, closedAt: k.c || null, acceptingOrders: st === 'active', endAt: k.o || k.x || null, resolvedAt: k.s || null, sport: false, gameAt: null, uma: '', umaHistory: [], rules: k.ru || '',
+      source: null, tokens: [], adapter: null, negRisk: false, liveness: 0, bond: null, ended: done, listedEnd: null };
+  };
+  /** The listed questions' Kalshi markets from the questions file (rows with k), at its build time; matches: its matches
+   *  (a game's start, which Kalshi's record does not give: its occurrence time is the expected end). */
+  R.kalshi = (rows, at, matches) => {
+    for (const r of rows || []) if (r && r.k && r.id) kalshiMs.set(lc(r.id), kalshiMarket(r.k, r.src, at, r.ev && matches && matches[r.ev] ? matches[r.ev].t : null));
+  };
   // Gamma is untyped JSON: every field that is shown or built into a request is read as the text it should be, so an
   // object where a string belongs (outcomes inside the JSON-in-a-string included) cannot reach the page as one
   const txt = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
@@ -249,7 +271,7 @@
     const late = need.filter((m) => m.sport && m.gameAt && now - m.gameAt >= R.NO_RESULT_HOURS * 3600000 && !m.uma && !(R.leader(m) && R.leader(m).p >= R.DECIDED) && !R.feedStatus(m.period));
     if (late.length) await R.history(late, { signal, now });
   };
-  R.get = (id) => { const m = markets.get(lc(id)); const o = oracles.get(lc(id)); const hv = hist.get(lc(id)); return { m: m ? m.m : undefined, o: o ? o.o : undefined, hv: hv ? hv.h : undefined, loaded: !!m }; };
+  R.get = (id) => { const m = markets.get(lc(id)); const km = kalshiMs.get(lc(id)); const o = oracles.get(lc(id)); const hv = hist.get(lc(id)); return { m: m && m.m ? m.m : km || (m ? m.m : undefined), o: o ? o.o : undefined, hv: hv ? hv.h : undefined, loaded: !!m || !!km }; };
   /** Which side of a Meridian question the source market resolved to: true = YES (Polymarket's first outcome, the one
    *  Meridian's YES mirrors), false = NO, 'void' = 50/50, null = not resolved or unknown. */
   R.relayFee = null;   // POL, the Polygon reader's quote in the snapshot (predict.json relayFee), set by the page
@@ -342,12 +364,35 @@
    * { code, chip:[text, cls], main, sub, at (ms the main line refers to), outcome, o, m }
    * codes: settled · resolved · paused · vote · disputed · proposed · settling · awaiting · postponed · noresult · trading · unknown
    */
+  /** A Kalshi question's state (R.state's codes, for the Ended tab's order): Kalshi determines and settles its markets
+   *  itself, then Meridian settles the question. As of the snapshot that read it. */
+  const kalshiState = (q, m, now, cd) => {
+    const k = m.kalshi, asOf = k.at ? 'Kalshi as of ' + U.fmtAgo(k.at) : 'Kalshi';
+    const H = 3600000, start = k.start, end = k.o || k.x || null;
+    if (m.closed) {
+      const y = R.resolvedYes(m);
+      const out = y === true ? 'YES' : y === false ? 'NO' : y === 'void' ? (Number.isFinite(k.sv) && Math.abs(k.sv - 0.5) > 0.001 ? 'a fair price ($' + k.sv.toFixed(2) + ')' : '50/50') : null;
+      const owed = q.op ? R.owed(q, now) : null;
+      const stuckD = m.resolvedAt ? Math.floor((now - m.resolvedAt) / 86400000) : 0;
+      const stuck = owed ? owed.stuck > 0 : stuckD >= R.STUCK_DAYS;
+      return { code: 'resolved', stuck, stuckD, owed, chip: stuck ? ['resolved · stuck', 'amber'] : ['resolved · settling', 'blue'], main: (out ? 'Resolved ' + out : 'Determined') + ' on Kalshi' + (m.resolvedAt ? ' ' + cd(m.resolvedAt) : ''),
+        sub: (owed && owed.won ? owed.won + ' won prediction' + (owed.won > 1 ? 's' : '') + ' awaiting settlement on Meridian' : 'not settled on Meridian yet') + (y === 'void' ? ' · on Meridian 50/50 settles as a loss for the bettor' : '') + ' · ' + asOf, at: m.resolvedAt, outcome: out, m };
+    }
+    if (k.st === 'closed') return { code: 'awaiting', chip: ['closed', 'amber'], main: 'Trading closed on Kalshi' + (m.closedAt ? ' ' + cd(m.closedAt) : ''), sub: 'Kalshi determines the result next · ' + asOf, at: m.closedAt, m };
+    if (k.st === 'disputed' || k.st === 'amended') return { code: 'disputed', chip: ['under review', 'red'], main: 'Result under review on Kalshi', sub: asOf, m };
+    if (k.st === 'inactive' || k.st === 'paused') return { code: 'paused', chip: ['paused', 'amber'], main: 'Trading paused on Kalshi', sub: asOf, m };
+    if (start && start > now) return { code: 'trading', chip: ['open', 'accent'], main: 'Starts ' + U.fmtDateTime(start) + ' (' + cd(start) + ')', sub: 'resolves on Kalshi, then on Meridian · ' + asOf, at: start, m };
+    if (start && (!end || now < end + 3 * H)) return { code: 'inplay', chip: ['in play', 'accent'], main: 'Started ' + cd(start) + ' · trading on Kalshi', sub: (end ? 'expected to end ' + cd(end) + ' · ' : '') + 'Kalshi settles once the result is in · ' + asOf, at: start, m };
+    if (end && now >= end + 3 * H) return { code: 'awaiting', chip: ['awaiting result', 'amber'], main: 'Expected to end ' + cd(end) + ' · still trading on Kalshi', sub: 'Kalshi settles once the result is official · ' + asOf, at: end, m };
+    return { code: 'trading', chip: ['open', 'accent'], main: 'Trading on Kalshi' + (end ? ' · expected to end ' + U.fmtDateTime(end) + ' (' + cd(end) + ')' : ''), sub: 'resolves on Kalshi, then on Meridian · ' + asOf, at: end, m };
+  };
   R.state = function (q, id, now = Date.now()) {
     const { m, o, hv } = R.get(id);
     const cd = (t) => (t > now ? 'in ' + U.fmtCountdown(t - now) : U.fmtAgo(t));
     const live = (s) => (s === 1 ? '1 s' : s < 3600 ? Math.round(s / 60) + ' min' : (s / 3600).toFixed(s % 3600 ? 1 : 0) + ' h');
-    if (q.settled) return { code: 'settled', chip: q.nd ? ['50/50', 'amber'] : q.yes ? ['YES', 'green'] : ['NO', 'red'], main: 'Settled on Meridian', sub: m && m.resolvedAt ? 'Polymarket resolved ' + U.fmtDateTime(m.resolvedAt) : null, m, o };
-    if (!m) return { code: 'unknown', chip: ['open', 'accent'], main: q.end ? (q.end > now ? 'Ends ' + cd(q.end) : 'Ended ' + cd(q.end)) : 'No end time', sub: m === null ? (/kalshi\.com/i.test(String(q.src || '')) ? 'a Kalshi market (Meridian lists some since 13 Oct): this page follows Polymarket\'s resolutions only' : 'no Polymarket record for this question') : null, m, o };
+    if (q.settled) return { code: 'settled', chip: q.nd ? ['50/50', 'amber'] : q.yes ? ['YES', 'green'] : ['NO', 'red'], main: 'Settled on Meridian', sub: m && m.resolvedAt ? (m.kalshi ? 'Kalshi settled ' : 'Polymarket resolved ') + U.fmtDateTime(m.resolvedAt) : null, m, o };
+    if (m && m.kalshi) return kalshiState(q, m, now, cd);
+    if (!m) return { code: 'unknown', chip: ['open', 'accent'], main: q.end ? (q.end > now ? 'Ends ' + cd(q.end) : 'Ended ' + cd(q.end)) : 'No end time', sub: m === null ? (/kalshi\.com/i.test(String(q.src || '')) ? 'a Kalshi market: the site reads Kalshi through the Predict snapshot, for the questions with Meridian bets (Kalshi does not answer browser requests from other sites)' : 'no Polymarket record for this question') : null, m, o };
     // Meridian's listed end time often comes well before the market itself ends; that is what people mistake for
     // "resolution". It is a listed end, not a betting cutoff: Meridian has taken bets after it
     const meridianEnd = q.end && m.endAt && m.endAt - q.end > 3600000 ? 'Meridian end time ' + (q.end > now ? U.fmtDateTime(q.end) : U.fmtDate(q.end)) : null;
@@ -473,7 +518,18 @@
     const kv = []; const row = (k, v) => { if (v != null && v !== '') kv.push(h('div.k', k), h('div', v)); };
     const short = (a) => h('a', { href: R.POLYGONSCAN + a, target: '_blank', rel: 'noopener', title: a }, U.shortAddr(a, 6));
     row('Status', h('div', UI.chip(s.chip[0], s.chip[1]), ' ', s.main, s.sub ? h('div.xs.dim', s.sub) : null));
-    if (m) {
+    if (m && m.kalshi) {
+      const k = m.kalshi, when = (t) => U.fmtDateTime(t) + (t > Date.now() ? ' · in ' + U.fmtCountdown(t - Date.now()) : ' · ' + U.fmtAgo(t)), c = (x) => (Number.isFinite(x) ? Math.round(x * 100) + '¢' : '—');
+      row('Kalshi market', k.t || null);
+      row('On Kalshi', ({ active: 'trading', closed: 'trading closed, result not determined yet', determined: 'result determined, settling', finalized: 'settled', settled: 'settled', inactive: 'trading paused', paused: 'trading paused', disputed: 'result under review', amended: 'result amended' }[k.st] || k.st || '—')
+        + (m.closed && k.r ? ' · result ' + (k.r === 'scalar' && Number.isFinite(k.sv) ? 'a fair price, $' + k.sv.toFixed(2) + ' a contract' : String(k.r).toUpperCase()) : ''));
+      if (!m.closed && (Number.isFinite(k.b) || Number.isFinite(k.p))) row('YES price', c(k.b) + ' bid · ' + c(k.a) + ' ask · last ' + c(k.p));
+      if (k.start) row('Game starts', when(k.start));
+      if (k.o || k.x) row('Expected to end', when(k.o || k.x));
+      if (k.s) row('Settled on Kalshi', when(k.s));
+      row('Meridian end time', q.end ? U.fmtDateTime(q.end) : '—');
+      row('Read', k.at ? 'with the Predict snapshot, ' + U.fmtAgo(k.at) + ' (every 30 minutes: Kalshi does not answer browser requests from other sites)' : 'with the Predict snapshot');
+    } else if (m) {
       // the listed date is a deadline, not when the market closes: one still trading past it says so
       row(m.listedEnd ? 'Deadline in the question' : 'Polymarket end date', m.endAt ? U.fmtDateTime(m.endAt) + (m.endAt > Date.now() ? ' · in ' + U.fmtCountdown(m.endAt - Date.now()) : ' · ' + U.fmtAgo(m.endAt) + (s.code === 'trading' ? ' · the market is still trading' : '')) + (m.listedEnd ? ' · Polymarket lists ' + U.fmtDateTime(m.listedEnd) + ', which is earlier' : '') + (s.code === 'postponed' || s.code === 'noresult' ? ' · only a placeholder for a game: the market runs until the result is in' : '') : '—');
       if (m.gameAt) row('Fixture', U.fmtDateTime(m.gameAt) + (m.gameAt > Date.now() ? ' · in ' + U.fmtCountdown(m.gameAt - Date.now()) : ' · ' + U.fmtAgo(m.gameAt)) + (s.orig ? ' · re-dated: first listed for ' + U.fmtDate(s.orig) : ''));
@@ -501,14 +557,14 @@
       row('Resolver contract', m.adapter ? h('span', short(m.adapter), m.negRisk ? ' · multi-outcome (neg-risk) market' : '') : '—');
     }
     const links = h('div.row.wrap', { style: { marginTop: '12px', gap: '6px' } },
-      m ? h('a.btn.sm', { href: m.url, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Open on Polymarket') : null,
+      m ? h('a.btn.sm', { href: m.url, target: '_blank', rel: 'noopener' }, U.icon('external'), m.kalshi ? 'Open on Kalshi' : 'Open on Polymarket') : null,
       m && m.source ? h('a.btn.sm.ghost', { href: m.source, target: '_blank', rel: 'noopener', title: 'The resolution source named by the market' }, U.icon('external'), 'Official source · ' + m.source.replace(/^https?:\/\/(www\.)?/i, '').replace(/\/.*$/, '')) : null,
       opts.appUrl ? h('a.btn.sm.ghost', { href: opts.appUrl, target: '_blank', rel: 'noopener' }, U.icon('external'), 'Meridian Predict') : null,
-      h('a.btn.sm.ghost', { href: 'https://docs.polymarket.com/polymarket-learn/markets/how-are-markets-resolved', target: '_blank', rel: 'noopener' }, U.icon('external'), 'How resolution works'));
+      m && m.kalshi ? null : h('a.btn.sm.ghost', { href: 'https://docs.polymarket.com/polymarket-learn/markets/how-are-markets-resolved', target: '_blank', rel: 'noopener' }, U.icon('external'), 'How resolution works'));
     const body = h('div',
       h('div.kv', kv),
-      m && m.rules ? h('div', { style: { marginTop: '14px' } }, h('div.small.dim', { style: { marginBottom: '6px' } }, 'Resolution rules (from Polymarket)'), h('div.rules', m.rules)) : null,
-      h('p.muted.small', { style: { margin: '14px 0 0' } }, R.explainer()),
+      m && m.rules ? h('div', { style: { marginTop: '14px' } }, h('div.small.dim', { style: { marginBottom: '6px' } }, m.kalshi ? 'Resolution rule (from Kalshi; the full rules on its page)' : 'Resolution rules (from Polymarket)'), h('div.rules', m.rules)) : null,
+      h('p.muted.small', { style: { margin: '14px 0 0' } }, m && m.kalshi ? 'How a Kalshi question resolves: Kalshi determines the result of its own market once the event is over and settles it, usually within minutes of the final whistle; a cancelled event settles at a fair price instead of YES or NO. Meridian then settles the question, and a fair-price or 50/50 result settles as a loss for the bettor.' : R.explainer()),
       links);
     UI.modal({ title: q.question || (m && m.question) || 'Resolution', body });
   };

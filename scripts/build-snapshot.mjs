@@ -663,6 +663,37 @@ async function readPnlRanks() {
  *  volume windows in one request). */
 export const compactMatch = (p) => ({ n: p.name || null, t: p.startTime ? Date.parse(p.startTime) : null, lg: (p.teams || []).map((t) => t.league).find(Boolean) || null,
   v: { d1: numOr(p.d1), d7: numOr(p.d7) } });
+// ---- Kalshi: the questions Meridian mirrors from Kalshi (since 13 Oct) as Kalshi has them. A browser on the site cannot
+// ask Kalshi (its API answers 403 to other sites' pages), so the snapshot carries each one's state, result, prices and
+// times (row.k), read by the market ticker in the question's source link (op_market_ticker) ----
+export const KALSHI = 'https://api.elections.kalshi.com/trade-api/v2/markets';
+export const kalshiTicker = (src) => { const m = /[?&]op_market_ticker=([A-Za-z0-9._-]+)/.exec(String(src || '')); return m ? m[1].toUpperCase() : null; };
+const kNum = (v) => { if (v == null || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+const kTime = (v) => { const t = Date.parse(v || ''); return Number.isFinite(t) ? t : null; };
+/** A Kalshi market as the snapshot keeps it, empty fields left out: t ticker, st status (active, closed, determined,
+ *  finalized…), r result (yes / no), sv settlement value (1, 0, 0.5 for a tie), p last price, b / a YES bid / ask, o the
+ *  event's expected end (occurrence_datetime: a game's end, not its start), x expected expiration, c trading close,
+ *  s settlement time, ru its main rule (300 characters at most). */
+export function kalshiRow(m) {
+  const o = { t: m.ticker || null, st: m.status || null, r: m.result || null, sv: kNum(m.settlement_value_dollars), p: kNum(m.last_price_dollars), b: kNum(m.yes_bid_dollars), a: kNum(m.yes_ask_dollars),
+    o: kTime(m.occurrence_datetime), x: kTime(m.expected_expiration_time), c: kTime(m.close_time), s: kTime(m.settlement_ts), ru: m.rules_primary ? String(m.rules_primary).slice(0, 300) : null };
+  for (const k of Object.keys(o)) if (o[k] == null) delete o[k];
+  return o;
+}
+/** Each listed Kalshi question's market (row.k), 50 tickers a request. Returns how many were asked and read. */
+async function readKalshi(rows) {
+  const by = new Map();
+  for (const q of rows) { const t = kalshiTicker(q.src); if (!t) continue; if (!by.has(t)) by.set(t, []); by.get(t).push(q); }
+  const tickers = Array.from(by.keys()); let read = 0;
+  for (let i = 0; i < tickers.length; i += 50) {
+    const chunk = tickers.slice(i, i + 50);
+    const j = await getJson(KALSHI + '?limit=' + chunk.length + '&tickers=' + chunk.map(encodeURIComponent).join(','));
+    for (const m of (j && j.markets) || []) { const qs = by.get(String(m.ticker || '').toUpperCase()); if (!qs) continue; const k = kalshiRow(m); for (const q of qs) q.k = k; read++; }
+    if (i + 50 < tickers.length) await sleep(200);
+  }
+  return { asked: tickers.length, read };
+}
+
 export async function readMatches(evIds) {   // exported for a check against the live API
   const ids = Array.from(new Set((evIds || []).filter((x) => x != null && x !== '').map(String)));
   const out = dict(), win = (w) => `displayVolume(filter: {}, window: ${w}, excludeLowOdds: true)`;
@@ -1042,6 +1073,7 @@ async function buildPredict() {
   try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { lost('matches', e, 'matches failed'); }
   try { hot = await readHot(); hotStakes(hot, (id) => (act[id] ? act[id].sw : 0), stakeByGroup(qNorms, new Map(withOi.map((q) => [q.id, q])))); } catch (e) { lost('hot', e, 'Hot lists failed'); }
   try { tags = await readTags(); } catch (e) { lost('tags', e, 'tags failed'); }
+  try { const kr = await readKalshi(withOi); if (kr.asked) console.log(`  predict: Kalshi: ${kr.read} of ${kr.asked} markets read`); } catch (e) { lost('kalshi', e, 'Kalshi markets failed (their questions show no Kalshi state)'); }
   // open predictions per question with every leg (condition id, side) and the stake: whether anyone can still win a
   // question, and who is owed after it resolves, depends on the other legs of each combo, so the page needs them
   // x: 1 marks an open prediction whose bettor has sold all its tokens to market makers (its ledger holds none of them):

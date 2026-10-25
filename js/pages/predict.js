@@ -132,10 +132,11 @@
   let questionsP = null;
   P.loadQuestions = async (snap) => {
     const s = snap || P._snap;
+    if (s && s.questionsWithOi) R.kalshi(s.questionsWithOi, s.builtAt, s.matches);   // (an older snapshot held the questions itself)
     if (!s || s.questionsWithOi || !s.questionsFile) return s;
     if (!questionsP || questionsP.for !== s) {
       const p = (async () => { const r = await fetch(P.SNAPSHOT_BASES[0] + s.questionsFile, { cache: 'no-cache' }); if (!r.ok) throw new Error('The questions could not be read (HTTP ' + r.status + ')'); const j = await r.json(); return j; })();
-      questionsP = Object.assign(p.then((j) => { for (const k of ['questionsWithOi', 'matches', 'hot', 'tags']) if (j[k] !== undefined) s[k] = j[k]; return s; }, (e) => { questionsP = null; throw e; }), { for: s });
+      questionsP = Object.assign(p.then((j) => { for (const k of ['questionsWithOi', 'matches', 'hot', 'tags']) if (j[k] !== undefined) s[k] = j[k]; R.kalshi(j.questionsWithOi, j.builtAt || s.builtAt, j.matches); return s; }, (e) => { questionsP = null; throw e; }), { for: s });
     }
     return questionsP;
   };
@@ -567,9 +568,9 @@
   }
   // YES now: the CLOB midpoint (as the app), else Polymarket's last price (Gamma), else the estimatedPrice Meridian's API
   // reported, which stops following the market once a game starts
-  const probNow = (c) => { const mid = midNow(qId(c)); if (mid != null) return { p: mid, live: true }; const m = R.get(qId(c)).m; if (m && m.prices && m.prices.length && Number.isFinite(m.prices[0])) return { p: m.prices[0], live: true }; const ep = c.ep != null ? c.ep : c.estimatedPrice; return ep == null ? null : { p: Number(ep), live: false }; };
+  const probNow = (c) => { const mid = midNow(qId(c)); if (mid != null) return { p: mid, live: true }; const m = R.get(qId(c)).m; if (m && m.prices && m.prices.length && Number.isFinite(m.prices[0])) return { p: m.prices[0], live: !m.kalshi, kalshi: !!m.kalshi }; const ep = c.ep != null ? c.ep : c.estimatedPrice; return ep == null ? null : { p: Number(ep), live: false }; };
   // a settled question shows its result, not a price; a price in whole percent, as Meridian's app rounds it
-  const probCell = (c) => { const v = qView(c); if (v.settled) return h('span.dim', v.nd ? 'resolved 50/50' : v.yes === true ? 'resolved YES' : v.yes === false ? 'resolved NO' : 'settled'); const x = probNow(c); return probBar(x && x.p, x && (x.live ? 'Polymarket now: ' : 'Meridian estimate (may lag): '), 0); };
+  const probCell = (c) => { const v = qView(c); if (v.settled) return h('span.dim', v.nd ? 'resolved 50/50' : v.yes === true ? 'resolved YES' : v.yes === false ? 'resolved NO' : 'settled'); const x = probNow(c); return probBar(x && x.p, x && (x.kalshi ? 'Kalshi, as of the snapshot: ' : x.live ? 'Polymarket now: ' : 'Meridian estimate (may lag): '), 0); };
   /** A question's volume over a window ('24h' / '7d') as Meridian's app shows it on its list cards sorted Hot / Top (the
    *  Filtered window: low-odds trading left out, its lists' default; P.questionVolume), in its format (P.fmtVol); every
    *  trade (the site's figure) and the all-time volume in the title. A row from an older snapshot has only every trade. */
@@ -913,6 +914,7 @@
     if (k.settled && (k.nonDecisive || k.resolvedToYes === true || k.resolvedToYes === false)) return { p: !k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0, live: true };
     const m = k.id ? R.get(k.id).m : null;
     if (m && (m.closed || m.uma === 'resolved')) { const y = R.resolvedYes(m); if (y === 'void') return { p: 0, live: true }; if (y === true || y === false) return { p: y === !!k.yes ? 1 : 0, live: true }; }
+    if (m && m.kalshi && !m.closed && m.prices.length) return { p: k.yes ? m.prices[0] : 1 - m.prices[0], live: false, kalshi: true };
     const mid = midNow(k.id);
     const live = mid != null || !!(m && m.prices && m.prices.length && Number.isFinite(m.prices[0]) && !m.closed);
     const yes = mid != null ? mid : live ? m.prices[0] : k.ep;
@@ -923,11 +925,13 @@
   const pickLive = (k) => pickNow(k).live;
   /** No Polymarket market for the leg (pickNow none): its chance is Meridian's own estimate, for good */
   const pickNone = (k) => !!pickNow(k).none;
+  /** A Kalshi question's leg: its chance is Kalshi's as of the snapshot (pickNow kalshi). */
+  const pickKalshi = (k) => !!pickNow(k).kalshi;
   /** A position's chance from its legs' stored estimates, a settled leg counting as won or lost; null while a leg has none. */
   const legNow = (k) => (k.settled ? (!k.nonDecisive && k.resolvedToYes === !!k.yes ? 1 : 0) : k.ep == null ? null : k.yes ? k.ep : 1 - k.ep);
   const winProb = (picks) => (picks.length && picks.every((k) => legNow(k) != null) ? picks.reduce((p, k) => p * legNow(k), 1) : null);
   // live false: Polymarket has not answered (yet), so the chance is Meridian's estimate from the snapshot (pickNow)
-  const gauge = (p, live, none) => h('span.gauge-wrap', { title: none ? 'Meridian\'s estimate: Polymarket has no market for this question (a Kalshi one)' : live ? 'Polymarket now: the chance of this pick (its order book\'s midpoint, as Meridian\'s app shows it, once loaded)' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
+  const gauge = (p, live, none, kalshi) => h('span.gauge-wrap', { title: kalshi ? 'Kalshi, as of the Predict snapshot: the chance of this pick (the middle of its YES bid and ask, else its last price)' : none ? 'Meridian\'s estimate: no Polymarket market for this question, and no Kalshi one in the snapshot' : live ? 'Polymarket now: the chance of this pick (its order book\'s midpoint, as Meridian\'s app shows it, once loaded)' : 'Meridian\'s estimate from the snapshot (Polymarket not loaded)' }, h('i.gauge', { style: { background: `conic-gradient(var(--green) ${Math.round(U.clamp(p, 0, 1) * 360)}deg, var(--bg-5) 0)` } }), pct(p, 0));
   const slipHowTo = () => h('div.slip-note', 'Copying opens this slip on Meridian Predict. Press ', h('b', 'Add To Slip'), ' there: its picks join whatever is already in your Meridian slip (clear that first to place exactly this one). Choose your amount and place it; Meridian\'s market makers quote fresh odds, so yours can differ from the ones locked here.');
   const slipBrand = () => h('span.slip-brand', 'Meridian', h('span', 'DataHub'));
 
@@ -1029,7 +1033,7 @@
         return h('div.slip-leg',
           h('div.side', sideChip(k.yes)),
           h('div.q', h('div', k.q), meta ? h('div.meta', meta) : null),
-          h('div.end', p != null ? gauge(p, pickLive(k), pickNone(k)) : null, o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null));
+          h('div.end', p != null ? gauge(p, pickLive(k), pickNone(k), pickKalshi(k)) : null, o ? h('span.chip', { class: o.tone, title: o.text }, o.label) : null));
       };
       const btnShare = (primary) => h('button.btn', { type: 'button', class: primary ? 'primary slip-copy' : 'slip-share', dataset: { focusKey: 'slip:share' }, title: 'A link that shows this slip\'s card in Discord, X, Telegram…, and the card as an image', onclick: () => shareSlip(n) }, U.icon('share'), primary ? 'Share this slip' : 'Share');
       U.replace(wrap, h('div.slip', { class: 'is-' + (n.decided ? (n.won ? 'won' : n.nd ? 'void' : 'lost') : 'open') },
@@ -1254,7 +1258,7 @@
       h('span.grow'), summary),
       h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Every question on the exchange, including the ones nobody has bet on.'), h('a.small', { href: '#/predict/questions', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: null, q: null, cat: null, status: null, sort: null }); } }, 'Back to questions with Meridian bets')));
     U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is the exchange's open-interest figure (0 for unlisted questions). Vol 24h and 7d are the mirrored Polymarket market's volume with low-odds trading left out, the figures Meridian's app adds up over a group's questions on its list cards; a question's dialog has its all-time volume, as on its page in the app.` : ''), resFootnote());
-    let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
+    let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0, kalshiAsked = false;
     function renderRows(live) {
       if (st.status === 'ended') rows = byStage(rows);
       (live ? U.replaceLive : U.replaceNow)(wrap, UI.table({ rowKey: (c) => qId(c), cols: [
@@ -1283,6 +1287,10 @@
       } catch (e) { if (isAbort(e)) return; if (my !== reqId) return; rows = []; U.replace(wrap, UI.error(e, () => go(p))); loading = false; return; }
       loading = false; renderRows();
       trackResolution(rows, ctx, () => renderRows(true), () => my === reqId);
+      if (!kalshiAsked && rows.some((c) => srcName(c) === 'Kalshi')) {
+        kalshiAsked = true;
+        P.loadSnapshot({ signal: ctx.signal }).then((s) => (s ? P.loadQuestions(s) : null)).then(() => { if (!ctx.signal.aborted && !loading) renderRows(true); }).catch(() => {});
+      }
     }
     // the countdowns, and the midpoints of the rows on screen (asked again once a minute is up)
     resTicker(ctx, (n) => { if (loading) return; renderRows(true); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(true); }).catch(() => {}); if (n % 4 === 0) reResolve(rows.map(qId), ctx, () => { if (!loading) renderRows(true); }); });
