@@ -288,3 +288,21 @@ test('paper copy: the fills seen are kept back to a minute before the newest app
   assert.deepEqual(Object.keys(st.seen).sort(), ['newest', 'recent']);
   PP.clear('prune-test');
 });
+
+test("a liquidation after a trim is replayed at the remainder's own price, not the average of every decrease", () => {
+  const T = 1792000000000;
+  const fills = [
+    { id: 'l1', orderId: 'o1', productId: 'xag', side: 0, filled: '10', price: '100', feeUsd: '0', createdAt: T },          // a long of 10 at 100
+    { id: 'l2', orderId: 'o2', productId: 'xag', side: 1, filled: '5', price: '110', feeUsd: '0', createdAt: T + 60000 },   // the leader trims 5 at 110
+  ];
+  // the exchange liquidates the other 5 at 80, with no fill of its own: the record's decreases are 5 at 110 and 5 at 80
+  const rec = { productId: 'xag', size: '0', totalDecreaseQuantity: '10', totalDecreaseNotional: String(5 * 110 + 5 * 80), createdAt: T, updatedAt: T + 120000, isLiquidated: true };
+  const [e] = S.episodes(fills, [rec]);
+  const last = e.fills[e.fills.length - 1];
+  assert.equal(last.synthetic, true);
+  near(assert, last.q, -5, 1e-12);
+  near(assert, last.px, 80, 1e-9, 'the remainder at 80: the average of every decrease, 95, is a price it never got');
+  // a record that does not match the episode's start keeps the average (the episode's fills may not be all of its)
+  const [e2] = S.episodes(fills, [Object.assign({}, rec, { createdAt: T - 3600000 })]);
+  near(assert, e2.fills[e2.fills.length - 1].px, 95, 1e-9);
+});

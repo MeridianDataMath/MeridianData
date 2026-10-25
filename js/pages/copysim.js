@@ -213,9 +213,10 @@
           h('div.it', h('div.t', 'Liquidations and open positions'), h('div.d', 'A position the leader was liquidated out of is closed at the leader\'s exit price; whether you would have been liquidated depends on your own margin. Positions still open are marked at the current oracle price.')),
           h('div.it', h('div.t', 'Books'), h('div.d', slipNote)),
           h('div.it', h('div.t', 'Not modelled'), h('div.d', 'Your own market impact on top of the leader\'s, rejected or partially filled orders, and the leader trading in more than one subaccount.')),
-          (data.truncated || T.partial || T.noFunding || T.unmarked || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
+          (data.truncated || data.positionsTruncated || T.partial || T.noFunding || T.unmarked || (candleStats && candleStats.noCandle)) ? h('div.it', h('div.t', 'Data limits'), h('div.d',
             (T.unmarked ? `${T.unmarked} open position${T.unmarked > 1 ? 's were' : ' was'} left out: the market prices to value ${T.unmarked > 1 ? 'them' : 'it'} could not be read (reload the page to read them again). ` : '') +
             (data.truncated ? `The exchange returned the newest ${U.fmtNum(data.fills.length, 0)} fills (back to ${U.fmtDateTime(data.oldestFill)}); older positions are not replayed. ` : '') +
+            (data.positionsTruncated ? `The exchange returned the newest ${U.fmtNum(data.positions.length, 0)} position records only: an older position the exchange closed without a fill of its own (a liquidation) has no record here and is not closed in the replay, so earlier episodes in its market can be off. ` : '') +
             (T.partial ? `${T.partial} position${T.partial > 1 ? 's' : ''} whose opening lies before that window ${T.partial > 1 ? 'were' : 'was'} left out. ` : '') +
             (T.noFunding ? `${T.noFunding} position${T.noFunding > 1 ? 's have' : ' has'} no position record from the exchange, so ${T.noFunding > 1 ? 'their' : 'its'} funding and liquidation status are unknown (counted as zero). ` : '') +
             (candleStats && candleStats.noCandle ? `${U.fmtNum(candleStats.noCandle, 0)} of ${U.fmtNum(candleStats.fills, 0)} delayed fills had no candle and were priced at the leader's fill (no drift).` : ''))) : null));

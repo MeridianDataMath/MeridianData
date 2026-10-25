@@ -21,7 +21,7 @@
     // every later episode in the market would be a phantom; forcing a close at the record's close time stops that at
     // the first known close. A record that closes without a fill of its own (a liquidation) is closed the same way.
     const closes = {};
-    for (const p of positions || []) if (U.num(p.size) === 0 && U.num(p.totalDecreaseQuantity) > 0) (closes[p.productId] || (closes[p.productId] = [])).push({ t: U.num(p.updatedAt), createdAt: U.num(p.createdAt), px: U.num(p.totalDecreaseNotional) / U.num(p.totalDecreaseQuantity), p });
+    for (const p of positions || []) if (U.num(p.size) === 0 && U.num(p.totalDecreaseQuantity) > 0) (closes[p.productId] || (closes[p.productId] = [])).push({ t: U.num(p.updatedAt), createdAt: U.num(p.createdAt), px: U.num(p.totalDecreaseNotional) / U.num(p.totalDecreaseQuantity), dn: U.num(p.totalDecreaseNotional), dq: U.num(p.totalDecreaseQuantity), p });
     for (const list of Object.values(closes)) list.sort((a, b) => a.t - b.t);
     const idx = {}, ended = {};   // ended: close times of episodes the fills themselves closed, per market
     const forceCloses = (pid, before) => {
@@ -31,7 +31,14 @@
         if ((ended[pid] || []).some((t) => Math.abs(t - c.t) < 1000)) continue;   // a fill closed this record: nothing to force
         const e = open[pid]; if (!e || e.start > c.t) continue;
         const matched = Math.abs(e.start - c.createdAt) < 5000;
-        e.fills.push({ t: c.t, q: -e.qty, px: c.px, fee: 0, maker: false, synthetic: true, oid: null });
+        // the remainder the exchange closed is priced at what the record's decreases took beyond the episode's own: the
+        // average of all of them, the leader's own trims included, replayed a liquidation after a trim at a price it never
+        // got (35-43 % of the loss missing). The average stands in where the episode's fills do not account for the rest.
+        const own = e.fills.filter((f) => Math.sign(f.q) === -e.side);
+        const ownQ = own.reduce((a, f) => a + Math.abs(f.q), 0), ownN = own.reduce((a, f) => a + Math.abs(f.q) * f.px, 0);
+        const remQ = c.dq - ownQ, remN = c.dn - ownN;
+        const px = matched && remQ > EPS && remN > 0 && Math.abs(remQ - Math.abs(e.qty)) <= 0.01 * Math.abs(e.qty) ? remN / remQ : c.px;
+        e.fills.push({ t: c.t, q: -e.qty, px, fee: 0, maker: false, synthetic: true, oid: null });
         e.qty = 0; e.end = c.t; e.forced = true; if (!matched) e.partial = true;
         done.push(e); delete open[pid];
       }

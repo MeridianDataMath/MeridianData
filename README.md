@@ -1673,7 +1673,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - *What the card shows:* the Record column and the bettor line under each slip show the
     bettor's won / lost and win rate as Meridian's app counts them (`appWon` / `appLost` /
     `appWinRate` in `predict-ideas.json`, from the bettor's snapshot row: its Positions Won / Lost
-    and Win Rate, every prediction on its own, each once it is claimed; the owner's call,
+    and Win Rate, every prediction on its own, each once it is settled on Meridian; the owner's call,
     2026-10-06). The record against the odds above, which the chip and *By luck* rest on, is in
     their tooltips. The two can read very differently (0x59e7…: 134W / 424L, 24.01% in the app;
     92 of 231 bets won where 79.8 were implied). An ideas file from before those fields shows the
@@ -1928,7 +1928,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `8b222a081de3b82a81e9c1a3c0be6d1ada16051ee3947c83bd85e098b760b2c6` (`tests/agent.test.mjs` fails when this line is
+    `db443007d806e24a9a7f7b71e81b31d0971ad331d663fc159637308fa0496dd2` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
@@ -2090,7 +2090,7 @@ difference explained (the owner's call, 2026-10-06; the in-app definitions, `MD.
   the earliest).
 * **Win rate** = closed positions with positive net result (realized − trading fees − position
   fees + funding received − funding paid: the site's net figure) ÷ closed positions. On Predict,
-  the won / lost records and win rates are the app's (claimed predictions only, `P.appRecord` /
+  the won / lost records and win rates are the app's (settled predictions only, `P.appRecord` /
   `P.rowRecord`), the site's count at the verdict in the tooltip. **Trading style** is the average
   holding time of closed positions: Scalper < 1h, Intraday < 1d, Swing < 7d, otherwise Long-term.
 * **Liquidation price** is an estimate from the app's pool maths: maintenance margin =

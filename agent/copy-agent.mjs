@@ -701,12 +701,16 @@ async function run() {
       rec.lateFound = true; rec.id = o.id; rec.orderStatus = o.status; rec.filled = num(o.filled);
       if (!(rec.filled > 0)) { note('order', `${prod.displayTicker} ${rec.side}: on the exchange after all, unfilled (${o.status})`); persist(); return; }
       rec.status = 'late'; await refreshOwn().catch(() => {});
+      // a reduction that went in late was carried as owed when it read as lost: taken off what is carried, or the next
+      // reduction took the same amount again (the copy went flat where its share of the leader's was left)
+      let unowed = false;
+      if (rec.reduceOnly && S.carry[prod.id] > 0) { S.carry[prod.id] = Math.max(0, S.carry[prod.id] - rec.filled); if (!(S.carry[prod.id] > 1e-12)) delete S.carry[prod.id]; unowed = true; }
       const own = S.own[prod.id];
       if (!rec.reduceOnly && leaderSid && own && Math.sign(own.size) === (side === 0 ? 1 : -1) && !S.marketOwner[prod.id]) {
         S.marketOwner[prod.id] = leaderSid; const lp = (S.leaderPos[leaderSid] || {})[prod.id]; const b = S.books[leaderSid] || (S.books[leaderSid] = {});
         if (!b[prod.id]) b[prod.id] = { k: lp ? Math.abs(own.size / lp) : null, openedAt: Date.now(), late: true };
       }
-      const msg = `${prod.displayTicker} ${rec.side} ${rec.filled}: the order reported lost went in late; ${S.marketOwner[prod.id] && S.marketOwner[prod.id] === leaderSid ? 'the position is followed as its copy' : 'check the position'}`;
+      const msg = `${prod.displayTicker} ${rec.side} ${rec.filled}: the order reported lost went in late; ${unowed ? 'the reduction it owed is no longer carried' : S.marketOwner[prod.id] && S.marketOwner[prod.id] === leaderSid ? 'the position is followed as its copy' : 'check the position'}`;
       note('warn', msg); push('Copy agent order filled late', msg); persist();
     }), ms));
   };
