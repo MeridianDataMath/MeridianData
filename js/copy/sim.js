@@ -230,7 +230,9 @@
     const rows = []; let partial = 0, noFunding = 0, unmarked = 0;
     for (const e of episodes) {
       if (e.start < since) continue;
-      if (settings.markets && settings.markets.size && !settings.markets.has(e.pid)) continue;
+      // (a selection, even an empty one, is a filter: with every market chip off it replayed every market, while paper copy
+      // read the same choice as following none)
+      if (settings.markets && !settings.markets.has(e.pid)) continue;
       if (e.partial) { partial++; continue; }
       const mark = e.qty ? marks && marks[e.pid] : null;
       if (e.qty && !mark) { unmarked++; continue; }   // open with no price to mark it: left out rather than guessed, and counted (Data limits)

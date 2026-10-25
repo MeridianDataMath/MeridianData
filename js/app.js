@@ -216,7 +216,8 @@
   // corrected in the ages and the stale marks (U.clockSkew)
   function readClock() {
     const t0 = Date.now();
-    A.get(A.BASE + '/v1/time', { ttl: 0 }).then((r) => { const t = U.num(r && r.time), t1 = Date.now(); if (t > 0) { const skew = t - (t0 + t1) / 2; if (Math.abs(skew) > 30000) U.clockSkew = skew; } }).catch(() => {});
+    const read = A.get(A.BASE + '/v1/time', { ttl: 0 }).then((r) => { const t = U.num(r && r.time), t1 = Date.now(); if (t > 0) { const skew = t - (t0 + t1) / 2; if (Math.abs(skew) > 30000) U.clockSkew = skew; } }).catch(() => {});
+    U.clockReady = Promise.race([read, new Promise((r) => setTimeout(r, 4000))]);
   }
   function boot() {
     renderRail();

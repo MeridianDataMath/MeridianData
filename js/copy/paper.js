@@ -114,7 +114,11 @@
         const closedPart = fill.oid && st.oc ? st.oc[fill.oid] || 0 : 0;
         pos = openPos(st, closedPart && fill.orderQty ? Object.assign({}, fill, { orderQty: Math.max(0, fill.orderQty - closedPart) }) : fill, exec, dir * rest);
       }
-      let q = s.mode === 'perfill' ? dir * (s.size / exec.px) : dir * rest * pos.k;
+      // an add to a copy already held scales with the copy over the leader's whole position before it, as the agent sizes it
+      // (sizeOrder): the first add's factor on every later add of a position the leader held before following started made
+      // $12 adds into $2,000 ones, a copy larger than the leader's whole position
+      const held = s.mode === 'fixed' && Math.abs(pos.qty) > EPS && Math.abs(T) > EPS && Math.sign(T) === dir;
+      let q = s.mode === 'perfill' ? dir * (s.size / exec.px) : held ? dir * rest * Math.abs(pos.qty) / Math.abs(T) : dir * rest * pos.k;
       const maxPos = MD.copysim ? MD.copysim.maxPosition(s) : Infinity;   // a scaled-in leader must not make the position any multiple of `size`
       const room = maxPos / exec.px - Math.abs(pos.qty);
       if (Math.abs(q) > room + EPS) { q = dir * Math.max(0, room); pos.capped = true; }

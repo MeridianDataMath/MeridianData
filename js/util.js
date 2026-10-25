@@ -290,6 +290,9 @@
    *  fresh snapshot stale, nor a slow one read "0s ago" */
   U.clockSkew = 0;
   U.now = () => Date.now() + U.clockSkew;
+  /** Settles once the exchange's clock has been read (or failed, or 4 s passed): what decides on an age without a
+   *  visitor watching (the leaderboard's own build) waits for it */
+  U.clockReady = Promise.resolve();
   U.fmtAgo = (ms) => {
     if (!(U.num(ms) > 0)) return '—';   // no time known (a status file that did not load): not "20750d ago"
     const s = Math.max(0, (U.now() - U.num(ms)) / 1000);

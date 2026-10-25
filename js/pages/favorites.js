@@ -11,6 +11,9 @@
 
       // each account's figures as last read: a rename, a removal or a reorder redraws from them at once, and only an account
       // not read yet (or Refresh) is read; gen: a later render wins, so a slow earlier one cannot bring back a removed row
+      // (the leaderboard page's helpers, for render() and draw() both: draw() used a name declared in render() only, and a
+      // carried row threw, leaving the page on its loading line)
+      const LB = MD.router.pages.leaderboard;
       const last = new Map(); let gen = 0, lbBy = {};
       async function render(force) {
         const my = ++gen;
@@ -24,7 +27,6 @@
         const need = force ? favs : favs.filter((f) => !last.has(f.subaccountId));
         if (!need.length) { draw(favs); return; }
         if (!body.querySelector('table')) U.replace(body, h('div.card.tight', UI.loading('Loading favorite accounts…')));
-        const LB = MD.router.pages.leaderboard;
         if (LB) await LB.loadRemote();
         if (my !== gen || ctx.signal.aborted) return;
         const lb = LB && LB.cache();

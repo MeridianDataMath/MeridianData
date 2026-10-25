@@ -210,7 +210,23 @@
 
       // ---- step 3: the config
       const c = st.cfg;
-      const inp = (obj, key, attrs) => h('input.input.sm', Object.assign({ value: obj[key] == null ? '' : obj[key], oninput: (e) => { obj[key] = attrs && attrs.type === 'number' ? U.num(e.target.value) : e.target.value.trim(); save(); renderJson(); } }, attrs || {}));
+      // a number outside its field's range (off: 0 means none) is marked and not taken: the last valid value stays in the
+      // config and comes back into the field on leaving it. A negative limit was written as 0, "no limit" to the agent, and
+      // the field and config.json disagreed. A value kept from before that is out of range is brought into it once.
+      const okNum = (v, a) => { if (v === '') return true; const n = Number(v); if (!Number.isFinite(n)) return false; if (a.off && n === 0) return true; return !(a.min != null && n < a.min) && !(a.max != null && n > a.max); };
+      const fitNum = (n, a) => (a.max != null && n > a.max ? a.max : a.min != null && n < a.min ? (a.off ? 0 : a.min) : n);
+      const rangeText = (a) => (a.off ? '0 (none), or ' : '') + (a.min != null ? 'from ' + a.min : 'any') + (a.max != null ? ' to ' + a.max : ' up');
+      const inp = (obj, key, attrs) => {
+        const { off, ...rest } = attrs || {}; const a = Object.assign({ off }, rest); const num = rest.type === 'number';
+        if (num && obj[key] != null && obj[key] !== '' && !okNum(String(obj[key]), a)) { obj[key] = fitNum(U.num(obj[key]), a); save(); }
+        return h('input.input.sm', Object.assign({ value: obj[key] == null ? '' : obj[key],
+          oninput: (e) => {
+            const v = e.target.value.trim();
+            if (num && !okNum(v, a)) { e.target.classList.add('bad'); e.target.title = rangeText(a); return; }
+            e.target.classList.remove('bad'); obj[key] = num ? U.num(v) : v; save(); renderJson();
+          },
+          onchange: (e) => { if (e.target.classList.contains('bad')) { e.target.value = obj[key] == null ? '' : obj[key]; e.target.classList.remove('bad'); } } }, rest));
+      };
       const sel = (obj, key, opts) => h('select.input.sm', { onchange: (e) => { obj[key] = e.target.value; save(); renderJson(); } }, opts.map(([v, label]) => h('option', { value: v, selected: obj[key] === v }, label)));
       // the ntfy topic is the only secret (anyone who knows it reads the pushes): say so when it is easy to guess, and
       // when the server is not https (the agent refuses a plain-http one except on localhost)
@@ -253,7 +269,24 @@
         U.replace(cfgDiff, out.length ? 'The running agent still has other ' + out.join(', ') + ': download config.json and restart it' : '');
       };
       const renderJson = () => { jsonOut.textContent = JSON.stringify(buildCfg(), null, 2); renderDiff(); };
-      const denyIn = h('input.input.sm', { value: (c.risk.markets.deny || []).join(', '), placeholder: 'e.g. HYPE-USD, XAG-USD', style: { width: '260px' }, oninput: (e) => { c.risk.markets.deny = e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean); save(); renderJson(); } });
+      // the names checked against the exchange's markets: the agent matches the full ticker only, so "XAG" denied nothing.
+      // A short name takes its -USD ticker; one that is no market is said and left out of config.json (once the markets are
+      // read: until then the names go in as typed)
+      const denyNote = h('div.xs', { style: { marginTop: '2px' } });
+      const resolveDeny = (text) => {
+        const names = String(text || '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+        const ref = MD._agentRef; if (!ref || !ref.products) return { list: names, unknown: [] };
+        const known = new Set(ref.products.map((p) => String(p.displayTicker).toUpperCase()));
+        const list = [], unknown = [];
+        for (const n of names) { const t = known.has(n) ? n : known.has(n + '-USD') ? n + '-USD' : null; if (t) { if (!list.includes(t)) list.push(t); } else unknown.push(n); }
+        return { list, unknown };
+      };
+      const applyDeny = (text) => {
+        const r = resolveDeny(text); c.risk.markets.deny = r.list;
+        U.replace(denyNote, r.unknown.length ? h('span.neg', 'Not a market on Meridian, left out: ' + r.unknown.join(', ')) : r.list.length ? h('span.dim', 'Not copied: ' + r.list.join(', ')) : null);
+        save(); renderJson();
+      };
+      const denyIn = h('input.input.sm', { value: (c.risk.markets.deny || []).join(', '), placeholder: 'e.g. HYPE-USD, XAG-USD', style: { width: '260px' }, oninput: (e) => applyDeny(e.target.value) });
       const tokenHint = h('span.xs');
       const tokenCheck = () => U.replace(tokenHint, st.token.length < 16 ? h('span.neg', '16 characters or more: the agent refuses a shorter one') : null);
       const tokenIn = h('input.input.sm', { value: st.token, spellcheck: false, style: { width: '260px', fontFamily: 'var(--mono)' }, oninput: (e) => { st.token = e.target.value.trim(); save(); renderJson(); tokenCheck(); } });
@@ -285,13 +318,13 @@
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxPositionUsd', { type: 'number', min: 10, step: 100, style: { width: '90px' } }), h('span.dim.small', 'USD max per position')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxNotionalPerMarket', { type: 'number', min: 0, step: 100, style: { width: '100px' } }), h('span.dim.small', 'USD max per market')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxPriceDeviationPct', { type: 'number', min: 0.5, max: 50, step: 0.5, style: { width: '70px' } }), h('span.dim.small', '% max leader price off the mark')),
-              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxOpenPositions', { type: 'number', min: 1, step: 1, style: { width: '70px' } }), h('span.dim.small', 'open positions max')),
-              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxLeverage', { type: 'number', min: 1, step: 0.5, style: { width: '70px' }, title: 'Positions at the mark ÷ equity (Meridian\'s Trade Equity). Meridian\'s own account leverage divides by the balance instead, so this one is the higher of the two whenever the positions\' uPnL, less the funding and position fees charged on them and not yet settled, is negative' }), h('span.dim.small', '× max leverage on equity')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxOpenPositions', { type: 'number', min: 1, off: true, step: 1, style: { width: '70px' } }), h('span.dim.small', 'open positions max')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'maxLeverage', { type: 'number', min: 1, off: true, step: 0.5, style: { width: '70px' }, title: 'Positions at the mark ÷ equity (Meridian\'s Trade Equity). Meridian\'s own account leverage divides by the balance instead, so this one is the higher of the two whenever the positions\' uPnL, less the funding and position fees charged on them and not yet settled, is negative' }), h('span.dim.small', '× max leverage on equity')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'dailyLossStop', { type: 'number', min: 0, step: 10, style: { width: '90px' } }), h('span.dim.small', 'USD daily loss stop')),
-              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'drawdownStopPct', { type: 'number', min: 0, step: 1, style: { width: '70px' } }), h('span.dim.small', '% drawdown stop')),
+              h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'drawdownStopPct', { type: 'number', min: 0, max: 100, step: 1, style: { width: '70px' } }), h('span.dim.small', '% drawdown stop')),
               h('span.row', { style: { gap: '4px' } }, inp(c.risk, 'minOrderUsd', { type: 'number', min: 0, step: 5, style: { width: '70px' } }), h('span.dim.small', 'USD min order')),
               h('span.row', { style: { gap: '4px' } }, sel(c.risk, 'onTrip', [['reduceOnly', 'On a stop: reduce-only'], ['closeAll', 'On a stop: close everything']]))), 'the USD max per order and per position are hard ceilings in every sizing mode, ratio included (left empty they take the default, never "no limit"); sizes and limits are counted at the exchange\'s mark, and a leader fill further off it than the % set (a stub quote on a thin book) is not copied. A tripped stop blocks new and larger positions until you resume from the dashboard; reductions and closes still follow the leader'),
-            fld('Markets not to copy', denyIn),
+            fld('Markets not to copy', h('div', denyIn, denyNote)),
             fld('Dashboard', h('div.row.wrap', { style: { gap: '6px' } }, h('span.dim.small', 'port'), inp(st, 'port', { type: 'number', min: 1024, step: 1, style: { width: '80px' } }), h('span.dim.small', 'token'), tokenIn, tokenNew, tokenHint), 'made at random here and written into config.json: the agent answers on 127.0.0.1 only, and only with this token, which guards the dashboard, pause / resume and close all. If you run the agent with a config of your own and an empty token, it makes one in control.token next to the script: paste that here'),
             fld('Phone push (ntfy)', h('div.row.wrap', { style: { gap: '6px' } }, ntfyTopic, h('button.btn.sm', { title: 'Fill in a long random topic nobody can guess; subscribe to the same name in the ntfy app', onclick: () => { ntfyTopic.value = MD.alerts.newTopic(); ntfyTopic.dispatchEvent(new Event('input')); } }, 'Generate'), ntfyServer, ntfyWarn), 'rejected orders, risk stops and leader liquidations; the topic is the only secret (anyone who knows it reads these), and the server must be https:// (plain http only on localhost)'))),
         h('div.row.wrap', { style: { gap: '8px', margin: '8px 0' } }, dl, h('span.dim.small', 'or copy the JSON into config.json next to the script · the agent reads it when it starts: after a change here, download it again and restart the agent'), cfgDiff),
@@ -481,6 +514,8 @@
       U.replace(body, hero, step1, step2, step3, step4, dashCard, histCard,
         h('div.footer-note', 'The agent is software you run; MeridianDataHub places no orders and holds no keys. Losses follow the leaders you pick and the limits you set. Past performance is not a promise of future returns.'));
       try { MD._agentRef = await A.ref(ctx); } catch (_) {}
+      if (ctx.signal.aborted) return;
+      if (denyIn.value.trim()) applyDeny(denyIn.value);   // the names typed before the markets were read, checked now
       listSigners();
       // each read 3 s after the last one ended: reads never overlap, however slow the agent is to answer
       // while no agent answers, the reads slow down (to one every 30 s) instead of failing every 3 s

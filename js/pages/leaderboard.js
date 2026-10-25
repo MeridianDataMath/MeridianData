@@ -229,7 +229,8 @@
       // a browser build only without a snapshot, or one so old the publishing job looks down (UI.STALE_MS): each one is
       // thousands of requests from the visitor's own rate limit, and one past 30 minutes is simply the next one not out yet
       // (Update builds one on request). Never when the published file only failed to load (P._remoteErr): that is a Retry
-      function autoBuild() { const c = P.cache(); if (!P._remoteErr && (!c || Date.now() - c.builtAt > UI.STALE_MS)) build(false); }
+      // (by the exchange's clock, once it has been read: a device clock hours fast built on every visit)
+      async function autoBuild() { await U.clockReady; if (ctx.signal.aborted) return; const c = P.cache(); if (!P._remoteErr && (!c || U.now() - c.builtAt > UI.STALE_MS)) build(false); }
       async function retryRemote() {
         U.replace(tableWrap, UI.loading('Loading the leaderboard…'));
         await P.loadRemote(true);

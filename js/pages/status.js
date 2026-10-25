@@ -10,7 +10,7 @@
   /** fresh / late / stale / missing, with the colour the chip takes */
   const ageState = (builtAt) => {
     if (!builtAt) return ['not published', 'red'];
-    const age = Date.now() - builtAt;
+    const age = U.now() - builtAt;   // (the exchange's clock where the device's is off)
     return age > UI.STALE_MS ? ['stale', 'red'] : age > LATE_MS ? ['late', 'amber'] : ['fresh', 'green'];
   };
   const kv = (pairs) => h('div.kv.wrap-v', pairs.filter(Boolean).map(([k, v, cls]) => [h('span.k', k), h('span.v', { class: cls || '' }, v)]));

@@ -235,6 +235,13 @@
       const page = h('div.page');
       root.appendChild(page);
       MD.setTopbar(h('span.title', 'Account'));
+      // a path-style link (/account/<address>, as /a/<address> is) opens that address; another segment is no account (both
+      // fell back to the last account seen in this browser without a word)
+      let seg = (route.path.split('/')[2] || '').trim(); try { seg = decodeURIComponent(seg); } catch (_) {}
+      if (seg && !route.params.address) {
+        if (U.isAddress(seg)) { location.replace(U.accountUrl(seg.toLowerCase(), route.params.sub)); return; }
+        U.replace(page, h('div.card', h('div.error', 'Invalid address. Enter a 0x wallet address (40 hex characters) or a subaccount ID.'))); return;
+      }
       let addr = (route.params.address || '').trim().toLowerCase();
       const subParam = route.params.sub;
       if (!addr && !subParam) {
@@ -274,6 +281,8 @@
         return;
       }
       const sa = subs.find((s) => s.id === subParam) || subs[0];
+      // a sub= of another wallet (or none): the link names the subaccount shown, not the one asked for
+      if (sa.id !== subParam && !ctx.signal.aborted) MD.router.setParams({ sub: sa.id }, { silent: true });
       const fav = { address: addr, subaccountId: sa.id };
       let ref;
       try { ref = await A.ref(ctx); } catch (e) { if (isAbort(e)) return; U.replace(page, UI.error(e, () => MD.router.reload())); return; }

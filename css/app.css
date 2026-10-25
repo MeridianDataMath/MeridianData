@@ -281,6 +281,8 @@ button.card-head.toggle-head { width: 100%; background: transparent; border: 0; 
 .tabs button.on .tab-n { color: var(--accent); }
 .tabs .tab-sep { flex: none; width: 1px; margin: 10px 6px; background: var(--border-3); }
 
+/* a value outside its field's range: marked, and not taken (js/pages/copyagent.js) */
+.input.bad { border-color: var(--red); }
 .input {
   background: var(--bg-3); border: 1px solid var(--border-3); border-radius: 8px;
   padding: 7px 10px; outline: none; width: 100%; min-width: 0;

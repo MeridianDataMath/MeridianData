@@ -306,3 +306,23 @@ test("a liquidation after a trim is replayed at the remainder's own price, not t
   const [e2] = S.episodes(fills, [Object.assign({}, rec, { createdAt: T - 3600000 })]);
   near(assert, e2.fills[e2.fills.length - 1].px, 95, 1e-9);
 });
+
+test("paper copy: later adds to a position the leader held before following scale as the agent sizes them, not by the first add's factor", () => {
+  // the leader was 3.5 short before following started; its add of 0.004 opens the copy at the size, as the agent does
+  const st = PP.start('sid', '0x', { mode: 'fixed', size: 2000, ratio: 0.1, delay: 0, slipBps: 0, feeRate: {} }, { e: -3.5 });
+  const f = (id, qty) => ({ id, t: 1, pid: 'e', ticker: 'E', side: 'SELL', qty, px: 3000, orderQty: qty });
+  PP.apply(st, f('a1', 0.004), { px: 3000, live: true, at: 1 });
+  near(assert, st.open.e.qty * 3000, -2000, 1e-6, 'the first add opens a copy of the size');
+  const before = st.open.e.qty;
+  PP.apply(st, f('a2', 0.004), { px: 3000, live: true, at: 2 });
+  // the agent: the add × |copy| ÷ |the leader's whole position before it| (0.004 × 0.667 ÷ 3.504), not 0.004 × 166.7
+  near(assert, st.open.e.qty - before, -0.004 * Math.abs(before) / 3.504, 1e-12);
+});
+
+test('the replay takes a market selection as a filter, an empty one too (every chip off replays nothing)', async () => {
+  const [e] = S.attachPositions(S.episodes(xauFills, [xauRec]), [xauRec]);
+  const run = (markets) => S.replay({ episodes: [e], settings: { mode: 'ratio', ratio: 1, delaySec: 0, slipBps: 0, feeRate: 0, priceAt, markets }, marks: {}, since: 0, ref: null });
+  assert.equal((await run(null)).rows.length, 1, 'no selection: every market');
+  assert.equal((await run(new Set([e.pid]))).rows.length, 1);
+  assert.equal((await run(new Set())).rows.length, 0, 'every chip off: none, as paper copy reads it');
+});

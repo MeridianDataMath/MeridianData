@@ -158,7 +158,7 @@
     prog.textContent = 'Rendering…'; UI.progress.set(0.9);
     try { await render(snap); } catch (e) { if (!isAbort(e)) { console.error(e); U.replace(body, UI.error(e, () => MD.router.reload())); } }
     UI.progress.done();
-    if (snap && snap.remote && Date.now() - snap.builtAt > UI.STALE_MS) {
+    if (snap && snap.remote && U.now() - snap.builtAt > UI.STALE_MS) {
       body.prepend(h('div.card', { style: { borderColor: 'var(--amber)', padding: '10px 14px' } }, h('div.row', { style: { gap: '8px', alignItems: 'baseline' } },
         UI.chip('stale snapshot', 'amber'), h('span.small', `This Predict snapshot was built ${U.fmtAgo(snap.builtAt)}. It is normally refreshed every 30 minutes, so the publishing job is probably down; figures below are as of ${U.fmtDateTime(snap.builtAt)}.`))));
     }
