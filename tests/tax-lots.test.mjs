@@ -158,6 +158,10 @@ test('UK pooling runs with one pool for everything only: a move between pools ne
   // the UK choice names its scope in the lots' methodology
   const uk = Object.fromEntries(LO.describe({ res: run(evs, { method: 'uk', scope: 'wallet' }), period: per, tz: 'UTC', money: USD, now: per.end }));
   assert.match(uk.Scope, /^one pool: .*\(UK pooling runs with one pool for everything only: this page reads the s104 pool as one per person/);
+  // a Predict load that failed is said in the scope of the data, not passed off as the Predict wallet's flows
+  const scope = (o) => Object.fromEntries(LO.describe(Object.assign({ res, period: per, tz: 'UTC', money: USD, now: per.end }, o)))['Scope of the data'];
+  assert.match(scope({}), /and its Predict wallet;/);
+  assert.match(scope({ predFailed: true }), /and not its Predict wallet \(the Meridian Predict data did not load\)/);
 });
 const U = (l, f) => l.reduce((a, x) => a + f(x), 0);
 

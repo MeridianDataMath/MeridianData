@@ -93,7 +93,10 @@
     const cmp = PR.compare(prep, period, money);
     const cov = PR.coverageNote(prep);
     // what a file says when it cannot be whole: the period figures (totals) or the per-prediction list (file)
-    const notes = { totals: cov && cov.blocking ? cov.text : null, file: PR.fileNote(prep) };
+    // (and a snapshot built before an ended period's end: every Predict file is then incomplete)
+    const late = PR.snapshotNote(prep, period);
+    const join = (...a) => a.filter(Boolean).join(' · ') || null;
+    const notes = { totals: join(cov && cov.blocking ? cov.text : null, late), file: join(PR.fileNote(prep), late) };
     const sel = h('select.input.sm.no-print', { style: { width: 'auto' }, 'aria-label': MODE_LBL, title: MODE_LBL + ': the date a result is booked at (sales and matched sets are always booked on their own dates)' },
       PR.MODES.map((m) => h('option', { value: m }, PR.MODE_LABEL[m])));
     // print hides the select: the basis in force is written beside its label instead

@@ -100,14 +100,17 @@
    * possible activity; needTo: the last local date that needs a rate (the period's last, or today). A date's rate is in
    * the file when the file goes past it, or was read after that rate is published (pubBy). Returns {head, tail}: head
    * false when the file starts too late; tail 'ok', 'provisional' (read on the day the newest rate is due, before it was
-   * out: until it comes, that day uses the rate before) or 'stale'.
+   * out: until it comes, that day uses the rate before) or 'stale'. tz: the report's zone, where that day begins (east of
+   * UTC before the UTC midnight: a file read at 00:30 in Berlin, complete to the day before, was 'stale', and a CAD report
+   * switched to ECB rates with a false "short of this period" note).
    */
-  FX.covers = (meta, id, fromKey, needTo) => {
+  FX.covers = (meta, id, fromKey, needTo, tz) => {
     const S = FX.SOURCES[id];
     const head = !!meta && (S.conv === 'before' ? meta.from < fromKey : meta.from <= fromKey);
     const last = S.conv === 'before' ? TZ.addDays(needTo, -1) : needTo;   // the newest date a lookup can take
     const at = Date.parse(meta && meta.fetchedAt) || 0, due = TZ.keyMs(last);
-    const tail = !meta ? 'stale' : meta.to >= last || at >= due + S.pubBy ? 'ok' : at >= due ? 'provisional' : 'stale';
+    const began = tz && tz !== 'UTC' ? Math.min(due, TZ.midnight(tz, +last.slice(0, 4), +last.slice(5, 7) - 1, +last.slice(8, 10))) : due;
+    const tail = !meta ? 'stale' : meta.to >= last || at >= due + S.pubBy ? 'ok' : at >= began ? 'provisional' : 'stale';
     return { head, tail };
   };
   /** A rate as text: four decimals, two from 1,000 up (the CSV cells carry the full rate). */
@@ -349,7 +352,7 @@
       try { json = await fileOf(io, meta); table = FX.table(json, ccy); } catch (e) { return { why: 'the file could not be read (' + e.message + ')' }; }
       if (!table.d.length) return { why: 'no ' + ccy + ' in the file' };
       const m = { from: table.d[0], to: table.d[table.d.length - 1], fetchedAt: json.fetchedAt || meta.fetchedAt };
-      return { meta: m, table, period: FX.covers(m, id, fromKey, needTo), now: FX.covers(m, id, fromKey, today) };
+      return { meta: m, table, period: FX.covers(m, id, fromKey, needTo, tz), now: FX.covers(m, id, fromKey, today, tz) };
     };
 
     // 1. the currency's own official source

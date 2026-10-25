@@ -21,7 +21,7 @@
     const cur = P.end >= n;
     return [
       { key: 'start', t: P.start, now: P.start >= n - LIVE, label: 'Period start', lotsT: P.start },
-      { key: 'end', t: cur ? n : P.end, now: cur, label: cur ? 'Now' : 'Period end', lotsT: P.end },
+      { key: 'end', t: cur ? n : P.end, now: cur, label: cur ? 'Now' : P.ongoing ? 'Last whole hour' : 'Period end', lotsT: P.end },
     ];
   };
 

@@ -118,7 +118,7 @@
       say('Collecting daily ledgers and position history…');
       const readsP = sa ? Promise.all([
         TX.load.archive(sa.id, period, { firstT: sa.createdAt, signal: ac.signal, progress: (stage, done, total) => say(stage === 'daily' ? 'Collecting daily ledgers and position history…' : 'Reading the hourly ledger of the UTC days the period\'s local boundaries cut…', done, total) }),
-        A.positions(sa.id, { maxPages: 100, signal: ac.signal, ttl: 5 * 60000 }),   // the same pages the trade detail reads
+        A.positions(sa.id, { maxPages: 100, signal: ac.signal, ttl: TX.load.freshTtl(period) }),   // the same pages the trade detail reads (made after the period's end)
       ]) : null;
       if (readsP) readsP.catch(() => {});   // awaited below
       const cancelled = () => U.replace(status, h('div.empty', 'Cancelled. ', h('button.btn.sm', { onclick: () => MD.router.reload() }, 'Load again')));
@@ -138,9 +138,13 @@
       const cur = rates ? ccy : 'USD';
       const money = FX.money(rates, tz);
       const pnlEl = TUI.pnlEl(money);
-      // the subaccount (a wallet with several) and the currency (not USD) in the name too: two subaccounts' or two currencies'
-      // files of one period would otherwise download under the same name
-      const fname = (kind) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}${sid && subs.length > 1 ? '-sub-' + sid.slice(-6) : ''}${cur !== 'USD' ? '-' + cur : ''}-${period.fromKey}_${period.toKey}.csv`;
+      // the subaccount (a wallet with several), the currency (not USD) and the zone (not UTC) in the name too: two
+      // subaccounts', currencies' or zones' files of one period would otherwise download under the same name. Predict's
+      // files are the wallet's, the same in every subaccount's report: named without the subaccount (pfname), so the
+      // second report's copy replaces the first instead of going into a tax tool twice
+      const zone = tz !== 'UTC' ? '-' + tz.replace(/[^A-Za-z0-9]+/g, '-') : '';
+      const fname = (kind, wallet) => `meridian-${kind}-${U.shortAddr(addr, 4).replace('…', '-')}${!wallet && sid && subs.length > 1 ? '-sub-' + sid.slice(-6) : ''}${cur !== 'USD' ? '-' + cur : ''}${zone}-${period.fromKey}_${period.toKey}.csv`;
+      const pfname = (kind) => fname(kind, true);
       const EX = TX.exports, M = TX.methodology;
       let vp = null, hv = null;
 
@@ -154,12 +158,12 @@
       const predictInfo = () => (rep.predict ? (rep.predict.missing ? { missing: true } : { mode: rep.predictMode, live: rep.predict.live, builtAt: rep.predict.builtAt, held: TX.predict.heldClaimText(rep.predict.prep) }) : rep.predictFailed ? { failed: true } : null);
       // the Predict record for the summary and the classes: {prep, mode}, {missing}, or {failed} when it did not load
       // the summary and the ZIP wait for it at most two minutes: a Predict read that hangs leaves them "Predict not loaded"
-      const predictState = async () => { const D = await Promise.race([predictData, U.sleep(120000).then(() => null)]); return !D ? { failed: true } : D.missing ? { missing: true } : { prep: D.prep, mode: rep.predictMode }; };
+      const predictState = async () => { const D = await Promise.race([predictData, U.sleep(120000).then(() => null)]); return !D || D.failed ? { failed: true } : D.missing ? { missing: true } : { prep: D.prep, mode: rep.predictMode }; };
       // what the report found missing, for the methodology's Completeness row (each section says it once)
       const allWarnings = () => {
         const w = vp ? vp.warnings().slice() : [];
         if (hv) for (const x of hv.warnings()) if (!w.includes(x)) w.push('holdings: ' + x);
-        if (rep.predict && rep.predict.prep) { const cov = TX.predict.coverageNote(rep.predict.prep); if (cov && cov.blocking) w.push(cov.text); }
+        if (rep.predict && rep.predict.prep) { const cov = TX.predict.coverageNote(rep.predict.prep); if (cov && cov.blocking) w.push(cov.text); const late = TX.predict.snapshotNote(rep.predict.prep, period); if (late) w.push(late); }
         if (rep.predictFailed && !rep.predict) w.push('the Meridian Predict data did not load');
         // its predictions were found under the address itself, but whether its Predict wallet has more is not known
         if (rep.pw && rep.pw.error) w.push('the Predict wallet of this address could not be looked up: only predictions placed from the address itself are in');
@@ -213,10 +217,11 @@
       if (!ctx.signal.aborted) { window.addEventListener('beforeprint', bpMeth); ctx.onCleanup(() => window.removeEventListener('beforeprint', bpMeth)); }
       // the Predict card (js/tax/view-predict.js), under the date basis of the link (pdate; the claim by default)
       // the USDe lots read the Predict card's record once it is loaded (null when it cannot be)
-      const pctx = { addr, period, fname, money, pnlEl, mode: rep.predictMode, signal: ctx.signal, methodology: meth, importNotes,
+      const pctx = { addr, period, fname: pfname, money, pnlEl, mode: rep.predictMode, signal: ctx.signal, methodology: meth, importNotes,
         onData: (D) => { rep.predict = D; rep.pw = D && D.pw ? D.pw : null; predictLoaded(D); refresh(); },
         onDraw: (fc) => { rep.predictCtx = fc; rep.predictMode = fc.mode; refresh(); } };
-      const predictFail = (el) => (e) => { rep.predictFailed = true; predictLoaded(null); if (!isAbort(e)) U.replace(el, h('div.row', h('h2', 'Meridian Predict')), UI.error(e, () => MD.router.reload())); refresh(); };
+      // (the holdings and the USDe lots read it as {failed}: a null read as "no Predict record", their files complete)
+      const predictFail = (el) => (e) => { rep.predictFailed = true; predictLoaded({ failed: true }); if (!isAbort(e)) U.replace(el, h('div.row', h('h2', 'Meridian Predict')), UI.error(e, () => MD.router.reload())); refresh(); };
       // converting a USD amount at its date's rate leaves out what USDe itself gained or lost in that currency between
       // receiving and spending it: said under the rate line, and computed by the lots card on request
       const fxOnly = rates ? h('div.dim.xs', { style: { marginTop: '2px' } }, `Each amount is converted at its own date's rate; a change in USDe's own value in ${ccy} between receiving and spending it is not in these figures (USDe lots, below, computes it on request).`) : null;

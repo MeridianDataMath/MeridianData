@@ -119,6 +119,13 @@ test('covers: a file holds a date\'s rate when it goes past it or was read after
   assert.deepEqual(FX.covers({ from: '2026-06-01', to: '2026-10-01', fetchedAt: '2026-10-02T16:30:00Z' }, 'ecb', '2026-09-22', '2026-10-02'), { head: true, tail: 'ok' });   // no rate for 2 Oct by then: a closing day
   assert.deepEqual(FX.covers({ from: '2026-06-01', to: '2026-10-01', fetchedAt: '2026-10-02T16:30:00Z' }, 'boc', '2026-09-22', '2026-10-02'), { head: true, tail: 'provisional' });   // the Bank of Canada publishes later
   assert.equal(FX.covers(m, 'nbp', '2026-06-01', '2026-10-02').head, false);   // NBP needs a table before the first date
+  // east of UTC a day begins before its UTC midnight: read at 00:00 in Berlin (23:00Z), complete to the day before, the
+  // file is that day's provisional one, not stale (in UTC, and in Toronto, it is the day before's)
+  const boc = { from: '2026-06-01', to: '2026-10-26', fetchedAt: '2026-10-26T23:00:00Z' };
+  assert.equal(FX.covers(boc, 'boc', '2026-09-22', '2026-10-27', 'Europe/Berlin').tail, 'provisional');
+  assert.equal(FX.covers(boc, 'boc', '2026-09-22', '2026-10-27', 'Asia/Tokyo').tail, 'provisional');
+  assert.equal(FX.covers(boc, 'boc', '2026-09-22', '2026-10-27').tail, 'stale');
+  assert.equal(FX.covers(boc, 'boc', '2026-09-22', '2026-10-27', 'America/Toronto').tail, 'stale', 'west of UTC the UTC midnight stands');
   assert.equal(FX.covers(m, 'ecb', '2026-06-01', '2026-10-02').head, true);
 });
 

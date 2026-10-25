@@ -5,6 +5,9 @@
   const MD = window.MD; const U = MD.util; const A = MD.api; const T = MD.tax;
   const LD = (T.load = {});
   const CLOSED = 5 * 60000;   // a range that ended this long ago no longer changes: kept for the tab
+  /** How long a cached read may stand in for one covering a period's end: only one made after that end, which holds all of
+   *  it (a running period ends at the last whole hour; an earlier read lacked its last minutes and today's checks failed) */
+  LD.freshTtl = (period, now = Date.now()) => Math.max(1, Math.min(CLOSED, now - period.end));
 
   /**
    * The archive for a period: daily balance and volume rows from the day before it starts (the running totals need the
@@ -30,7 +33,8 @@
     let total = 2 * perKind + 2 * splits.length, done = 0;
     const tick = () => { done++; progress(done <= 2 * perKind ? 'daily' : 'hourly', done, total); };
     progress('daily', 0, total);
-    const day = (kind) => (from >= to ? Promise.resolve([]) : A.history(kind, sid, { start: from, end: to, resolution: 'day1', signal, ttl: CLOSED, onChunk: tick }));
+    const ttl = LD.freshTtl(period, now);
+    const day = (kind) => (from >= to ? Promise.resolve([]) : A.history(kind, sid, { start: from, end: to, resolution: 'day1', signal, ttl, onChunk: tick }));
     const [balance, volume] = await Promise.all([day('balance'), day('volume')]);
     // a split day on which nothing moved (before the account existed, or a quiet day) has nothing to split
     const quiet = new Set(T.ledger.quietDays(balance, volume, splits));
@@ -39,7 +43,7 @@
     const hour = new Map(); for (const S of busy) hour.set(S, { balance: null, volume: null });
     const tasks = [];
     for (const S of busy) for (const kind of ['balance', 'volume']) tasks.push(async () => {
-      const rows = await A.history(kind, sid, { start: S - U.HOUR, end: Math.min(S + U.DAY, now), resolution: 'hour1', signal, ttl: CLOSED });
+      const rows = await A.history(kind, sid, { start: S - U.HOUR, end: Math.min(S + U.DAY, now), resolution: 'hour1', signal, ttl });
       hour.get(S)[kind] = rows; tick();
     });
     const res = await U.pLimit(tasks, 4);
@@ -191,20 +195,22 @@
     const hit = T.cache.get(key);
     if (hit && hit.closed) return hit.value;
     tell({});
-    const positions = await A.positions(sid, { maxPages: 100, ttl: CLOSED, signal });
+    const ttl = LD.freshTtl({ end: o.end }, now);
+    const positions = await A.positions(sid, { maxPages: 100, ttl, signal });
     const touched = LD.touched(positions, o.start, o.end);
     const from = touched.length ? Math.min(...touched.map((p) => U.num(p.createdAt))) : o.start;
     // a running range read before: only the tail is new (not after a read that failed: then all of it again)
     const prev = hit && hit.value && !hit.value.failed.length && hit.value.charges != null && hit.value.from === from && hit.value.to <= to ? hit.value : null;
     const failed = [];
-    const fillsFrom = prev ? prev.to : from;
+    // (a minute back over the last read's end: a fill the API had not listed yet then is read now; the merge keeps each once)
+    const fillsFrom = prev ? Math.max(from, prev.to - 60000) : from;
     const [fillsNew, transfers, chargesNew] = await Promise.all([
       // createdAfter is exclusive: LD.span asks a millisecond earlier, which keeps a fill at the position's very opening;
       // what another range of this tab read (the period's trade detail, for the lifetime lots) is not read again
       LD.span('/v1/order/fill', sid, fillsFrom, to, { maxPages: 500, signal, onPage: (n, rows) => tell({ fillPages: n, fillRows: rows }) }),
       LD.span('/v1/token/transfer', sid, o.start, to, { maxPages: 20, signal, closedOnly: true }),
       // no position touched: nothing could be charged, so no window is read (from a custom range's start, hundreds of them)
-      !touched.length ? Promise.resolve([]) : A.fundingCharges(sid, prev ? prev.to - HOUR : from, { end: to, signal, ttl: CLOSED, onProgress: (d, n) => tell({ fundDone: d, fundTotal: n }) })
+      !touched.length ? Promise.resolve([]) : A.fundingCharges(sid, prev ? prev.to - HOUR : from, { end: to, signal, ttl, onProgress: (d, n) => tell({ fundDone: d, fundTotal: n }) })
         .catch((e) => { if (T.isAbort(e)) throw e; failed.push('funding charges (' + e.message + ')'); return null; }),
     ]);
     const fills = (prev ? merge(prev.fills, fillsNew, (f) => f.id) : fillsNew.slice()).filter((f) => U.num(f.createdAt) >= from && U.num(f.createdAt) < to);
@@ -224,7 +230,7 @@
     if (prev) for (const f of prev.failed) if (/^the daily ledger before/.test(f)) failed.push(f);   // not read again: still missing
     const read = want.filter((p) => !posFills.has(p.id));
     tell({ posTotal: read.length, posDone: 0 });
-    const res = await U.pLimit(read.map((p) => () => A.positionFills(p.id, { maxPages: 50, ttl: CLOSED, signal })), 4, (d) => tell({ posDone: d }));
+    const res = await U.pLimit(read.map((p) => () => A.positionFills(p.id, { maxPages: 50, ttl, signal })), 4, (d) => tell({ posDone: d }));
     const ab = res.find((r) => !r.ok && T.isAbort(r.error)); if (ab) throw ab.error;
     res.forEach((r, i) => {
       if (!r.ok) { failed.push('fills of position ' + read[i].id.slice(0, 8) + ' (' + r.error.message + ')'); return; }

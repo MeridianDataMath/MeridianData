@@ -4,7 +4,7 @@
 (function () {
   const MD = window.MD; const U = MD.util; const T = MD.tax; const TZ = T.tz;
   const PER = (T.periods = {});
-  const DAY = 86400000;
+  const DAY = 86400000, HOUR = 3600000;
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const pad = (n) => String(n).padStart(2, '0');
 
@@ -38,8 +38,10 @@
    * The report period from the URL's params (fy, year, from, to, tz). firstT: the wallet's first possible activity (its
    * subaccount's creation; Meridian Predict's launch is the floor, as Predict activity can predate the subaccount).
    * Returns {mode, preset, year, years, tz, tzGiven, start, end, now, label, fromKey, toKey, badRange, from, to, reqYear,
-   * yearMissing, startText, endText, ongoing}: start and end are instants (end exclusive), from local midnight; a year
-   * still running ends now. A custom range is local dates in tz, both inclusive; one that is not a real, ordered pair of
+   * yearMissing, startText, endText, ongoing}: start and end are instants (end exclusive), from local midnight. A period
+   * still running (ongoing) ends at the last whole hour, the one instant every read of the report ends at: ending now,
+   * each read came at its own moment (the ledger up to 5 minutes older than the fills, the positions list too), today's
+   * checks failed and every per-fill file was marked INCOMPLETE. (Within its first hour it ends now.) A custom range is local dates in tz, both inclusive; one that is not a real, ordered pair of
    * days falls back to the year (badRange). A requested year with no activity is not invented: the newest year is shown
    * and yearMissing says so.
    */
@@ -54,19 +56,21 @@
     const pf = params.from || null, pt = params.to || null;
     const badRange = !!(pf || pt) && !(PER.okDay(pf) && PER.okDay(pt) && pf <= pt);
     const reqYear = /^\d{4}$/.test(String(params.year == null ? '' : params.year)) ? +params.year : null;
-    let mode, year = null, start, end, label, fromKey, toKey;
+    let mode, year = null, start, end, label, fromKey, toKey, fullEnd;
     if (!badRange && pf && pt) {
-      mode = 'custom'; start = dayOf(tz, pf); end = dayOf(tz, TZ.addDays(pt, 1)); label = pf + ' → ' + pt; fromKey = pf; toKey = pt;
+      mode = 'custom'; start = dayOf(tz, pf); end = fullEnd = dayOf(tz, TZ.addDays(pt, 1)); label = pf + ' → ' + pt; fromKey = pf; toKey = pt;
     } else {
       mode = 'year'; year = years.includes(reqYear) ? reqYear : years[0];
-      start = PER.fyStart(preset, year, tz); end = Math.min(PER.fyStart(preset, year + 1, tz), now); label = PER.fyLabel(preset, year);
-      fromKey = TZ.dayKey(start, tz); toKey = TZ.dayKey(Math.max(start, end - 1), tz);
+      start = PER.fyStart(preset, year, tz); fullEnd = PER.fyStart(preset, year + 1, tz); end = Math.min(fullEnd, now); label = PER.fyLabel(preset, year);
     }
+    const ongoing = fullEnd >= now, hourEnd = Math.floor(now / HOUR) * HOUR;
+    if (ongoing && hourEnd > start) end = Math.min(end, hourEnd);
+    if (mode === 'year') { fromKey = TZ.dayKey(start, tz); toKey = TZ.dayKey(Math.max(start, end - 1), tz); }
     const text = (t) => (tz === 'UTC' ? PER.utc(t) : `${TZ.fmt(t, tz, 'datetime')} ${tz} (${PER.utc(t)})`);
     return {
       mode, preset, year, years, tz, tzGiven, start, end, now, label, fromKey, toKey, badRange, from: pf, to: pt, reqYear,
       yearMissing: mode === 'year' && reqYear != null && !years.includes(reqYear),
-      startText: text(start), endText: (mode === 'year' && end === now ? 'now, ' : '') + text(end), ongoing: end >= now,
+      startText: text(start), endText: (!ongoing ? '' : end === now ? 'now, ' : 'the last whole hour, ') + text(end), ongoing,
     };
   };
 
@@ -123,7 +127,9 @@
     const set = new Set([P.start]);
     for (const x of PER.months(P)) set.add(x.t0);
     for (const x of PER.quarters(P)) set.add(x.t0);
-    if (P.end < now) set.add(P.end);
+    // (a running period's end too: the day it cuts is read by the hour up to it, as every other read of the report ends
+    // there; the daily row, read later, holds what came after it)
+    if (P.end < now || P.ongoing) set.add(P.end);
     return Array.from(set).sort((a, b) => a - b);
   };
   /** The UTC days (their 00:00Z) that a boundary cuts: the exchange's daily ledger is split hour by hour on these. */

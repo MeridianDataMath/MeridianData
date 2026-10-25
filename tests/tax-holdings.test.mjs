@@ -39,11 +39,13 @@ test('the archive bucket at an instant: the day before a UTC midnight, the hour 
   assert.deepEqual(HO.archiveRow(at('2026-04-05T03:00:00Z'), { now, fallbackDays: [D] }), { res: 'day1', rowT: D - DAY, at: D, now: false }, 'the day is after the instant');
   for (const t of [now, now - 60000, now + DAY, at('2026-10-03T07:01:00Z')]) assert.deepEqual(HO.archiveRow(t, { now }), { res: 'hour1', rowT: at('2026-10-03T07:00:00Z'), at: now, now: true }, 'now (or an hour that ends after it): the newest hour');
   assert.deepEqual(HO.archiveRow(at('2026-10-03T07:00:00Z'), { now }), { res: 'hour1', rowT: at('2026-10-03T06:00:00Z'), at: at('2026-10-03T07:00:00Z'), now: false }, 'a whole hour just before now');
-  // the instants: a period that has ended, and one still running (its end is now)
+  // the instants: a period that has ended, one still running (its end is the last whole hour, where every read ends),
+  // and one that ends now (a year within its first hour)
   const done = period('2026-09-20', '2026-09-28');
   assert.deepEqual(HO.instants(done, now).map((x) => [x.key, x.t, x.now, x.label, x.lotsT]), [['start', done.start, false, 'Period start', done.start], ['end', done.end, false, 'Period end', done.end]]);
   const running = period('2026-09-20', '2026-12-31', 'UTC', now);
-  assert.deepEqual(HO.instants(running, now).map((x) => [x.t, x.now, x.label]), [[running.start, false, 'Period start'], [now, true, 'Now']]);
+  assert.deepEqual(HO.instants(running, now).map((x) => [x.t, x.now, x.label]), [[running.start, false, 'Period start'], [at('2026-10-03T07:00:00Z'), false, 'Last whole hour']]);
+  assert.deepEqual(HO.instants(Object.assign({}, running, { end: now }), now).map((x) => [x.t, x.now, x.label]), [[running.start, false, 'Period start'], [now, true, 'Now']]);
 });
 
 test('the unrealized PnL of one read: the row at its bucket only (the archive\'s endTime is inclusive), per pool; now, the newest; a failed read is null', () => {
@@ -167,7 +169,8 @@ test('the positions open at an instant from the positions list: sizes only where
 test('now: the exchange\'s own unsettled funding and position fees per open position, so equity is the account page\'s', () => {
   const { led, reads } = synth();
   const now = D0 + 2 * DAY + 7 * HOUR + 5 * 60000;
-  const P1 = period('2026-09-01', '2026-12-31', 'UTC', now);
+  // a period ending now (a year within its first hour: a running one otherwise ends at the last whole hour)
+  const P1 = Object.assign(period('2026-09-01', '2026-12-31', 'UTC', now), { end: now });
   const live = [{ id: 'pb', productId: 'btc', side: 0, size: '0.5', cost: '30000', createdAt: D0 + 10 * HOUR, updatedAt: D0 + 10 * HOUR, fundingUsd: '568.9871428564946', positionFeeUsd: '0', unrealizedPnl: '-40' },
     { id: 'pz', productId: 'xau', side: 0, size: '33.3634', cost: '139262.16794', createdAt: D0 + HOUR, updatedAt: D0 + HOUR, fundingUsd: '-2', positionFeeUsd: '111.052281319', unrealizedPnl: '15' }];
   const nowRead = { spec: { res: 'hour1', rowT: Math.floor(now / HOUR) * HOUR, now: true }, rows: [{ time: Math.floor(now / HOUR) * HOUR - HOUR, tokenId: 'usd', unrealizedPnl: '-39' }, { time: Math.floor(now / HOUR) * HOUR, tokenId: 'usd', unrealizedPnl: '-40' }, { time: Math.floor(now / HOUR) * HOUR, tokenId: 'xaup', unrealizedPnl: '15' }] };

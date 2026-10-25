@@ -106,10 +106,10 @@
       dataP = (async () => {
         const [perps, pred] = await Promise.all([
           sa && first < lifeEnd ? T.load.lifetime(sa.id, { first, end: lifeEnd, ref, signal: ac.signal, progress: say }) : null,
-          ctx.predict ? ctx.predict().catch(() => null) : null,
+          ctx.predict ? ctx.predict().catch(() => ({ failed: true })) : null,
         ]);
         U.replace(statusEl);
-        return { perps, pred: pred && pred.prep ? pred : null };
+        return { perps, pred: pred && pred.prep ? pred : null, predFailed: !!(pred && pred.failed) };
       })();
       dataP.catch((e) => {
         dataP = null;
@@ -143,7 +143,7 @@
       const res = L.runs[dep], alt = L.runs[dep === 'transfer' ? 'disposal' : 'transfer'];
       return {
         ectx: { res, alt, events: L.x.events, names: L.x.names, period, tz, money, fname, preset: period.preset, warnings: L.warnings },
-        extra: LO.describe({ res, events: L.x.events, period, tz, money, addr, sid: sa ? sa.id : null, pw: L.pw, valuation: valuation(L), opening, skipped: L.x.skipped, early: L.x.early, cutoff: L.cutoff, dataNotes: L.warnings, now: Date.now() }),
+        extra: LO.describe({ res, events: L.x.events, period, tz, money, addr, sid: sa ? sa.id : null, pw: L.pw, predFailed: L.predFailed, valuation: valuation(L), opening, skipped: L.x.skipped, early: L.x.early, cutoff: L.cutoff, dataNotes: L.warnings, now: Date.now() }),
       };
     };
     const build = (data, prices) => {
@@ -158,7 +158,9 @@
       if (P0) warnings.push(...EX.eventWarnings({ ev: P0.ev }));
       const cov = data.pred ? T.predict.coverageNote(data.pred.prep) : null;
       if (cov && cov.blocking) warnings.push(cov.text);
-      return { x, runs, priced, priceFail: prices && prices.failed ? prices.failed : null, cutoff, now, warnings, pw: data.pred && data.pred.pw ? data.pred.pw.address : null, cov, predMissing: !data.pred };
+      // a Predict load that failed leaves its flows out: said, and the files marked incomplete (not "no Predict record")
+      if (data.predFailed) warnings.push('the Meridian Predict data did not load: its USDe flows are missing');
+      return { x, runs, priced, priceFail: prices && prices.failed ? prices.failed : null, cutoff, now, warnings, pw: data.pred && data.pred.pw ? data.pred.pw.address : null, cov, predMissing: !data.pred && !data.predFailed, predFailed: !!data.predFailed };
     };
     const valuation = (L) => (L.priced ? { kind: 'market', name: FX.USDE.name, rule: FX.USDE.rule, fetchedAt: (L.priced.via === 'file' ? 'published by this site, ' : 'DefiLlama directly, ') + (L.priced.fetchedAt || '?') } : { kind: 'par' });
     const draw = () => {

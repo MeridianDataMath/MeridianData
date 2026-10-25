@@ -161,6 +161,14 @@
     if (c.rows) return { blocking: false, text: `This wallet is ${role} on ${N} predictions and ${src} only the newest ${M} of ${N} in full: the period figures come from the snapshot's row for every prediction (complete), the per-prediction export lists only the ${U.fmtNum(prep.mine.length, 0)} loaded in full.` };
     return { blocking: true, text: `This wallet is ${role} on ${N} predictions; ${src} only the newest ${M} of ${N}, so the period figures are incomplete.` };
   };
+  /** A snapshot built before an ended period's end leaves out what came after it (a 2026 report made at 00:10 on 1 Jan from
+   *  the snapshot of 23:45): the period figures are incomplete. null when it covers the period, the data is live, or the
+   *  period is still running (its figures are as of the snapshot, which the card says). */
+  PR.snapshotNote = (prep, period) => {
+    const c = prep && prep.coverage; const at = c && c.builtAt;
+    if (!at || c.live || !period || period.ongoing || !(at < period.end)) return null;
+    return `the Meridian Predict snapshot was built at ${new Date(at).toISOString().replace('T', ' ').slice(0, 16)} UTC, before the period ended: what happened after that is not in these figures`;
+  };
   /** The note every per-prediction file carries when it cannot list every prediction (null when it can). */
   PR.fileNote = (prep) => {
     const c = prep.coverage; if (!c.truncated) return null;

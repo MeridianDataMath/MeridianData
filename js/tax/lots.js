@@ -493,7 +493,7 @@
       ['Not covered by a lot', r.uncovered.n ? `${U.fmtNum(r.uncovered.n, 0)} arrival(s), ${T.n6(r.uncovered.units)} units, entered at their value at that moment (no opening lot covered them: what they cost is not known here)` : 'none'],
       ...(r.short.n ? [['Disposals without lots', `${U.fmtNum(r.short.n, 0)}, ${T.n6(r.short.units)} units: the lots of their scope held fewer units than its flows put there (a gap in the matching, not in the data); cost taken as their value at that moment`]] : []),
       ...(r.method === 'uk' ? [['UK 30-day rule', 'events read to ' + (ctx.cutoff ? TZ.fmt(ctx.cutoff, tz, 'datetime') + ' ' + tz : '?') + (ctx.res.disposals.some((d) => d.provisional) ? '; disposals whose 30 days run past that can still match later acquisitions (marked provisional)' : '; every 30-day window is complete')]] : []),
-      ['Scope of the data', 'this wallet\'s Meridian perps subaccount (fills, funding and position-fee settlements, transfers) from its first event, and its Predict wallet; USDe held or spent elsewhere is not seen'],
+      ['Scope of the data', 'this wallet\'s Meridian perps subaccount (fills, funding and position-fee settlements, transfers) from its first event, and ' + (ctx.predFailed ? 'not its Predict wallet (the Meridian Predict data did not load)' : 'its Predict wallet') + '; USDe held or spent elsewhere is not seen'],
       ...(ctx.dataNotes || []).map((t) => ['Completeness', t]),
       ['Generated (UTC)', new Date(ctx.now != null ? ctx.now : Date.now()).toISOString().replace('T', ' ').slice(0, 19)], ['Site version', T.VERSION],
     ];

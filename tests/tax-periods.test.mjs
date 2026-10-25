@@ -40,10 +40,22 @@ test('splitDays: the UTC days whose boundary is not at 00:00 UTC', () => {
     '2027-03-31', '2027-04-05',   // BST again from 28 Mar 2027, and the end
   ]);
   assert.deepEqual(PER.splitDays(PER.resolve({ tz: 'UTC', year: '2026' }, { now: LATER })), [], 'UTC needs no split');
-  // a year still running ends now, where the data ends: its end is no boundary
+  // a year still running, at a whole hour: it ends there, now
   const open = PER.resolve({ fy: 'cal', year: '2026', tz: 'Europe/Paris' }, { now: Date.UTC(2026, 9, 3, 4) });
   assert.equal(open.end, Date.UTC(2026, 9, 3, 4)); assert.equal(open.ongoing, true); assert.match(open.endText, /^now, /);
-  assert.ok(!PER.boundaries(open).includes(open.end));
+  // a year still running ends at the last whole hour, where every read of the report ends: the day it cuts is split
+  const mid = PER.resolve({ fy: 'cal', year: '2026', tz: 'Europe/Paris' }, { now: Date.UTC(2026, 9, 3, 4, 37) });
+  assert.equal(mid.end, Date.UTC(2026, 9, 3, 4)); assert.equal(mid.ongoing, true); assert.match(mid.endText, /^the last whole hour, /);
+  assert.ok(PER.splitDays(mid).includes(Date.UTC(2026, 9, 3)), 'today is read by the hour, to that hour');
+  assert.equal(mid.toKey, '2026-10-03');
+  // a custom range not over yet ends there too; one that is over keeps its own end
+  const cur = PER.resolve({ from: '2026-10-01', to: '2026-10-31', tz: 'UTC' }, { now: Date.UTC(2026, 9, 3, 4, 37) });
+  assert.equal(cur.end, Date.UTC(2026, 9, 3, 4)); assert.equal(cur.ongoing, true); assert.equal(cur.toKey, '2026-10-31');
+  assert.equal(PER.resolve({ from: '2026-09-01', to: '2026-09-30', tz: 'UTC' }, { now: Date.UTC(2026, 9, 3, 4, 37) }).end, Date.UTC(2026, 9, 1));
+  // within a year's first hour there is no whole hour yet: it ends now
+  const first = PER.resolve({ fy: 'cal', year: '2026', tz: 'UTC' }, { now: Date.UTC(2026, 0, 1, 0, 20), firstT: Date.UTC(2025, 0, 1) });
+  assert.equal(first.end, Date.UTC(2026, 0, 1, 0, 20));
+  assert.ok(PER.boundaries(open).includes(open.end), 'its end is a boundary: the day it cuts is read by the hour up to it, as every read ends there');
   assert.equal(iso(PER.boundaries(open)[0]), '2025-12-31T23:00:00Z');
 });
 

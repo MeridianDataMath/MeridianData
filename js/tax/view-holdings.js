@@ -136,7 +136,8 @@
       if (H.perps && st.detailErr) notes.push(amber('The trade detail did not load: positions changed since an instant have no size here, and the funding charged and not settled at a past instant is not available.'));
       else if (H.perps && st.deferred) notes.push(dim('The trade detail is not loaded yet (Load trade detail, in the perps card above): until it is, positions changed since an instant have no size here, and the funding charged and not settled at a past instant is not shown.'));
       if (H.perps && st.D && !st.D.funding.S) notes.push(amber('The hourly funding charges could not be read: the funding not settled at a past instant is not available.'));
-      if (st.pred === null) notes.push(dim('No Meridian Predict record for this wallet: nothing held there.'));
+      if (st.predFailed) notes.push(amber('The Meridian Predict data did not load: what this wallet holds there is not included.'));
+      else if (st.pred === null) notes.push(dim('No Meridian Predict record for this wallet: nothing held there.'));
       if (!st.lots) notes.push(dim('The USDe lots held at each instant appear here once the USDe lots card is built (it asks for a lot method and a scope).'));
       // where the archive's figures are not at the instant itself: the end of the hour a boundary cuts, or the edge of a
       // UTC day the ledger kept whole
@@ -174,12 +175,13 @@
       // still loading, or waiting to be asked for: a file saved now lacks what it brings, and says so
       else if (ctx.led) w.push('the trade detail had not loaded: positions changed since an instant have no size, and funding not settled at a past instant is missing');
       if (st.pred && st.pred.prep) { const cov = T.predict.coverageNote(st.pred.prep); if (cov && cov.blocking) w.push(cov.text); }
+      if (st.predFailed) w.push('the Meridian Predict data did not load: its holdings are missing');
       return w;
     };
 
     // ---- the inputs, each redrawing the card when it arrives ----
     const upnlP = ctx.upnl ? ctx.upnl.then((r) => { st.reads = r; if (r.some((x) => x.error)) st.upnlErr = r.find((x) => x.error).error.message; draw(); }, (e) => { st.upnlFailed = true; st.upnlErr = T.isAbort(e) ? 'cancelled' : e.message; draw(); }) : Promise.resolve();
-    const predP = (ctx.predict ? Promise.resolve(ctx.predict()) : Promise.resolve(null)).then((D) => { st.pred = D && D.prep ? D : null; draw(); }, () => { st.pred = null; draw(); });
+    const predP = (ctx.predict ? Promise.resolve(ctx.predict()) : Promise.resolve(null)).then((D) => { st.predFailed = !!(D && D.failed); st.pred = D && D.prep ? D : null; draw(); }, () => { st.predFailed = true; st.pred = null; draw(); });
     draw();
     return {
       setDetail(ev, D, err, o) { st.ev = ev; st.D = D; st.detailErr = err ? (T.isAbort(err) ? 'cancelled' : err.message) : null; st.deferred = !!(o && o.deferred); draw(); },
