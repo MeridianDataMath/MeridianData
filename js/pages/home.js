@@ -43,7 +43,7 @@
       const shortcuts = h('div.quick.shortcuts');
       let refocus = null;   // a favorite moved from the keyboard keeps the focus through the re-render
       const favChip = (f) => {
-        const a = h('a.chipbtn.ic-gold.fav', { href: U.accountUrl(f.address, f.subaccountId), dataset: { sid: f.subaccountId },
+        const a = h('a.chipbtn.ic-gold.fav', { href: U.accountUrl(f.address, f.subaccountId), dataset: { sid: f.subaccountId, focusKey: 'favchip:' + f.subaccountId },
           title: (f.label ? f.label + ' · ' : 'Favorite · ') + f.address + '\nDrag to move it · right-click or hold to name it' },
           U.icon('starFill'), h('span.lbl', f.label || U.shortAddr(f.address)));
         a.draggable = false;   // h() skips a false attribute; the browser's own link dragging would take over the move

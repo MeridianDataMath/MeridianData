@@ -446,7 +446,7 @@
             { key: 'p', label: 'Paid', num: true, render: (r) => usd(r.paid) },
             { key: 'px', label: 'Price / token', num: true, title: 'Paid ÷ face value: the price of a token that pays 1 USDe if its side wins, i.e. the win chance implied by the trade price', render: (r) => pct(r.px, 1) },
             { key: 'o', label: 'Outcome', title: 'How the traded picks were settled on Meridian: won = each token is worth 1 USDe, lost = nothing, void = its share of the stakes back; open = not settled yet. It shows what the seller gave up, not what the buyer collected: a market maker that buys back the bettor\'s side usually burns those tokens at once with its own opposite-side tokens and takes its collateral back before the verdict', render: outcome },
-            { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener' }, U.icon('external')) : '') },
+            { key: 'x', label: '', render: (r) => (r.tx ? h('a.dim.ext', { href: U.explorerTx(r.tx), target: '_blank', rel: 'noopener', title: 'The transaction', 'aria-label': 'The transaction on the block explorer' }, U.icon('external')) : '') },
           ], rows, empty: 'No secondary-market trades' }), h('div.footer-note', `${U.fmtNum(total, 0)} trades in total`));
         } catch (e) { if (!isAbort(e)) U.replace(secBody, UI.error(e)); }
       }
@@ -502,7 +502,7 @@
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (st.page > pages) st.page = pages;
         const slice = rows.slice((st.page - 1) * PAGE, st.page * PAGE);
         const onSort = (k) => { if (st.sort.key === k) st.sort.desc = !st.sort.desc; else st.sort = { key: k, desc: k !== 'address' }; st.page = 1; render(); };
-        U.replace(wrap, UI.table({ sort: st.sort, onSort, cols: [
+        U.replace(wrap, UI.table({ rowKey: (b) => b.address, sort: st.sort, onSort, cols: [
           { key: 'rank', label: '#', render: (r) => { const i = rank.get(r); return i ? UI.rank(i, BEST[st.sort.key] === (st.sort.desc ? 'desc' : 'asc')) : h('span.dim', { title: 'Below the Min predictions or Top category filter' }, '—'); } },
           { key: 'address', label: 'Bettor', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, bettorLink(r.address, 5), U.copyBtn(r.address)) },
           // open: Meridian's Open Positions where the snapshot counts them (one per pick configuration and side with tokens
@@ -1245,10 +1245,10 @@
       h('div.row.wrap', { style: { marginTop: '8px' } }, h('span.dim.small', 'Every question on the exchange, including the ones nobody has bet on.'), h('a.small', { href: '#/predict/questions', onclick: (e) => { e.preventDefault(); MD.router.setParams({ all: null, q: null, cat: null, status: null, sort: null }); } }, 'Back to questions with Meridian bets')));
     U.replace(body, controls, h('div.card.tight', wrap), h('div.footer-note', counts ? `${U.fmtNum(counts.all.totalCount, 0)} questions on Meridian Predict · ${U.fmtNum(counts.open.totalCount, 0)} open · ${U.fmtNum(counts.settled.totalCount, 0)} settled. Meridian OI is the exchange's open-interest figure (0 for unlisted questions). Vol 24h and 7d are the mirrored Polymarket market's volume with low-odds trading left out, the figures Meridian's app adds up over a group's questions on its list cards; a question's dialog has its all-time volume, as on its page in the app.` : ''), resFootnote());
     let cursors = [null], page = 1, hasNext = false, rows = [], loading = false, reqId = 0;
-    function renderRows() {
+    function renderRows(live) {
       if (st.status === 'ended') rows = byStage(rows);
-      U.replace(wrap, UI.table({ cols: [
-        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.question)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
+      (live ? U.replaceLive : U.replaceNow)(wrap, UI.table({ rowKey: (c) => qId(c), cols: [
+        { key: 'q', label: 'Question', render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '220px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.question)), h('div.xs.dim', (c.tags || []).slice(0, 4).join(' · '))) },
         { key: 'c', label: 'Category', render: (c) => (c.category ? c.category.name : '—') },
         { key: 'p', label: 'Probability', num: true, title: PROB_TITLE, render: probCell },
         { key: 'oi', label: 'Meridian OI', num: true, render: (c) => { const v = P.usd(c.openInterest); return v ? usd(v, { compact: true }) : h('span.dim', '—'); } },
@@ -1272,10 +1272,10 @@
         U.replace(summary, ended ? `${rows.length} ended, unsettled on this page` : `${U.fmtNum(res.totalCount, 0)} questions`);
       } catch (e) { if (isAbort(e)) return; if (my !== reqId) return; rows = []; U.replace(wrap, UI.error(e, () => go(p))); loading = false; return; }
       loading = false; renderRows();
-      trackResolution(rows, ctx, renderRows, () => my === reqId);
+      trackResolution(rows, ctx, () => renderRows(true), () => my === reqId);
     }
     // the countdowns, and the midpoints of the rows on screen (asked again once a minute is up)
-    resTicker(ctx, (n) => { if (loading) return; renderRows(); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(); }).catch(() => {}); if (n % 4 === 0) reResolve(rows.map(qId), ctx, () => { if (!loading) renderRows(); }); });
+    resTicker(ctx, (n) => { if (loading) return; renderRows(true); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(true); }).catch(() => {}); if (n % 4 === 0) reResolve(rows.map(qId), ctx, () => { if (!loading) renderRows(true); }); });
     function load() { if (ctx.signal.aborted) return; cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
@@ -1414,11 +1414,11 @@
         rows = st.status === 'ended' && !headerSorted ? byStage(rows) : U.sortBy(rows, SORTS[st.col.key] || SORTS.sw, st.col.desc);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (page > pages) page = pages;
         const slice = rows.slice((page - 1) * PAGE, page * PAGE); shown = slice;
-        U.replace(wrap, UI.table({ sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
-          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '240px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), qSub(snap, c)) },
-          { key: 'c', label: 'Category', sortVal: 1, render: (c) => c.cat || '—' },
+        (keepTracking ? U.replaceLive : U.replaceNow)(wrap, UI.table({ rowKey: (c) => qId(c), sort: st.status === 'ended' && !headerSorted ? null : st.col, onSort, cols: [
+          { key: 'q', label: 'Question', sortVal: 1, render: (c) => h('div', { style: { whiteSpace: 'normal', minWidth: '220px', maxWidth: '520px', lineHeight: '1.3' } }, h('div', U.kid(c.q)), qSub(snap, c)) },
+          { key: 'c', label: 'Category', sortVal: 1, cls: 'cell-wrap', render: (c) => c.cat || '—' },
           { key: 'p', label: 'Probability', num: true, sortVal: 1, title: PROB_TITLE, render: probCell },
-          { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes of every prediction that includes this question (a combo\'s whole stake counts on each of its questions) · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'nowrap' } }, `${c.n} prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last ' + U.fmtAgo(c.l) : ''}`) : null) },
+          { key: 'sw', label: 'Staked on Meridian', num: true, sortVal: 1, title: 'Bettor stakes of every prediction that includes this question (a combo\'s whole stake counts on each of its questions) · predictions', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.sw ? usd(c.sw, { compact: true }) : h('span.dim', '$0'), c.n ? h('div.xs.dim', { style: { whiteSpace: 'normal' } }, `${c.n}\u00a0prediction${c.n > 1 ? 's' : ''}${c.l ? ' · last\u00a0' + U.fmtAgo(c.l).replace(/ /g, '\u00a0') : ''}`) : null) },
           { key: 'oi', label: 'Meridian OI', num: true, sortVal: 1, title: snap.oiFrom === 'chain' ? 'Meridian\'s open interest on this question, as its app counts it (Sort by Open Interest): the collateral still in escrow behind the predictions on it, i.e. the position tokens of open bets still in circulation and the winning tokens of decided ones not yet redeemed (a combo counts in full on each of its questions), read on-chain for the snapshot. Meridian\'s API gives unlisted questions 0; this is their real figure · open predictions and their bettor stakes' : 'Estimated from the predictions (this snapshot has no on-chain reading of it): stake + maker collateral of every prediction on the question not yet settled, a combo in full on each of its questions; it overstates where a market maker bought a bet back and merged it, which Meridian\'s own figure does not · open predictions and their bettor stakes', render: (c) => h('div', { style: { lineHeight: '1.25' } }, c.oi ? usd(c.oi, { compact: true }) : h('span.dim', '$0'), betsNote(c) ? h('div.xs.dim', { style: { whiteSpace: 'normal', maxWidth: '200px', marginLeft: 'auto' } }, betsNote(c)) : null) },
           { key: 'v7', label: 'Vol 7d', num: true, sortVal: 1, title: volColTitle('7d'), render: (c) => volCell(c, '7d') },
           ...resCols(slice),
@@ -1493,7 +1493,7 @@
       const v = snap.agg.vig; const cv = h('canvas'); const cov = v.coverage || null;
       if (!cov || !cov.withAtBet) { U.replace(body, h('div.card', h('div.empty', 'No source prices at bet time in this snapshot yet. The snapshot builder fetches them from Polymarket\'s price history; the next published snapshot will have them.'))); return; }
       const sumTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
-        { key: 'k', label: labelKey, render: labelFn },
+        { key: 'k', label: labelKey, cls: 'cell-wrap', render: labelFn },
         { key: 'n', label: 'Predictions', num: true, render: (r) => U.fmtNum(r.n, 0) },
         { key: 'avg', label: 'Avg vig', num: true, render: (r) => vigCell(r.avg) },
         { key: 'med', label: 'Median vig', num: true, render: (r) => vigCell(r.median) },
@@ -1513,7 +1513,7 @@
       const hitCell = (r) => (r.hit == null ? h('span.dim', '—') : h('span', U.fmtPct(r.hit * 100, { dp: 1 }), r.ci == null ? null : r.ciKind === 'shared' ? h('span.dim.xs', ' ±' + U.fmtNum(r.ci * 100, 1)) : h('span.dim.xs', ' (' + U.fmtNum(range(r).lo * 100, 1) + '–' + U.fmtNum(range(r).hi * 100, 1) + ')')));
       const gapCell = (r) => (r.gap == null ? h('span.dim', '—') : h('span', { class: outside(r) ? (r.gap > 0 ? 'neg' : 'pos') : 'dim', title: outside(r) ? 'The implied rate is outside the 95% interval of the realized one' : 'Within the 95% interval: could be luck' }, pp(r.gap)));
       const realTbl = (rows, labelKey, labelFn) => UI.table({ cols: [
-        { key: 'k', label: labelKey, render: labelFn },
+        { key: 'k', label: labelKey, cls: 'cell-wrap', render: labelFn },
         { key: 'n', label: 'Decided', num: true, render: (r) => U.fmtNum(r.n, 0) },
         { key: 'imp', label: 'Implied', num: true, title: 'Average locked odds = the win probability the bettors paid for', render: (r) => (r.implied == null ? '—' : U.fmtPct(r.implied * 100, { dp: 1 })) },
         { key: 'hit', label: 'Realized', num: true, title: 'Share actually won, with its 95% interval (bets on the same question counted as winning or losing together)', render: hitCell },
@@ -1895,7 +1895,7 @@
     const lostPos = (r) => r.side !== 'COUNTERPARTY' && r.picks.some((k) => (k.settled ? k.nonDecisive || k.resolvedToYes !== !!k.yes : R.pickLost(k, k.id)));
     // the chance now: the legs' results and Polymarket's prices once loaded (pickProb), else the row's stored chance
     const fairNow = (r) => { const ps = r.picks.map(pickProb); if (!ps.length || ps.some((p) => p == null)) return r.fair; const f = ps.reduce((a, p) => a * p, 1); return r.side === 'COUNTERPARTY' ? 1 - f : f; };
-    const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replace(openWrap, UI.table({ phone: { title: 'q', aside: 'p' }, cols: [
+    const renderOpen = () => { const lost = posRows.filter(lostPos); const rows = posRows.filter((r) => !lostPos(r)); U.replaceLive(openWrap, UI.table({ rowKey: (r) => r.key || r.id, phone: { title: 'q', aside: 'p' }, cols: [
       // a position holding several bets on the same picks says so (the row opens the largest of them)
       { key: 'q', label: 'Prediction', render: (r) => h('div', { style: { whiteSpace: 'normal', maxWidth: '460px', lineHeight: '1.3' } }, r.picks.map((k, i) => h('div', sideChip(k.yes), ' ', k.q)), r.n > 1 ? h('div.xs.dim', { title: 'Bets on the same picks and side share one position token: Meridian shows them as one position, their stakes and payouts summed. A click opens the largest.' }, `${r.n} bets, one position`) : null) },
       { key: 'side', label: 'Role', render: (r) => (r.side === 'COUNTERPARTY' ? UI.chip(marketMaker ? 'maker' : 'counterparty', 'blue') : UI.chip('bettor', '')) },
@@ -2043,7 +2043,7 @@
         { key: 't', label: 'Time', render: (x) => h('span.dim', U.fmtDateTimeS(x[0])) },
         { key: 'v', label: 'USDe', num: true, render: (x) => pnlEl(x[1]) },
         { key: 'p', label: 'From / to', cls: 'wrap-any', render: (x) => h('span', h('span.dim', x[1] > 0 ? 'from ' : 'to '), peer(x)) },   // (wraps: a phone scrolled the card sideways)
-        { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction' }, U.icon('external')) : '') },
+        { key: 'tx', label: '', render: (x) => (x[3] ? h('a.dim.ext', { href: U.explorerTx(x[3]), target: '_blank', rel: 'noopener', title: 'The transaction', 'aria-label': 'The transaction on the block explorer' }, U.icon('external')) : '') },
       ], rows: xf.slice(0, 25), empty: 'No deposits or withdrawals', phone: false });
       // xfMore: the snapshot read the newest 1,000 of more (the oldest are not counted)
       const note = `${U.fmtNum(all, 0)}${c.xfMore ? '+' : ''} in all${all > xf.length || c.xfMore ? ` · the newest ${xf.length}:` : ' ·'} in ${usd(ins)}, out ${usd(outs)}` + (trades ? ` · ${usd(trades, { sign: true })} for position tokens traded` : '') + (xf.length > 25 ? ' · the newest 25 listed' : '');

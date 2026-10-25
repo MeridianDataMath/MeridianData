@@ -140,6 +140,10 @@ body.share { display: grid; place-items: center; min-height: 100vh; min-height: 
 .app.rail-collapsed .rail .toggle { width: 40px; padding: 0; justify-content: center; border-color: transparent; }
 .app:not(.rail-collapsed) .topbar .brand { display: none; }
 
+/* the skip link: out of sight until the keyboard reaches it (the first Tab stop) */
+.skip-link { position: fixed; left: 10px; top: 8px; z-index: 200; padding: 8px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #05221f; font: inherit; font-weight: 600; cursor: pointer; transform: translateY(-200%); }
+.skip-link:focus { transform: none; }
+#main:focus { outline: none; }   /* (the page itself, given the focus by the skip link or a keyboard route change) */
 .frame { display: grid; grid-template-rows: var(--top) 1fr; height: 100vh; height: 100dvh; min-width: 0; }
 .topbar {
   display: flex; align-items: center; gap: 12px; padding: 0 20px;
@@ -386,17 +390,19 @@ a.addr:hover { text-decoration: underline; }
 .tbl-wrap { overflow: auto; max-width: 100%; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.tbl th, table.tbl td { padding: 9px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--border-2); }
-table.tbl th { font-weight: 500; color: var(--text-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; position: sticky; top: 0; background: var(--bg-2); z-index: 1; }
+table.tbl th { font-weight: 500; color: var(--text-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; position: sticky; top: 0; background: var(--bg-2); z-index: 1; white-space: normal; vertical-align: bottom; }   /* (wraps only where the table would not fit its card) */
 table.tbl th.sortable { cursor: pointer; user-select: none; }
 table.tbl th.sortable:hover { color: var(--text-1); }
 table.tbl th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 table.tbl th.sorted { color: var(--text-1); }
-table.tbl th.sorted::after { content: " ▾"; color: var(--accent); }
-table.tbl th.sorted.asc::after { content: " ▴"; }
+table.tbl th.sorted::after { content: "\00a0▾"; color: var(--accent); }   /* (a no-break space: the arrow wraps with its word) */
+table.tbl th.sorted.asc::after { content: "\00a0▴"; }
 /* a cell of running text (an agent's messages): wraps, at least a readable width */
 table.tbl td.wrap-text { white-space: normal; min-width: 220px; overflow-wrap: anywhere; }
 /* a long identifier (an API route) that may break anywhere rather than widen its table on a phone */
 table.tbl td.wrap-any { white-space: normal; overflow-wrap: anywhere; }
+table.tbl td.cell-wrap { white-space: normal; }
+.cell-chips { gap: 4px 6px; flex-wrap: wrap; }   /* an account and its chips: the chips go under it where the column must narrow */   /* a text column that may wrap where the table would not fit its card */
 table.tbl td.num, table.tbl th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 table.tbl th.num { font-family: var(--font); }
 table.tbl tbody tr:hover { background: var(--bg-3); }
@@ -407,6 +413,12 @@ table.tbl .empty td { text-align: center; color: var(--text-3); padding: 28px; }
    feeds: the lead (a rank), the title and the aside on the first line, the other columns as label and value, three to a
    line, under them. Every page, the Predict ones too (their 18 wide tables scrolled sideways inside their cards). */
 .tbl-wrap.ph { container: tblph / inline-size; }
+/* a phone-row table's sort control (its header is hidden there): in the phone layout only */
+.tbl-wrap.ph > .ph-sort { display: none; }
+@container tblph (max-width: 560px) {
+  .tbl-wrap.ph > .ph-sort { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-2); }
+  .tbl-wrap.ph > .ph-sort select { width: auto; min-width: 0; max-width: 70%; }
+}
 .n2 .n-compact { display: none; }
 @container tblph (max-width: 560px) {
   .tbl-wrap.ph table.tbl, .tbl-wrap.ph table.tbl tbody { display: block; }
@@ -626,6 +638,7 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .lb .filters { position: sticky; top: 0; }
 .lb .filters .sec { border-top: 1px solid var(--border-2); padding-top: 12px; margin-top: 12px; }
 .lb .filters h3 { margin-bottom: 8px; }
+.lb .filters .lb-find { display: grid; gap: 10px; margin-top: 10px; }
 .lb-toolbar { display: none; }   /* narrow screens only (see the responsive block) */
 .minmax { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .progress { height: 4px; background: var(--bg-5); border-radius: 3px; overflow: hidden; }
@@ -649,7 +662,9 @@ table.tbl tr.group + tr.empty td { padding: 12px; font-size: 12px; }
 .card-head .card-ic { display: inline-grid; place-items: center; flex: none; }
 .card-head .card-ic svg { width: 17px; height: 17px; }
 .card-head .card-ic + h2 { margin-left: -4px; }
-.title.with-ic { display: inline-flex; align-items: center; gap: 8px; }
+.title.with-ic { display: flex; align-items: center; gap: 8px; min-width: 0; }   /* (it can narrow: on a phone it ran on under the search box) */
+.title.with-ic > :first-child { flex: none; display: inline-flex; }
+.title.with-ic > .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title.with-ic svg { width: 18px; height: 18px; }
 .star-btn { background: transparent; border: 0; cursor: pointer; color: var(--text-3); padding: 2px; display: inline-grid; place-items: center; vertical-align: middle; }
 .star-btn:hover { color: var(--amber); }
@@ -899,12 +914,26 @@ textarea.input:focus { border-color: var(--accent); }
 }
 /* the Live tab's twelve-column positions table needs ~1050px beside the 360px book (about 1700px with the sidebar); below that the book moves underneath */
 @media (max-width: 1700px) { .live { grid-template-columns: minmax(0, 1fr); } }
+/* laptop widths (1440 px and the like): the columns closer together, the card's edges keep their 12 px; with the
+   headers wrapping, the Predict, Copy trading and Leaderboard tables fit their cards instead of hiding their last columns */
+@media screen and (max-width: 1500px) {
+  table.tbl th, table.tbl td { padding-left: 8px; padding-right: 8px; }
+  table.tbl th:first-child, table.tbl td:first-child { padding-left: 12px; }
+  table.tbl th:last-child, table.tbl td:last-child { padding-right: 12px; }
+  .res-cell { min-width: 160px; }
+  .prob { width: 84px; }
+  table.tbl th.wide-col, table.tbl td.wide-col { display: none; }   /* a column only wide screens have room for */
+}
 /* the leaderboard's eleven columns need ~1100px; below 1500px the filter column gives way and lives behind the toolbar's Filters button */
 @media (max-width: 1500px) {
   .lb { grid-template-columns: minmax(0, 1fr); }
   .lb .filters { position: static; display: none; }   /* collapsed under the toolbar's Filters button */
   .lb.open .filters { display: block; }
   .lb-toolbar { display: flex; }
+  .lb .filters .sec.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); column-gap: 18px; }
+  .lb .filters .sec.fields > h3 { grid-column: 1 / -1; }
+  .lb .filters .lb-find { display: flex; flex-wrap: wrap; align-items: center; }
+  .lb .filters .lb-find > .input { flex: 1 1 240px; max-width: 420px; }
 }
 @media (max-width: 1100px) {
   .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -914,6 +943,8 @@ textarea.input:focus { border-color: var(--accent); }
 /* screens only: an A4 page is about 718 CSS px wide as well, and print has its own block above */
 @media screen and (max-width: 720px) {
   :root { --rail: 0px; }
+  /* hints that only hold where the table shows its header and every column (a phone sorts with .ph-sort) */
+  .wide-only { display: none; }
   .app, .app.rail-collapsed { grid-template-columns: 1fr; grid-template-rows: 1fr; }
   .rail { position: fixed; left: 0; right: 0; bottom: 0; height: 56px; flex-direction: row; justify-content: flex-start; align-items: center; gap: 2px; padding: 6px 8px; border-right: 0; border-top: 1px solid var(--border-2); z-index: 40; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
   .rail::-webkit-scrollbar { display: none; }

@@ -50,6 +50,15 @@
         results.forEach((r, i) => last.set(need[i].subaccountId, r.ok ? r.value : { f: need[i], error: r.error }));
         draw(U.favorites.list());
       }
+      // (a removal from the keyboard: the focus goes on to the next row's trash button, else the one before)
+      function removeFav(sid, btn) {
+        const had = document.activeElement === btn;
+        const ids = U.favorites.list().map((f) => f.subaccountId); const i = ids.indexOf(sid); const next = ids[i + 1] || ids[i - 1];
+        U.favorites.remove(sid);
+        if (!had || !next || !(window.CSS && CSS.escape)) return;
+        const to = body.querySelector('[data-focus-key="' + CSS.escape('fav:rm:' + next) + '"]');
+        if (to) to.focus({ preventScroll: true });
+      }
       function draw(favs) {
         // the favorite as it is now (its name), with the figures last read for it
         const rows = favs.filter((f) => last.has(f.subaccountId)).map((f) => Object.assign({}, last.get(f.subaccountId), { f, lb: lbBy[f.subaccountId] }));
@@ -68,10 +77,10 @@
             { key: 'pnl30', label: 'PnL 30d', num: true, title: 'From the leaderboard snapshot, as Meridian\'s Trade Stats 30D: from the end of the UTC day 30 days back. Hover a cell for the site\'s net figure', render: (r) => (r.lb && r.lb.stats && r.lb.stats['30d'] ? h('span', { title: AN.sitePnlTitle(r.lb, '30d') }, U.pnlEl(r.lb.stats['30d'].pnl), r.lb.carried && LB ? [' ', LB.carriedChip(r.lb)] : null) : h('span.dim', '—')) },
             { key: 'added', label: 'Added', render: (r) => h('span.dim', U.fmtAgo(r.f.addedAt)) },
             { key: 'rm', label: '', render: (r) => h('div.row', { style: { gap: '2px', flexWrap: 'nowrap' } },
-              h('button.btn.sm.icon.ghost', { title: r.f.label ? 'Rename' : 'Give it a name', 'aria-label': r.f.label ? 'Rename' : 'Give it a name', onclick: (e) => { e.stopPropagation(); UI.nameFavorite(r.f.subaccountId); } }, U.icon('pencil')),
-              h('button.btn.sm.icon.ghost', { title: 'Remove', 'aria-label': 'Remove', onclick: (e) => { e.stopPropagation(); U.favorites.remove(r.f.subaccountId); } }, U.icon('trash'))) },
+              h('button.btn.sm.icon.ghost', { title: r.f.label ? 'Rename' : 'Give it a name', 'aria-label': (r.f.label ? 'Rename ' : 'Name ') + (r.f.label || U.shortAddr(r.f.address, 4)), dataset: { focusKey: 'fav:name:' + r.f.subaccountId }, onclick: (e) => { e.stopPropagation(); UI.nameFavorite(r.f.subaccountId); } }, U.icon('pencil')),
+              h('button.btn.sm.icon.ghost', { title: 'Remove', 'aria-label': 'Remove ' + (r.f.label || U.shortAddr(r.f.address, 4)) + ' from favorites', dataset: { focusKey: 'fav:rm:' + r.f.subaccountId }, onclick: (e) => { e.stopPropagation(); removeFav(r.f.subaccountId, e.currentTarget); } }, U.icon('trash'))) },
           ],
-          rows,
+          rows, rowKey: (r) => r.f.subaccountId,
           onRow: (r) => { location.hash = U.accountUrl(r.f.address, r.f.subaccountId).slice(1); },
         });
         U.replace(body, h('div.card.tight', tbl), h('div.footer-note', 'Favorites are stored in this browser only.'));

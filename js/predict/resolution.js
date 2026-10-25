@@ -440,7 +440,7 @@
   /** Resolution column cell: main line, detail line, and an info button that opens the full picture. */
   R.cell = function (q, id, opts = {}) {
     const s = R.state(q, id);
-    const btn = h('button.btn.sm.icon.ghost.res-info', { title: 'Resolution details', onclick: (e) => { e.stopPropagation(); R.openDetails(q, id, opts); } }, U.icon('info'));
+    const btn = h('button.btn.sm.icon.ghost.res-info', { title: 'Resolution details', 'aria-label': 'Resolution details', dataset: { focusKey: 'res:' + id }, onclick: (e) => { e.stopPropagation(); R.openDetails(q, id, opts); } }, U.icon('info'));
     return h('div.res-cell', h('div.row', { style: { gap: '4px', alignItems: 'flex-start' } }, h('div', h('div', { class: s.code === 'unknown' ? 'dim' : '' }, s.main), s.sub ? h('div.xs.dim', s.sub) : null), s.m ? btn : null));
   };
   /** One-line version for lists that show several legs. */

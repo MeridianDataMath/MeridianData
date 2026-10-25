@@ -69,7 +69,14 @@
 
   // Scroll positions per hash, so Back returns to where the reader was instead of the top of the page.
   // Pages fill in asynchronously, so the restore is retried for a moment until the page is tall enough.
-  const scrollPos = new Map();
+  const scrollPos = new Map(), focusPos = new Map();
+  let byKeyboard = false;   // the last input was a key (Tab, Enter), not a pointer
+  if (typeof document !== 'undefined') {
+    document.addEventListener('keydown', (e) => { if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) byKeyboard = true; }, true);
+    document.addEventListener('pointerdown', () => { byKeyboard = false; }, true);
+  }
+  /** The keyboard to the page (the skip link, a keyboard route change): the main region, so Tab goes on into the page. */
+  R.focusPage = () => { const m = R.root; if (!m) return; if (!m.hasAttribute('tabindex')) m.tabIndex = -1; m.focus({ preventScroll: true }); };
   let curHash = null;   // curHash follows silent param updates too, so the key matches what Back returns to
   // each history entry numbered (history.state.i, from this load's time up: unique across reloads): an entry seen before
   // is reached by Back or Forward, a new one (state null) by a link. Only those restore a scroll position (Chrome fires
@@ -79,6 +86,13 @@
     const y = scrollPos.get(hash); if (!y) return;
     const t0 = Date.now();
     const tick = () => { if (ctx.signal.aborted || R.ctx !== ctx) return; if (R.root.scrollHeight - R.root.clientHeight >= y) { R.root.scrollTop = y; return; } if (Date.now() - t0 < 2500) setTimeout(tick, 100); };
+    tick();
+  };
+  // the element that had the focus when the page was left, by its key: retried for a moment, as the page draws late
+  const restoreFocus = (hash, ctx) => {
+    const key = focusPos.get(hash); if (!key || !(window.CSS && CSS.escape)) return;
+    const t0 = Date.now();
+    const tick = () => { if (ctx.signal.aborted || R.ctx !== ctx) return; const el = R.root.querySelector('[data-focus-key="' + CSS.escape(key) + '"]'); if (el) { el.focus({ preventScroll: true }); return; } if (Date.now() - t0 < 2500) setTimeout(tick, 100); };
     tick();
   };
   R.start = function (rootEl, onRoute) {
@@ -97,7 +111,7 @@
     if (prev && prev.path === route.path && JSON.stringify(prev.params) === JSON.stringify(route.params)) return;
     // a dialog belongs to the page it was opened on (Back, Forward, a link or a notification leave it behind otherwise)
     if (window.MD.ui && window.MD.ui.closeModals) window.MD.ui.closeModals();
-    if (prev && curHash) scrollPos.set(curHash, R.root.scrollTop);
+    if (prev && curHash) { scrollPos.set(curHash, R.root.scrollTop); const a = document.activeElement; focusPos.set(curHash, a && a !== document.body && R.root.contains(a) && a.dataset && a.dataset.focusKey ? a.dataset.focusKey : null); }
     curHash = location.hash || '#/';
     if (R.ctx) { const old = R.ctx; old.done = true; try { old.abort.abort(); } catch (_) {} for (const f of old.cleanup.splice(0)) { try { f(); } catch (_) {} } }   // one failing cleanup must not leave the others (timers, socket subscriptions) running
     const abort = new AbortController();
@@ -116,7 +130,8 @@
     if (R.onRoute) R.onRoute(route);
     const progress = window.MD.ui && window.MD.ui.progress;   // the thin line under the topbar, for every page change
     if (progress) progress.restart();
-    if (fromHistory) restoreScroll(curHash, ctx);
+    if (fromHistory) { restoreScroll(curHash, ctx); restoreFocus(curHash, ctx); }
+    else if (byKeyboard && prev && prev.path !== route.path) R.focusPage();
     // a page in a group not loaded yet: its scripts first (a failed load says so, with a Retry)
     const own = (o, k) => (Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);   // (#/constructor is no page)
     const lazy = own(R.LAZY, route.name);

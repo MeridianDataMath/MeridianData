@@ -63,7 +63,7 @@
       return r && r.carried ? h('span.chip.amber', { title: `This account could not be rebuilt for the latest snapshot: its figures are from the build of ${U.fmtWhen(r.builtAt)} (${U.fmtAgo(r.builtAt)})` }, 'older') : null;
     },
     async mount(root, route, ctx) {
-      MD.setTopbar(h('span.title.with-ic', h('span.ic-gold', U.icon('trophyFill')), 'Leaderboard'));
+      MD.setTopbar(h('span.title.with-ic', h('span.ic-gold', U.icon('trophyFill')), h('span.t', 'Leaderboard')));
       // the published snapshot is close to a megabyte: say so while it comes, rather than a blank page
       if (P._remote === undefined) U.replace(root, h('div.page', h('div.card', UI.loading('Loading the leaderboard…'))));
       await P.loadRemote();
@@ -77,17 +77,19 @@
         sort: sortP && sortP[1] in BEST ? { key: sortP[1], desc: !sortP[2] } : { key: 'pnl', desc: true },
         page: Math.max(1, Math.floor(U.num(pr.page)) || 1), q: String(pr.q || '').trim().toLowerCase(), favOnly: pr.fav === '1', style: STYLES.includes(pr.style) ? pr.style : '', min: {}, max: {},
       };
-      const saveState = () => MD.router.setParams({ interval: state.interval, page: state.page > 1 ? state.page : null, sort: state.sort.key === 'pnl' && state.sort.desc ? null : state.sort.key + (state.sort.desc ? '' : ':asc'), q: state.q || null, fav: state.favOnly ? '1' : null, style: state.style || null }, { silent: true });
+      const RANGES = ['equity', 'volume', 'pnl', 'roi', 'winRate', 'sharpe', 'ddPct'];   // (min.<key> and max.<key> in the link)
+      for (const k of RANGES) for (const which of ['min', 'max']) { const v = pr[which + '.' + k]; const n = Number(v); if (v != null && String(v).trim() !== '' && Number.isFinite(n)) state[which][k] = n; }
+      const saveState = () => MD.router.setParams({ interval: state.interval, page: state.page > 1 ? state.page : null, sort: state.sort.key === 'pnl' && state.sort.desc ? null : state.sort.key + (state.sort.desc ? '' : ':asc'), q: state.q || null, fav: state.favOnly ? '1' : null, style: state.style || null, ...Object.fromEntries(RANGES.flatMap((k) => [['min.' + k, state.min[k] ?? null], ['max.' + k, state.max[k] ?? null]])) }, { silent: true });
       const tableWrap = h('div');
       const progress = h('div');
       const filters = h('div');
       const summary = h('span.dim.small');
       const updateBtn = h('button.btn.sm', { onclick: () => build(true) }, U.icon('refresh'), 'Update');
       // narrow screens stack the filters under the table, so a toolbar above it carries the interval and a Filters toggle
-      const lbEl = h('div.lb');
+      const lbEl = h('div.lb', { class: pr.filters === '1' ? 'open' : '' });
       const toolbar = h('div.row.lb-toolbar');
       const intervalNote = 'PnL, volume and ROI follow the selected interval on Meridian\'s windows (its Trade Stats), Sharpe and drawdown on the site\'s rolling ones; equity, positions, win rate and trading style do not follow it';
-      const renderToolbar = () => { const seg = UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'); seg.title = intervalNote; U.replace(toolbar, seg, h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', onclick: () => { lbEl.classList.toggle('open'); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters')); };
+      const renderToolbar = () => { const seg = UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderFilters(); renderTable(); }, 'sm'); seg.title = intervalNote; U.replace(toolbar, seg, h('button.btn.sm', { class: lbEl.classList.contains('open') ? 'on' : '', 'aria-expanded': String(lbEl.classList.contains('open')), dataset: { focusKey: 'lb:filters' }, onclick: () => { lbEl.classList.toggle('open'); MD.router.setParams({ filters: lbEl.classList.contains('open') ? '1' : null }, { silent: true }); renderToolbar(); } }, U.icon('filter'), lbEl.classList.contains('open') ? 'Hide filters' : 'Filters')); };
       const filtersCard = h('div.card.filters', filters);
       // one header row: what is shown, then (narrow screens) the interval and the filters toggle, then Update
       const headRow = h('div.row.wrap', { style: { rowGap: '8px' } }, summary, h('span.grow'), toolbar, updateBtn);
@@ -104,12 +106,12 @@
       function renderFilters() {
         U.replace(filters,
           h('div.row', h('h2', 'Filters'), h('span.grow'), h('button.btn.sm.ghost', { onclick: () => { state.q = ''; state.favOnly = false; state.style = ''; state.min = {}; state.max = {}; state.page = 1; renderFilters(); renderTable(); } }, 'Reset all')),
-          h('div', { style: { marginTop: '10px' } }, h('input.input', { placeholder: 'Search by address', 'aria-label': 'Search accounts by address', value: state.q, oninput: (e) => { state.q = e.target.value.trim().toLowerCase(); state.page = 1; renderTable(); } })),
-          h('div', { style: { marginTop: '10px' } }, UI.seg([{ v: 'all', label: 'All' }, { v: 'fav', label: '★ Favorites' }], state.favOnly ? 'fav' : 'all', (v) => { state.favOnly = v === 'fav'; state.page = 1; renderTable(); })),
+          h('div.lb-find', h('input.input', { placeholder: 'Search by address', 'aria-label': 'Search accounts by address', value: state.q, oninput: (e) => { state.q = e.target.value.trim().toLowerCase(); state.page = 1; renderTable(); } }),
+            UI.seg([{ v: 'all', label: 'All' }, { v: 'fav', label: '★ Favorites' }], state.favOnly ? 'fav' : 'all', (v) => { state.favOnly = v === 'fav'; state.page = 1; renderTable(); })),
           h('div.sec', h('h3', 'Interval'), UI.seg(INTERVALS, state.interval, (v) => { state.interval = v; state.page = 1; MD.router.setParams({ interval: v }, { silent: true }); renderToolbar(); renderTable(); }), h('div.dim.xs', { style: { marginTop: '6px' } }, intervalNote)),
-          h('div.sec', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
+          h('div.sec.fields', h('h3', 'Account metrics'), fld('Equity', minmax('equity', '$')), fld('Volume', minmax('volume', '$')), fld('PnL', minmax('pnl', '$')),
             fld('Trading style', h('select.input.sm', { 'aria-label': 'Trading style', onchange: (e) => { state.style = e.target.value; state.page = 1; renderTable(); } }, h('option', { value: '' }, 'All'), STYLES.map((s) => h('option', { value: s, selected: state.style === s }, s))))),
-          h('div.sec', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
+          h('div.sec.fields', h('h3', 'Performance metrics'), fld('ROI', minmax('roi', '%')), fld('Win rate', minmax('winRate', '%')), fld('Sharpe ratio', minmax('sharpe', '')), fld('Max drawdown', minmax('ddPct', '%'))),
           h('div.sec.small.dim', 'Every subaccount on the exchange, from the public Meridian API. A snapshot is published every 30 minutes; an account it could not rebuild keeps its row from an earlier one, marked "older". Update rebuilds one in your browser right now.'),
           h('div.sec', MD.defsLink()));
       }
@@ -144,12 +146,12 @@
         const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: k !== 'account' && k !== 'style' && BEST[k] !== 'asc' }; state.page = 1; renderTable(); };
         const podium = !!BEST[state.sort.key] && BEST[state.sort.key] === (state.sort.desc ? 'desc' : 'asc');
         const tbl = UI.table({
-          sort: state.sort, onSort,
+          rowKey: (r) => r.sid, sort: state.sort, onSort,
           // a phone: rank, account and PnL on the first line; equity, volume, ROI, win rate, drawdown and style under them
           phone: { lead: 'rank', title: 'account', aside: 'pnl', hide: ['positions', 'sharpe'] },
           cols: [
             { key: 'rank', label: '#', render: (r) => UI.rank(rankOf.get(r.sid), podium) },
-            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account), AN.known(r) ? h('span.chip.amber', { title: AN.known(r).title }, AN.known(r).label) : r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
+            { key: 'account', label: 'Account', sortVal: 1, render: (r) => h('div.row.cell-chips', h('span.row', { style: { gap: '6px', flexWrap: 'nowrap' } }, UI.starBtn({ address: r.account, subaccountId: r.sid, name: r.name }), U.addrLink(r.account, r.sid), U.copyBtn(r.account)), AN.known(r) ? h('span.chip.amber', { title: AN.known(r).title }, AN.known(r).label) : r.inactive ? h('span.xs.dim', 'inactive') : AN.exchangeAccount(r) ? h('span.chip.amber', { title: AN.exchangeAccount(r) }, 'exchange account') : AN.noTrades(r) && r.stats && r.stats.all && r.stats.all.pnl ? h('span.chip.amber', { title: 'No trades on record: this PnL is fees or funding received, not trading. Meridian\'s fee-collector subaccount looks like this.' }, 'no trades') : null, P.carriedChip(r)) },
             { key: 'equity', label: 'Equity', num: true, sortVal: 1, render: (r) => UI.money2(r.equity) },
             // PnL, volume and ROI as Meridian's Trade Stats (row basis 'app'); the site's net figures in a cell's tooltip
             { key: 'pnl', label: 'PnL', num: true, sortVal: 1, title: 'As Meridian\'s Trade Stats: the change in its running total of realized PnL, settled funding and trading fees, plus unrealized PnL, over its window (24h from the end of the hour a day ago, 7d and 30d from the end of the UTC day 7 or 30 days back); mPerp position fees are not in it. Hover a cell for the site\'s net figure', render: (r) => (s(r) ? h('span', { title: AN.sitePnlTitle(r, iv) }, U.pnlEl(s(r).pnl)) : '—') },

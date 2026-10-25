@@ -54,10 +54,23 @@
       if (o.groups && !g.rows.length && g.empty) tbody.appendChild(h('tr.empty', h('td', { colspan: cols.length }, g.empty)));
       for (const r of g.rows) tbody.appendChild(rowEl(r));
     }
-    return h('div.tbl-wrap', { class: ph ? 'ph' : null }, h('table.tbl', thead, tbody));
+    // phone rows hide the header, so a sort control stands in for it there (css .ph-sort: shown in the phone layout only).
+    // On a phone no table could be sorted, while its card said "click a column to sort"
+    let sorter = null;
+    const sortable = ph && o.onSort ? cols.filter((c) => c.sortVal) : [];
+    if (sortable.length) {
+      const cur = o.sort && sortable.some((c) => c.key === o.sort.key) ? o.sort.key : null;
+      const sel = h('select.input.sm', { 'aria-label': 'Sort by', dataset: { focusKey: 'phsort:' + sig }, onchange: (e) => refocus(e.target, () => o.onSort(e.target.value)) },
+        cur ? null : h('option', { value: '', selected: true, disabled: true }, 'Default order'),
+        sortable.map((c) => h('option', { value: c.key, selected: c.key === cur }, phLabel(c) || c.key)));
+      const dir = cur ? h('button.btn.sm', { type: 'button', title: 'Reverse the order', 'aria-label': (o.sort.desc ? 'Descending' : 'Ascending') + ': reverse the order', dataset: { focusKey: 'phdir:' + sig }, onclick: (e) => refocus(e.currentTarget, () => o.onSort(cur)) }, o.sort.desc ? '↓' : '↑') : null;
+      sorter = h('div.ph-sort', h('span.dim.xs', 'Sort by'), sel, dir);
+    }
+    return h('div.tbl-wrap', { class: ph ? 'ph' : null }, sorter, h('table.tbl', thead, tbody));
     function rowEl(r) {
       const opens = !!o.onRow && (!o.canRow || o.canRow(r));
       const tr = h('tr', { class: [(opens ? 'clickable' : ''), o.rowClass ? o.rowClass(r) : ''].join(' ').trim() });
+      if (o.rowKey) tr.dataset.focusKey = 'row:' + sig + ':' + o.rowKey(r);   // (the keyboard's place across re-renders and Back)
       for (const c of cols) {
         const role = phRole(c);
         const td = h('td', { class: ((c.num ? 'num ' : '') + (c.cls || '') + role).trim() || null });
@@ -93,7 +106,8 @@
   };
   /** cursor pager for server-side pages */
   UI.cursorPager = function ({ page, hasNext, count, onPrev, onNext, loading }) {
-    return h('div.pager', h('span', loading ? h('span.loading', h('span.spinner'), 'Loading') : `${count} rows · page ${page}`), h('span.grow'), h('button.btn.sm.icon', { disabled: page <= 1 || loading, title: 'Previous', onclick: onPrev }, U.icon('chevL')), h('button.btn.sm.icon', { disabled: !hasNext || loading, title: 'Next', onclick: onNext }, U.icon('chevR')));
+    // (its buttons keep the focus across the page change, as UI.pager's: dataset.focusKey, U.replace)
+    return h('div.pager', h('span', loading ? h('span.loading', h('span.spinner'), 'Loading') : `${count} rows · page ${page}`), h('span.grow'), h('button.btn.sm.icon', { disabled: page <= 1 || loading, title: 'Previous', 'aria-label': 'Previous', dataset: { focusKey: 'pager:Previous' }, onclick: onPrev }, U.icon('chevL')), h('button.btn.sm.icon', { disabled: !hasNext || loading, title: 'Next', 'aria-label': 'Next', dataset: { focusKey: 'pager:Next' }, onclick: onNext }, U.icon('chevR')));
   };
 
   // a value longer than a tile is wide ("$1,000,060.00") shrinks a step instead of being cut with an ellipsis
@@ -201,10 +215,21 @@
   const watched = new WeakSet();
   /** A tile value wider than its tile steps down a size (long, then xlong) instead of ending in "…": the character-count
    *  guess in UI.stat does not know how narrow a tile is (two to a row inside a card on a phone). */
+  // (measured to the fraction of a pixel: scrollWidth and clientWidth are whole pixels, and a value a third of a pixel too
+  // wide, "+$4,711.20" or "+$2,215.40" in a phone's half-width tile, passed and ended in "…". A Range spans the text as laid
+  // out, the part cut off included)
+  const rng = typeof document !== 'undefined' && document.createRange ? document.createRange() : null;
+  const tooWide = (v) => {
+    if (!rng) return v.scrollWidth > v.clientWidth;
+    rng.selectNodeContents(v);
+    const cs = getComputedStyle(v);
+    const box = v.getBoundingClientRect().width - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0) - (parseFloat(cs.borderLeftWidth) || 0) - (parseFloat(cs.borderRightWidth) || 0);
+    return rng.getBoundingClientRect().width > box + 0.01;
+  };
   const fitValues = (root) => {
     for (const v of (root || document).querySelectorAll('.stat .v')) {
-      if (v.scrollWidth <= v.clientWidth + 1) continue;
-      if (!v.classList.contains('long') && !v.classList.contains('xlong')) { v.classList.add('long'); if (v.scrollWidth <= v.clientWidth + 1) continue; }
+      if (!tooWide(v)) continue;
+      if (!v.classList.contains('long') && !v.classList.contains('xlong')) { v.classList.add('long'); if (!tooWide(v)) continue; }
       v.classList.remove('long'); v.classList.add('xlong');
     }
   };

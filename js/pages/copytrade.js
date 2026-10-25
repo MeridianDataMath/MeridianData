@@ -26,12 +26,18 @@
   /** The alerts card: who is followed, what to be told about, how, and what happened. */
   function alertsCard(ctx) {
     const card = h('div.card#leader-alerts');
+    // (from the keyboard, the focus goes on to the next leader's button, else the one before: the one pressed is gone)
+    const unfollow = (sid, btn) => {
+      const xs = () => Array.from(card.querySelectorAll('button.x')); const i = xs().indexOf(btn); const had = document.activeElement === btn;
+      AL.unfollow(sid);
+      if (had) { const left = xs(); const to = left[i] || left[i - 1]; if (to) to.focus({ preventScroll: true }); }
+    };
     const render = () => {
       const ae = document.activeElement; if (ae && card.contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName) && ae.type !== 'checkbox') return;   // an alert arriving must not clobber a field being typed in
       // Android's browsers have the Notification API but cannot show one from a page (only a service worker, which the site
       // has not): said rather than "allowed" over notifications that never appear (AL.pageNotifications)
       const s = AL.state(); const has = AL.pageNotifications(); const perm = has ? Notification.permission : 'unsupported';
-      const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', onclick: () => AL.unfollow(l.sid), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
+      const leaders = h('div.row.wrap', { style: { gap: '6px' } }, s.leaders.length ? s.leaders.map((l) => h('span.chip', { style: { gap: '6px', display: 'inline-flex', alignItems: 'center' } }, h('a', { href: U.accountUrl(l.address, l.sid) }, U.shortAddr(l.address, 4)), h('button.x', { title: 'Stop following', 'aria-label': 'Stop following ' + U.shortAddr(l.address, 4), onclick: (e) => unfollow(l.sid, e.currentTarget), style: { background: 'none', border: 0, padding: 0, cursor: 'pointer', color: 'inherit', display: 'inline-flex' } }, U.icon('x')))) : h('span.dim.small', 'No leader followed yet: press the bell on a row, in a leader\'s breakdown, or on the simulator.'));
       const ev = (k, label) => UI.checkbox(label, !!s.events[k], (v) => { s.events[k] = v; AL.save(); });
       const events = h('div.row.wrap', { style: { gap: '4px 14px' } }, ev('open', 'opens'), ev('add', 'adds'), ev('reduce', 'reduces'), ev('close', 'closes'), ev('reverse', 'reverses'), ev('liq', 'is liquidated'));
       const minIn = h('input.input.sm', { type: 'number', min: 0, step: 100, value: s.minNotional || '', placeholder: '0', style: { width: '100px' }, onchange: (e) => { s.minNotional = Math.max(0, U.num(e.target.value)); AL.save(); } });
@@ -85,7 +91,7 @@
     // a score that rests on few closed positions says so beside it (the verdict stays: results first, as ranked); fewer
     // than SMALL_SAMPLE is a sample where luck can carry it
     const few = c && c.closed < SMALL_SAMPLE ? h('span.xs', { style: { color: 'var(--amber)' }, title: `Scored on ${c.closed} closed positions only: a small sample, where one lucky or unlucky trade moves the score a lot` }, c.closed + ' closed') : null;
-    return h('div.row', { style: { gap: '8px' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict), few);
+    return h('div.row', { style: { gap: '4px 8px', flexWrap: 'wrap' }, title: sc.caps.length ? 'Capped: ' + sc.caps.map((x) => x.why).join(' · ') : `results ${sc.results} · risk ${sc.risk} · friction ${sc.friction}` }, h('span.row', { style: { gap: '8px', flexWrap: 'nowrap' } }, h('span.score', { class: VERDICT_CLS[sc.verdict] || '' }, String(sc.total)), h('span.chip', { class: VERDICT_CLS[sc.verdict] || '' }, sc.verdict)), few);
   }
 
   /** The "Copier keeps" cell: the share of the leader's result per position left after a copier's costs (AN.copyKeep),
@@ -98,7 +104,7 @@
     // +$6,422 read as a fault; that account's five closed trades averaged +0.02%, its dollars came from one big, long-held
     // position and an open one)
     const n = c.nTrim != null ? c.nTrim : c.closed;
-    const cell = (cls, text, title, sub) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', sub || (K.kept == null ? '' : 'of ') + pc(K.lead) + ' a trade'));
+    const cell = (cls, text, title, sub) => h('div', { title, style: { lineHeight: '1.25' } }, h('span', { class: cls }, text), h('div.xs.dim', { style: { whiteSpace: 'normal' } }, sub || (K.kept == null ? '' : 'of\u00a0') + pc(K.lead) + ' a\u00a0trade'));
     // its closed trades lose on average (or make nothing): no edge to keep (user 10-23: a word, not "—")
     if (K.kept == null) return cell('dim', 'no edge', `The leader's closed positions ${K.lead < 0 ? 'lose ' + pc(K.lead).replace('-', '').replace('−', '') + ' each on average' : 'make nothing on average'} after fees and funding (${n} of them): nothing for a copier to keep`);
     const title = `Per closed position, on average over ${n}: the leader makes ${pc(K.lead)} after its fees and funding; a copier's costs take ${pc(K.cost).replace('+', '')} (extra fees ${U.fmtNum(K.fees, 1)} bps, slippage ${U.fmtNum(K.slip, 1)} bps, a minute's delay ${U.fmtNum(K.drift, 1)} bps, in and out), leaving ${pc(K.copier)}. Each position counts once whatever its size, as for a copier copying every position at the same size; open positions are not in it` + (n < 10 ? ` · only ${n} positions, so one can move it` : '');
@@ -245,10 +251,10 @@
         U.keepFocus(tableWrap, () => U.replace(tableWrap,
           noProfiles ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } }, data.remote ? 'This snapshot predates copyability; the next one (within 30 minutes) will carry the profiles.' : 'A leaderboard built in the browser has no copy profiles; scores need the published snapshot.') : null,
           UI.table({
-            sort: state.sort, onSort,
+            rowKey: (x) => x.r.sid, sort: state.sort, onSort,
             cols: [
               { key: 'rank', label: '#', render: (x) => { const i = rows.indexOf(x) + 1; return UI.rank(i, !!(x.sc && x.sc.verdict === 'Copyable')); } },
-              { key: 'w', label: 'Wallet', render: (x) => h('div.row', { style: { gap: '6px' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account), AN.known(x.r) ? h('span.chip.amber', { title: AN.known(x.r).title }, AN.known(x.r).label) : null, LB ? LB.carriedChip(x.r) : null) },
+              { key: 'w', label: 'Wallet', render: (x) => h('div.row.cell-chips', h('span.row', { style: { gap: '6px', flexWrap: 'nowrap' } }, UI.starBtn({ address: x.r.account, subaccountId: x.r.sid, name: x.r.name }), MD.bellBtn({ sid: x.r.sid, address: x.r.account, name: x.r.name }), U.addrLink(x.r.account, x.r.sid), U.copyBtn(x.r.account)), AN.known(x.r) ? h('span.chip.amber', { title: AN.known(x.r).title }, AN.known(x.r).label) : null, LB ? LB.carriedChip(x.r) : null) },
               { key: 'score', label: 'Copyability', sortVal: 1, title: `0–100: results (all-time PnL and ROI) 55%, risk 25%, copy friction 20%; Copyable from ${AN.COPY.copyableAt} with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time; click a row for the breakdown`, render: (x) => scorePill(x.sc, x.c) },
               { key: 'edge', label: 'Copier keeps', num: true, sortVal: 1, title: `How much of the leader's average result per position a copier keeps after its own costs: the trading fees it pays beyond the leader's, slippage at the leader's median position size (at most $2K) and the price move in the minute after the leader's fills (their latest, up to 400), in and out. A price move in the copier's favour is not counted, so it is never more than 100%. Hover a cell for the figures, click a row for the breakdown`, render: (x) => keepCell(x.c, x.r) },
               // PnL and ROI as Meridian's app (the Leaderboard's, row basis 'app'); the site's net figures in a cell's tooltip
@@ -259,9 +265,9 @@
               { key: 'hold', label: 'Median hold', num: true, sortVal: 1, render: (x) => (x.c && x.c.holdMed != null ? U.fmtDuration(x.c.holdMed) : h('span.dim', '—')) },
               { key: 'size', label: 'Typical size', num: true, sortVal: 1, title: 'Median entry notional per position', render: (x) => (x.c && x.c.notMed ? usd0(x.c.notMed) : h('span.dim', '—')) },
               // one line: the two main markets by share, the rest counted (chips stacked made every row three lines tall)
-              { key: 'mk', label: 'Markets', title: 'Most-traded markets by number of positions (closed and open); hover a cell for each market\'s share', render: (x) => (x.c && x.c.markets.length ? h('span', { title: 'Share of positions (closed and open): ' + x.c.markets.map((m) => `${m.t} ${U.fmtPct(m.share, { dp: 0 })}`).join(' · ') }, x.c.markets.slice(0, 2).map((m) => m.t.replace(/-USD$/, '')).join(' · '), x.c.nMarkets > 2 ? h('span.dim', ' +' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
+              { key: 'mk', label: 'Markets', cls: 'wide-col', title: 'Most-traded markets by number of positions (closed and open); hover a cell for each market\'s share', render: (x) => (x.c && x.c.markets.length ? h('span', { title: 'Share of positions (closed and open): ' + x.c.markets.map((m) => `${m.t} ${U.fmtPct(m.share, { dp: 0 })}`).join(' · ') }, x.c.markets.slice(0, 2).map((m) => m.t.replace(/-USD$/, '')).join(' · '), x.c.nMarkets > 2 ? h('span.dim', ' +' + (x.c.nMarkets - 2)) : null) : h('span.dim', '—')) },
               { key: 'dd', label: 'Max DD', num: true, sortVal: 1, title: 'All-time drawdown on the site\'s net PnL (funding and mPerp position fees as charged), deposits and withdrawals left out', render: (x) => { const v = x.r.stats.all.ddPct; return v == null || !(v > 0) ? h('span.dim', '—') : U.fmtDd(v); } },
-              { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
+              { key: 'go', label: '', render: (x) => h('div.row', { style: { gap: '6px', flexWrap: 'nowrap' } }, h('a.btn.sm', { href: '#/copytrade/sim?address=' + x.r.account + '&sub=' + x.r.sid, onclick: (e) => e.stopPropagation(), title: 'Replay this account as a copier' }, 'Simulate'), h('a.btn.sm.ghost', { href: U.accountUrl(x.r.account, x.r.sid), onclick: (e) => e.stopPropagation(), title: 'Open the account page' }, 'Account')) },
             ],
             phone: { lead: 'rank', title: 'w', wide: ['score', 'go'] },   // a phone: the score badge and the buttons two thirds of their line
             rows: slice, empty: state.filter === 'copyable' ? `No wallet is copyable yet (a score of ${AN.COPY.copyableAt}+ with ${U.fmtUsd(AN.COPY.minPnl, { dp: 0 })}+ made all-time)` : state.filter === 'scored' ? `No wallet has ${AN.COPY.minClosed} closed positions yet` : 'No traders in the snapshot',

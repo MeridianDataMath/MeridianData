@@ -70,12 +70,40 @@
   /** Replace children, keeping the scroll position of the container and of any scrollers inside it (tables scrolled
    *  sideways on a phone, feeds scrolled down): live pages re-render on every tick and must not snap back. */
   const SCROLLERS = '.tbl-wrap, .feed, .scroll-y, .smap, .book';
+  // The keyboard's place across a re-render: the element that had the focus is found again in what replaced it, by its
+  // data-focus-key, else by its kind and name (aria-label, title, its label's or its own text) at the same position among
+  // its namesakes. Live tables re-render every 30 s and on every event, and a focused row, checkbox or button fell to the
+  // page. (A row's text changes as it ticks: rows carry a key, UI.table's rowKey.)
+  const focusSig = (e) => e.tagName + '|' + String(e.getAttribute('aria-label') || e.getAttribute('title') || (e.labels && e.labels[0] ? e.labels[0].textContent : '') || (/^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) ? (e.name || e.placeholder || e.type) : e.textContent) || '').trim().slice(0, 80);
+  const focusIn = (el) => {
+    const a = typeof document !== 'undefined' ? document.activeElement : null;
+    if (!a || a === el || !el.contains || !el.contains(a) || a === document.body) return null;
+    let caret = null; try { if (typeof a.selectionStart === 'number') caret = { v: a.value, s: a.selectionStart, e: a.selectionEnd }; } catch (_) {}
+    const key = a.dataset ? a.dataset.focusKey : null;
+    if (key) return { key, caret };
+    const sig = focusSig(a); const same = Array.from(el.querySelectorAll(a.tagName)).filter((x) => focusSig(x) === sig);
+    return { sig, tag: a.tagName, i: same.indexOf(a), caret };
+  };
+  const focusBack = (el, f) => {
+    if (!f || el.contains(document.activeElement)) return;
+    let to = null;
+    if (f.key) { if (window.CSS && CSS.escape) to = el.querySelector('[data-focus-key="' + CSS.escape(f.key) + '"]'); }
+    else if (f.i >= 0) to = Array.from(el.querySelectorAll(f.tag)).filter((x) => focusSig(x) === f.sig)[f.i] || null;
+    if (to && to.disabled) { el.__focusWant = { f, at: Date.now() }; return; }   // (a pager while its page loads: at the next render)
+    if (to && typeof to.focus === 'function') {
+      to.focus({ preventScroll: true });
+      if (f.caret && to.value === f.caret.v) try { to.setSelectionRange(f.caret.s, f.caret.e); } catch (_) {}
+    }
+  };
   U.replace = (el, ...children) => {
     const own = { l: el.scrollLeft, t: el.scrollTop };
     const inner = Array.from(el.querySelectorAll(SCROLLERS)).map((s) => ({ l: s.scrollLeft, t: s.scrollTop }));
+    const want = el.__focusWant; el.__focusWant = null;
+    const f = focusIn(el) || (want && Date.now() - want.at < 10000 && typeof document !== 'undefined' && document.activeElement === document.body ? want.f : null);
     U.clear(el); U.append(el, children);
     if (own.l || own.t) { el.scrollLeft = own.l; el.scrollTop = own.t; }
     if (inner.some((s) => s.l || s.t)) el.querySelectorAll(SCROLLERS).forEach((s, i) => { const p = inner[i]; if (p && (p.l || p.t)) { s.scrollLeft = p.l; s.scrollTop = p.t; } });
+    focusBack(el, f);
     return el;
   };
   /** For containers that re-render on every tick: skip a render while the reader is selecting text inside it or

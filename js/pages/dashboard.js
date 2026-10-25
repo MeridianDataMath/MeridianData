@@ -56,6 +56,9 @@
     takerFeeUsd: r.takerFeeUsd ?? null, makerFeeUsd: r.makerFeeUsd ?? null, takerRate: p.takerFee, makerRate: p.makerFee });
   const wsTrades = (p, m) => { const d = m.data || {}; return (d.d || []).map((it) => ({ id: it.id, t: d.t || m.t, ticker: p.displayTicker, tick: p.tickSize, lot: p.lotSize, side: it.sd, size: it.sz, price: it.px, taker: it.sids && it.sids[0], maker: it.sids && it.sids[1], takerRate: p.takerFee, makerRate: p.makerFee, _new: true })); };
 
+  // the stop and liquidation maps as the page was left: their scan (about 70 s), which of them were open and the market
+  // shown in each, taken up again by a visit within 2 minutes (Back from an account rescanned from nothing, both closed)
+  const MAPS = { sm: null, smMarket: null, lmMarket: null, stop: false, liq: false, left: 0 };
   MD.router.pages.dashboard = {
     ratePct, fundingGap, fundingOf, restTrade, wsTrades, lastLongGap, chargesSum, pctT, tradeFee, fees24h, oiUse,
     async mount(root, route, ctx) {
@@ -99,6 +102,10 @@
         h('span.chev', U.icon('chevR')), h('h2', 'Liquidation map'), h('span.dim.small', 'where every open position gets liquidated, by price level · Meridian\'s liquidator takes them over, not the order book · the jump that would drain its pool, after which winning positions are force-closed · click a level for the accounts'), h('span.grow'), h('span.dim.small.toggle-hint'));
       U.append(stopCard, [smHead, smBody]);
       U.append(liqCard, [lmHead, lmBody]);
+      const kept = Date.now() - MAPS.left < 120000;
+      const reopen = (card, body, head) => { card.classList.add('open'); body.style.display = ''; head.setAttribute('aria-expanded', 'true'); };
+      if (kept && MAPS.stop) reopen(stopCard, smBody, smHead);
+      if (kept && MAPS.liq) reopen(liqCard, lmBody, lmHead);
       // market specs: each market's limits and settings as Meridian's product data has them; closed until opened, and the
       // choice is kept in this browser (it loads nothing of its own)
       const SPECS_KEY = 'md.dash.specsOpen';
@@ -111,11 +118,11 @@
       U.append(specsCard, [specsHead, specsBody]);
       if (U.storage.get(SPECS_KEY, false) === true) setSpecs(true);
       U.replace(root, h('div.page', h('div.stack', tiles,
-        h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket · sparkline = 7d oracle price · click a column to sort')), mktBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Markets'), status, statusTxt, catSel, h('span.grow'), h('span.dim.small', 'prices via WebSocket', h('span.wide-only', ' · sparkline = 7d oracle price · click a column to sort'))), mktBody),
         h('div.grid.cols-2',
           h('div.card.tight.feed-card', h('div.card-head', h('h2', 'Live trades'), h('span.dim.small', 'all markets · click a trade to open the account that took it')), h('div.feed-fill', tradesBody)),
           h('div.stack', h('div.card.tight', h('div.card-head', h('h2', 'Liquidations'), h('span.dim.small', 'latest 20')), liqBody), h('div.card.tight', h('div.card-head', h('h2', 'Market closures (mPerps)'), h('span.dim.small', 'next 7 days')), gapBody))),
-        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets; click a column to sort')), fundBody, pfBody),
+        h('div.card.tight', h('div.card-head', h('h2', 'Funding'), h('span.dim.small', 'projected next charge, as Meridian\'s app shows it · last hourly charge · annualized from the projected rate · the largest asset first, as in Markets', h('span.wide-only', '; click a column to sort'))), fundBody, pfBody),
         specsCard, stopCard, liqCard)));
 
       // the markets and their prices are the page: without them it says why, with a Retry
@@ -359,7 +366,8 @@
       // AN.stopPressure). A liquidation goes to Meridian's liquidator, not the book: the liquidation map shows those.
       const flowOf = (kind, posSide) => (kind === 'ENTRY' ? (posSide === 'long' ? 'buy' : 'sell') : posSide === 'long' ? 'sell' : 'buy');
       const BANDS = [1, 2, 5];   // percent from the mark
-      let sm = null, smMarket = null, lmMarket = null, smScanning = false;
+      let sm = kept ? MAPS.sm : null, smMarket = kept ? MAPS.smMarket : null, lmMarket = kept ? MAPS.lmMarket : null, smScanning = false;
+      ctx.onCleanup(() => { Object.assign(MAPS, { sm, smMarket, lmMarket, stop: stopCard.classList.contains('open'), liq: liqCard.classList.contains('open'), left: Date.now() }); });
       const scanUi = (busy, msg) => { smRescan.disabled = lmRescan.disabled = busy; if (msg) { U.replace(smSummary, msg()); U.replace(lmSummary, msg()); } };
       async function scanStops() {
         if (smScanning) return; smScanning = true;
@@ -608,7 +616,8 @@
         smT = U.every(120000, scanStops);
       };
       ctx.onCleanup(() => { if (smT) smT(); });
-      scanOpen();   // one opened while the page was still loading
+      if (sm) { renderStopMap(); renderLiqMap(); }   // the last visit's scan
+      scanOpen();   // one opened while the page was still loading, or kept open from the last visit
 
       // ---- market specs (the card under Funding): every market's limits and settings from its product data, by category
       // in the Markets table's order; redrawn with the products every minute while open ----

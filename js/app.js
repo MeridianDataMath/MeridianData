@@ -16,7 +16,7 @@
       { name: 'tax', path: '/tax', icon: 'receipt', label: 'Tax center' },
     ] },
     { title: 'Predict', items: [
-      { name: 'predict', path: '/predict', icon: 'target', label: 'Overview' },
+      { name: 'predict', path: '/predict', icon: 'target', label: 'Overview', aria: 'Predict overview' },
       { name: 'predict', path: '/predict/bettors', icon: 'ticket', label: 'Bettors', prefix: '/predict/bettor' },
       { name: 'predict', path: '/predict/questions', icon: 'help', label: 'Questions' },
       { name: 'predict', path: '/predict/makers', icon: 'layers', label: 'Market makers' },
@@ -165,10 +165,10 @@
   function renderRail() {
     const rail = U.$('#rail');
     // aria-label: the link's name when the rail shows icons only (collapsed, a phone), where the label text is hidden
-    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, class: inMore(n) ? 'ph-more' : null, 'aria-label': n.label, dataset: { name: n.name, path: n.path, prefix: n.prefix || '', label: n.label } },
+    const navLink = (n) => h('a.nav', { href: n.name === 'account' ? lastAccountHref() : n.name === 'tax' ? lastAccountHref().replace('#/account', '#/tax') : '#' + n.path, class: inMore(n) ? 'ph-more' : null, 'aria-label': n.aria || n.label, dataset: { name: n.name, path: n.path, prefix: n.prefix || '', label: n.label } },
       U.icon(n.icon), h('span.lbl', n.label, n.badge ? h('span.chip.accent', { style: { marginLeft: '8px' } }, n.badge) : null), h('span.tip', n.label));
     // color: the icon's colour (.ic-<color>), as the sections above have theirs
-    const ext = (href, icon, label, color) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener', class: color ? 'ic-' + color : null }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
+    const ext = (href, icon, label, color) => h('a.nav.ext', { href, target: '_blank', rel: 'noopener', class: color ? 'ic-' + color : null, 'aria-label': label + ' (opens in a new tab)' }, icon, h('span.lbl', label), h('span.ext-ico', U.icon('external')), h('span.tip', label));
     U.replace(rail,
       h('a.logo', { href: '#/', title: 'MeridianDataHub' }, h('img', { src: 'assets/meridian-symbol.svg', alt: 'Meridian' }), h('span.word', 'Meridian', h('span', 'DataHub'))),
       SECTIONS.map((s) => [s.rule ? h('div.rule') : h('div.sec', s.title), s.items.map(navLink), s.rule ? h('div.rule') : null]),
@@ -224,6 +224,11 @@
     readClock();
     const input = U.$('#mini-search input');
     const mini = U.$('#mini-search');
+    input.setAttribute('aria-label', 'Search by wallet address or subaccount ID');
+    const skip = U.$('#skip-link'); if (skip) skip.addEventListener('click', () => MD.router.focusPage());
+    const touch = window.matchMedia ? window.matchMedia('(max-width: 720px), (hover: none)') : null;
+    const setPlaceholder = () => { input.placeholder = touch && touch.matches ? 'Address or ID' : 'Search by address…  ( / )'; };
+    setPlaceholder(); if (touch) touch.addEventListener('change', setPlaceholder);
     mini.addEventListener('submit', async (e) => {
       e.preventDefault(); if (mini.classList.contains('busy')) return;
       mini.classList.add('busy'); mini.setAttribute('aria-busy', 'true'); input.readOnly = true;
