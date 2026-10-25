@@ -938,8 +938,14 @@
   async function mountSlip(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Slip'));
     const id = route.path.split('/')[3] || '';
-    const ref = U.refCode(route.params.r);   // the sharer's code, from a slip link shared with it (this slip's Meridian buttons)
     if (!id) { U.replace(body, slipForm()); return; }
+    // the sharer's code, from a slip link shared with it (this slip's Meridian buttons): kept for this tab's visit of the
+    // slip (a reload keeps it) and taken out of the address, so the page's address, copied and passed on by someone who
+    // did not add a code of their own, carries the site's code rather than the sharer's
+    const refKey = 'md.slipRef.' + String(id).toLowerCase();
+    let ref = U.refCode(route.params.r);
+    if (route.params.r != null) { if (ref) { try { sessionStorage.setItem(refKey, ref); } catch (_) {} } MD.router.setParams({ r: null }, { silent: true }); }
+    else { try { ref = U.refCode(sessionStorage.getItem(refKey)); } catch (_) { ref = null; } }
     if (!P.isPredictionId(id)) { U.replace(body, h('div.card', h('div.error', 'That is not a prediction id. A slip link ends in 0x and 64 hex digits, as in app.meridian.xyz/predict/p/0x…')), slipForm()); return; }
     U.replace(body, loadingCard('Loading the slip…'));
     let found;
