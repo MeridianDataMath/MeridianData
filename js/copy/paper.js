@@ -8,7 +8,7 @@
   const MD = window.MD; const U = MD.util;
   const P = (MD.paper = {});
   const EPS = 1e-9;
-  P.V = 3;
+  P.V = 4;   // 3: positions held before following kept apart; 4: adds to a copy held sized as the agent sizes them
   P.key = (sid) => 'md.paper.' + sid;
   P.load = (sid) => U.storage.get(P.key(sid), null);
   /** Write the account; rev counts writes, so a tab holding an older copy can tell another tab has moved on. The fills
