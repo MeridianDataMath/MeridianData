@@ -98,7 +98,10 @@
     // must not freeze the tape
     const focusIn = () => { const a = document.activeElement; return a !== el && el.contains(a) && !!a.matches && a.matches(':focus-visible'); };
     // (the pointer only where it can hover: a phone keeps :hover after a tap, which held a tape until the next tap elsewhere)
-    const held = selecting || (pauses && ((canHover() && el.matches(':hover')) || focusIn())) || (pointerDown && el.matches(':hover'));
+    // nothing to hold still while it shows only a failure (its Retry was just pressed, under the pointer) or an empty or
+    // loading note: what replaces it is what the visitor is waiting for
+    const placeholder = el.children.length === 1 && !!el.firstElementChild.matches && el.firstElementChild.matches('.error, .empty');
+    const held = !placeholder && (selecting || (pauses && ((canHover() && el.matches(':hover')) || focusIn())) || (pointerDown && el.matches(':hover')));
     if (held) {
       el.__pending = children;
       if (!el.__catchUp) {
@@ -113,6 +116,9 @@
     el.__pending = null;
     return U.replace(el, ...children);
   };
+  /** A render the visitor asked for (a sort, a category) in a container U.replaceLive feeds: applied at once, even under
+   *  the pointer or the keyboard focus, and a held live render still waiting (the order before it) is dropped */
+  U.replaceNow = (el, ...children) => { el.__pending = null; return U.replace(el, ...children); };
   /** Re-render a container without losing the keyboard focus: fn() replaces what is inside el, and when an element in it
    *  had the focus, the one that replaced it (the same data-focus-key) gets it back. */
   U.keepFocus = (el, fn) => {
@@ -371,7 +377,15 @@
   U.emit = (name, detail) => bus.dispatchEvent(new CustomEvent(name, { detail }));
 
   // ---------- Misc ----------
-  U.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  /** A pause. With a signal it ends at once when that aborts (an AbortError): a retry's wait (Retry-After, up to a minute
+   *  in the snapshot build) ran to its end after the build's deadline had aborted everything else */
+  U.sleep = (ms, signal) => new Promise((resolve, reject) => {
+    if (!signal) { setTimeout(resolve, ms); return; }
+    if (signal.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+    const abort = () => { clearTimeout(t); reject(new DOMException('Aborted', 'AbortError')); };
+    const t = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
+    signal.addEventListener('abort', abort, { once: true });
+  });
   /** setInterval for reads a page repeats while it is open: a tick that comes while the tab is hidden is skipped (a
    *  background tab kept scanning every account every two minutes), and one runs as soon as the tab shows again if any
    *  was skipped. Returns the function that stops it (for ctx.onCleanup). */

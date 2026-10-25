@@ -272,16 +272,19 @@
         const seen = JSON.stringify(n) + '|' + mktCat; if (seen === catSeen) return; catSeen = seen;
         const label = (name, k) => h('span', name, h('span.n', ' ' + k));
         U.replace(catSel, UI.seg([{ v: 'all', label: label('All', rows.length) }].concat(AN.MARKET_CATS.map(([k, name]) => ({ v: k, label: label(name, n[k] || 0), title: n[k] ? null : 'No ' + name + ' markets on Meridian yet' }))), mktCat,
-          (v) => { mktCat = v; U.storage.set(CAT_KEY, v); renderMarkets(); }, 'sm'));
+          (v) => { mktCat = v; U.storage.set(CAT_KEY, v); renderMarkets(true); }, 'sm'));
       };
-      function renderMarkets() {
+      // now: a sort or a category the visitor chose, shown at once (U.replaceNow); the live updates wait while the pointer is
+      // over a table (U.replaceLive)
+      function renderMarkets(now) {
+        const put = now ? U.replaceNow : U.replaceLive;
         const rows = marketRows();
         renderCatSel(rows);
         const groups = AN.MARKET_CATS.filter(([k]) => mktCat === 'all' || k === mktCat).map(([k, name]) => {
           const list = U.sortBy(rows.filter((r) => r.cat === k), SORTS[mktSort.key] || SORTS.cap, mktSort.desc);
           return { head: catHead(name, list, (l) => '24h volume ' + U.fmtUsd(U.sum(l, (r) => r.volUsd), { compact: true }) + ' · open interest ' + U.fmtUsd(U.sum(l, (r) => r.oiUsd), { compact: true })), rows: list };
         });
-        U.replaceLive(mktBody, UI.table({
+        put(mktBody, UI.table({
           cols: [
             // the taker fee as set (0.005% shows as 0.005%, not rounded up to 0.01%)
             // the leverage the app offers (AN.productMargin): 1 ÷ the initial margin, an mPerp's closed-market one while it is closed
@@ -300,14 +303,14 @@
           // a phone: the market and its price on the first line, the figures under them, no bid/ask or sparkline
           phone: { title: 'm', aside: 'px', hide: ['ba', 'spark'] },
           // a new column sorts the largest first (the market name A to Z); the same column again reverses it
-          onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(); },
+          onSort: (k) => { mktSort = { key: k, desc: mktSort.key === k ? !mktSort.desc : k !== 'm' }; renderMarkets(true); },
         }));
         const fundGroups = AN.MARKET_CATS.map(([k, name]) => ({ name, list: U.sortBy(rows.filter((r) => r.cat === k), FUND_SORTS[fundSort.key] || FUND_SORTS.cap, fundSort.desc) }))
           .filter((g) => g.list.length).map((g) => ({ head: catHead(g.name, g.list), rows: g.list }));
-        U.replaceLive(fundBody, UI.table({
+        put(fundBody, UI.table({
           groups: fundGroups, sort: fundSort,
           phone: { title: 'm', aside: 'apr', hide: ['base', 'cum', 'upd'] },   // a phone: the rates only
-          onSort: (k) => { fundSort = { key: k, desc: fundSort.key === k ? !fundSort.desc : k !== 'm' }; renderMarkets(); },
+          onSort: (k) => { fundSort = { key: k, desc: fundSort.key === k ? !fundSort.desc : k !== 'm' }; renderMarkets(true); },
           cols: [
             { key: 'm', label: 'Market', sortVal: 1, render: (r) => r.p.displayTicker },
             capCol,

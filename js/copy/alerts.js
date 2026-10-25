@@ -55,6 +55,13 @@
     setInterval(heartbeat, 5000);
     const release = () => { if (owner) U.storage.del(OWNER); };   // hand over at once when this tab goes away (pagehide fires where beforeunload does not)
     window.addEventListener('beforeunload', release); window.addEventListener('pagehide', release);
+    // a leader whose subscription could not be set up is tried again at once when the browser is back online
+    window.addEventListener('online', () => { if (owner) AL.sync(); });
+    // a reconnect: fills while the socket was down never arrive (an account stream sends no snapshot when subscribed
+    // again), so each followed leader's positions are read again; later fills were classified against the book before
+    // the gap ("opened a SHORT" for a close) until the 10-minute resync
+    let wasOpen = false;
+    A.ws.onStatus((s) => { if (s !== 'open') return; if (wasOpen) for (const [sid, un] of subs) if (un) readPositions(sid).catch(() => {}); wasOpen = true; });
     window.addEventListener('storage', (e) => {
       if (e.key === KEY) {   // another tab followed / unfollowed, or the owner wrote history
         const before = st && st.history.length ? st.history[0].id : null;
@@ -80,11 +87,18 @@
   // set up finds a newer generation when its reads come back and undoes only itself (a late cleanup deleted the newer
   // subscription's claim, which then unsubscribed itself: followed, and no alert ever came)
   const gens = new Map();
+  // a subscription that could not be set up (the markets did not load: offline at login, an API blip) is tried again after
+  // 5 s, 15 s, 45 s ... up to 5 minutes (and when the browser comes back online): one failed read left a followed leader
+  // unheard all day while the card said "listening"
+  let retryT = null, retryN = 0; const failed = new Set();
+  const retryLater = () => { if (retryT) return; const d = Math.min(300000, 5000 * Math.pow(3, retryN++)); retryT = setTimeout(() => { retryT = null; AL.sync(); }, d); };
+  /** How many followed leaders this tab could not start listening to yet (waiting for a retry) */
+  AL.waiting = () => (owner ? AL.state().leaders.filter((l) => failed.has(l.sid)).length : 0);
   async function subscribeLeader(sid) {
     if (subs.has(sid)) return;
     const gen = (gens.get(sid) || 0) + 1; gens.set(sid, gen);
     subs.set(sid, null);           // claimed: a second call during the awaits below must not subscribe twice
-    let ref; try { ref = await A.ref(); } catch (_) { if (gens.get(sid) === gen) subs.delete(sid); return; }
+    let ref; try { ref = await A.ref(); } catch (_) { if (gens.get(sid) === gen) { subs.delete(sid); if (!failed.has(sid)) { failed.add(sid); U.emit('alerts'); } retryLater(); } return; }
     // the leader's open positions now, so the first fill can be told apart from an add
     pos[sid] = {}; posAt[sid] = {};
     try { await readPositions(sid); } catch (_) {}
@@ -104,6 +118,7 @@
     if (gens.get(sid) !== gen || subs.get(sid) !== null) { un(); return; }   // unfollowed (or followed again) meanwhile: not this one
     subs.set(sid, un);
     t = setInterval(async () => { try { await readPositions(sid); } catch (_) {} }, 10 * 60000);
+    if (failed.delete(sid)) { if (!failed.size) { retryN = 0; clearTimeout(retryT); retryT = null; } U.emit('alerts'); }   // the card stops saying it is retrying
   }
 
   /** Fills of one order arrive in pieces; gather them for a moment and classify the whole order once. */

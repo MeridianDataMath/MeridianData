@@ -46,7 +46,9 @@
       const serverIn = h('input.input.sm', { placeholder: 'https://ntfy.sh', value: s.ntfy.server || 'https://ntfy.sh', title: 'https://ntfy.sh, or a ntfy on this machine (http://localhost:…): the site may reach no other server', style: { width: '170px' }, spellcheck: false, onchange: (e) => { const v = e.target.value.trim() || 'https://ntfy.sh'; if (!AL.pageServerOk(v)) { U.toast(AL.PAGE_SERVER_MSG.replace(/^t/, 'T')); e.target.value = s.ntfy.server || 'https://ntfy.sh'; return; } s.ntfy.server = v; AL.save(); } });
       const ntfyErr = s.ntfy.lastError ? h('span.small.neg', { title: U.fmtDateTime(s.ntfy.lastError.t) }, 'last push failed: ' + s.ntfy.lastError.msg) : null;
       const testBtn = h('button.btn.sm', { onclick: async () => { s.ntfy.topic = topicIn.value.trim(); s.ntfy.server = serverIn.value.trim() || 'https://ntfy.sh'; AL.save(); try { await AL.test(); U.toast('Test push sent'); } catch (e) { U.toast('Push failed: ' + e.message); } } }, 'Send a test');
-      const status = h('span.dim.small', s.leaders.length ? (AL.isOwner() ? 'this tab is listening since ' + U.fmtTime(AL.since || Date.now()) : 'another tab of this browser is listening') + ' · ' + s.leaders.length + ' followed' : 'not listening');
+      const waiting = AL.waiting ? AL.waiting() : 0;   // followed leaders whose subscription has not come up yet (retried)
+      const status = h('span.dim.small', s.leaders.length ? (AL.isOwner() ? 'this tab is listening since ' + U.fmtTime(AL.since || Date.now()) : 'another tab of this browser is listening') + ' · ' + s.leaders.length + ' followed' : 'not listening',
+        waiting ? h('span', { style: { color: 'var(--amber)' } }, ` · ${waiting === s.leaders.length ? 'not connected yet' : waiting + ' not connected yet'}: retrying`) : null);
       const hist = s.history.slice(0, 30);
       const feed = UI.table({ cols: [
         { key: 't', label: 'When', render: (a) => h('span.dim', U.fmtAgo(a.t)) },
@@ -205,14 +207,21 @@
       ctx.onCleanup(U.on('favorites', () => render()));
       ctx.onCleanup(U.on('alerts', () => render()));
 
-      let data = null;
+      let data = null, loaded = false;
+      U.replace(tableWrap, UI.loading('Loading the leaderboard snapshot…'));   // close to a megabyte: not a blank card
       try { data = LB ? await LB.loadRemote() : null; } catch (_) {}
       if (ctx.signal.aborted) return;
+      loaded = true;
       const local = LB && LB.cache();
       if (!data && local) data = local;   // a browser-built leaderboard has no copy profiles, but it is better than nothing
+      // a snapshot that did not load is offered again (one failed read said "No leaderboard snapshot yet" for as long as
+      // the page stayed open)
+      const retry = async () => { U.replace(tableWrap, UI.loading('Loading the leaderboard snapshot…')); data = (await LB.loadRemote(true)) || LB.cache(); if (!ctx.signal.aborted) render(); };
 
       function render() {
+        if (!loaded) return;   // (a follow or an alert while the snapshot is still coming)
         if (!data || !data.rows) {
+          if (LB && LB._remoteErr) { U.replace(tableWrap, UI.error(LB._remoteErr, retry)); U.replace(summary, ''); return; }
           U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'No leaderboard snapshot yet.'), h('a.btn.primary', { href: '#/leaderboard' }, 'Open the leaderboard')));
           U.replace(summary, ''); return;
         }
@@ -265,7 +274,7 @@
       }
       render();
       // keep the page current with the published snapshot
-      ctx.onCleanup(U.every(60000, async () => { if (ctx.signal.aborted) return; const d = await LB.loadRemote(); if (d && data && d.builtAt !== data.builtAt) { data = d; render(); } }));   // (not while hidden)
+      ctx.onCleanup(U.every(60000, async () => { if (ctx.signal.aborted) return; const d = await LB.loadRemote(); if (ctx.signal.aborted) return; if (d && (!data || d.builtAt !== data.builtAt)) { data = d; render(); } }));   // (not while hidden)
     },
   };
 })();

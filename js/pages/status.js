@@ -59,7 +59,7 @@
               ['Accounts', `${U.fmtNum(s.rows.length - (s.carried || 0), 0)} of ${U.fmtNum(s.accounts || s.rows.length, 0)} built` + (s.carried ? ` · ${s.carried} carried over from an earlier build` : '') + (s.missing ? ` · ${s.missing} missing` : '') + (s.failed ? ` · ${s.failed} failed${s.retried ? ' after retrying' : ''}` + (s.failReasons && Object.keys(s.failReasons).length ? ' (' + Object.entries(s.failReasons).sort((a, b) => b[1] - a[1]).map(([w, n]) => w + (n > 1 ? ' ×' + n : '')).join('; ') + ')' : '') : '') + (s.skipped ? ` · ${s.skipped} not reached in the ${U.fmtDuration((s.budgetS || 0) * 1000)} budget` : '') + (s.partial ? ' · partial' : ''), s.failed || s.skipped || s.missing ? 'neg' : ''],
               ['Copy profiles', `${U.fmtNum(s.rows.filter((r) => r.copy && r.copy.driftN).length, 0)} accounts with their price move after a fill measured`],
               s.durationMs ? ['Build took', U.fmtDuration(s.durationMs)] : null,
-            ]) : h('div.empty', 'No published perps snapshot: the leaderboard is built in each visitor\'s browser instead.'),
+            ]) : LB && LB._remoteErr ? UI.error(LB._remoteErr, () => drawPerps(true)) : h('div.empty', 'No published perps snapshot: the leaderboard is built in each visitor\'s browser instead.'),
             h('div.dim.xs', { style: { marginTop: '10px' } }, 'Used by: Leaderboard, Copy trading (scores, also in the simulator), Home (top wallets), Favorites (PnL 30d), Dashboard (stop map account list).'));
         } catch (e) { if (!isAbort(e)) U.replace(perps, UI.error(e)); }
       };

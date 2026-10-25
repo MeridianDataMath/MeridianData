@@ -12,16 +12,27 @@
   // with today's file (a removed one with the site's page, which the browser then keeps a year as that script): its lazy
   // groups would run new code on the old page's core. The deploy's build id (index.html's <meta name="md-build">) is
   // compared with the live one before a group loads, and after one fails: a newer deploy reloads the page instead.
+  // The live id is read again after 5 s (kept a minute, a deploy landing inside it was missed, and the re-check after a
+  // failed load always got the old answer: Retry failed for the rest of the minute), and given 10 s: no answer is
+  // "unknown", the group loads. Chart.js is not checked: a vendor file that cannot mix with the site's code, and loaded
+  // with a page's first chart, often long after the page opened (it reloaded a Tax report or a simulation just as its
+  // results came).
   const pageBuild = () => { const m = typeof document !== 'undefined' && document.querySelector ? document.querySelector('meta[name="md-build"]') : null; return m ? m.getAttribute('content') : null; };
-  let liveP = null;
-  const liveBuild = () => liveP || (liveP = fetch('./', { cache: 'no-cache' }).then((r) => (r.ok ? r.text() : '')).then((t) => { const m = /<meta name="md-build" content="([^"]*)">/.exec(t); return m ? m[1] : null; }, () => null).then((v) => { setTimeout(() => { liveP = null; }, 60000); return v; }));
-  const outdated = async () => { const mine = pageBuild(); if (!mine || mine === 'dev' || typeof fetch !== 'function') return false; const live = await liveBuild(); return !!live && live !== mine; };
+  let liveP = null, liveAt = 0;
+  const liveBuild = (fresh) => {
+    if (liveP && !fresh && Date.now() - liveAt < 5000) return liveP;
+    liveAt = Date.now();
+    const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined;
+    return (liveP = fetch('./', { cache: 'no-cache', signal }).then((r) => (r.ok ? r.text() : '')).then((t) => { const m = /<meta name="md-build" content="([^"]*)">/.exec(t); return m ? m[1] : null; }, () => null));
+  };
+  const outdated = async (fresh) => { const mine = pageBuild(); if (!mine || mine === 'dev' || typeof fetch !== 'function') return false; const live = await liveBuild(fresh); return !!live && live !== mine; };
+  const CHECKED = (name) => name !== 'charts';
   const reload = () => { try { U.toast('A newer version of the site is out: loading it'); } catch (_) {} location.reload(); return new Promise(() => {}); };
   MD.need = (name) => groups[name] || (groups[name] = (async () => {
     const tpl = typeof document !== 'undefined' && document.getElementById ? document.getElementById('lazy-' + name) : null;
     const srcs = tpl && tpl.content ? Array.from(tpl.content.querySelectorAll('script')).map((s) => s.getAttribute('src')) : [];
     if (!srcs.length) return;
-    if (await outdated()) return reload();
+    if (CHECKED(name) && await outdated()) return reload();
     await new Promise((resolve, reject) => {
       let left = srcs.length;
       for (const src of srcs) {
@@ -31,7 +42,7 @@
         document.head.appendChild(s);
       }
     });
-  })().catch(async (e) => { delete groups[name]; if (await outdated()) return reload(); throw e; }));
+  })().catch(async (e) => { delete groups[name]; if (CHECKED(name) && await outdated(true)) return reload(); throw e; }));
   /** route name → the script group its page is in (the Tax center, the Predict pages), loaded before it mounts */
   R.LAZY = { tax: 'tax', predict: 'predict' };
 

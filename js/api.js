@@ -54,17 +54,18 @@
   }
   /** GET, tried up to three times: after no answer, a 5xx, or a 429 (waiting what Retry-After asks, 1 s to RETRY_WAIT_MAX_MS:
    *  10 s in a browser, a minute in the snapshot build; 3 s when it says nothing). Any other 4xx is final at once, and the
-   *  caller's abort stops it between tries too. */
+   *  caller's abort stops it between tries too, in the middle of a wait. */
   A.RETRY_WAIT_MAX_MS = 10000;
   async function rawGet(url, signal) {
     for (let attempt = 1; ; attempt++) {
       let r;
       try { r = await fetchOnce(url, signal); }
-      catch (e) { if ((e && e.name === 'AbortError') || attempt >= 3) throw e; await U.sleep(500 * Math.pow(3, attempt - 1)); if (signal && signal.aborted) throw abortErr(); continue; }
+      catch (e) { if ((e && e.name === 'AbortError') || attempt >= 3) throw e; await U.sleep(500 * Math.pow(3, attempt - 1), signal); if (signal && signal.aborted) throw abortErr(); continue; }
       const res = r.res; noteLimit(url, res);
       if ((res.status === 429 || res.status >= 500) && attempt < 3) {
         const asked = waitAsked(res);
-        await U.sleep(res.status === 429 ? Math.min(A.RETRY_WAIT_MAX_MS, Math.max(1000, asked != null ? asked : 3000)) : 500 * Math.pow(3, attempt - 1));
+        // (the wait itself ends at the caller's abort: the snapshot build's deadline must not wait out a minute's Retry-After)
+        await U.sleep(res.status === 429 ? Math.min(A.RETRY_WAIT_MAX_MS, Math.max(1000, asked != null ? asked : 3000)) : 500 * Math.pow(3, attempt - 1), signal);
         if (signal && signal.aborted) throw abortErr();
         continue;
       }
@@ -220,8 +221,9 @@
   A.openOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isWorking: true }, { maxPages: 5, signal: o && o.signal });
   /** Untriggered stop orders (take profit / stop loss) — a separate filter from working orders. */
   A.pendingOrders = (sid, o) => A.page(A.BASE, '/v1/order', { subaccountId: sid, isPending: true }, { maxPages: 5, signal: o && o.signal });
-  /** Working + pending orders in one list. */
-  A.activeOrders = async (sid, o) => { const [w, p] = await Promise.all([A.openOrders(sid, o).catch(() => []), A.pendingOrders(sid, o).catch(() => [])]); const seen = new Set(); return w.concat(p).filter((x) => (seen.has(x.id) ? false : seen.add(x.id))); };
+  /** Working + pending orders in one list. Rejects when either read fails: a failure is not "no orders" (turned into an
+   *  empty list, the account's Live tab showed "No open orders or stops" and cleared every TP / SL). */
+  A.activeOrders = async (sid, o) => { const [w, p] = await Promise.all([A.openOrders(sid, o), A.pendingOrders(sid, o)]); const seen = new Set(); return w.concat(p).filter((x) => (seen.has(x.id) ? false : seen.add(x.id))); };
   A.fillsPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/order/fill', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
   A.fills = (sid, o) => A.page(A.BASE, '/v1/order/fill', { subaccountId: sid, createdAfter: o && o.after }, { maxPages: (o && o.maxPages) || 10, signal: o && o.signal });
   A.transfersPage = (sid, cursor, limit, o) => A.pageOne(A.BASE, '/v1/token/transfer', { subaccountId: sid }, { cursor, limit, signal: o && o.signal });
@@ -362,31 +364,49 @@
       this.setStatus('connecting');
       let sock;
       try { sock = new WebSocket(A.WS_URL); } catch (e) { this.setStatus('closed'); return; }
-      this.sock = sock;
+      this.sock = sock; this.pingAt = 0;
+      // every handler first checks that its socket is still the current one: a socket closed and replaced (the idle close,
+      // then a page subscribing) reported "closed" over the live one when its close finally came in
       sock.onopen = () => {
+        if (this.sock !== sock) return;
         this.retry = 0; this.setStatus('open');
         for (const [, sub] of this.subs) this.send(sub.payload);
       };
-      sock.onmessage = (ev) => { this.lastMsg = Date.now(); let m; try { m = JSON.parse(ev.data); } catch (_) { return; } this.route(m); };
+      sock.onmessage = (ev) => { if (this.sock !== sock) return; this.lastMsg = Date.now(); let m; try { m = JSON.parse(ev.data); } catch (_) { return; } this.route(m); };
       this.lastMsg = Date.now();
       this.watch();
       sock.onclose = () => {
+        if (this.sock !== sock) return;
         this.setStatus('closed');
         if (this.subs.size) { const d = Math.min(15000, 500 * Math.pow(2, this.retry++)); setTimeout(() => this.ensure(), d); }
       };
       sock.onerror = () => {};
     },
     send(obj) { if (this.sock && this.sock.readyState === 1) this.sock.send(JSON.stringify(obj)); },
-    /** A socket can stay "open" after the laptop slept or the network blipped while nothing arrives any more (tickers
-     *  normally come every second). Silence for 45 s, coming back online, or the tab becoming visible again after a
-     *  quiet spell all force a reconnect, so the status dot and the data are honest. */
+    /** Keepalive and liveness. Meridian's server closes a connection that has carried nothing for a minute (code 1006),
+     *  which a socket with account streams only (the leader alerts: fills come when the account trades) did every minute,
+     *  and fills in the gap were lost. After 20 s with nothing in, a ping goes out ({"event":"ping"}); its pong
+     *  ({"e":"pong"}) is traffic both ways. A socket can also stay "open" after the laptop slept or the network blipped
+     *  while nothing arrives any more: a ping left unanswered for 10 s, coming back online after 5 s of quiet, or a ping
+     *  unanswered for 5 s when the tab becomes visible again force a reconnect, so the status dot and the data are honest.
+     *  (A hidden tab's timers can run once a minute: the pong of each ping keeps the socket from counting as dead.) */
     watch() {
       if (this.watchT) return;
-      const stale = (ms) => this.sock && this.sock.readyState === 1 && this.subs.size && Date.now() - (this.lastMsg || 0) > ms;
+      const open = () => !!(this.sock && this.sock.readyState === 1 && this.subs.size);
+      const quiet = () => Date.now() - (this.lastMsg || 0);
+      const unanswered = (ms) => this.pingAt > (this.lastMsg || 0) && Date.now() - this.pingAt > ms;
       const kick = () => { try { this.sock.close(); } catch (_) {} };
-      this.watchT = setInterval(() => { if (stale(45000)) kick(); }, 15000);
-      window.addEventListener('online', () => { if (stale(5000)) kick(); });
-      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && stale(10000)) kick(); });
+      const ping = () => { this.pingAt = Date.now(); this.send({ event: 'ping' }); };
+      this.watchT = setInterval(() => {
+        if (!open()) return;
+        if (unanswered(10000)) { kick(); return; }
+        if (quiet() > 20000 && !(this.pingAt > (this.lastMsg || 0))) ping();
+      }, 5000);
+      window.addEventListener('online', () => { if (open() && quiet() > 5000) kick(); });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible' || !open() || quiet() < 10000) return;
+        ping(); setTimeout(() => { if (open() && unanswered(4000)) kick(); }, 5000);
+      });
     },
     route(m) {
       if (!m || !m.e) return;

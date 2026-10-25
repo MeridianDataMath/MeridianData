@@ -30,6 +30,20 @@ test('a 429 waits what Retry-After asks (1 to 10 s, 3 s when it says nothing); a
   await withFetch([answer(404, { message: 'Not found' })], async (calls) => { await assert.rejects(A.get('https://api.test/f'), (e) => e.status === 404); assert.equal(calls.length, 1); });
 });
 
+test("the caller's abort ends a 429's wait at once (the snapshot build's deadline does not wait out a minute)", async () => {
+  const f0 = globalThis.fetch, w0 = A.RETRY_WAIT_MAX_MS;
+  globalThis.fetch = async () => answer(429, null, { 'retry-after': '30' });
+  A.RETRY_WAIT_MAX_MS = 60000;
+  try {
+    const ctl = new AbortController(); setTimeout(() => ctl.abort(), 30);
+    const t0 = Date.now();
+    await assert.rejects(A.get('https://api.test/wait', { signal: ctl.signal, ttl: 0 }), (e) => e.name === 'AbortError');
+    assert.ok(Date.now() - t0 < 2000, 'ended at the abort, not after the 30 s wait');
+  } finally { globalThis.fetch = f0; A.RETRY_WAIT_MAX_MS = w0; }
+  // and a pause given no signal still just waits
+  const t1 = Date.now(); await U.sleep(20); assert.ok(Date.now() - t1 >= 15);
+});
+
 test('a request that hangs is given up at the time limit (and tried again); the caller\'s abort is never retried', async () => {
   const hang = (opt) => new Promise((resolve, reject) => opt.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
   await withFetch([hang], async (calls) => {

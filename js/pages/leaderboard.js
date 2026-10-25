@@ -14,7 +14,7 @@
   let building = null;
 
   const P = (MD.router.pages.leaderboard = {
-    _remote: undefined, _remoteAt: 0,
+    _remote: undefined, _remoteAt: 0, _remoteErr: null,
     /** newest of: local build (localStorage / memory) and the published snapshot (data/leaderboard.json) */
     cache() {
       const all = [U.storage.get(KEY, null), P._mem, P._remote].filter((c) => c && Array.isArray(c.rows));
@@ -22,15 +22,24 @@
       if (best) best.rows = best.rows.filter((r) => !(r && U.isExcluded(r.account)));   // left-out wallets (U.EXCLUDED), a local build too
       return best;
     },
-    /** Fetch the snapshot published next to the site (built by GitHub Actions); resolves null if absent. Re-checks at most once a minute unless forced. */
+    /** Fetch the snapshot published next to the site (built by GitHub Actions); resolves null if absent. Re-checks at most
+     *  once a minute unless forced. Absent is a 404 or the site's page served in its place (the host answers a missing file
+     *  with index.html). A read that fails (no answer, a 5xx, a cut-off body) is not "absent": P._remoteErr holds it, the
+     *  snapshot read before stays in use, and the page offers a Retry rather than a browser build, the thousands of
+     *  requests only a missing file justifies */
     async loadRemote(force) {
       if (!force && P._remote !== undefined && Date.now() - P._remoteAt < 60000) return P._remote;
       try {
-        const r = await fetch('data/leaderboard.json', { cache: 'no-cache' });
-        const j = r.ok ? await r.json() : null;
-        if (j && Array.isArray(j.rows)) P._remote = Object.assign(j, { remote: true, rows: j.rows.filter((r) => !(r && U.isExcluded(r.account))) });   // left-out wallets (U.EXCLUDED)
-        else if (P._remote === undefined) P._remote = null;
-      } catch (_) { if (P._remote === undefined) P._remote = null; }
+        const r = await fetch('data/leaderboard.json', { cache: 'no-cache' }).catch(() => { throw new Error('The published leaderboard did not load: check the connection and try again'); });
+        if (r.status === 404 || (r.ok && /text\/html/i.test(r.headers.get('content-type') || ''))) { if (P._remote === undefined) P._remote = null; P._remoteErr = null; }
+        else {
+          if (!r.ok) throw new Error(`The published leaderboard did not load (the site answered ${r.status}): try again in a moment`);
+          let j; try { j = await r.json(); } catch (_) { throw new Error('The published leaderboard arrived incomplete: try again'); }
+          if (!j || !Array.isArray(j.rows)) throw new Error('The published leaderboard could not be read: try again');
+          P._remote = Object.assign(j, { remote: true, rows: j.rows.filter((r) => !(r && U.isExcluded(r.account))) });   // left-out wallets (U.EXCLUDED)
+          P._remoteErr = null;
+        }
+      } catch (e) { P._remoteErr = e; if (P._remote === undefined) P._remote = null; }
       P._remoteAt = Date.now();
       return P._remote;
     },
@@ -124,6 +133,8 @@
 
       function renderTable() {
         const data = P.cache();
+        // a published file that did not load is not a missing one: a Retry, never a browser build behind the visitor's back
+        if ((!data || !data.rows) && P._remoteErr) { U.replace(tableWrap, UI.error(P._remoteErr, retryRemote)); U.replace(summary, ''); return; }
         if (!data || !data.rows) { U.replace(tableWrap, h('div.empty', h('div', { style: { marginBottom: '10px' } }, 'The leaderboard has not been built yet.'), h('button.btn.primary', { onclick: () => build(true) }, 'Build leaderboard'))); U.replace(summary, ''); return; }
         const { rows, rankOf } = rowsFiltered(data);
         const total = rows.length; const pages = Math.max(1, Math.ceil(total / PAGE)); if (state.page > pages) state.page = pages;
@@ -160,7 +171,7 @@
       }
       function renderSummary(data) {
         if (!data) return;
-        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), P.coverageNote(data), UI.staleNote(data.builtAt, 'the publishing job may be down; press Update to rebuild in your browser'));
+        U.replace(summary, `${data.rows.length} accounts · snapshot ${U.fmtAgo(data.builtAt)}`, data.remote ? h('span.dim', ' · published snapshot') : h('span.dim', ' · built in this browser'), !data.remote && P._remoteErr ? h('span.neg', { title: P._remoteErr.message }, ' · the published snapshot did not load') : null, P.coverageNote(data), UI.staleNote(data.builtAt, 'the publishing job may be down; press Update to rebuild in your browser'));
       }
       // keep the page current: re-check the published snapshot every minute, tick the age label every 30 s
       let shownBuiltAt = 0;
@@ -207,12 +218,18 @@
           if (e.name !== 'AbortError') U.replace(progress, UI.error(e, () => build(true)));
         } finally { building = false; updateBtn.disabled = false; }
       }
-      renderTable();
-      const c = P.cache();
       // a browser build only without a snapshot, or one so old the publishing job looks down (UI.STALE_MS): each one is
       // thousands of requests from the visitor's own rate limit, and one past 30 minutes is simply the next one not out yet
-      // (Update builds one on request)
-      if (!c || Date.now() - c.builtAt > UI.STALE_MS) build(false);
+      // (Update builds one on request). Never when the published file only failed to load (P._remoteErr): that is a Retry
+      function autoBuild() { const c = P.cache(); if (!P._remoteErr && (!c || Date.now() - c.builtAt > UI.STALE_MS)) build(false); }
+      async function retryRemote() {
+        U.replace(tableWrap, UI.loading('Loading the leaderboard…'));
+        await P.loadRemote(true);
+        if (ctx.signal.aborted) return;
+        renderTable(); autoBuild();
+      }
+      renderTable();
+      autoBuild();
     },
   });
 

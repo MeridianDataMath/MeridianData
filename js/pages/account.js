@@ -823,9 +823,9 @@
         h('div.card-head', { style: { borderTop: '1px solid var(--border-2)', flex: 'none' } }, h('h2', 'Market trades'), mktTitle), mktFill)));
 
     const marks = {}; // ticker -> {mark, bid, ask}
-    let positions = [], orders = [], fills = [];
+    let positions = [], orders = [], fills = [], ordersRead = false;   // ordersRead: an order read has worked once
     // a read that failed (and nothing read before it): its list says so, with a Retry, instead of "No …"
-    const err = { live: null, fills: null, events: null, mkt: null };
+    const err = { live: null, orders: null, fills: null, events: null, mkt: null };
     const failNote = (what, e, retry) => UI.error(what + ' could not be read: ' + ((e && e.message) || e), retry);
     const prices = {};
     const renderPos = () => {
@@ -833,6 +833,8 @@
       for (const p of positions) { const prod = ref.byId[p.productId]; const m = prod && marks[prod.ticker]; px[p.productId] = m ? { oraclePrice: m.mark } : prices[p.productId]; }
       const acct = AN.accountState({ balances: [], positions, ref, prices: px });
       AN.attachStops(acct.positions, orders); AN.appTpSl(acct.positions, orders);
+      // the orders could not be read and none were before: whether a position has a TP or an SL is not known ("?", not "—")
+      if (err.orders && !ordersRead) for (const r of acct.positions) r.stopsUnknown = true;
       U.replaceLive(posBody, UI.table({
         cols: [
           { key: 'm', label: 'Symbol', render: (r) => UI.marketCell(r.ticker) },
@@ -850,7 +852,10 @@
         ], rows: acct.positions, empty: err.live ? 'The positions could not be read' : 'No open positions', phone: { title: 'm', aside: 'upnl', hide: ['upd', 'pfee'] },
       }));
     };
-    const renderOrd = () => U.replaceLive(ordBody, UI.table({ cols: orderCols(ref, orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: err.live ? 'The orders could not be read' : 'No open orders or stops' }));
+    // an order read that failed keeps the orders read before, and says so; with none read before, the failure and a Retry
+    const renderOrd = () => U.replaceLive(ordBody, err.orders && !ordersRead ? failNote('The orders', err.orders, reload) : [
+      err.orders ? h('div.small', { style: { color: 'var(--amber)', padding: '6px 12px' }, title: String(err.orders.message || err.orders) }, 'The latest read of the orders failed: these are the orders read before') : null,
+      UI.table({ cols: orderCols(ref, orders), phone: { title: 'm', aside: 'value', hide: ['flags'] }, rows: U.sortBy(orders, (o) => o.createdAt, true), empty: err.live ? 'The orders could not be read' : 'No open orders or stops' })]);
     const fillRow = (f, flash) => h('div.it', { class: flash ? 'flash' : '' }, h('span.t', U.fmtFeedTime(f.createdAt)), h('span.m', tickerOf(ref, f.productId)), U.sideEl(f.side), h('span.num', U.fmtQty(f.filled, lotOf(ref, f.productId)) + ' @ ' + U.fmtPrice(f.price, tickOf(ref, f.productId))), h('span.grow'), h('span.num.dim', U.fmtUsd(U.num(f.filled) * U.num(f.price))), h('span.xs.dim', f.isMaker ? 'maker' : 'taker'));
     const renderFills = () => U.replaceLive(fillBody, fills.length ? fills.slice(0, 40).map((f, i) => fillRow(f, f._new && i < 5)) : err.fills ? failNote('The fills', err.fills, loadFills) : UI.empty('No fills yet'));
     let events = [];
@@ -864,8 +869,11 @@
 
     async function reload() {
       try {
-        const [p, o] = await Promise.all([A.openPositions(sid, cx), A.activeOrders(sid, cx)]);
-        positions = p; orders = o; err.live = null;
+        // the orders apart from the positions: a failed order read keeps the orders read before (renderOrd)
+        let ordErr = null;
+        const [p, o] = await Promise.all([A.openPositions(sid, cx), A.activeOrders(sid, cx).catch((e) => { if (isAbort(e)) throw e; ordErr = e; return null; })]);
+        positions = p; err.live = null; err.orders = ordErr;
+        if (o) { orders = o; ordersRead = true; }
         const pids = Array.from(new Set(positions.map((x) => x.productId)));
         if (pids.length) Object.assign(prices, await A.marketPrices(pids, { signal: cx.signal, ttl: 3000 }));
         renderPos(); renderOrd(); if (bookHook) bookHook();   // the book marks this account's own resting orders
