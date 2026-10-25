@@ -5,7 +5,8 @@
   const isAbort = (e) => e && e.name === 'AbortError';
   const ROWS = 5;   // rows per card
   const usd0 = (x, o) => U.fmtUsd(x, Object.assign({ dp: 0 }, o));
-  const mult = (m) => (m == null || !Number.isFinite(m) ? '—' : U.fmtNum(m, m < 1.01 ? 4 : m >= 100 ? 0 : 2) + '×');
+  const mult = (m) => { if (m == null || !Number.isFinite(m)) return '—'; const r = Math.ceil(m * 100 - 1e-9) / 100; return (r >= 100 ? U.fmtNum(Math.ceil(r - 1e-9), 0) : U.fmtNum(r, 2)) + '×'; };
+  const multExact = (m) => (+m.toFixed(4)).toLocaleString('en-US', { maximumFractionDigits: 4 }) + '×';
   const bettorUrl = (a) => '#/predict/bettor?address=' + encodeURIComponent(a);
   const slipUrl = (id) => '#/predict/p/' + id;
 
@@ -258,7 +259,7 @@
           U.replace(betsBody, bets.length ? h('div.feed', bets.map((n) => predRow(n, n.t,
             n.picks[0] && n.picks[0].yes != null ? UI.chip(n.picks[0].yes ? 'YES' : 'NO', n.picks[0].yes ? 'green' : 'red') : null,
             h('span.num.fix', usd0(n.stake)),
-            h('span.num.dim.fix.opt', { title: 'Pays this many times the stake if it wins' }, mult(n.multiple))))) : UI.empty(pr.fullBets ? 'No bet of ' + usd0(P.BIG_BET) + ' or more yet' : 'No bet of ' + usd0(P.BIG_BET) + ' or more among the latest 25'));
+            h('span.num.dim.fix.opt', { title: Number.isFinite(n.multiple) ? 'Pays ' + multExact(n.multiple) + ' the stake if it wins' : 'Pays this many times the stake if it wins' }, mult(n.multiple))))) : UI.empty(pr.fullBets ? 'No bet of ' + usd0(P.BIG_BET) + ' or more yet' : 'No bet of ' + usd0(P.BIG_BET) + ' or more among the latest 25'));
         }
 
         U.replace(foot, h('a', { href: A.APP_URL, target: '_blank', rel: 'noopener' }, 'app.meridian.xyz'), ' · ', h('a', { href: '#/status', title: 'How old the published snapshots are' }, 'Data updated ', lb && lb.builtAt ? U.fmtAgo(lb.builtAt) : '—'));
