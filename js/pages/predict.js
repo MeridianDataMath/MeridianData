@@ -465,7 +465,7 @@
       const pr = route.params, sp = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
       const KEYS = ['address', 'n', 'wagered', 'pnl', 'mrank', 'roi', 'winRate', 'avgOdds', 'combos', 'avgVig', 'biggestWin', 'last'];
       const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 3, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
-      const save = () => MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
+      const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
       // the medals go with a best-first order only (sorted the other way, the biggest loss took gold)
       const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc', mrank: 'asc' };
       const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
@@ -1187,17 +1187,21 @@
   function trackResolution(rows, ctx, rerender, isCurrent) {
     const ids = rows.map(qId).filter(Boolean);
     if (!ids.length) return;
+    // a page left meanwhile is never drawn again (its render rewrites the link, which is then the next page's)
+    const current = () => !ctx.signal.aborted && isCurrent();
     (async () => {
       resLoading++;
       // the markets first (each row's state and its YES token), then the order book's midpoints (the chance as the app shows it), then the oracle
-      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!isCurrent()) return; rerender(); if (await loadMids(ids, ctx.signal) && isCurrent()) rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); }
+      try { await R.load(ids, { signal: ctx.signal, deep: false }); if (!current()) return; rerender(); if (await loadMids(ids, ctx.signal) && current()) rerender(); await R.load(ids, { signal: ctx.signal, deep: true }); }
       catch (e) { if (!isAbort(e)) console.warn('resolution tracker', e); }
       finally { resLoading--; }
-      if (isCurrent()) rerender();
+      if (current()) rerender();
     })();
   }
-  // every 30 s (countdowns, prices); fn gets the tick's number, so every fourth (two minutes) can read the resolutions again
-  const resTicker = (ctx, fn) => { let n = 0; const stop = U.every(30000, () => fn(++n)); ctx.signal.addEventListener('abort', stop); };
+  // every 30 s (countdowns, prices); fn gets the tick's number, so every fourth (two minutes) can read the resolutions again.
+  // Stopped through ctx.onCleanup, which also stops one started after the page was left (an 'abort' listener added then
+  // never fires, and the ticker ran for the rest of the visit)
+  const resTicker = (ctx, fn) => { let n = 0; ctx.onCleanup(U.every(30000, () => fn(++n))); };
   /** The resolutions of the rows on screen read again (R.load keeps what is still fresh): a "proposed" row turns into
    *  "resolved" or "settled" on a page left open */
   const reResolve = (ids, ctx, redraw) => { if (ids.length) R.load(ids, { signal: ctx.signal }).then(() => { if (!ctx.signal.aborted) redraw(); }).catch(() => {}); };
@@ -1215,8 +1219,10 @@
     const liveP = P.live();
     if (route.params.all !== '1') return mountQuestionsWithBets(body, route, ctx, st, liveP);
     if (!(await liveP)) return mountQuestionsWithBets(body, route, ctx, st, liveP);
+    if (ctx.signal.aborted) return;
     let cats = []; let counts = null;
     try { [cats, counts] = await Promise.all([P.categories(ctx), P.conditionCounts(ctx)]); } catch (e) { if (isAbort(e)) return; }
+    if (ctx.signal.aborted) return;   // answered from the cache after the page was left: nothing is drawn or linked
     const seenSlug = new Set(); cats = cats.filter((c) => (seenSlug.has(c.slug) ? false : seenSlug.add(c.slug)));
     const wrap = h('div');
     const summary = h('span.dim.small');
@@ -1251,7 +1257,7 @@
         // "Ended · unsettled": unsettled questions in end-time order start with the ended ones, so a page is cut off at the first still-running question
         const ended = st.status === 'ended';
         const res = await P.conditions({ search: st.search || undefined, categorySlug: st.cat || undefined, settled: st.status === 'all' ? null : st.status === 'settled', orderBy: ended ? 'END_TIME' : st.sort, dir: ended || st.sort === 'END_TIME' ? 'ASC' : 'DESC', first: PAGE, after: cursors[p - 1], signal: ctx.signal, ttl: 30000 });
-        if (my !== reqId) return;
+        if (my !== reqId || ctx.signal.aborted) return;
         const now = Date.now() / 1000;
         rows = ended ? res.nodes.filter((c) => c.endTime && c.endTime < now) : res.nodes;
         hasNext = res.pageInfo.hasNextPage && rows.length === res.nodes.length; page = p; if (hasNext && cursors.length === p) cursors.push(res.pageInfo.endCursor);
@@ -1262,7 +1268,7 @@
     }
     // the countdowns, and the midpoints of the rows on screen (asked again once a minute is up)
     resTicker(ctx, (n) => { if (loading) return; renderRows(); loadMids(rows.map(qId), ctx.signal).then((ok) => { if (ok && !loading) renderRows(); }).catch(() => {}); if (n % 4 === 0) reResolve(rows.map(qId), ctx, () => { if (!loading) renderRows(); }); });
-    function load() { cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
+    function load() { if (ctx.signal.aborted) return; cursors = [null]; MD.router.setParams({ all: '1', q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, sort: st.sort !== 'OPEN_INTEREST' ? st.sort : null }, { silent: true }); go(1); }
     load();
   }
 
@@ -1318,6 +1324,7 @@
   async function mountQuestionsWithBets(body, route, ctx, st, liveP) {
     await withSnapshot(body, ctx, async (snap) => {
       await P.loadQuestions(snap);
+      if (ctx.signal.aborted) return;
       let live = false;
       const all = (snap.questionsWithOi || []).filter(hasBets);
       const cats = Array.from(new Map(all.filter((q) => q.slug).map((q) => [q.slug, q.cat])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -1379,8 +1386,10 @@
       loadEnded();
       // the tab, search, category, tag, column and page in the link (silently), so Back from a question's bettor returns to
       // this same view
-      const save = () => MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, tag: st.tag || null, col: st.col.key === 'sw' ? null : st.col.key, dir: st.col.desc ? null : 'asc', page: page > 1 ? page : null }, { silent: true });
+      // (never once the page is left: a late render would write this page's view into the next page's link)
+      const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.search || null, cat: st.cat || null, status: st.status !== 'open' ? st.status : null, tag: st.tag || null, col: st.col.key === 'sw' ? null : st.col.key, dir: st.col.desc ? null : 'asc', page: page > 1 ? page : null }, { silent: true });
       function render(keepTracking) {
+        if (ctx.signal.aborted) return;
         save();
         let rows = all.slice(); const t = Date.now();
         if (st.search) { const s = st.search.toLowerCase(); rows = rows.filter((q) => (q.q + ' ' + (q.tags || []).join(' ')).toLowerCase().includes(s)); }   // a linked ?q= keeps its case
