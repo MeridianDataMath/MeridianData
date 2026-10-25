@@ -938,6 +938,7 @@
   async function mountSlip(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Slip'));
     const id = route.path.split('/')[3] || '';
+    const ref = U.refCode(route.params.r);   // the sharer's code, from a slip link shared with it (this slip's Meridian buttons)
     if (!id) { U.replace(body, slipForm()); return; }
     if (!P.isPredictionId(id)) { U.replace(body, h('div.card', h('div.error', 'That is not a prediction id. A slip link ends in 0x and 64 hex digits, as in app.meridian.xyz/predict/p/0x…')), slipForm()); return; }
     U.replace(body, loadingCard('Loading the slip…'));
@@ -953,12 +954,12 @@
         h('p.muted', { style: { margin: 0 } }, found.unavailable
           ? 'The snapshot\'s slip files could not be read just now (they are published with the snapshot every 30 minutes). Try again in a moment, or open the slip on Meridian:'
           : `This prediction id is not in the published snapshot${found.builtAt ? ' (built ' + U.fmtAgo(found.builtAt) + ', refreshed every 30 minutes)' : ''}. A prediction placed since then appears with the next snapshot (launch-day test predictions are left out). If the id is a real prediction, Meridian's own page shows it:`),
-        h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(id), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Open the slip on Meridian Predict'),
+        h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(id, ref), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Open the slip on Meridian Predict'),
         found.unavailable ? h('div.slip-actions', h('button.btn.sm', { type: 'button', onclick: () => mountSlip(body, route, ctx) }, 'Try again')) : null,
         slipHowTo())));
       return;
     }
-    renderSlip(body, found.n, found.builtAt, ctx);
+    renderSlip(body, found.n, found.builtAt, ctx, ref);
   }
 
   /** The share dialog of a slip (js/flex.js FX.card): its card drawn here, and the /s/<id> link, which unfurls into the
@@ -973,11 +974,11 @@
         : st === 'open' ? `A ${usd(n.stake)} ${combo} at ${mult(n.multiple)} on Meridian Predict: pays ${usd(n.pool)} if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`
           : `A ${mult(n.multiple)} ${combo} on Meridian Predict`;
     return MD.flex.card({ title: 'Share this slip', alt: K.slipText(n).title, draw: (fontCss) => K.slipSvg(n, { fontCss }), fname: `meridian-slip-${id.slice(2, 10)}.png`,
-      shareUrl: MD.api.shareUrl('s', id), card: 'cards/s/' + id + '.png', expected: K.slipCardWanted(n), postText: post });
+      shareUrl: MD.api.shareUrl('s', id), refField: true, card: 'cards/s/' + id + '.png', expected: K.slipCardWanted(n), postText: post });
   }
   P.shareSlip = shareSlip;
 
-  function renderSlip(body, n, builtAt, ctx) {
+  function renderSlip(body, n, builtAt, ctx, ref) {
     const wrap = h('div.slip-wrap');
     U.replace(body, wrap);
     const render = () => {
@@ -1052,14 +1053,14 @@
         h('div.slip-legs-head', h('span', n.legs > 1 ? `${n.legs} legs` : '1 leg'), h('span.grow'), n.legs > 1 ? h('span', 'every leg must win') : null),
         h('div.slip-legs', n.picks.map(leg)),
         // (data-focus-key: a keyboard user's focus comes back to the button after a refresh redrew the card)
-        open ? h('div.slip-cta', h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Copy slip to Meridian Predict'), btnShare(false))
+        open ? h('div.slip-cta', h('a.btn.primary.slip-copy', { href: P.meridianSlipUrl(n.id, ref), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Copy slip to Meridian Predict'), btnShare(false))
           : h('div.slip-cta', btnShare(true)),
         !open && !n.decided ? h('div.slip-note', { style: { textAlign: 'center' } }, `${closed} of its ${n.legs} leg${n.legs > 1 ? 's' : ''} ${closed === 1 ? 'has' : 'have'} passed Meridian's listed end time, settled on Meridian or closed on Polymarket, so this page no longer offers to copy it.`) : null,
         open ? slipHowTo() : null,
         h('div.slip-actions',
           h('button.btn.sm.ghost', { type: 'button', dataset: { focusKey: 'slip:details' }, title: 'Stake, odds, both sides, every leg and its resolution', onclick: () => openPrediction(n, ctx) }, U.icon('info'), 'Details'),
           n.predictor ? h('a.btn.sm.ghost', { href: bettorUrl(n.predictor), title: 'Every prediction of this bettor, its PnL and open positions' }, U.icon('account'), 'Bettor ' + U.shortAddr(n.predictor, 4)) : null,
-          open ? null : h('a.btn.sm.ghost', { href: P.meridianSlipUrl(n.id), target: '_blank', rel: 'noopener', title: 'Meridian\'s page for this prediction' }, U.icon('external'), 'View on Meridian')),
+          open ? null : h('a.btn.sm.ghost', { href: P.meridianSlipUrl(n.id, ref), target: '_blank', rel: 'noopener', title: 'Meridian\'s page for this prediction' }, U.icon('external'), 'View on Meridian')),
         h('div.slip-note', { style: { textAlign: 'center' } }, 'Placed ' + U.fmtDateTime(n.t), builtAt ? [' · as of the snapshot built ', U.agoEl(builtAt)] : null, builtAt ? UI.staleNote(builtAt) : null, n.decided ? '' : allLive ? ' · the chances are Polymarket\'s, live.' : noneOnly ? ' · a leg Polymarket has no market for (a Kalshi one) is at Meridian\'s estimate.' : ' · Polymarket has not loaded: the chances are Meridian\'s snapshot estimates.')));
     };
     render();

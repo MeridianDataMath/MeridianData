@@ -306,6 +306,20 @@ test('index.html sends /a/, /p/, /s/ and /predict/p/ paths on to their hash rout
   // of that name (the router's not-found page for one that does not exist)
   assert.equal(go('/predict/questions'), '/#/predict/questions'); assert.equal(go('/leaderboard/'), '/#/leaderboard');
   assert.equal(go('/leaderboard', '?interval=7d'), '/#/leaderboard?interval=7d'); assert.equal(go('/s/0x12'), '/#/s/0x12');
+  // a slip link shared with its sharer's referral code passes the code on (letters and digits only), nothing else
+  assert.equal(go('/s/' + ID, '?r=K7Q2LMNP9RTA'), '/#/predict/p/' + ID + '?r=K7Q2LMNP9RTA');
+  assert.equal(go('/predict/p/' + ID, '?x=1&r=AB12'), '/#/predict/p/' + ID + '?r=AB12');
+  assert.equal(go('/s/' + ID, '?r=%22%3E%3Cscript'), '/#/predict/p/' + ID); assert.equal(go('/s/' + ID, '?r=ab'), '/#/predict/p/' + ID);
+});
+
+test('the share page (js/share.js) sends people on, a slip with its sharer\'s referral code', () => {
+  const code = fs.readFileSync(path.join(root, 'js/share.js'), 'utf8');
+  const go = (href, search = '') => { let to = null; new Function('document', 'location', code)({ getElementById: () => ({ getAttribute: () => href }) }, { search, replace: (u) => { to = u; } }); return to; };
+  assert.equal(go('/#/predict/p/' + ID), '/#/predict/p/' + ID);
+  assert.equal(go('/#/predict/p/' + ID, '?r=K7Q2LMNP9RTA'), '/#/predict/p/' + ID + '?r=K7Q2LMNP9RTA');
+  assert.equal(go('/#/predict/p/' + ID, '?r=bad!code'), '/#/predict/p/' + ID, 'only letters and digits');
+  assert.equal(go('/#/account?address=' + A1 + '&sub=s1', '?r=K7Q2LMNP9RTA'), '/#/account?address=' + A1 + '&sub=s1', 'an account link keeps no code');
+  assert.equal(go(null), null);
 });
 
 test('the site card counts accounts and Predict activity', () => {

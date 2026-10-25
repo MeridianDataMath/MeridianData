@@ -360,6 +360,12 @@
   U.shortAddr = (a, n = 4) => { a = String(a || ''); return a.length > 2 * n + 4 ? `${a.slice(0, 2 + n)}…${a.slice(-n)}` : a; };
   U.isAddress = (s) => /^0x[0-9a-fA-F]{40}$/.test(String(s || '').trim());
   U.isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s || '').trim());
+  /** A Meridian referral code as a slip's share link carries it (?r=): from a code, or from a link with ?ref=<code>
+   *  pasted whole; letters and digits, 4 to 32 of them, else null (nothing else goes into a link). */
+  U.refCode = (x) => {
+    const s = String(x == null ? '' : x).trim(); const m = /[?&]ref=([A-Za-z0-9]{4,32})(?=[&#]|$)/.exec(s); const c = m ? m[1] : s;
+    return /^[A-Za-z0-9]{4,32}$/.test(c) ? c : null;
+  };
   /** A subaccount's name as its owner set it, where it reads as text (UTF-8, no control characters); null otherwise. */
   U.subName = (s) => {
     const raw = String((s && s.name) || '').trim();

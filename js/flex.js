@@ -130,8 +130,21 @@
     let svg = null, previewUrl = null, pngP = null, pngBlob = null, ready = false;
     const img = h('img', { alt: o.alt || o.title, style: { width: '100%', height: 'auto', display: 'block', borderRadius: '12px', border: '1px solid var(--border-3)' } });
     const frame = h('div.flex-frame.busy', img);
-    const linkIn = h('input.input.mono.share-link-input', { value: o.shareUrl, readOnly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() });
-    const btnLink = h('button.btn.primary', { onclick: () => { U.copyText(o.shareUrl, ready ? 'Link copied: wherever you paste it, it shows this card' : 'Link copied'); } }, U.icon('copy'), 'Copy link');
+    // o.refField (a slip): the sharer's own Meridian referral code, optional, goes into the link as ?r= (that slip's
+    // Meridian buttons carry it for whoever opens the link; js/share.js and index.html pass it on); kept in this browser
+    const REF_KEY = 'md.myRefCode';
+    let url = o.shareUrl;
+    const linkIn = h('input.input.mono.share-link-input', { value: url, readOnly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() });
+    const refIn = o.refField ? h('input.input.sm', { value: U.storage.get(REF_KEY, '') || '', placeholder: 'your code, or your referral link', spellcheck: false, autocomplete: 'off', 'aria-label': 'Your Meridian referral code (optional)' }) : null;
+    const setRef = () => {
+      if (!refIn) return;
+      const raw = refIn.value.trim(), code = U.refCode(raw), bad = !!raw && !code;
+      refIn.classList.toggle('bad', bad); refIn.title = bad ? 'Letters and digits only, 4 to 32 of them (or paste your referral link)' : '';
+      url = o.shareUrl + (code ? '?r=' + code : ''); linkIn.value = url;
+      if (!bad) U.storage.set(REF_KEY, code || '');
+    };
+    if (refIn) { refIn.addEventListener('input', setRef); setRef(); }
+    const btnLink = h('button.btn.primary', { onclick: () => { U.copyText(url, ready ? 'Link copied: wherever you paste it, it shows this card' : 'Link copied'); } }, U.icon('copy'), 'Copy link');
     const btnDl = h('button.btn', { onclick: async () => { if (!svg) return; try { btnDl.disabled = true; saveBlob(await (pngP || FX.png(svg)), o.fname); U.toast('Saved ' + o.fname); } catch (e) { U.toast(e.message || 'Download failed'); } finally { btnDl.disabled = false; } } }, U.icon('download'), 'Download PNG');
     const canCopy = !!(navigator.clipboard && window.ClipboardItem);
     const btnCopy = canCopy ? h('button.btn', { onclick: async () => {
@@ -142,12 +155,13 @@
     const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([''], 't.png', { type: 'image/png' })] })); } catch (e) { return false; } })();
     const btnShare = canShareFiles ? h('button.btn', { onclick: () => {
       if (!pngBlob) { U.toast('The image is still being made: try again in a moment'); return; }
-      navigator.share({ files: [new File([pngBlob], o.fname, { type: 'image/png' })], text: o.shareUrl }).catch((e) => { if (e && e.name !== 'AbortError') U.toast('Sharing failed: use Download'); });
+      navigator.share({ files: [new File([pngBlob], o.fname, { type: 'image/png' })], text: url }).catch((e) => { if (e && e.name !== 'AbortError') U.toast('Sharing failed: use Download'); });
     } }, U.icon('external'), 'Share image') : null;
-    const btnX = h('button.btn', { onclick: () => window.open('https://x.com/intent/post?text=' + encodeURIComponent(o.postText || o.title) + '&url=' + encodeURIComponent(o.shareUrl), '_blank', 'noopener') }, U.icon('external'), 'Post on X');
+    const btnX = h('button.btn', { onclick: () => window.open('https://x.com/intent/post?text=' + encodeURIComponent(o.postText || o.title) + '&url=' + encodeURIComponent(url), '_blank', 'noopener') }, U.icon('external'), 'Post on X');
     const note = h('p.dim.xs', { style: { margin: '12px 0 0' } }, 'The link opens this slip on the site.');
     const body = h('div.flex-modal',
       frame,
+      refIn ? h('div.share-ref', h('label.small', 'Your Meridian referral code ', h('span.dim', '(optional)')), refIn, h('div.dim.xs', 'It goes into the link: whoever opens this slip from it and copies it to Meridian comes in with your code.')) : null,
       h('div.share-link', linkIn, btnLink),
       h('div.row.wrap', { style: { gap: '8px', marginTop: '10px' } }, btnX, btnShare, btnCopy, btnDl),
       note);

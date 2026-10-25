@@ -114,6 +114,17 @@ test('a slip copied to Meridian opens its shared-prediction page under the refer
   assert.ok(P.APP_URL.endsWith('?ref=BJ9Y51H9XB1L') && P.CLAIM_URL.endsWith('?ref=BJ9Y51H9XB1L') && MD.api.APP_URL.endsWith('?ref=BJ9Y51H9XB1L'), 'every app link keeps the code');
 });
 
+test('a slip shared with its sharer\'s referral code: that slip\'s Meridian link carries it, nothing else does', () => {
+  const U = MD.util, id = '0x' + 'c0'.repeat(32);
+  // the code: letters and digits, 4 to 32, typed or from a referral link pasted whole
+  assert.equal(U.refCode('ABC123XYZ'), 'ABC123XYZ'); assert.equal(U.refCode('  abcd  '), 'abcd');
+  assert.equal(U.refCode('https://app.meridian.xyz/?ref=K7Q2LMNP9RTA'), 'K7Q2LMNP9RTA'); assert.equal(U.refCode('app.meridian.xyz/predict?x=1&ref=ZZ99#top'), 'ZZ99');
+  for (const bad of ['', null, 'abc', 'x'.repeat(33), 'AB CD', 'ABC"onload=', 'https://app.meridian.xyz/?ref=', '../etc', 'AB%20CD']) assert.equal(U.refCode(bad), null, String(bad));
+  assert.equal(P.meridianSlipUrl(id, 'K7Q2LMNP9RTA'), 'https://app.meridian.xyz/predict/p/' + id + '?ref=K7Q2LMNP9RTA');
+  assert.equal(P.meridianSlipUrl(id, 'no good!'), P.meridianSlipUrl(id), 'a code that is not one: the site\'s');
+  assert.equal(P.meridianSlipUrl('0x12', 'K7Q2LMNP9RTA'), P.APP_URL, 'not a slip: the site\'s Predict link');
+});
+
 test('luck: the exact chance of a record at least this good if every bet had exactly its locked odds', () => {
   near(assert, P.luckOf([0.5, 0.5], 2), 0.25, 1e-12);
   near(assert, P.luckOf(Array(10).fill(0.5), 7), 176 / 1024, 1e-12, 'binomial tail: 7+ of 10 coin flips');

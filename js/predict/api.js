@@ -32,7 +32,8 @@
   /** Meridian's own page for one prediction ("Shared Prediction"): its Add To Slip button loads the same picks into the
    *  visitor's bet slip. The app keeps ?ref= as the pending referral code (checked 2026-09-29: localStorage
    *  pending-referral-code), so a slip copied from here brings the visitor in under the site's code. */
-  P.meridianSlipUrl = (id) => (P.isPredictionId(id) ? 'https://app.meridian.xyz/predict/p/' + String(id).toLowerCase() + '?ref=' + MD.api.REF : P.APP_URL);
+  // ref: the referral code a shared slip's link carried (?r=, the slip page only): that slip's Meridian link takes it
+  P.meridianSlipUrl = (id, ref) => (P.isPredictionId(id) ? 'https://app.meridian.xyz/predict/p/' + String(id).toLowerCase() + '?ref=' + (MD.util.refCode(ref) || MD.api.REF) : P.APP_URL);
   /** A page of the app's Predict section: '/<condition id or group id>' a question or group, '/event/<event id>' a match,
    *  '/competitions/<slug>' a competition, '/leaderboard' with `query` (e.g. 'cycle=3') its monthly leaderboard */
   P.appPageUrl = (path, query) => 'https://app.meridian.xyz/predict' + (path || '') + '?' + (query ? query + '&' : '') + 'ref=' + MD.api.REF;
