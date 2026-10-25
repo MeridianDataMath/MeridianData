@@ -253,7 +253,10 @@
       }
       let subs = [];
       try {
-        if (!addr && subParam && U.isUuid(subParam)) { const sa = await A.subaccount(subParam, ctx); addr = sa.account; }
+        if (!addr && subParam && U.isUuid(subParam)) {
+          const sa = await A.subaccount(subParam, ctx); addr = String(sa.account || '').toLowerCase();
+          if (U.isAddress(addr) && !U.isExcluded(addr) && !ctx.signal.aborted) { MD.router.setParams({ address: addr }, { silent: true }); MD.rememberAccount(addr, subParam); document.title = 'Account ' + U.shortAddr(addr, 4) + ' · MeridianDataHub'; }
+        }
         if (!U.isAddress(addr)) { U.replace(page, h('div.card', h('div.error', 'Invalid address. Enter a 0x wallet address (40 hex characters) or a subaccount ID.'))); return; }
         if (U.isExcluded(addr)) { U.replace(page, h('div.card', h('div.empty', 'This account is not shown on this site.'))); return; }   // U.EXCLUDED
         subs = await A.subaccountsOf(addr, ctx);
@@ -668,11 +671,11 @@
       if (Date.now() - reloadAt < 60000) return;
       reloadAt = Date.now();
       const r = range, gen = ++seriesGen;
-      const s = await AN.loadSeries(sid, { start: AN.seriesStart(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true, positions: positionsList(true) });
+      const s = await AN.loadSeries(sid, { start: AN.seriesStart(r, sa.createdAt), resolution: AN.resFor(r), signal: cx.signal, ttl: 0, charges: true, positions: positionsList(true), lateFees: true });
       if (cx.signal.aborted || gen !== seriesGen || r !== range) return;   // the range was switched meanwhile
       seriesCache.clear(); seriesCache.set(r, s); series = s;
       seriesStale = trails(s) && ++trailTries < 3;
-      drawChart();
+      drawChart(); feesLater(s);
     }
     async function loadRange() {
       const res = AN.resFor(range);
@@ -683,7 +686,7 @@
       loadingRange = true; drawChart();
       let s;
       try {
-        s = await AN.loadSeries(sid, { start, resolution: res, signal: cx.signal, ttl: 60000, charges: true, positions: positionsList() });
+        s = await AN.loadSeries(sid, { start, resolution: res, signal: cx.signal, ttl: 60000, charges: true, positions: positionsList(), lateFees: true });
         seriesCache.set(key, s);
       } catch (e) {
         if (isAbort(e) || key !== range) return;
@@ -694,8 +697,10 @@
       if (key !== range) return;   // another range was picked meanwhile: its own load draws the chart
       series = s;
       if (base && s.length && trails(s) && trailTries < 3) seriesStale = true;
-      loadingRange = false; drawChart();
+      loadingRange = false; drawChart(); feesLater(s);
     }
+    // the position fees read after the series (AN.loadSeries lateFees): the chart is drawn again with them, if it still shows it
+    function feesLater(s) { if (s.posChargesLate) s.posChargesLate.then((pc) => { if (pc && !cx.signal.aborted && series === s) drawChart(); }).catch(() => {}); }
     function drawChart() {
       U.$$('.overlay', chartBox).forEach((o) => o.remove());
       if (!loadingRange && !series && seriesErr) {

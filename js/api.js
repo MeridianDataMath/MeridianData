@@ -48,7 +48,7 @@
     try { const res = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json' } }); return { res, text: await res.text() }; }
     catch (e) {
       if (signal && signal.aborted) throw abortErr();
-      throw new ApiError(0, timedOut ? `No answer within ${A.TIMEOUT_MS / 1000} s` : 'Network error: ' + (e && e.message ? e.message : e), url);
+      throw new ApiError(0, (timedOut ? `No answer within ${A.TIMEOUT_MS / 1000} s from Meridian's exchange API` : 'Meridian\'s exchange API did not answer (' + (e && e.message ? e.message : e) + ')') + ': check the connection and try again', url);
     }
     finally { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); }
   }

@@ -62,8 +62,9 @@
    *  the funding charged since then (series.charges, for AN.netOfUnsettled; null when not asked for or not readable).
    *  With `positions` (A.positions rows, or a promise of them), also the mPerp position fees charged from where they can
    *  matter to it (AN.positionFeeFrom): series.posCharges {rows, from}, null when none can or they could not be read
-   *  (AN.netLive takes both). */
-  AN.loadSeries = async function (sid, { start, resolution, signal, ttl, withVolume = true, charges = false, positions = null }) {
+   *  (AN.netLive takes both). lateFees: the series comes back without waiting for those (a busy account's 153 windows
+   *  took about 9 s, for figures the chart does not show by default); series.posChargesLate adds them to it when read. */
+  AN.loadSeries = async function (sid, { start, resolution, signal, ttl, withVolume = true, charges = false, positions = null, lateFees = false }) {
     const res = A.RES[resolution];
     const s = Math.max(0, Math.floor(start / res.ms) * res.ms - res.ms);
     const soft = (e) => { if (e && e.name === 'AbortError') throw e; return null; };   // unreadable: that part keeps the settled basis
@@ -74,10 +75,11 @@
       A.history('unrealized-pnl', sid, { start: s, resolution, signal, ttl }),
       withVolume ? A.history('volume', sid, { start: s, resolution, signal, ttl }) : Promise.resolve([]),
       charges ? A.fundingCharges(sid, s, { signal, ttl }).catch(soft) : Promise.resolve(null),
-      pf,
+      lateFees ? null : pf,
     ]);
     const series = AN.buildSeries({ balance, upnl, volume });
-    series.charges = ch; series.posCharges = pc;
+    series.charges = ch; series.posCharges = lateFees ? null : pc;
+    if (lateFees) series.posChargesLate = pf.then((x) => { series.posCharges = x; return x; });
     return series;
   };
 

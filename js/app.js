@@ -136,6 +136,13 @@
   // Account / Tax center reopen the last viewed account; before any has been viewed in this browser they open the
   // pages' own "pick an account" screens (a bare "#/" made the buttons look dead on a fresh domain).
   // (never a wallet the site leaves out: the rail's Account and Tax links are built from it)
+  /** The account the rail's Account and Tax links reopen (never a left-out wallet's). */
+  MD.rememberAccount = (address, sub) => {
+    if (!U.isAddress(address) || U.isExcluded(address)) return;
+    U.storage.set('md.lastAccount', { address: String(address).toLowerCase(), sub: sub || undefined });
+    const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
+    const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');
+  };
   function lastAccountHref() { const last = U.storage.get('md.lastAccount', null); return last && !U.isExcluded(last.address) ? U.accountUrl(last.address, last.sub) : '#/account'; }
 
   // ---- sidebar (expanded with labels by default on desktop; collapsible to icons, remembered) ----
@@ -210,12 +217,11 @@
     MD.setTopbar(h('span.title', title || 'MeridianDataHub'));
     const mini = U.$('#mini-search'); if (mini) mini.style.display = route.name === 'home' ? 'none' : '';
     const main = U.$('#main'); if (main) { main.classList.toggle('home', route.name === 'home'); main.dataset.route = route.name; }
-    if (route.name === 'account' && route.params.address && !U.isExcluded(route.params.address)) {
-      U.storage.set('md.lastAccount', { address: route.params.address, sub: route.params.sub });
-      const a = U.$('#rail a.nav[data-name="account"]'); if (a) a.href = lastAccountHref();
-      const t = U.$('#rail a.nav[data-name="tax"]'); if (t) t.href = lastAccountHref().replace('#/account', '#/tax');
-    }
-    document.title = (title ? title + ' · ' : '') + 'MeridianDataHub';
+    if (route.name === 'account' && route.params.address) MD.rememberAccount(route.params.address, route.params.sub);
+    // 45: a wallet's page names its wallet in the tab (every bettor's and account's read the same), a slip is a slip
+    const who = U.isAddress(route.params.address) && !U.isExcluded(route.params.address) ? ' ' + U.shortAddr(route.params.address, 4) : '';
+    const tabTitle = route.path.startsWith('/predict/p/') ? 'Predict · Slip' : title ? title + (route.name === 'account' || route.name === 'tax' || route.path === '/predict/bettor' ? who : '') : '';
+    document.title = (tabTitle ? tabTitle + ' · ' : '') + 'MeridianDataHub';
   }
 
   // the exchange's clock, read once (half the round trip allowed for): a device clock off by more than half a minute is

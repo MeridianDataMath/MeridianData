@@ -194,7 +194,9 @@
       // 25 leaders a page, as the Leaderboard: every row at once was some 9,000 elements, about 40,000 px of a phone before
       // the alerts card; the page is kept in the link, so Back returns to it
       const PAGE = 25;
-      const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: { key: 'score', desc: true }, page: Math.max(1, Math.floor(U.num(route.params.page)) || 1) };
+      const SORTS = ['score', 'edge', 'pnl', 'roi', 'winRate', 'closed', 'hold', 'size', 'dd'];
+      const sortP = /^([a-zA-Z]+)(:asc)?$/.exec(route.params.sort || '');
+      const state = { filter: route.params.show || 'scored', win: WINDOWS.some((w) => w.v === route.params.window) ? route.params.window : 'all', sort: sortP && SORTS.includes(sortP[1]) ? { key: sortP[1], desc: !sortP[2] } : { key: 'score', desc: true }, page: Math.max(1, Math.floor(U.num(route.params.page)) || 1) };
       // Predict: open slips from winning bettors (js/pages/predict.js), under the perps leaders
       // (the Predict pages' scripts load for it: MD.need('predict'))
       const ideas = h('div');
@@ -248,7 +250,7 @@
         const onSort = (k) => { if (state.sort.key === k) state.sort.desc = !state.sort.desc; else state.sort = { key: k, desc: true }; state.page = 1; render(); };
         const pages = Math.max(1, Math.ceil(rows.length / PAGE)); if (state.page > pages) state.page = pages;
         const slice = rows.slice((state.page - 1) * PAGE, state.page * PAGE);
-        MD.router.setParams({ page: state.page > 1 ? state.page : null }, { silent: true });
+        MD.router.setParams({ page: state.page > 1 ? state.page : null, sort: state.sort.key === 'score' && state.sort.desc ? null : state.sort.key + (state.sort.desc ? '' : ':asc') }, { silent: true });
         const noProfiles = !traders.some((r) => r.copy);
         U.keepFocus(tableWrap, () => U.replace(tableWrap,
           noProfiles ? h('div.small.muted', { style: { padding: '10px 14px', borderBottom: '1px solid var(--border-2)' } }, data.remote ? 'This snapshot predates copyability; the next one (within 30 minutes) will carry the profiles.' : 'A leaderboard built in the browser has no copy profiles; scores need the published snapshot.') : null,
