@@ -11,7 +11,7 @@ import { root, near, load } from './_load.mjs';
 const src = fs.readFileSync(path.join(root, 'agent/copy-agent.mjs'), 'utf8');
 const block = src.slice(src.indexOf('// @pure-begin'), src.indexOf('// @pure-end'));
 assert.ok(block.length > 100, 'the pure block is marked in agent/copy-agent.mjs');
-const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty, closeSteps, closeRef, STALE_MARK_MS, fillSide, retryAfterMs, orderOutcome, rebaseStops })', { Math, Number, String, parseFloat, Infinity, Date });
+const A = vm.runInNewContext(block + '\n;({ num, roundDown, roundTick, classify, sizeOrder, ownPosition, unsettledOf, tradeEquity, toNetBasis, roomLeft, fitToRoom, reduceQty, defaultCap, MAX_SCALE, LIMITS, checkConfig, priceProblem, parseArgs, parseState, isClockReject, hostOk, dayBaseline, restorePeak, leaderRead, flatAction, resyncFlat, flowsForStops, closedByOrder, openingOrderQty, closeSteps, closeRef, orderLimit, STALE_MARK_MS, fillSide, retryAfterMs, orderOutcome, rebaseStops })', { Math, Number, String, parseFloat, Infinity, Date });
 // the dashboard's figures: the site's DOM-free part of the two copy pages (their top level only reads MD.util), with the
 // simulator's engine they build on (MD.copysim: episodes, the exchange's records, each position's result)
 const MD = load(['js/util.js', 'js/copy/sim.js', 'js/pages/copysim.js', 'js/pages/copyagent.js']);
@@ -257,6 +257,19 @@ test('a close prices off the book only where the mark has frozen and the book li
   const far = r({ side: 1, bid: 85 }); assert.equal(far.from, 'mark'); assert.equal(far.px, 100); assert.equal(far.blocked, true);
   // no book or no mark: the mark
   assert.equal(r({ side: 1, bid: 0 }).from, 'mark'); assert.equal(r({ side: 1, bid: 97, markSince: 0 }).from, 'mark');
+});
+
+test('a close priced off the book never goes past the 10 % guard; off the mark it keeps the cap', () => {
+  const lim = (side, cr, bps) => A.orderLimit({ side, cr, mark: 100, bps, tick: '0.01' });
+  // a weekend mPerp: the mark frozen at 100, the best bid 90.01 (within 10 %): 90.01 less 200 bps would be 88.20
+  assert.equal(lim(1, { px: 90.01, from: 'book' }, 200), 90);
+  assert.equal(lim(1, { px: 90.01, from: 'book' }, 500), 90, 'a 500 bps cap is held the same');
+  assert.equal(lim(1, { px: 97, from: 'book' }, 200), 95.06, 'inside the guard: the bid less the cap, rounded down');
+  // a short's close buys: an ask 109.9 plus the cap is held at 110
+  assert.equal(lim(0, { px: 109.9, from: 'book' }, 200), 110);
+  assert.equal(lim(0, { px: 104, from: 'book' }, 200), 106.08);
+  // off the mark the cap applies as before (no guard: the mark is the reference)
+  assert.equal(lim(1, { px: 100, from: 'mark' }, 1500), 85);
 });
 
 test('a rejection about the time is retried once; the control port answers to its own name only', () => {

@@ -187,6 +187,15 @@ const closeRef = ({ side, mark, markSince, bid, ask, capBps, now }) => {
   if (Math.abs(gapPct) > STALE_CLOSE_MAX_PCT) return { px: mark, from: 'mark', gapPct, blocked: true };
   return { px: book, from: 'book', gapPct, blocked: false };
 };
+/** An order's limit: its reference price (closeRef's px) with the step's cap, rounded to the tick away from the mark.
+ *  Priced off the book it never goes past the 10 % guard closeRef checks the book against (a bid 9.99 % under a frozen
+ *  mark, less a 200 bps cap, sold down to 11.8 % under it): held at the mark ± 10 %, rounded towards the mark. */
+const orderLimit = ({ side, cr, mark, bps, tick }) => {
+  const lim = cr.px * (1 + (side === 0 ? 1 : -1) * (bps / 1e4));
+  const bound = mark * (1 + (side === 0 ? 1 : -1) * (STALE_CLOSE_MAX_PCT / 100));
+  const held = cr.from === 'book' && (side === 0 ? lim > bound : lim < bound);
+  return roundTick(held ? bound : lim, tick, held ? side !== 0 : side === 0);
+};
 /** A fill's side from the stream: 1 buy, −1 sell, null when it says neither (that fill is left to the next re-read: a
  *  side guessed wrong would copy the opposite trade) */
 const fillSide = (sd) => { const s = String(sd == null ? '' : sd).trim().toUpperCase(); return s === '0' || s === 'BUY' ? 1 : s === '1' || s === 'SELL' ? -1 : null; };
@@ -341,18 +350,22 @@ const controlToken = (cfg, create) => {
   fs.writeFileSync(tokenPath, '', { mode: 0o600 }); restrictFile(tokenPath); fs.writeFileSync(tokenPath, token + '\n');
   return { token, from: tokenPath, created: true };
 };
-const statePath = path.join(here, 'state.json');
+/** The state file. A dry run keeps its own, state.dry.json: sharing state.json, its virtual follows became the next live
+ *  run's (whose start resync then sold a position the owner had opened by hand as the leader's copy), and it dropped the
+ *  live run's market owners and pending closes as "closed by hand". */
+const statePathFor = (dry) => path.join(here, dry ? 'state.dry.json' : 'state.json');
 /**
  * The saved state, and what went wrong reading it. No file is a fresh start. A file that is there but cannot be read or
  * trusted is kept as state.json.damaged, the save before it (state.json.bak) stands in when it can, and `damaged` says so:
  * the agent then starts with its risk stop set, because what was lost may be a tripped stop or the day's loss baseline.
  */
-const loadState = () => {
+const loadState = (statePath) => {
+  const name = path.basename(statePath);
   let r; try { r = parseState(fs.readFileSync(statePath, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return { saved: {} }; r = { error: e.message }; }
   if (!r.error) return { saved: r.state };
   try { fs.copyFileSync(statePath, statePath + '.damaged'); } catch (_) {}
   let bak = null; try { const b = parseState(fs.readFileSync(statePath + '.bak', 'utf8')); if (!b.error) bak = b.state; } catch (_) {}
-  return { saved: bak || {}, damaged: `state.json could not be read (${r.error}; kept as state.json.damaged)` + (bak ? `, so the save before it (state.json.bak, ${bak.savedAt ? new Date(bak.savedAt).toISOString() : 'undated'}) stands in` : ', and there is no usable backup: the day\'s loss baseline and the drawdown peak start again from now') };
+  return { saved: bak || {}, damaged: `${name} could not be read (${r.error}; kept as ${name}.damaged)` + (bak ? `, so the save before it (${name}.bak, ${bak.savedAt ? new Date(bak.savedAt).toISOString() : 'undated'}) stands in` : ', and there is no usable backup: the day\'s loss baseline and the drawdown peak start again from now') };
 };
 const logDir = path.join(here, 'logs'); fs.mkdirSync(logDir, { recursive: true });
 const log = (...a) => { const line = `${new Date().toISOString()} ${a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')}`; console.log(line); try { fs.appendFileSync(path.join(logDir, 'agent-' + new Date().toISOString().slice(0, 10) + '.log'), line + '\n'); } catch (_) {} };
@@ -430,6 +443,7 @@ async function status() {
 async function run() {
   const cfg = readConfig();
   const DRY = ARGS.dry || !!(cfg.execution && cfg.execution.dryRun);
+  const statePath = statePathFor(DRY), stateName = path.basename(statePath);
   // the mode first, and unmissable: a live run is the one that spends money
   console.log(DRY ? '\n=== DRY RUN · every order goes to the exchange\'s dry-run endpoint · NOTHING IS PLACED ===\n' : '\n!!! LIVE · this agent places REAL orders with your linked signer · Ctrl+C stops it !!!\n');
   const problems = checkConfig(cfg);
@@ -460,7 +474,7 @@ async function run() {
 
   // persisted state: what we follow from whom, so a restart does not orphan positions. A damaged state.json starts with
   // the risk stop set (see loadState): only an explicit resume clears it
-  const { saved, damaged } = loadState();
+  const { saved, damaged } = loadState(statePath);
   // the leaders' sizes the last run knew: what a leader did while the agent was down is mirrored at start (resync)
   const savedLeaderPos = saved.leaderPos && typeof saved.leaderPos === 'object' ? saved.leaderPos : {};
   const S = { dry: DRY, startedAt: Date.now(), paused: !!saved.paused, tripped: damaged ? { t: Date.now(), why: `${damaged}${saved.tripped ? '; the stop it had: ' + saved.tripped.why : ''}: check the positions and resume` } : saved.tripped || null, signer: w.address, owner: sa.account, subaccountId: SID, subaccountName: sub, leaders: cfg.leaders, sizing, risk, execution: ex,
@@ -471,13 +485,15 @@ async function run() {
   let grossBasis = !saved.equityNet && (S.equityDayStart != null || S.equityPeak != null);
   const persist = () => {
     try {
-      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, closing: S.closing, flowsLast: S.flowsLast, leaderPos: S.leaderPos, leaderPosAt: S.leaderPosAt, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
+      fs.writeFileSync(statePath + '.tmp', JSON.stringify({ mode: DRY ? 'dry' : 'live', paused: S.paused, tripped: S.tripped, books: S.books, marketOwner: S.marketOwner, carry: S.carry, equityDayStart: S.equityDayStart, dayKey: S.dayKey, dayBaseAt: S.dayBaseAt, equityPeak: S.equityPeak, peakSince: S.peakSince, equityNet: !grossBasis, closing: S.closing, flowsLast: S.flowsLast, leaderPos: S.leaderPos, leaderPosAt: S.leaderPosAt, orders: S.orders.slice(0, 1000), savedAt: Date.now() }));
       // written whole beside it and swapped in: a crash or a full disk mid-write leaves the last good file, never half of one
       if (onDiskGood && fs.existsSync(statePath)) fs.copyFileSync(statePath, statePath + '.bak');
       fs.renameSync(statePath + '.tmp', statePath); persistErr = null; onDiskGood = true;
-    } catch (e) { if (persistErr !== e.message) { persistErr = e.message; note('error', `state.json could not be saved (${e.message}): a restart now would lose what changed since`); push('Copy agent cannot save its state', e.message); } }
+    } catch (e) { if (persistErr !== e.message) { persistErr = e.message; note('error', `${stateName} could not be saved (${e.message}): a restart now would lose what changed since`); push('Copy agent cannot save its state', e.message); } }
   };
   const note = (kind, msg, extra) => { const e = Object.assign({ t: Date.now(), kind, msg }, extra || {}); S.events.unshift(e); if (S.events.length > 300) S.events.length = 300; log(kind, msg, extra || ''); };
+  // a state.json saved by a dry run before dry runs kept their own file: its follows may be virtual (said at the start)
+  if (!DRY && (saved.mode === 'dry' || (!saved.mode && (saved.orders || []).some((o) => o && Array.isArray(o.fills) && o.fills.some((f) => f && f.virtual))))) note('warn', 'state.json holds a dry run\'s orders (saved before dry runs kept their own file, state.dry.json): a market it lists as followed may be a virtual copy, so check the positions the start resync acts on');
   // a push gets 10 s and a refusal is logged; with a key (a market), one of a kind per key every 10 minutes: a burst of
   // rejections could reach ntfy's limit, and the "stopped" or "paused" push after it was refused without a trace
   const pushedAt = {};
@@ -605,7 +621,7 @@ async function run() {
     const tk = tick[prod.id]; const fresh = !!tk && Date.now() - tk.at < 15000;
     const cr = close && !dust ? closeRef({ side, mark, markSince: fresh ? tk.since : 0, bid: fresh ? tk.bid : 0, ask: fresh ? tk.ask : 0, capBps: bps, now: Date.now() }) : { px: mark, from: 'mark', gapPct: null, blocked: false };
     if (cr.from === 'book') why = `${why} · priced off the book, ${cr.gapPct.toFixed(2)}% from a mark that has not moved for ${Math.round((Date.now() - tk.since) / 60000)} min`;
-    const px = dust ? 0 : roundTick(cr.px * (1 + (side === 0 ? 1 : -1) * (bps / 1e4)), prod.tickSize, side === 0);
+    const px = dust ? 0 : orderLimit({ side, cr, mark, bps, tick: prod.tickSize });
     // signed afresh for every attempt: a retry after the clock is measured again needs a new nonce and signedAt
     const signed = async () => {
       const n = nonce(); const signedAt = Math.floor(serverNow() / 1000); const cid = randomUUID();
@@ -1028,17 +1044,24 @@ async function run() {
   // ---- Resume and Close all from the site wait for a yes typed here: the control token sits in the site's browser
   //      storage, and a page that got hold of it must not clear a stop or close everything on its own. status.siteControls
   //      "direct" lets the page do both unconfirmed (an agent without a terminal needs that)
-  // one reader for the whole run: a line typed while nothing is asked is dropped, so a late "yes" never confirms the next
-  // request (each prompt had a reader of its own, and what was typed in between waited for the next one)
-  let answer = null;
-  const reader = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, terminal: false }) : null;
-  if (reader) reader.on('line', (line) => { const a = answer; answer = null; if (a) a(line); });
+  // one reader for the rest of the run, made at the first request: a line typed while nothing is asked is dropped, so a
+  // late "yes" never confirms the next request (each prompt had a reader of its own, and what was typed in between waited
+  // for the next one). Not at the start: reading the terminal puts stdin in flowing mode, and an agent started in the
+  // background (`&`, nohup) is then stopped by SIGTTIN, frozen with its copies open. Lines already waiting when it is made
+  // (typed before the question) are dropped too.
+  let answer = null, reader = null, readerAt = 0;
+  const hasTerminal = !!process.stdin.isTTY;
+  const ensureReader = () => {
+    if (reader) return;
+    reader = readline.createInterface({ input: process.stdin, terminal: false }); readerAt = Date.now();
+    reader.on('line', (line) => { if (Date.now() - readerAt < 250) return; const a = answer; answer = null; if (a) a(line); });
+  };
   const confirmHere = (what, act) => {
     const run = () => { Promise.resolve().then(act).catch((e) => note('error', `${what}: ${e.message}`)); };
     if (cfg.status && cfg.status.siteControls === 'direct') { note('control', `${what}: asked from the site`); run(); return { code: 200, body: { ok: true } }; }
     if (S.asking) return { code: 409, body: { error: 'busy', msg: `"${S.asking}" is already waiting for a yes in the agent's terminal` } };
-    if (!reader) return { code: 409, body: { error: 'terminal', msg: `the agent has no terminal to confirm in: to let this page ${what} unconfirmed, set status.siteControls to "direct" in config.json and restart the agent` } };
-    S.asking = what;
+    if (!hasTerminal) return { code: 409, body: { error: 'terminal', msg: `the agent has no terminal to confirm in: to let this page ${what} unconfirmed, set status.siteControls to "direct" in config.json and restart the agent` } };
+    S.asking = what; ensureReader();
     const done = (yes) => { if (!S.asking) return; S.asking = null; answer = null; clearTimeout(timer); if (yes) { note('control', `${what}: confirmed in the terminal`); run(); } else note('control', `${what}: not confirmed in the terminal, nothing done`); };
     const timer = setTimeout(() => done(false), 120000);
     answer = (line) => done(/^\s*yes\s*$/i.test(line));

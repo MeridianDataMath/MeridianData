@@ -1863,7 +1863,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   default, at most 1000), each at the current mark. Where the mark has not moved for 5 minutes (an
   mPerp keeps the last oracle price while its underlying market is shut, and its book trades on)
   and the book's best price on the close's side lies beyond the cap, the close is priced off that
-  price instead, when it is within 10% of the mark; a book further out is never followed, and the
+  price instead, when it is within 10% of the mark, and its limit (that price less the step's cap)
+  never goes past the mark ± 10%; a book further out is never followed, and the
   pending close's push says to close it by hand. What the widest leaves stays pending
   (`closing` in `state.json`): tried again from the refresh timer, 30 s doubling to 5 min,
   pushed once, with nothing else traded in that market meanwhile. Only dust below the market's
@@ -1887,14 +1888,18 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   answered in that browser: recent browsers ask before a site reaches the visitor's own computer)
   and slows to one read every 30 s while none answers; resume and close all from the page wait for `yes` typed in the agent's
   terminal, since the token sits in the site's browser storage (`status.siteControls`
-  `direct` skips that, for an agent run without a terminal). Close all also pauses copying until it
+  `direct` skips that, for an agent run without a terminal). The terminal is read only from the
+  first such request on, so an agent started in the background (`&`, nohup) keeps running; one
+  that should answer these requests runs in the foreground. Close all also pauses copying until it
   is resumed: a leader adding to a position just closed would otherwise open it afresh. The dashboard shows equity, day
   and peak change, leverage, own positions against the leaders', closes still pending, the
   latest 30 orders with their status and fill (the daily log files in `logs/`
   keep every one), the event log. `run --dry` sends every order
   to the exchange's dry-run endpoint instead (margin check, nothing placed) and keeps a virtual
   book, so the whole loop can be watched before any money moves; `/simulate` on the status
-  port feeds it a pretend leader fill. Logs in `agent/logs/`; ntfy push on rejected or lost
+  port feeds it a pretend leader fill. A dry run keeps its own state, `state.dry.json`: sharing
+  `state.json`, its virtual follows became the next live run's. A `state.json` saved by a dry run
+  before that is named at a live start. Logs in `agent/logs/`; ntfy push on rejected or lost
   orders, closes left pending, risk stops, leader liquidations and a signer expiring or refused. The page builds `config.json` from the followed leaders
   and the limits, lists and revokes signers, and shows the dashboard. The deploy publishes only
   `copy-agent.mjs`, `package.json`, `package-lock.json` and `config.example.json`. Keys, configs,
@@ -1923,7 +1928,7 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   - **Linking.** The page's link step shows the signer it is about to authorise, and warns when it
     differs from the running agent's.
   - **Checksum.** The SHA-256 of `copy-agent.mjs` as published is
-    `6f9730d21cc4c07a2838e89e5f2ea3242c5ec079d3d11e0bb66c9f05fbd75180` (`tests/agent.test.mjs` fails when this line is
+    `8b222a081de3b82a81e9c1a3c0be6d1ada16051ee3947c83bd85e098b760b2c6` (`tests/agent.test.mjs` fails when this line is
     stale). Check a download with `certutil -hashfile copy-agent.mjs SHA256` (Windows) or
     `shasum -a 256 copy-agent.mjs`; the page points here, a channel apart from the site that serves the file.
   - **Requests.** Each has a time limit (15 s for reads, 10 s for orders). Reads are tried again
@@ -1964,8 +1969,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   Revoke and Refresh first switch the wallet to Robinhood Chain (wallets refuse typed data for another
   chain). Safety rules: one serial queue for every decision and order (two leader orders arriving
   together cannot both size against the same stale position); adds scale to what is actually
-  held after partial fills; state (`state.json`: what is followed from whom, the leaders' sizes,
-  stops, the order log) survives restarts. On start each leader's positions are compared with the
+  held after partial fills; state (`state.json`, `state.dry.json` for a dry run: what is followed
+  from whom, the leaders' sizes, stops, the order log) survives restarts. On start each leader's positions are compared with the
   sizes the last run saved, so a reduction made while the agent was down is mirrored and a close
   or a side change closes ours at once (a state file from an older agent, without those sizes,
   gets a warning for each followed market its leader traded since); open positions that a
