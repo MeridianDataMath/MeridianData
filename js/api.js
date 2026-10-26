@@ -268,10 +268,11 @@
   };
   A.totalVolume = (sid, o) => A.get(A.ARCHIVE + '/v1/subaccount/total-volume' + qs({ subaccountId: sid }), { ttl: (o && o.ttl) || 0, signal: o && o.signal }).then((r) => U.num(r && r.volumeUsd));
   /** Hourly funding charges on a subaccount's positions since `start` (archive; fundingCharge: + = paid). The archive serves
-   *  1 hour to 3 days per request and floors startTime to the hour, so the windows run back from the next whole hour, each
-   *  71 hours, a few at a time; a row two windows share is kept once. Hour-aligned, the same windows within the hour hit
-   *  the request cache. Null when a window holds more rows than are read (40 pages): netting against part of the charges
-   *  would misdate every earlier bucket, so callers fall back to the settled funding. o.end bounds the windows (charges
+   *  1 hour to 3 days per request (it rejects less or more) and floors startTime to the hour, so the windows are 71 hours
+   *  each on one grid, back from the grid edge after now, a few at a time; the newest starts 2 hours back at the latest,
+   *  and a row two windows share is kept once. Hour-aligned, the same windows within the hour hit the request cache. Null
+   *  when a window holds more rows than are read (40 pages): netting against part of the charges would misdate every
+   *  earlier bucket, so callers fall back to the settled funding. o.end bounds the windows (charges
    *  before it only; now when left out); o.onProgress(done, total) counts the windows. o.cache (the snapshot build's:
    *  {get(sid), set(sid, entry)}) keeps what was read: charges more than 6 hours old do not change, so only the windows
    *  after the kept ones are read and the kept ones come back as {time, fundingCharge}. */
@@ -284,8 +285,12 @@
     const kept0 = cache ? cache.get(sid) : null, kept = kept0 && kept0.from <= start && kept0.until > start && Array.isArray(kept0.rows) ? kept0 : null;
     const readFrom = kept ? kept.until : start;
     const ends = []; for (let e = top; e > readFrom; e -= W) ends.push(e);
-    // a window reaching the archive's clock sends no endTime, so the archive ends it there (it rejects an endTime past that)
-    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: e - W, endTime: e >= now - 2 * 60000 ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4, o && o.onProgress);
+    // a window reaching the archive's clock sends no endTime, so the archive ends it there (it rejects an endTime past that).
+    // It also rejects a span under an hour, and the newest window starts at the last grid edge: in the hour after an edge
+    // (one in every 71) every read failed (10-26). So that window starts 2 hours back at the latest (an hour, and room for
+    // a clock ahead of the archive's); what it shares with the window before is kept once
+    const open = (e) => e >= now - 2 * 60000, from = (e) => (open(e) ? Math.min(e - W, Math.floor(now / U.HOUR) * U.HOUR - 2 * U.HOUR) : e - W);
+    const res = await U.pLimit(ends.map((e) => () => A.page(A.ARCHIVE, '/v1/subaccount/funding', { subaccountId: sid, startTime: from(e), endTime: open(e) ? null : e, order: 'asc' }, { maxPages: 40, ttl: (o && o.ttl) || 0, signal: o && o.signal })), 4, o && o.onProgress);
     const bad = res.find((r) => !r.ok); if (bad) throw bad.error;   // an abort or a failed window, as a serial loop would throw
     const parts = res.map((r) => r.value);
     if (parts.some((p) => !p || p.truncated)) return null;
@@ -337,7 +342,11 @@
     const seen = new Set();
     const chunks = Math.max(1, Math.ceil((end - start) / chunk)); let n = 0;
     while (s < end) {
-      const e = Math.min(end, s + chunk);
+      let e = Math.min(end, s + chunk);
+      // the archive rejects a span under one bucket: a last chunk that would be shorter than two (one, and room for a clock
+      // ahead of the archive's when it ends "now") takes them from this one (a day1 read of 120 days and a few hours: its
+      // last chunk was those few hours)
+      if (e < end && end - e < 2 * res.ms) e = end - 2 * res.ms;
       // the archive rejects an endTime later than its own clock; when the chunk ends "now", let the server default it
       const endParam = e >= Date.now() - 2 * 60000 ? null : e;
       const part = await A.page(A.ARCHIVE, '/v1/subaccount/' + kind, { subaccountId: sid, startTime: s, endTime: endParam, resolution, order: 'asc' }, { maxPages: 40, ttl: ttl || 0, signal });

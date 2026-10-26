@@ -88,6 +88,51 @@ test('funding charges: with the snapshot build\'s cache, only the windows after 
   } finally { globalThis.fetch = globalThis.fetch0; delete globalThis.fetch0; }
 });
 
+// A fake archive with its limits: a request spanning less than one bucket (funding: an hour) or more than the resolution's
+// maximum (funding: 3 days), measured to its own clock when no endTime is sent, or an endTime past that clock, gets a 400.
+// Its clock runs `lag` ms behind the site's; rowsFor(from, to, bucket ms) gives the rows of a window.
+const archive = (lag, rowsFor) => async (url) => {
+  const u = new URL(url), clock = Date.now() - lag;
+  const res = u.pathname.endsWith('/funding') ? A.RES.hour1 : A.RES[u.searchParams.get('resolution')];
+  const from = Number(u.searchParams.get('startTime')), to = u.searchParams.has('endTime') ? Number(u.searchParams.get('endTime')) : clock;
+  if (to > clock || to - from < res.ms || to - from > res.max) return answer(400, { message: ['date range (' + (to - from) + ') out of bounds'] });
+  return answer(200, { data: rowsFor(from, to, res.ms) });
+};
+const buckets = (from, to, ms) => { const out = []; for (let t = Math.ceil(from / ms) * ms; t <= to; t += ms) out.push(t); return out; };
+
+test('funding charges: no window under an hour, minutes after a grid edge too (the archive rejects one: no funding was read in that hour)', async () => {
+  const H = U.HOUR, W = 3 * U.DAY - H, now0 = Date.now, f0 = globalThis.fetch;
+  const edge = Math.floor(now0() / W) * W;   // an edge of the windows' grid (whole multiples of 71 hours)
+  try {
+    for (const lag of [0, 60000]) for (const after of [0, 60000, 30 * 60000, H - 1, H + 30 * 60000, 2 * H, 3 * H, W - 60000]) {
+      const now = edge + after, start = now - 10 * U.DAY; Date.now = () => now;
+      globalThis.fetch = archive(lag, (from, to) => buckets(from, to, H).map((t) => ({ positionId: 'p', time: t, fundingCharge: '1' })));
+      const rows = await A.fundingCharges('s' + lag + '-' + after, start);
+      const want = buckets(start, now - lag, H);
+      const got = new Set(rows.map((r) => r.time));
+      assert.ok(want.every((t) => got.has(t)), after + ' ms after an edge: every hour since the start');
+      assert.equal(got.size, rows.length, 'each hour once');
+    }
+  } finally { Date.now = now0; globalThis.fetch = f0; }
+});
+
+test('history: no chunk under a bucket, however the range divides into chunks (the archive rejects one)', async () => {
+  const now0 = Date.now, f0 = globalThis.fetch;
+  try {
+    for (const [resolution, tail] of [['day1', 30 * 60000], ['day1', U.DAY - 1], ['hour1', 1000], ['hour1', 59 * 60000], ['hour2', U.HOUR]]) for (const lag of [0, 60000]) {
+      const res = A.RES[resolution], chunk = res.max - 1000;
+      // a range a whole chunk and `tail` long, ending now (no endTime sent) or 10 days ago
+      const start = Math.floor(now0() / res.ms) * res.ms - 3 * res.max, end = start + chunk + tail;
+      globalThis.fetch = archive(lag, (from, to, ms) => buckets(from, to, ms).map((t) => ({ time: t, tokenId: 'x', balance: '1' })));
+      for (const closed of [false, true]) {
+        Date.now = () => (closed ? end + 10 * U.DAY : end);
+        const rows = await A.history('balance', 's', closed ? { start, end, resolution } : { start, resolution });
+        assert.deepEqual(rows.map((r) => r.time), buckets(start, closed ? end : end - lag, res.ms), resolution + ', ' + tail + ' ms past a chunk' + (closed ? '' : ', to now') + ': every bucket once');
+      }
+    }
+  } finally { Date.now = now0; globalThis.fetch = f0; }
+});
+
 test('position fees: with the snapshot build\'s cache, only the windows after the kept ones are read, one sum per charge time', async () => {
   const H = 3600000, now = Date.now(), start = now - 2 * 24 * H;
   const asked = [];
