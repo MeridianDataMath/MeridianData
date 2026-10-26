@@ -131,7 +131,8 @@
     const img = h('img', { alt: o.alt || o.title, style: { width: '100%', height: 'auto', display: 'block', borderRadius: '12px', border: '1px solid var(--border-3)' } });
     const frame = h('div.flex-frame.busy', img);
     // o.refField (a slip): the sharer's own Meridian referral code, optional, goes into the link as ?r= (that slip's
-    // Meridian buttons carry it for whoever opens the link; js/share.js and index.html pass it on); kept in this browser
+    // Meridian buttons carry it for whoever opens the link; js/share.js and index.html pass it on); kept in this browser.
+    // Without one (an empty or unusable field) the link carries o.refDefault, the site's own code
     const REF_KEY = 'md.myRefCode';
     let url = o.shareUrl;
     const linkIn = h('input.input.mono.share-link-input', { value: url, readOnly: true, 'aria-label': 'Share link', onfocus: (e) => e.target.select() });
@@ -140,7 +141,8 @@
       if (!refIn) return;
       const raw = refIn.value.trim(), code = U.refCode(raw), bad = !!raw && !code;
       refIn.classList.toggle('bad', bad); refIn.title = bad ? 'Letters and digits only, 4 to 32 of them (or paste your referral link)' : '';
-      url = o.shareUrl + (code ? '?r=' + code : ''); linkIn.value = url;
+      const use = code || U.refCode(o.refDefault);
+      url = o.shareUrl + (use ? '?r=' + use : ''); linkIn.value = url;
       if (!bad) U.storage.set(REF_KEY, code || '');
     };
     if (refIn) { refIn.addEventListener('input', setRef); setRef(); }

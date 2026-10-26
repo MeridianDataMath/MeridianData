@@ -980,7 +980,7 @@
         : st === 'open' ? `A ${usd(n.stake)} ${combo} at ${mult(n.multiple)} on Meridian Predict: pays ${usd(n.pool)} if ${n.legs > 1 ? 'every leg wins' : 'it wins'}`
           : `A ${mult(n.multiple)} ${combo} on Meridian Predict`;
     return MD.flex.card({ title: 'Share this slip', alt: K.slipText(n).title, draw: (fontCss) => K.slipSvg(n, { fontCss }), fname: `meridian-slip-${id.slice(2, 10)}.png`,
-      shareUrl: MD.api.shareUrl('s', id), refField: true, card: 'cards/s/' + id + '.png', expected: K.slipCardWanted(n), postText: post });
+      shareUrl: MD.api.shareUrl('s', id), refField: true, refDefault: MD.api.REF, card: 'cards/s/' + id + '.png', expected: K.slipCardWanted(n), postText: post });
   }
   P.shareSlip = shareSlip;
 
