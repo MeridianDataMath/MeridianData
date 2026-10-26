@@ -75,7 +75,12 @@ test('funding charges: with the snapshot build\'s cache, only the windows after 
     const windows = asked.length; asked.length = 0;
     assert.ok(windows >= 4, 'ten days: four windows or more'); assert.ok(store.s && store.s.until <= now - 6 * H && store.s.rows.length > 30);
     const b = await A.fundingCharges('s', start, { cache });
-    assert.equal(asked.length, 1, 'the second read asks only the window after the kept charges');
+    // the windows lie on one grid (71 hours), so the span after the kept charges (their last 6 hours) is one window, or two
+    // where a grid edge falls inside it: asserting one failed for 6 hours in every 71 and held up every deploy (10-26)
+    const W = 3 * 24 * H - H, want = []; for (let e = Math.ceil(Date.now() / W) * W; e > store.s.until; e -= W) want.push(e);
+    assert.ok(want.length === 1 || want.length === 2);
+    assert.equal(asked.length, want.length, 'the second read asks only the windows after the kept charges');
+    assert.ok(asked.every(([from]) => from + W > store.s.until), 'no window wholly before the kept ones');
     // (a read without the cache also returns what its first window holds before `start`; the kept ones start there)
     const from = (rows) => rows.filter((r) => Number(r.time) >= start).map((r) => [Number(r.time), Number(r.fundingCharge)]);
     assert.deepEqual(from(b), from(a), 'the same charges from the start on, once each');
