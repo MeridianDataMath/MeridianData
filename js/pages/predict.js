@@ -466,11 +466,11 @@
       // the view is kept in the link (silently): Back from a bettor returns to the same page, order and filters, and the
       // scroll position the router restores lands on the same rows; a hand-edited value that is not one falls back
       const pr = route.params, sp = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
-      const KEYS = ['address', 'n', 'wagered', 'pnl', 'mrank', 'roi', 'winRate', 'avgOdds', 'combos', 'avgVig', 'biggestWin', 'last'];
+      const KEYS = ['address', 'n', 'wagered', 'pnl', 'roi', 'winRate', 'avgOdds', 'combos', 'avgVig', 'biggestWin', 'last'];
       const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 3, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
       const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
       // the medals go with a best-first order only (sorted the other way, the biggest loss took gold)
-      const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc', mrank: 'desc' };   // (mrank sorts on −rank: best first is descending)
+      const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc' };
       const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
       if (st.cat && !cats.includes(st.cat)) st.cat = '';   // (a link's category that is none of these: all, as the select reads)
       const wrap = h('div');
@@ -480,19 +480,8 @@
         h('span.dim.small', 'Min predictions'), UI.seg([{ v: 1, label: '1' }, { v: 3, label: '3' }, { v: 10, label: '10' }, { v: 25, label: '25' }], st.minN, (v) => { st.minN = v; st.page = 1; render(); }, 'sm'),
         h('span.dim.small', 'Top category'), h('select.input.sm', { 'aria-label': 'Top category', style: { width: 'auto' }, onchange: (e) => { st.cat = e.target.value; st.page = 1; render(); } }, h('option', { value: '' }, 'All'), cats.map((c) => h('option', { value: c, selected: c === st.cat }, c))),
         h('span.grow'), summary));
-      // Meridian's own PnL ranking (snap.pnlRank, its API's leaderboard): [rank, PnL] all time and over the last 30 days,
-      // the window its app ranks its top traders by (an older snapshot: 7 days)
-      const MR = snap.pnlRank || null, MW = MR && MR.d30 ? { k: 'd30', n: MR.n30, label: '30d', text: 'last 30 days' } : { k: 'd7', n: MR && MR.n7, label: '7d', text: 'last 7 days' };
-      const mrOf = (a, k) => (MR && MR[k || 'all'] ? MR[k || 'all'][a] || null : null);
-      const mrCell = (r) => {
-        const x = mrOf(r.address), w = mrOf(r.address, MW.k);
-        if (!MR) return h('span.dim', '—');
-        const title = (x ? `#${x[0]} of ${U.fmtNum(MR.n, 0)} in Meridian's PnL leaderboard, all time (${usd(x[1], { sign: true })})` : `Not in Meridian's PnL leaderboard`) + ` · ${MW.text}: ` + (w ? `#${w[0]} of ${U.fmtNum(MW.n, 0)} (${usd(w[1], { sign: true })})` : 'not ranked') + ' · as of the snapshot'
-          + (x && Math.abs(x[1] - r.pnl) >= 0.5 ? `. Meridian ranks by its predictions' own results; Net PnL here, ${usd(r.pnl, { sign: true })}, also counts the position tokens it traded on the secondary market` : '');
-        return x ? h('span', { title }, '#' + x[0], w ? h('span.xs.dim', ` ${MW.label} #` + w[0]) : null) : h('span.dim', { title }, '—');
-      };
       // (win rate: the app's, as the column shows it)
-      const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: P.rowRecord(b).winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin, mrank: mrOf(b.address) ? -mrOf(b.address)[0] : -1e9 })[k];
+      const val = (b, k) => ({ address: b.address, n: b.n, wagered: b.wagered, pnl: b.pnl, roi: b.roi, winRate: P.rowRecord(b).winRate, avgOdds: b.avgOdds, combos: b.n ? b.combos / b.n : 0, avgVig: b.avgVig, last: b.last, open: b.openWagered, biggestWin: b.biggestWin })[k];
       function render() {
         let rows = all.filter((b) => b.n >= st.minN);
         if (st.cat) rows = rows.filter((b) => b.topCat === st.cat);
@@ -512,7 +501,6 @@
           { key: 'n', label: 'Predictions', num: true, sortVal: 1, render: (r) => { const o = r.openPos != null ? r.openPos : r.open; return h('span', U.fmtNum(r.n, 0), o ? h('span.dim.xs', { title: r.openPos != null ? `${o} open position${o === 1 ? '' : 's'} as Meridian counts them: one per pick configuration and side with tokens still held (bets on the same picks share one; a position sold out is none)` + (r.open !== r.openPos ? ` · ${r.open} undecided prediction${r.open === 1 ? '' : 's'}` : '') : 'Undecided predictions' }, ' (' + o + ' open)') : null); } },
           { key: 'wagered', label: 'Wagered', num: true, sortVal: 1, render: (r) => usd(r.wagered, { compact: true }) },
           { key: 'pnl', label: 'Net PnL', num: true, sortVal: 1, render: (r) => pnlEl(r.pnl) },
-          { key: 'mrank', label: 'Meridian rank', num: true, sortVal: 1, title: 'Its place in Meridian\'s own PnL leaderboard (its API\'s ranking), all time, and over the last 30 days beside it, the window its app ranks its top traders by (the first 12, in its social search, not open to the public yet); as of the snapshot. Meridian ranks by the results of the wallet\'s own predictions at the verdict, claimed or not, without the secondary market: Net PnL differs from it only by the position tokens a bettor traded (checked 2026-10-21 on 763 of 764 bettors). Hover a rank for that PnL', render: mrCell },
           { key: 'roi', label: 'ROI', num: true, sortVal: 1, title: 'Net PnL ÷ the stakes of decided predictions (claimed or not), plus the sold share of open predictions\' stakes', render: (r) => UI.pct(r.roi, { dp: 0 }) },
           // (by result, whoever claimed: a prediction whose tokens it sold before the verdict counts too, its sale in Net PnL)
           { key: 'winRate', label: 'Win rate', num: true, sortVal: 1, title: WIN_COL_TITLE + '. Predictions whose tokens it sold before the verdict count by their result (the sale is in Net PnL)', render: winCell },

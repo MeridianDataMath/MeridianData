@@ -482,7 +482,6 @@
     if (Array.isArray(a.bigWins)) a.bigWins = a.bigWins.filter((w) => !out(w.p) && !out(w.c));
     // Meridian's own lists (the builder leaves them out of these already)
     if (Array.isArray(snap.competitions)) for (const c of snap.competitions) if (Array.isArray(c.standings)) c.standings = c.standings.filter((s) => !out(s.a));
-    if (snap.pnlRank) for (const k of ['all', 'd30', 'd7']) if (snap.pnlRank[k]) for (const x of Object.keys(snap.pnlRank[k])) if (out(x)) delete snap.pnlRank[k][x];
     return snap;
   };
   /** A claim redeems the wallet's whole balance of a position token (one pick configuration and side: tokP / tokC are

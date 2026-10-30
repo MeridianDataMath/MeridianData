@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { load } from './_load.mjs';
-import { fullAtOf, publicCash, leftOutRanked, prevDrift, needsRebuild, mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, rankMap, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
+import { fullAtOf, publicCash, prevDrift, needsRebuild, mergeRows, stalestFirst, publishProblem, completeTrades, mergeRaw, settledRaw, fullRead, cachedPrices, needsPrice, REPRICE_PER_RUN, carryStandings, mergeTransfers, mergeBalances, CARRY_MAX_MS, claimCandidates, claimPlan, claimEntries, claimReads, balanceCall, capClaims, escrowReads, escrowSum, CLAIM_RECHECK_MS, CLAIM_REFRESH, compactCompetition, COMP_STANDINGS, compactMatch, hotRows, hotFilter, HOT_WINDOWS, readHot, stakeByGroup, hotStakes, legacyCycle, legacyStandings, legacyCompetitions, LEGACY_PAYOUTS, cashPlan, cashTransfers, cashBalances, cashFrom, CASH_STALE_MS } from '../scripts/build-snapshot.mjs';
 
 const MD = globalThis.MD;   // the builder loaded util, api, analytics and Predict into this process
 MD.router = MD.router || { pages: {} }; MD.ui = MD.ui || {};
@@ -177,15 +177,9 @@ test('compactCompetition: window, prizes, rules, market counts and the standings
   assert.equal(compactCompetition(c, Array.from({ length: 40 }, (_, i) => ({ rank: i + 1, account: WL(i % 9 + 1), payout: wei(1), stake: wei(1) })), null, out).standings.length, COMP_STANDINGS);
 });
 
-test('rankMap: Meridian\'s own rank and PnL by wallet; compactMatch: a match\'s name, start, league and volume windows', () => {
-  const m = rankMap([{ rank: 1, pnl: wei(18810.12), account: { address: WL('A') } }, { rank: 2, pnl: wei(100), account: { address: WL('d') } }, { rank: 3, pnl: '-' + wei(5), account: { address: WL('c') } }], out);
-  // the left-out wallet's place is not kept: c, Meridian's 3, is the site's 2, and the count goes without it
-  assert.deepEqual(Object.assign({}, m), { [WL('a')]: [1, 18810.12], [WL('c')]: [2, -5] });
-  assert.equal(leftOutRanked([{ rank: 1, account: { address: WL('A') } }, { rank: 2, account: { address: WL('d') } }], out), 1);
+test('publicCash: a transfer with a left-out wallet loses its address; compactMatch: a match\'s name, start, league and volume windows', () => {
   // a transfer with a left-out wallet is published without its address; the others as read
   assert.deepEqual(publicCash([[2, 10, WL('d'), '0xa'], [1, -5, WL('c'), '0xb'], [0, 3, null, null]], out), [[2, 10, null, '0xa'], [1, -5, WL('c'), '0xb'], [0, 3, null, null]]);
-  // a tie with a left-out wallet keeps its rank (only the ones ranked above count)
-  assert.deepEqual(Object.assign({}, rankMap([{ rank: 2, pnl: wei(1), account: { address: WL('d') } }, { rank: 2, pnl: wei(1), account: { address: WL('c') } }], out)), { [WL('c')]: [2, 1] });
   const x = compactMatch({ externalEventId: '909431', name: 'Colts vs. Commanders', startTime: '2026-10-04T13:30:00.000Z', teams: [{ league: 'nfl' }, { league: 'nfl' }], d1: 4810386.74, d7: '5000000' });
   assert.deepEqual(x, { n: 'Colts vs. Commanders', t: Date.UTC(2026, 9, 4, 13, 30), lg: 'nfl', v: { d1: 4810386.74, d7: 5000000 } });
 });

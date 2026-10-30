@@ -1092,16 +1092,14 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last bet; click through to a bettor page. The count line
     says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
-    filtered board, and a full address is found whatever the filters. *Meridian rank* is the
-    wallet's place in Meridian's own PnL leaderboard (`snap.pnlRank`, the API's `leaderboard(metric:
-    PNL)` paged 25 at a time: 775 wallets on 2026-10-21), all time with the last 30 days beside it
-    (the window the app ranks its top traders by: the first 12, in its social search, not open to
-    the public yet; an older snapshot has 7 days), the PnL it ranks by in the tooltip. Meridian ranks by the results of the wallet's own
-    predictions at the verdict, claimed or not, without the secondary market: checked on
-    2026-10-21, that figure equals the site's sum of a bettor's own decided predictions for 763 of
-    764 bettors (the other, a launch-day tester, differs by its tests); Net PnL here also counts
-    the position tokens a bettor traded, so it differs for those (0x3f6a…: +$1,695 against
-    Meridian's +$79).
+    filtered board, and a full address is found whatever the filters. Meridian's own PnL
+    leaderboard ranks by the results of a wallet's own predictions at the verdict, claimed or not,
+    without the secondary market: checked on 2026-10-21, that figure equals the site's sum of a
+    bettor's own decided predictions for 763 of 764 bettors (the other, a launch-day tester,
+    differs by its tests); Net PnL here also counts the position tokens a bettor traded, so it
+    differs for those (0x3f6a…: +$1,695 against Meridian's +$79). A *Meridian rank* column, that
+    leaderboard's place all time and over 30 days, was removed on 2026-10-30: it mostly repeated
+    the Net PnL order (the same PnL for 688 of 768 bettors that day).
     - *Fact-checked 2026-10-20* (as the Overview): every column of all 764 rows was recomputed
       from the raw predictions and trades with separate code, with no difference; Meridian's own
       account stats (statsHistory from launch: the query without a date window returns only about

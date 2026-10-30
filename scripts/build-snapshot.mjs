@@ -629,35 +629,6 @@ export function legacyCompetitions(norms, trades, out = outWallet) {
     };
   });
 }
-/** Meridian's PnL ranks by wallet (its app's leaderboard): { address: [rank, PnL in USDe] }. The wallets the site leaves
- *  out are not ranked: each one ranked above a wallet moves it up a place, so no place is left empty (an empty #2 pointed
- *  at the left-out wallet on Meridian's public leaderboard). */
-const nodeAddr = (x) => String((x && x.account && x.account.address) || '').toLowerCase();
-export function rankMap(nodes, out = outWallet) {
-  const m = dict();
-  const ranked = (nodes || []).filter((x) => x && x.rank != null);
-  const outRanks = ranked.filter((x) => out(nodeAddr(x))).map((x) => x.rank);
-  for (const x of ranked) { const a = nodeAddr(x); if (!out(a)) m[a] = [x.rank - outRanks.filter((r) => r < x.rank).length, round2(P.usd(x.pnl))]; }
-  return m;
-}
-/** How many of Meridian's ranked wallets the site leaves out: taken off its count ("of 778") */
-export const leftOutRanked = (nodes, out = outWallet) => (nodes || []).filter((x) => x && x.rank != null && out(nodeAddr(x))).length;
-/** All time and over the last 30 days, the window its app ranks its top traders by (its social search): { n (wallets
- *  ranked), all, n30, d30, at }. */
-async function readPnlRanks() {
-  const read = async (since) => {
-    const nodes = []; let after = null, pages = 0, total = null;
-    do {
-      const d = await P.gql('query($first: Int!, $since: Int!, $after: String) { leaderboard(metric: PNL, first: $first, after: $after, filter: { timestamp: { gte: $since } }) { totalCount pageInfo { hasNextPage endCursor } nodes { rank pnl account { address } } } }', { first: P.PAGE, since, after });
-      const lb = d.leaderboard || {}; if (total == null) total = lb.totalCount;
-      nodes.push(...(lb.nodes || [])); pages++;
-      after = lb.pageInfo && lb.pageInfo.hasNextPage ? lb.pageInfo.endCursor : null;
-    } while (after && pages < 80);
-    return { n: total != null ? Math.max(0, total - leftOutRanked(nodes)) : total, map: rankMap(nodes) };
-  };
-  const all = await read(0), d30 = await read(Math.floor(Date.now() / 1000) - 30 * 86400);
-  return { n: all.n, all: all.map, n30: d30.n, d30: d30.map, at: Date.now() };
-}
 /** A match (Meridian's cluster of the questions on one event) as the snapshot keeps it: name, start (ms), league, and the
  *  app's volume over 24 hours and 7 days (the mirrored markets', low-odds trading left out; the API answers at most two
  *  volume windows in one request). */
@@ -1065,11 +1036,10 @@ async function buildPredict() {
   try { const pol = await quoteRelayFee(withOi.length ? withOi[0].id : null); if (pol != null) relayFee = { pol: Math.round(pol * 1e4) / 1e4, at: Date.now() }; else if (withOi.length) lost('relay-fee', new Error('no answer from the Polygon RPC'), 'relay fee quote failed'); }
   catch (e) { lost('relay-fee', e, 'relay fee quote failed'); }
   // Meridian's own lists beside the predictions (readCompetitions and the rest); each failure leaves its part out
-  let competitions = null, pnlRank = null, matches = null, hot = null, tags = null;
+  let competitions = null, matches = null, hot = null, tags = null;
   try { competitions = await readCompetitions(new Map(norms.map((n) => [String(n.id).toLowerCase(), n.legs])), prevSnap && prevSnap.competitions, prevSnap && prevSnap.builtAt, failed); console.log(`  predict: ${competitions.length} competitions`); } catch (e) { lost('competitions', e, 'competitions failed'); }
   // the monthly leaderboard of July to September, worked out from the predictions as Meridian's app does (legacyCompetitions)
   try { const legacy = legacyCompetitions(norms, trades); competitions = (competitions || []).concat(legacy); console.log(`  predict: monthly leaderboard: ${legacy.map((c) => c.entries).join(' / ')} entries in its 4 cycles`); } catch (e) { lost('monthly-leaderboard', e, 'monthly leaderboard failed'); }
-  try { pnlRank = await readPnlRanks(); console.log(`  predict: Meridian's PnL ranks of ${pnlRank.n} wallets (${pnlRank.n30} over 30 days)`); } catch (e) { lost('pnl-ranks', e, 'PnL ranks failed'); }
   try { matches = await readMatches(withOi.map((q) => q.ev)); console.log(`  predict: ${Object.keys(matches).length} matches of the listed questions`); } catch (e) { lost('matches', e, 'matches failed'); }
   try { hot = await readHot(); hotStakes(hot, (id) => (act[id] ? act[id].sw : 0), stakeByGroup(qNorms, new Map(withOi.map((q) => [q.id, q])))); } catch (e) { lost('hot', e, 'Hot lists failed'); }
   try { tags = await readTags(); } catch (e) { lost('tags', e, 'tags failed'); }
@@ -1105,7 +1075,7 @@ async function buildPredict() {
     fs.writeFileSync(path.join(qdir, q.id + '.json'), JSON.stringify({ id: q.id, q: q.q, total: list.length, predictions: list.slice(0, 400).map((n) => Object.assign(P.slim(n, { ids: true }), agg.soldOf(n))) }));
     qfiles++;
   }
-  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, pnlRank, questionsFile: 'predict-questions.json', questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries, health: { complete, failed: Array.from(new Set(failed)) } };
+  const out = { builtAt: Date.now(), source: process.env.GITHUB_ACTIONS ? 'github-actions' : 'pc', fromSec: P.LAUNCH_SEC, predictions: norms.length, apiTotal: probe, preLaunch, oiFrom, relayFee, competitions, questionsFile: 'predict-questions.json', questions: counts ? { all: counts.all.totalCount, open: counts.open.totalCount, settled: counts.settled.totalCount } : null, agg, recentFrom, trades, tradesTotal: trades.total || trades.length, durationMs: Date.now() - t0, requests: P.stats.requests, retries: P.stats.retries, health: { complete, failed: Array.from(new Set(failed)) } };
   fs.writeFileSync(path.join(outDir, 'predict.json'), JSON.stringify(out));
   // the questions with money on them, the matches they belong to, Meridian's Hot lists and tags: more than half of what
   // predict.json held, and only the Questions page and a prediction's leg links read them (P.loadQuestions)
