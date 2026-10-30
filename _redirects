@@ -3,3 +3,4 @@
 # never sticks in a browser's cache. Cloudflare reads this file at deploy (copied into dist/ like _headers); not served.
 /go/predict  https://app.meridian.xyz/predict?ref=BJ9Y51H9XB1L  302
 /go/p/:id  https://app.meridian.xyz/predict/p/:id?ref=BJ9Y51H9XB1L  302
+/go/c/:slug  https://app.meridian.xyz/predict/competitions/:slug?ref=BJ9Y51H9XB1L  302

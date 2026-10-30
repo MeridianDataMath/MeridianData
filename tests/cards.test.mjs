@@ -182,6 +182,7 @@ test('_redirects: the X bot\'s short links forward to the Meridian app with the 
   assert.deepEqual(rules, [
     ['/go/predict', `https://app.meridian.xyz/predict?ref=${ref}`, '302'],
     ['/go/p/:id', `https://app.meridian.xyz/predict/p/:id?ref=${ref}`, '302'],
+    ['/go/c/:slug', `https://app.meridian.xyz/predict/competitions/:slug?ref=${ref}`, '302'],
   ]);
   assert.match(fs.readFileSync(path.join(root, '.github/workflows/pages.yml'), 'utf8'), /cp -r [^\n]*\s_redirects\s[^\n]*dist\//, 'the deploy copies _redirects into dist/');
 });
