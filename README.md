@@ -935,16 +935,24 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     category and single-vs-combo breakdowns, market makers, secondary-market trades.
     A **Competitions** card (`snap.competitions`, from the API's `competitions` and each one's
     `competition(slug) { eligibleConditionIds leaderboard }`): Meridian's contests, the running ones
-    first, each with its window, prizes by place (NFL Week 4: 200 / 75 / 50, then 25 down to the
-    10th, USDe), its conditions as the app words them on the competition's page (*2+ legs · Stake ≥
-    $10 · Entered & settled in-window · Held until settlement · Resolves as a win*: `minLegs`,
-    `minStake`, `rankBy`, `disqualifyEarlySales`), the matches, groups and questions it names,
-    its standings (place, bettor, legs, stake, multiplier, payout, the prize; the first 25; the legs
-    from the snapshot's predictions, the standings do not carry them) and a link to its page on the
-    app. When a build cannot read a competition's standings it keeps the last ones read, with when
-    (`asOf`, shown in amber), or says the standings could not be read (`standingsUnread`), never
-    "0 entries". An entry opens its prediction in the dialog the tape and the big wins open (from the
-    snapshot's slip files, `findPrediction`). With them, Meridian's monthly *Predict Leaderboard*
+    and then the upcoming (a button for each when there are more), each with its window, prizes by
+    place (NFL Week 4: 200 / 75 / 50, then 25 down to the 10th, USDe), its conditions as the app
+    words them on the competition's page (*2+ legs · Stake ≥ $10 · Entered & settled in-window ·
+    Held until settlement · Resolves as a win*: `minLegs`, `minStake`, `rankBy`,
+    `disqualifyEarlySales`), the matches, groups and questions it names (none named: every
+    question, the app's *All markets*, as in the *Monthly Combo Competition* of 30 October to
+    1 December), its standings (place, bettor, legs, stake, multiplier, payout, the prize; the
+    first 25; the legs from the snapshot's predictions, the standings do not carry them) and a link
+    to its page on the app. A prediction not settled yet (the standing's `pending`) counts only if
+    it wins: as in the app, it is left out of the standings and the entries, and a running
+    competition lists such predictions under *Show pending*, marked *Pending* (the snapshot keeps
+    the first 25 of all and the first 25 settled, `pe` on a pending one, `pending` their count).
+    The ended competitions, the latest first, are in a *Past competitions* card under it that stays
+    closed on every visit until opened (2026-10-30). When a build cannot read a competition's
+    standings it keeps the last ones read, with when (`asOf`, shown in amber), or says the
+    standings could not be read (`standingsUnread`), never "0 entries". An entry opens its
+    prediction in the dialog the tape and the big wins open (from the snapshot's slip files,
+    `findPrediction`). With them, Meridian's monthly *Predict Leaderboard*
     of July to September, which the app works out from the predictions rather than the API and
     still shows (its competitions page lists the last cycle as *Monthly Competition*, its
     `/predict/leaderboard?cycle=N` steps through all four): cycles from 1 July 16:00 UTC, three

@@ -177,6 +177,21 @@ test('compactCompetition: window, prizes, rules, market counts and the standings
   assert.equal(compactCompetition(c, Array.from({ length: 40 }, (_, i) => ({ rank: i + 1, account: WL(i % 9 + 1), payout: wei(1), stake: wei(1) })), null, out).standings.length, COMP_STANDINGS);
 });
 
+test('compactCompetition: a standing not settled yet is kept marked and left out of the entries, as Meridian\'s app counts them', () => {
+  const c = { slug: 'monthly-combo-2026-10-30', title: 'Monthly Combo Competition', label: 'All', startsAt: '2026-10-30T04:00:00.000Z', endsAt: '2026-12-01T05:00:00.000Z', payouts: ['1750', '850'], prizeUnit: 'USD', minStake: '25', minLegs: 2, rankBy: 'MULTIPLIER', disqualifyEarlySales: true, eligibleMarketKinds: { gameEventIds: [], groupIds: [], conditionIds: [] } };
+  const st = [{ rank: 1, account: WL('e'), multiplier: 1.2234398, predictionId: '0x9', payout: wei(183.52), stake: wei(150), pending: true }, { rank: 2, account: WL('a'), multiplier: 1.1, predictionId: '0x1', payout: wei(27.5), stake: wei(25), pending: false }, { rank: 3, account: WL('d'), multiplier: 1.05, payout: wei(26.25), stake: wei(25), pending: true }];
+  const x = compactCompetition(c, st, 0, out);
+  assert.equal(x.entries, 1); assert.equal(x.pending, 1, 'the left-out wallet counted in neither');
+  assert.deepEqual(x.standings.map((s) => [s.r, s.a, s.pe || 0]), [[1, WL('e'), 1], [2, WL('a'), 0]]);
+  assert.deepEqual(x.markets, { games: 0, groups: 0, questions: 0, eligible: 0 }, 'every market: none named');
+  // the app's two views: the first 25 of all (pending first here) and the first 25 settled, both kept
+  const many = Array.from({ length: 60 }, (_, i) => ({ rank: i + 1, account: WL(i % 9 + 1), payout: wei(1), stake: wei(1), pending: i < 30 }));
+  const y = compactCompetition(c, many, null, out);
+  assert.equal(y.entries, 30); assert.equal(y.pending, 30);
+  assert.equal(y.standings.length, 2 * COMP_STANDINGS);
+  assert.deepEqual([y.standings[COMP_STANDINGS - 1].r, y.standings[COMP_STANDINGS].r, y.standings.at(-1).r], [25, 31, 55]);
+});
+
 test('publicCash: a transfer with a left-out wallet loses its address; compactMatch: a match\'s name, start, league and volume windows', () => {
   // a transfer with a left-out wallet is published without its address; the others as read
   assert.deepEqual(publicCash([[2, 10, WL('d'), '0xa'], [1, -5, WL('c'), '0xb'], [0, 3, null, null]], out), [[2, 10, null, '0xa'], [1, -5, WL('c'), '0xb'], [0, 3, null, null]]);
@@ -356,6 +371,10 @@ test('a competition whose standings could not be read keeps the last ones read, 
   // a wallet left out since the last read is dropped from what is carried
   const left = carryStandings(fresh, { entries: 41, standings: [{ r: 1, a: WL(1) }, { r: 2, a: WL(2) }], markets: {} }, 1, (a) => a === WL(1));
   assert.deepEqual(left.standings.map((x) => x.a), [WL(2)]); assert.equal(left.entries, 40);
+  // the pending count is carried too, and a left-out wallet's pending standing leaves it, not the entries
+  const pend = carryStandings(fresh, { entries: 5, pending: 2, standings: [{ r: 1, a: WL(1), pe: 1 }, { r: 2, a: WL(2) }], markets: {} }, 1, (a) => a === WL(1));
+  assert.equal(pend.entries, 5); assert.equal(pend.pending, 1);
+  assert.equal(none.pending, null);
 });
 
 test('cash read since the last build merges into what was kept: transfers once each, the latest days replaced', () => {

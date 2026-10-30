@@ -539,25 +539,29 @@ async function checkClaimsOnChain(norms, claims) {
 
 // ---------------------------------------------------------------- Meridian's own lists
 // The site's origin cannot ask the Predict API, so what Meridian's app lists beside the predictions travels with the
-// snapshot: its competitions and their standings, its PnL ranking, the matches the listed questions belong to, its Hot
+// snapshot: its competitions and their standings, the matches the listed questions belong to, its Hot
 // lists and its most used tags. A left-out wallet (P.EXCLUDED) is in none of them.
 const round2 = (x) => Math.round(x * 100) / 100;
 const numOr = (v) => (v == null || v === '' ? null : Number(v) || 0);
 const outWallet = (a) => !isAddr(a) || P.EXCLUDED.has(a);
 export const COMP_STANDINGS = 25;
 /** A competition as the snapshot keeps it: its window (ms), prizes by place, rules, how many matches, groups and
- *  questions it names (and how many questions qualify in all), and its standings best first, up to COMP_STANDINGS: each
- *  entry's place, wallet, multiplier, payout and stake (USDe) and the prediction behind it. */
+ *  questions it names (and how many questions qualify in all), and its standings best first, up to COMP_STANDINGS and as
+ *  many settled ones: each entry's place, wallet, multiplier, payout and stake (USDe), the prediction behind it, and `pe`
+ *  on one not settled yet. */
 export function compactCompetition(c, standings, eligibleN, out = outWallet, legsOf = null) {
   const k = (c && c.eligibleMarketKinds) || {};
   const rows = (standings || []).map((x) => Object.assign({}, x, { account: String((x && x.account) || '').toLowerCase() })).filter((x) => !out(x.account)).sort((a, b) => a.rank - b.rank);
+  // pending: a prediction not settled yet, which counts only if it wins. Meridian's app counts and lists the settled ones
+  // (the first 25), and with "Show pending" the first 25 of all: both are kept, a pending one marked `pe` (2026-10-30)
+  const settled = rows.filter((x) => !x.pending), keep = new Set(rows.slice(0, COMP_STANDINGS).concat(settled.slice(0, COMP_STANDINGS)));
   return {
     slug: c.slug, title: c.title, label: c.label || null, start: c.startsAt ? Date.parse(c.startsAt) : null, end: c.endsAt ? Date.parse(c.endsAt) : null,
     payouts: (c.payouts || []).map((v) => Number(v) || 0), unit: c.prizeUnit || 'USDe', minStake: Number(c.minStake) || 0, minLegs: c.minLegs || null, rankBy: c.rankBy || null, noEarlySales: !!c.disqualifyEarlySales,
     markets: { games: (k.gameEventIds || []).length, groups: (k.groupIds || []).length, questions: (k.conditionIds || []).length, eligible: eligibleN == null ? null : eligibleN },
-    entries: rows.length,
+    entries: settled.length, pending: rows.length - settled.length,
     // l: the prediction's legs, from the snapshot's own predictions (the standings do not carry them)
-    standings: rows.slice(0, COMP_STANDINGS).map((x) => { const id = x.predictionId || null, l = id && legsOf ? legsOf.get(String(id).toLowerCase()) : null; return Object.assign({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id }, l ? { l } : null); }),
+    standings: rows.filter((x) => keep.has(x)).map((x) => { const id = x.predictionId || null, l = id && legsOf ? legsOf.get(String(id).toLowerCase()) : null; return Object.assign({ r: x.rank, a: x.account, m: x.multiplier == null ? null : Math.round(Number(x.multiplier) * 1e4) / 1e4, p: round2(P.usd(x.payout)), s: round2(P.usd(x.stake)), id }, l ? { l } : null, x.pending ? { pe: 1 } : null); }),
   };
 }
 /** A competition whose standings could not be read: the last snapshot's standings of it, marked with when they were read
@@ -567,9 +571,11 @@ export function carryStandings(fresh, prev, prevAt, out = outWallet) {
   // for standings "as read 30 min ago" with nobody in them; a wallet left out since (P.EXCLUDED) is dropped from them
   if (prev && Array.isArray(prev.standings) && !prev.standingsUnread) {
     const standings = prev.standings.filter((x) => !(x && x.a && out(String(x.a).toLowerCase())));
-    return Object.assign({}, fresh, { entries: prev.entries == null ? null : Math.max(0, prev.entries - (prev.standings.length - standings.length)), standings, markets: Object.assign({}, fresh.markets, { eligible: prev.markets ? prev.markets.eligible : null }), asOf: prev.asOf || prevAt || null });
+    // a left-out wallet's standing leaves the entries (settled) or the pending count, whichever it was in
+    const gone = prev.standings.filter((x) => !standings.includes(x)), gonePending = gone.filter((x) => x && x.pe).length;
+    return Object.assign({}, fresh, { entries: prev.entries == null ? null : Math.max(0, prev.entries - (gone.length - gonePending)), pending: Math.max(0, (prev.pending || 0) - gonePending), standings, markets: Object.assign({}, fresh.markets, { eligible: prev.markets ? prev.markets.eligible : null }), asOf: prev.asOf || prevAt || null });
   }
-  return Object.assign({}, fresh, { entries: null, standings: [], standingsUnread: true });
+  return Object.assign({}, fresh, { entries: null, pending: null, standings: [], standingsUnread: true });
 }
 async function readCompetitions(legsOf, prevList, prevAt, failed) {
   const d = await P.gql('{ competitions { slug title label startsAt endsAt payouts prizeUnit minStake minLegs rankBy disqualifyEarlySales eligibleMarketKinds { gameEventIds groupIds conditionIds } } }');
@@ -578,7 +584,7 @@ async function readCompetitions(legsOf, prevList, prevAt, failed) {
   for (const c of (d && d.competitions) || []) {
     let st = null, elig = null;
     try {
-      const s = await P.gql('query($s: String!) { competition(slug: $s) { eligibleConditionIds leaderboard { rank account multiplier predictionId payout stake } } }', { s: c.slug });
+      const s = await P.gql('query($s: String!) { competition(slug: $s) { eligibleConditionIds leaderboard { rank account multiplier predictionId payout stake pending } } }', { s: c.slug });
       st = (s.competition && s.competition.leaderboard) || []; elig = s.competition && Array.isArray(s.competition.eligibleConditionIds) ? s.competition.eligibleConditionIds.length : null;
     } catch (e) { console.warn('  predict: the standings of competition', shown(c.slug), 'failed, the last ones read stand in:', e.message); if (failed) failed.push('standings'); }
     const row = compactCompetition(c, st || [], elig, outWallet, legsOf);

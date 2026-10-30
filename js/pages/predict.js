@@ -187,12 +187,14 @@
   // =====================================================================
   // Overview
   // =====================================================================
+  const COMP_ROWS = 25;   // standings shown, as the app shows them (the snapshot keeps the first 25, and the first 25 settled)
   /** Meridian's competitions as of the snapshot (snap.competitions): contests over a set of markets with a prize for each
    *  of the first places, ranked by the best multiplier of a qualifying prediction, and its monthly leaderboard of July to
-   *  September (`legacy`: its cycle; USD prizes plus a token `bonus`). The running ones first, then the upcoming, then the
-   *  ended (the latest first); a button for each, its conditions as the app words them, prizes and standings under it. A
-   *  standing opens its prediction, as a row of the live tape or the big wins does (user 10-21). Null without any (an
-   *  older snapshot). */
+   *  September (`legacy`: its cycle; USD prizes plus a token `bonus`). The running ones, then the upcoming, in this card
+   *  (a button for each when there are more); the ended ones, the latest first, in a card of their own that stays closed
+   *  until opened (user 10-30: past standings only for whoever wants them). Under a button its conditions as the app
+   *  words them, prizes and standings. A standing opens its prediction, as a row of the live tape or the big wins does
+   *  (user 10-21). Null without any (an older snapshot). */
   function competitionsCard(snap, ctx) {
     // the entry's prediction from the snapshot (its slip file), in the dialog the tape and the big wins open
     const openStanding = async (s) => {
@@ -206,12 +208,12 @@
     if (!list.length) return null;
     const t0 = Date.now();
     const stateOf = (c) => (c.start && c.start > t0 ? 'upcoming' : c.end && c.end <= t0 ? 'ended' : 'running');
-    const ORDER = { running: 0, upcoming: 1, ended: 2 };
-    list.sort((a, b) => ORDER[stateOf(a)] - ORDER[stateOf(b)] || (stateOf(a) === 'ended' ? (b.end || 0) - (a.end || 0) : (a.end || 0) - (b.end || 0)));
-    let cur = list[0].slug;
-    const body = h('div');
-    const render = () => {
-      const c = list.find((x) => x.slug === cur) || list[0], st = stateOf(c), t = Date.now();
+    const ORDER = { running: 0, upcoming: 1 };
+    const live = list.filter((c) => stateOf(c) !== 'ended').sort((a, b) => ORDER[stateOf(a)] - ORDER[stateOf(b)] || (a.end || 0) - (b.end || 0));
+    const past = list.filter((c) => stateOf(c) === 'ended').sort((a, b) => (b.end || 0) - (a.end || 0));
+    // one competition: its window, prizes, conditions and standings
+    const details = (c) => {
+      const st = stateOf(c), t = Date.now();
       // the prize for a place: its amount in the competition's unit, plus the token bonus of the monthly leaderboard
       const bonus = c.bonus && Array.isArray(c.bonus.payouts) ? c.bonus : null;
       const prizeOf = (r) => { const a = r >= 1 && r <= c.payouts.length ? c.payouts[r - 1] : 0, b = bonus && r >= 1 && r <= bonus.payouts.length ? bonus.payouts[r - 1] : 0; return a || b ? [a ? U.fmtNum(a, 0) + ' ' + c.unit : null, b ? U.fmtNum(b, b % 1 ? 1 : 0) + ' ' + bonus.unit : null].filter(Boolean).join(' + ') : null; };
@@ -225,32 +227,60 @@
       const rulesTitle = (c.rankBy === 'PNL' ? 'Ranked by the PnL of the qualifying predictions' : 'Ranked by the multiplier (payout ÷ stake) of each bettor\'s best qualifying prediction: placed and settled within the window, won')
         + (c.noEarlySales ? ', with none of its position tokens sold before its settlement' : '') + '. Each leg of a combo has to be an independent outcome: a combo whose legs imply one another counts as one prediction and Meridian takes it off the standings, as it may other attempts to game the contest';
       const mk = c.markets || {};
-      const markets = c.markets ? [mk.games ? U.fmtNum(mk.games, 0) + ' matches' : null, mk.groups ? U.fmtNum(mk.groups, 0) + ' question groups' : null, mk.questions ? U.fmtNum(mk.questions, 0) + ' questions' : null].filter(Boolean).join(', ') : 'every question';
+      // one naming no match, group or question counts them all (the app's "All markets"; the API lists no eligible ones)
+      const named = mk.games || mk.groups || mk.questions;
+      const markets = named ? [mk.games ? U.fmtNum(mk.games, 0) + ' matches' : null, mk.groups ? U.fmtNum(mk.groups, 0) + ' question groups' : null, mk.questions ? U.fmtNum(mk.questions, 0) + ' questions' : null].filter(Boolean).join(', ') : 'every question';
       const appLink = c.legacy != null ? P.appPageUrl('/leaderboard', 'cycle=' + c.legacy) : P.appPageUrl('/competitions/' + encodeURIComponent(c.slug));
-      U.replace(body, h('div', { style: { padding: '10px 14px 6px' } },
+      // pending (`pe`): a prediction not settled yet, which counts only if it wins. Meridian's app leaves them out of the
+      // standings and the entries; a running competition lists them on request, as its "Show pending" does
+      const all = c.standings || [], pendN = c.pending || all.filter((s) => s.pe).length;
+      let showPending = false;
+      const board = h('div');
+      const renderBoard = () => {
+        const rows = (showPending ? all : all.filter((s) => !s.pe)).slice(0, COMP_ROWS), shown = rows.filter((s) => !s.pe).length;
+        U.replace(board, UI.table({ cols: [
+          { key: 'r', label: '#', render: (s) => UI.rank(s.r) },
+          { key: 'a', label: 'Bettor', render: (s) => h('span', bettorLink(s.a, 5), s.pe ? [' ', h('span.chip.amber', { title: 'Not settled yet: it counts only if it wins. Its multiplier and payout are what it pays if every leg wins' }, 'Pending')] : null) },
+          { key: 'l', label: 'Legs', num: true, title: 'The legs of its best qualifying prediction', render: (s) => (s.l ? String(s.l) : h('span.dim', '—')) },
+          { key: 's', label: 'Stake', num: true, render: (s) => usd(s.s) },
+          { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
+          { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
+          { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => { const p = prizeOf(s.r); return p ? h(s.pe ? 'span.dim' : 'span.pos', p) : h('span.dim', '—'); } },
+        ], rows, onRow: openStanding, empty: c.standingsUnread ? 'The standings could not be read for this snapshot; a later one brings them' : st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
+          // standings the snapshot kept from an earlier read (its own read of them failed)
+          c.asOf ? h('div.xs', { style: { padding: '6px 14px 0', color: 'var(--amber)' } }, 'Standings as read ', U.agoEl(c.asOf), ': the latest read failed') : null,
+          c.entries > shown ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${shown} of ${U.fmtNum(c.entries, 0)} entries`) : null);
+      };
+      renderBoard();
+      return [h('div', { style: { padding: '10px 14px 6px' } },
         h('div.row.wrap', { style: { gap: '8px', alignItems: 'baseline' } }, h('b', c.title), UI.chip(st, st === 'running' ? 'green' : st === 'upcoming' ? 'blue' : ''),
           h('span.dim.small', (c.weeks ? c.weeks + '-week competition · ' : '') + U.fmtWhen(c.start) + ' → ' + U.fmtWhen(c.end) + (st === 'running' ? ' · ends in ' + U.fmtCountdown(c.end - t) : st === 'upcoming' ? ' · starts in ' + U.fmtCountdown(c.start - t) : '')),
           h('span.grow'), h('a.small.ext', { href: appLink, target: '_blank', rel: 'noopener', title: 'This competition on Meridian\'s app' }, U.icon('external'), 'Meridian\'s page')),
         h('div.small', { style: { marginTop: '4px' } }, `${U.fmtNum(total, 0)} ${c.unit}${bonus ? ` + ${U.fmtNum(bonusTotal, bonusTotal % 1 ? 1 : 0)} ${bonus.unit}` : ''} in prizes for the first ${places} places (${[1, 2, 3].filter((r) => r <= places).map(prizeOf).join(' / ')}${places > 3 ? ' / …' : ''})`),
         h('div.xs.dim', { style: { marginTop: '2px' }, title: rulesTitle }, 'Conditions · ' + [legsRule, `Stake ≥ ${U.fmtUsd(c.minStake, { dp: 0 })}`].concat(how).join(' · ')),
-        h('div.xs.dim', { style: { marginTop: '2px' } }, 'Counts predictions on ' + markets + (mk.eligible != null ? ` (${U.fmtNum(mk.eligible, 0)} questions in all)` : ''))),
-        UI.table({ cols: [
-          { key: 'r', label: '#', render: (s) => UI.rank(s.r) },
-          { key: 'a', label: 'Bettor', render: (s) => bettorLink(s.a, 5) },
-          { key: 'l', label: 'Legs', num: true, title: 'The legs of its best qualifying prediction', render: (s) => (s.l ? String(s.l) : h('span.dim', '—')) },
-          { key: 's', label: 'Stake', num: true, render: (s) => usd(s.s) },
-          { key: 'm', label: 'Multiplier', num: true, title: 'Payout ÷ stake of its best qualifying prediction', render: (s) => mult(s.m) },
-          { key: 'p', label: 'Payout', num: true, title: 'What that prediction pays if it wins: its stake and the maker\'s collateral', render: (s) => usd(s.p) },
-          { key: 'z', label: 'Prize', num: true, title: 'The prize for this place, as the standings stand', render: (s) => { const p = prizeOf(s.r); return p ? h('span.pos', p) : h('span.dim', '—'); } },
-        ], rows: c.standings || [], onRow: openStanding, empty: c.standingsUnread ? 'The standings could not be read for this snapshot; a later one brings them' : st === 'upcoming' ? 'Not started yet' : 'No qualifying prediction yet', phone: { lead: 'r', title: 'a', aside: 'z' } }),
-        // standings the snapshot kept from an earlier read (its own read of them failed)
-        c.asOf ? h('div.xs', { style: { padding: '6px 14px 0', color: 'var(--amber)' } }, 'Standings as read ', U.agoEl(c.asOf), ': the latest read failed') : null,
-        c.entries > (c.standings || []).length ? h('div.xs.dim', { style: { padding: '6px 14px' } }, `The first ${(c.standings || []).length} of ${U.fmtNum(c.entries, 0)} entries`) : null);
+        h('div.xs.dim', { style: { marginTop: '2px' } }, 'Counts predictions on ' + markets + (named && mk.eligible != null ? ` (${U.fmtNum(mk.eligible, 0)} questions in all)` : '')),
+        st === 'running' && pendN ? h('div.row', { style: { justifyContent: 'flex-end', marginTop: '6px' } }, UI.checkbox(`Show pending (${pendN})`, false, (v) => { showPending = v; renderBoard(); })) : null),
+        board];
     };
-    const sel = UI.seg(list.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm');
-    render();
-    return h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of markets · as of the snapshot · click an entry for its prediction'), h('span.grow'), h('a.btn.sm.ghost', { href: P.appPageUrl('/competitions'), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Competitions')),
-      h('div', { style: { padding: '8px 12px 0', overflowX: 'auto' } }, sel), body);
+    // a button for each competition when there are more than one, and the chosen one under them
+    const chooser = (cs) => {
+      let cur = cs[0].slug;
+      const body = h('div'), render = () => U.replace(body, details(cs.find((x) => x.slug === cur) || cs[0]));
+      render();
+      return [cs.length > 1 ? h('div', { style: { padding: '8px 12px 0', overflowX: 'auto' } }, UI.seg(cs.map((c) => ({ v: c.slug, label: c.title, title: c.title + ' · ' + stateOf(c) })), cur, (v) => { cur = v; render(); }, 'sm')) : null, body];
+    };
+    const card = h('div.card.tight', h('div.card-head', h('h2', 'Competitions'), h('span.dim.small', 'Meridian\'s contests: prizes for the best predictions on a set of markets · as of the snapshot · click an entry for its prediction'), h('span.grow'), h('a.btn.sm.ghost', { href: P.appPageUrl('/competitions'), target: '_blank', rel: 'noopener' }, U.icon('external'), 'Competitions')),
+      live.length ? chooser(live) : h('div.dim.small', { style: { padding: '10px 14px 12px' } }, 'No competition is running right now'));
+    if (!past.length) return card;
+    // the ended ones: closed on every visit until opened (user 10-30), built when first opened
+    const pastBody = h('div', { style: { display: 'none' } }), pastCard = h('div.card.tight.collapsible');
+    const pastHead = h('button.card-head.toggle-head', { type: 'button', 'aria-expanded': 'false', onclick: () => {
+      const open = !pastCard.classList.contains('open');
+      if (open && !pastBody.firstChild) U.replace(pastBody, chooser(past));
+      pastCard.classList.toggle('open', open); pastBody.style.display = open ? '' : 'none'; pastHead.setAttribute('aria-expanded', String(open));
+    } }, h('span.chev', U.icon('chevR')), h('h2', 'Past competitions'), h('span.dim.small', `${past.length} ended · their final standings`), h('span.grow'), h('span.dim.small.toggle-hint'));
+    U.append(pastCard, [pastHead, pastBody]);
+    return [card, pastCard];
   }
   async function mountOverview(body, route, ctx) {
     MD.setTopbar(h('span.title', 'Predict · Overview'));
