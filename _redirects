@@ -4,3 +4,4 @@
 /go/predict  https://app.meridian.xyz/predict?ref=BJ9Y51H9XB1L  302
 /go/p/:id  https://app.meridian.xyz/predict/p/:id?ref=BJ9Y51H9XB1L  302
 /go/c/:slug  https://app.meridian.xyz/predict/competitions/:slug?ref=BJ9Y51H9XB1L  302
+/go/t/:market  https://app.meridian.xyz/:market?ref=BJ9Y51H9XB1L  302
