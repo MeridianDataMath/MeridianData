@@ -954,7 +954,9 @@ textarea.input:focus { border-color: var(--accent); }
   .rail::-webkit-scrollbar { display: none; }
   .rail a.nav { flex: none; }
   .rail .logo, .rail .spacer, .rail .ext, .rail .tip, .rail .sec, .rail .rule, .rail .toggle, .rail a.nav .lbl, .rail a.nav .ext-ico { display: none !important; }
-  .rail a.nav, .rail .more-btn { width: 40px; padding: 0; justify-content: center; }
+  /* eight in the bar (seven pages and More), 40 px each: on a phone under 350 px wide they narrow to fit, never scroll
+     (the collapsed rail's own width, kept from a wider screen, too) */
+  .rail a.nav, .app.rail-collapsed .rail a.nav, .rail .more-btn { width: min(40px, calc((100vw - 30px) / 8)); padding: 0; justify-content: center; }
   /* the main pages and More: the rest sit in the More menu (a phone's 13 icons scrolled sideways) */
   .rail a.nav.ph-more { display: none; }
   .rail .more-btn { display: flex; flex: none; align-items: center; height: 40px; margin-left: auto; background: none; border: 0; color: var(--text-2); border-radius: 8px; cursor: pointer; }

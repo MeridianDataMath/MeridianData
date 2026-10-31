@@ -157,9 +157,11 @@
     if (t) { U.replace(t, U.icon(collapsed ? 'panelOpen' : 'panelClose'), h('span.lbl', label), h('span.tip', label)); t.title = label; t.setAttribute('aria-label', label); }
   }
   // a phone's bottom bar holds the main pages and More (13 icons in a row scrolled sideways, Predict and Data status out
-  // of sight): these sit behind More there, and the Predict pages after the Overview are in its own tabs too
+  // of sight): these sit behind More there. Of the Predict pages the Overview, Bettors and Questions stay in the bar, in
+  // that order (user 10-31); the others are in More and in Predict's own tabs
   const PHONE_MORE = new Set(['account', 'favorites', 'tax', 'status']);
-  const inMore = (n) => PHONE_MORE.has(n.name) || (n.name === 'predict' && n.path !== '/predict');
+  const PHONE_PREDICT = new Set(['/predict', '/predict/bettors', '/predict/questions']);
+  const inMore = (n) => PHONE_MORE.has(n.name) || (n.name === 'predict' && !PHONE_PREDICT.has(n.path));
   function openMore(btn) {
     const close = () => { menu.remove(); btn.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', onKey, true); };
     const outside = (e) => { if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close(); };
