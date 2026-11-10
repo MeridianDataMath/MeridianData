@@ -348,7 +348,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
   given there (a row's pencil names it too; stored in this browser only: `U.favorites`, label,
   reorder).
 * **Leaderboard** – every subaccount on the exchange, ranked; sortable columns and filters for
-  interval (24h/7d/30d/all), equity, volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
+  interval (24h/7d/30d/all; it opens on all time, by PnL: on 30d until 2026-11-10), equity,
+  volume, PnL, ROI, win rate, Sharpe, max drawdown, trading
   style. PnL, volume and ROI follow the interval on Meridian's windows and are its figures (the
   site's in each cell's tooltip), Sharpe and drawdown on the site's rolling windows; equity,
   positions, win rate and trading style do not follow it. **#** is the account's rank on the whole leaderboard in the current
@@ -1099,7 +1100,8 @@ route costs from `/v1/rate-limit/config` (`routeCost`: fixed, or a base plus a s
     its page counts.
   * *Bettors* – every bettor ranked by net PnL with ROI, win rate, average odds, combo share,
     average vig paid, best win and last bet; click through to a bettor page. The count line
-    says what is filtered (*364 of 733 bettors · 3+ predictions*), `#` is the place on the
+    says what is filtered (*364 of 733 bettors · 3+ predictions*; the page opens on every
+    bettor, on those with 3+ predictions until 2026-11-10), `#` is the place on the
     filtered board, and a full address is found whatever the filters. Meridian's own PnL
     leaderboard ranks by the results of a wallet's own predictions at the verdict, claimed or not,
     without the secondary market: checked on 2026-10-21, that figure equals the site's sum of a

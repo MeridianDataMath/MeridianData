@@ -73,7 +73,7 @@
       const pr = route.params;
       const sortP = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
       const state = {
-        interval: INTERVALS.some((x) => x.v === pr.interval) ? pr.interval : '30d',
+        interval: INTERVALS.some((x) => x.v === pr.interval) ? pr.interval : 'all',   // all time unless the link names one (user 11-10: it opened on 30d)
         sort: sortP && sortP[1] in BEST ? { key: sortP[1], desc: !sortP[2] } : { key: 'pnl', desc: true },
         page: Math.max(1, Math.floor(U.num(pr.page)) || 1), q: String(pr.q || '').trim().toLowerCase(), favOnly: pr.fav === '1', style: STYLES.includes(pr.style) ? pr.style : '', min: {}, max: {},
       };

@@ -495,10 +495,11 @@
       const all = snap.agg.bettors;
       // the view is kept in the link (silently): Back from a bettor returns to the same page, order and filters, and the
       // scroll position the router restores lands on the same rows; a hand-edited value that is not one falls back
+      // (every bettor unless the link names a minimum: user 11-10, it opened on those with 3 or more predictions)
       const pr = route.params, sp = /^([a-zA-Z]+)(:asc)?$/.exec(pr.sort || '');
       const KEYS = ['address', 'n', 'wagered', 'pnl', 'roi', 'winRate', 'avgOdds', 'combos', 'avgVig', 'biggestWin', 'last'];
-      const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 3, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
-      const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.q || null, min: st.minN !== 3 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
+      const st = { q: String(pr.q || '').trim().toLowerCase(), minN: [1, 3, 10, 25].includes(+pr.min) ? +pr.min : 1, sort: sp && KEYS.includes(sp[1]) ? { key: sp[1], desc: !sp[2] } : { key: 'pnl', desc: true }, page: Math.max(1, Math.floor(U.num(pr.page)) || 1), cat: pr.cat || '' };
+      const save = () => !ctx.signal.aborted && MD.router.setParams({ q: st.q || null, min: st.minN !== 1 ? st.minN : null, cat: st.cat || null, sort: st.sort.key === 'pnl' && st.sort.desc ? null : st.sort.key + (st.sort.desc ? '' : ':asc'), page: st.page > 1 ? st.page : null }, { silent: true });
       // the medals go with a best-first order only (sorted the other way, the biggest loss took gold)
       const BEST = { n: 'desc', wagered: 'desc', pnl: 'desc', roi: 'desc', winRate: 'desc', biggestWin: 'desc' };
       const cats = Array.from(new Set(all.map((b) => b.topCat).filter(Boolean))).sort();
